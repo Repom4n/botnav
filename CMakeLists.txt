@@ -237,6 +237,19 @@ if(MSVC)
 		set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /arch:SSE2")
 	endif()
 
+	if(UseAddressSanitizer)
+		# MSVC ASan is incompatible with runtime checks, Edit and Continue,
+		# and incremental linking. RelWithDebInfo already provides /Zi.
+		foreach(flag_variable CMAKE_C_FLAGS_DEBUG CMAKE_CXX_FLAGS_DEBUG)
+			string(REPLACE "/RTC1" "" ${flag_variable} "${${flag_variable}}")
+			string(REPLACE "/RTCs" "" ${flag_variable} "${${flag_variable}}")
+			string(REPLACE "/RTCu" "" ${flag_variable} "${${flag_variable}}")
+			string(REPLACE "/ZI" "/Zi" ${flag_variable} "${${flag_variable}}")
+		endforeach()
+		add_compile_options(/fsanitize=address)
+		add_link_options(/INCREMENTAL:NO)
+	endif()
+
 	# Configure MSVC Runtime
 	include(MSVCRuntime)
 	if(NOT DEFINED MSVC_RUNTIME)
