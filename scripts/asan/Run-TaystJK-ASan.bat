@@ -44,7 +44,12 @@ echo Log:  %ASAN_LOG%
 echo Dump: %ASAN_SAVE_DUMPS%
 echo.
 
-"%~dp0taystjk.x86_64.exe" %* > "%ASAN_LOG%" 2>&1
+"%~dp0taystjk.x86_64.exe" ^
+	+set developer 1 ^
+	+set logfile 2 ^
+	+set r_verbose 1 ^
+	+set fs_debug 1 ^
+	%* > "%ASAN_LOG%" 2>&1
 set "EXIT_CODE=%ERRORLEVEL%"
 
 echo.
