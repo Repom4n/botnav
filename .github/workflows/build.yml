@@ -139,6 +139,7 @@ jobs:
             throw "MSVC AddressSanitizer runtime DLL not found at $asanRuntime"
           }
           Copy-Item $asanRuntime -Destination $installDir -Force
+          Copy-Item "${{ github.workspace }}\scripts\asan\Run-TaystJK-ASan.bat" -Destination $installDir -Force
 
       - name: Create Archive
         if: ${{ matrix.build_type == 'Release' || matrix.sanitizer == 'AddressSanitizer' }}
