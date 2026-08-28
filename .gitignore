@@ -1,0 +1,3 @@
+# Build artifacts
+test_botnav
+*.o
