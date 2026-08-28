@@ -5274,21 +5274,6 @@ int BotFallbackNavigation(bot_state_t *bs)
 
         bs->customNavReverseTime = level.time + 1000;
     }
-    if (!bot_custom_nav_enable.integer)
-    {
-        return 0;
-    }
-
-    if (bs->customNavReverseTime < level.time)
-    {
-        if (bot_custom_reverse_yaw_chance.integer > 0 &&
-            Q_irand(0, 99) < bot_custom_reverse_yaw_chance.integer)
-        {
-            bs->goalAngles[YAW] = AngleNormalize360(bs->goalAngles[YAW] + 180.0f);
-        }
-
-        bs->customNavReverseTime = level.time + 1000;
-    }
 	vec3_t b_angle, fwd, trto, mins, maxs;
 	trace_t tr;
 
