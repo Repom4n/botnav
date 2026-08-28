@@ -260,6 +260,7 @@ typedef struct bot_state_s
 
 	int					randomNavTime;
 	int					randomNav;
+    int					customNavReverseTime;
 
 	int					saberSpecialist;
 
