@@ -7530,30 +7530,41 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 	float aggressionBias;
 	int hardRetreatHealth;
 	int softRetreatHealth;
+	float retreatDistance;
 
 	bs->combatAction = BOT_COMBAT_ACTION_AGGRESSION;
 
 	aggressionBias = BotGetAggressionBias();
 
-	hardRetreatHealth = 25 - (int)(aggressionBias * 20.0f);
-	softRetreatHealth = 50 - (int)(aggressionBias * 25.0f);
+	hardRetreatHealth = 30 - (int)(aggressionBias * 25.0f);
+	softRetreatHealth = 60 - (int)(aggressionBias * 35.0f);
+	retreatDistance = 350.0f - (aggressionBias * 150.0f);
 
 	if (hardRetreatHealth < 5)
 	{
 		hardRetreatHealth = 5;
 	}
-	else if (hardRetreatHealth > 60)
+	else if (hardRetreatHealth > 80)
 	{
-		hardRetreatHealth = 60;
+		hardRetreatHealth = 80;
 	}
 
 	if (softRetreatHealth < 20)
 	{
 		softRetreatHealth = 20;
 	}
-	else if (softRetreatHealth > 85)
+	else if (softRetreatHealth > 95)
 	{
-		softRetreatHealth = 85;
+		softRetreatHealth = 95;
+	}
+
+	if (retreatDistance < 200.0f)
+	{
+		retreatDistance = 200.0f;
+	}
+	else if (retreatDistance > 550.0f)
+	{
+		retreatDistance = 550.0f;
 	}
 
 	if ((bs->frame_Enemy_Len > 2000) && (bs->currentEnemy && bs->currentEnemy->client && (hisWeapon == WP_SABER))) { //Chase movement
@@ -7672,7 +7683,7 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 				((g_entities[bs->client].health < softRetreatHealth)
 				&& (bs->cur_ps.fd.forcePower < 30)
 				&& !(bs->cur_ps.fd.forcePowersActive & (1 << FP_ABSORB))
-				&& (bs->frame_Enemy_Len < 450))) {
+				&& (bs->frame_Enemy_Len < retreatDistance))) {
 			qboolean wallRun = qfalse;
 			bs->combatAction = BOT_COMBAT_ACTION_RETREAT_DEFENSE;
 			//Running routine, we should add a wallrun search to this.
@@ -7819,12 +7830,6 @@ static int BotGetResponseDelayMs(void)
 {
 	int delay = bot_delayresponsetime.integer;
 
-	if (!Q_stricmp(bot_delayresponsetime.string, "0") &&
-		Q_stricmp(bot_responseTimeDelay.string, "0"))
-	{
-		delay = bot_responseTimeDelay.integer;
-	}
-
 	if (delay < 0)
 	{
 		delay = 0;
@@ -7840,11 +7845,9 @@ static int BotGetResponseDelayMs(void)
 static float BotGetTargetDistanceLimit(void)
 {
 	float targetDistanceLimit = bot_targetdistance.value;
-
-	if (!Q_stricmp(bot_targetdistance.string, "4096") &&
-		Q_stricmp(g_newBotAITargetDistance.string, "4096"))
+	if (targetDistanceLimit < 0.0f)
 	{
-		targetDistanceLimit = g_newBotAITargetDistance.value;
+		targetDistanceLimit = 0.0f;
 	}
 
 	return targetDistanceLimit;
@@ -7853,12 +7856,6 @@ static float BotGetTargetDistanceLimit(void)
 static float BotGetAggressionBias(void)
 {
 	float aggressionBias = bot_aggressionbias.value;
-
-	if (!Q_stricmp(bot_aggressionbias.string, "0") &&
-		Q_stricmp(bot_aggressionBias.string, "0"))
-	{
-		aggressionBias = bot_aggressionBias.value;
-	}
 
 	if (aggressionBias < -1.0f)
 	{
@@ -9010,6 +9007,19 @@ void NewBotAI_DoAloneStuff(bot_state_t *bs, float thinktime) {
 	//Run to it..
 }
 
+static void NewBotAI_RunNavigationOrAlone(bot_state_t *bs, float thinktime)
+{
+	if (bot_navigation.integer)
+	{
+		bs->navObstacleUntil = 0;
+		StandardBotAI(bs, thinktime);
+	}
+	else
+	{
+		NewBotAI_DoAloneStuff(bs, thinktime);
+	}
+}
+
 int NewBotAI_ScanForEnemies(bot_state_t* bs) {
 	vec3_t a;
 	float distcheck;
@@ -9259,11 +9269,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	}
 
 	if (closestID == -1) {//Its just us, or they are too far away.
-#if _ADVANCEDBOTSHIT
-		NewBotAI_DoAloneStuff(bs, thinktime);
-#else
-		//StandardBotAI(bs, thinktime);
-#endif
+		NewBotAI_RunNavigationOrAlone(bs, thinktime);
 		return;
 	}
 
@@ -9290,7 +9296,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		else {
 			bs->currentEnemy = &g_entities[closestID];
 			if (bs->lastVisibleEnemyIndex < level.time - 10000) { //let him keep going for target for 10s before abandoning
-				NewBotAI_DoAloneStuff(bs, thinktime);
+				NewBotAI_RunNavigationOrAlone(bs, thinktime);
 				return;
 			}
 		}
@@ -9361,11 +9367,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	}
 
 	if (!bs->frame_Enemy_Vis && bs->frame_Enemy_Len > 8096) {
-#if _ADVANCEDBOTSHIT
-		NewBotAI_DoAloneStuff(bs, thinktime);
-#else
-		//StandardBotAI(bs, thinktime);
-#endif
+		NewBotAI_RunNavigationOrAlone(bs, thinktime);
 		return;
 	}
 
