@@ -9188,6 +9188,18 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 
 	if (NewBotAI_ShouldFallbackToWaypoints(bs))
 	{
+		// obstacle detected: hold waypoint-nav mode for a period so the bot
+		// navigates around the obstacle rather than flickering back to direct
+		// combat movement every frame
+		bs->navObstacleUntil = level.time + 2000;
+		StandardBotAI(bs, thinktime);
+		return;
+	}
+
+	if (bs->navObstacleUntil > level.time)
+	{
+		// hysteresis: obstacle was recently blocking; keep following waypoints
+		// while StandardBotAI's enemy-aiming code keeps targeting the enemy
 		StandardBotAI(bs, thinktime);
 		return;
 	}
