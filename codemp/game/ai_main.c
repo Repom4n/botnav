@@ -1961,6 +1961,7 @@ void BotDamageNotification(gclient_t *bot, gentity_t *attacker)
 	}
 
 	bs->lastHurt = attacker;
+	bs->lastHurtTime = level.time;
 
 	if (bs->currentEnemy)
 	{ //we don't care about the guy attacking us if we have an enemy already
@@ -9188,20 +9189,37 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 
 	if (NewBotAI_ShouldFallbackToWaypoints(bs))
 	{
-		// obstacle detected: hold waypoint-nav mode for a period so the bot
-		// navigates around the obstacle rather than flickering back to direct
-		// combat movement every frame
-		bs->navObstacleUntil = level.time + 2000;
-		StandardBotAI(bs, thinktime);
-		return;
+		// If the bot is actively being attacked, don't divert to waypoint nav —
+		// keep full combat logic running so it can defend, dodge, and fight back.
+		if (bs->lastHurtTime > level.time - 1500)
+		{
+			bs->navObstacleUntil = 0; // clear any pending hysteresis too
+		}
+		else
+		{
+			// obstacle detected: hold waypoint-nav mode for a period so the bot
+			// navigates around the obstacle rather than flickering back to direct
+			// combat movement every frame
+			bs->navObstacleUntil = level.time + 2000;
+			StandardBotAI(bs, thinktime);
+			return;
+		}
 	}
 
 	if (bs->navObstacleUntil > level.time)
 	{
 		// hysteresis: obstacle was recently blocking; keep following waypoints
-		// while StandardBotAI's enemy-aiming code keeps targeting the enemy
-		StandardBotAI(bs, thinktime);
-		return;
+		// while StandardBotAI's enemy-aiming code keeps targeting the enemy.
+		// But if we're being actively attacked, override and run combat AI instead.
+		if (bs->lastHurtTime > level.time - 1500)
+		{
+			bs->navObstacleUntil = 0;
+		}
+		else
+		{
+			StandardBotAI(bs, thinktime);
+			return;
+		}
 	}
 
 	if (!bs->frame_Enemy_Vis && bs->frame_Enemy_Len > 8096) {
