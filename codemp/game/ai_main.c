@@ -5259,9 +5259,37 @@ int CombatBotAI(bot_state_t *bs, float thinktime)
 //good place.
 int BotFallbackNavigation(bot_state_t *bs)
 {
+    int reverseInterval;
+    float probeDistance;
+    float traceHalfWidth;
+    float traceHeight;
     if (!bot_custom_nav_enable.integer)
     {
         return 0;
+    }
+
+    reverseInterval = bot_custom_reverse_interval_ms.integer;
+    if (reverseInterval < 1)
+    {
+        reverseInterval = 1;
+    }
+
+    probeDistance = bot_custom_probe_distance.value;
+    if (probeDistance <= 0.0f)
+    {
+        probeDistance = 16.0f;
+    }
+
+    traceHalfWidth = bot_custom_trace_half_width.value;
+    if (traceHalfWidth <= 0.0f)
+    {
+        traceHalfWidth = 15.0f;
+    }
+
+    traceHeight = bot_custom_trace_height.value;
+    if (traceHeight <= 0.0f)
+    {
+        traceHeight = 32.0f;
     }
 
     if (bs->customNavReverseTime < level.time)
@@ -5272,7 +5300,7 @@ int BotFallbackNavigation(bot_state_t *bs)
             bs->goalAngles[YAW] = AngleNormalize360(bs->goalAngles[YAW] + 180.0f);
         }
 
-        bs->customNavReverseTime = level.time + 1000;
+        bs->customNavReverseTime = level.time + reverseInterval;
     }
 	vec3_t b_angle, fwd, trto, mins, maxs;
 	trace_t tr;
@@ -5282,12 +5310,12 @@ int BotFallbackNavigation(bot_state_t *bs)
 		return 2; //we're busy
 	}
 
-	mins[0] = -15;
-	mins[1] = -15;
+	mins[0] = -traceHalfWidth;
+	mins[1] = -traceHalfWidth;
 	mins[2] = 0;
-	maxs[0] = 15;
-	maxs[1] = 15;
-	maxs[2] = 32;
+	maxs[0] = traceHalfWidth;
+	maxs[1] = traceHalfWidth;
+	maxs[2] = traceHeight;
 
 	bs->goalAngles[PITCH] = 0;
 	bs->goalAngles[ROLL] = 0;
@@ -5296,9 +5324,9 @@ int BotFallbackNavigation(bot_state_t *bs)
 
 	AngleVectors(b_angle, fwd, NULL, NULL);
 
-	trto[0] = bs->origin[0] + fwd[0]*16;
-	trto[1] = bs->origin[1] + fwd[1]*16;
-	trto[2] = bs->origin[2] + fwd[2]*16;
+	trto[0] = bs->origin[0] + fwd[0]*probeDistance;
+	trto[1] = bs->origin[1] + fwd[1]*probeDistance;
+	trto[2] = bs->origin[2] + fwd[2]*probeDistance;
 
 	JP_Trace(&tr, bs->origin, mins, maxs, trto, ENTITYNUM_NONE, MASK_SOLID, qfalse, 0, 0);
 
