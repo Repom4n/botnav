@@ -7524,37 +7524,24 @@ void NewBotAI_GetGroundDodge(bot_state_t *bs) {
 void NewBotAI_GetMovement(bot_state_t *bs)
 {
 	const int hisWeapon = bs->currentEnemy->client->ps.weapon;
-	float skillNormalized;
 	float aggressionBias;
-	float defenseBias;
 	int hardRetreatHealth;
 	int softRetreatHealth;
 
 	bs->combatAction = BOT_COMBAT_ACTION_AGGRESSION;
 
-	skillNormalized = (bs->settings.skill - 1.0f) / 4.0f;
-	if (skillNormalized < 0.0f)
+	aggressionBias = bot_aggressionBias.value;
+	if (aggressionBias < -1.0f)
 	{
-		skillNormalized = 0.0f;
+		aggressionBias = -1.0f;
 	}
-	else if (skillNormalized > 1.0f)
+	else if (aggressionBias > 1.0f)
 	{
-		skillNormalized = 1.0f;
-	}
-
-	if (bot_aggressionSkillScale.value < 0.0f)
-	{
-		aggressionBias = 0.0f;
-		defenseBias = 0.0f;
-	}
-	else
-	{
-		aggressionBias = skillNormalized * bot_aggressionSkillScale.value;
-		defenseBias = (1.0f - skillNormalized) * bot_aggressionSkillScale.value;
+		aggressionBias = 1.0f;
 	}
 
-	hardRetreatHealth = 25 + (int)(defenseBias * 15.0f) - (int)(aggressionBias * 10.0f);
-	softRetreatHealth = 50 + (int)(defenseBias * 15.0f) - (int)(aggressionBias * 10.0f);
+	hardRetreatHealth = 25 - (int)(aggressionBias * 20.0f);
+	softRetreatHealth = 50 - (int)(aggressionBias * 25.0f);
 
 	if (hardRetreatHealth < 5)
 	{
@@ -7831,6 +7818,22 @@ qboolean BG_InRoll3(int anim)
 		return qtrue;
 	}
 	return qfalse;
+}
+
+static int BotGetResponseDelayMs(void)
+{
+	int delay = bot_responseTimeDelay.integer;
+
+	if (delay < 0)
+	{
+		delay = 0;
+	}
+	else if (delay > 5000)
+	{
+		delay = 5000;
+	}
+
+	return delay;
 }
 
 qboolean NewBotAI_IsEnemyPullable(bot_state_t *bs) {
@@ -9059,8 +9062,10 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 {
 	int closestID = -1;
 	int i;
+	int responseDelay;
 	qboolean someonesHere = qfalse;
 	vec3_t headlevel;
+	gentity_t *oldEnemy = bs->currentEnemy;
 
 	bs->isCamper = 0; //reset this
 
@@ -9158,6 +9163,23 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 
 	bs->enemySeenTime = level.time + ENEMY_FORGET_MS;
 	bs->frame_Enemy_Len = NewBotAI_GetDist(bs);
+
+	responseDelay = BotGetResponseDelayMs();
+	if (responseDelay > 0 && bs->currentEnemy && bs->currentEnemy->client)
+	{
+		if (bs->currentEnemy != oldEnemy || bs->timeToReact < level.time)
+		{
+			bs->timeToReact = level.time + responseDelay;
+		}
+
+		if (bs->timeToReact > level.time)
+		{
+			bs->doAttack = 0;
+			bs->doAltAttack = 0;
+			bs->beStill = level.time + 50;
+			return;
+		}
+	}
 
 	if (BotTryAcceptAnyDuelChallenge(bs))
 	{
@@ -9667,7 +9689,7 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 		return;
 	}*/
 
-	reaction = bs->skills.reflex/bs->settings.skill;
+	reaction = BotGetResponseDelayMs();
 
 	if (reaction < 0)
 	{
