@@ -8831,6 +8831,7 @@ int NewBotAI_ScanForEnemies(bot_state_t* bs) {
 	float hasEnemyDist = 0;
 	qboolean noAttackNonJM = qfalse;
 	int ourHealth = g_entities[bs->client].health;
+	const float targetDistanceLimit = g_newBotAITargetDistance.value;
 
 	closest = 999999;
 	i = 0;
@@ -8875,7 +8876,13 @@ int NewBotAI_ScanForEnemies(bot_state_t* bs) {
 
 			//See if we have a LOS to them.  If not, scale the distcheck way up.. expensive?
 
-			distcheck = VectorLength(a) * normalizedHealth;
+			const float enemyDist = VectorLength(a);
+			if (targetDistanceLimit > 0.0f && enemyDist > targetDistanceLimit)
+			{
+				continue;
+			}
+
+			distcheck = enemyDist * normalizedHealth;
 			vectoangles(a, a);
 
 			if (ent->client->ps.isJediMaster) { //make us think the Jedi Master is close so we'll attack him above all
@@ -8908,6 +8915,95 @@ int NewBotAI_ScanForEnemies(bot_state_t* bs) {
 }
 
 #define _ADVANCEDBOTSHIT 1
+
+static qboolean BotTryAcceptAnyDuelChallenge(bot_state_t *bs)
+{
+	int i;
+
+	if (!bot_honorableduelacceptance.integer || !g_privateDuel.integer || bs->cur_ps.duelInProgress)
+	{
+		return qfalse;
+	}
+
+	for (i = 0; i < MAX_CLIENTS; i++)
+	{
+		gentity_t *challenger = &g_entities[i];
+		int duelType;
+
+		if (!challenger->inuse || !challenger->client || i == bs->client)
+		{
+			continue;
+		}
+
+		if (challenger->health < 1 || challenger->client->ps.duelIndex != bs->client || challenger->client->ps.duelTime <= level.time)
+		{
+			continue;
+		}
+
+		duelType = dueltypes[challenger->client->ps.clientNum];
+
+		if (duelType <= 1 && bs->cur_ps.weapon == WP_SABER && !bs->cur_ps.saberHolstered)
+		{
+			Cmd_ToggleSaber_f(&g_entities[bs->client]);
+		}
+		else
+		{
+			Cmd_EngageDuel_f(&g_entities[bs->client], duelType);
+		}
+
+		bs->currentEnemy = challenger;
+		bs->doAttack = 0;
+		bs->doAltAttack = 0;
+		bs->botChallengingTime = level.time + 100;
+		bs->beStill = level.time + 100;
+		return qtrue;
+	}
+
+	return qfalse;
+}
+
+static qboolean NewBotAI_ShouldFallbackToWaypoints(bot_state_t *bs)
+{
+	vec3_t toEnemy, trTo, mins, maxs;
+	trace_t tr;
+	const float targetDistanceLimit = g_newBotAITargetDistance.value;
+
+	if (!bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return qtrue;
+	}
+
+	if (targetDistanceLimit > 0.0f && bs->frame_Enemy_Len > targetDistanceLimit)
+	{
+		return qtrue;
+	}
+
+	if (!bs->frame_Enemy_Vis)
+	{
+		return qtrue;
+	}
+
+	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->origin, toEnemy);
+	if (VectorNormalize(toEnemy) < 96.0f)
+	{
+		return qfalse;
+	}
+
+	trTo[0] = bs->origin[0] + toEnemy[0] * 64.0f;
+	trTo[1] = bs->origin[1] + toEnemy[1] * 64.0f;
+	trTo[2] = bs->origin[2] + toEnemy[2] * 64.0f;
+
+	mins[0] = -15;
+	mins[1] = -15;
+	mins[2] = 0;
+	maxs[0] = 15;
+	maxs[1] = 15;
+	maxs[2] = 32;
+
+	JP_Trace(&tr, bs->origin, mins, maxs, trTo, bs->client, MASK_PLAYERSOLID, qfalse, 0, 0);
+
+	return (tr.fraction < 1.0f && tr.entityNum != bs->currentEnemy->s.number);
+}
 
 void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 {
@@ -9012,6 +9108,17 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 
 	bs->enemySeenTime = level.time + ENEMY_FORGET_MS;
 	bs->frame_Enemy_Len = NewBotAI_GetDist(bs);
+
+	if (BotTryAcceptAnyDuelChallenge(bs))
+	{
+		return;
+	}
+
+	if (NewBotAI_ShouldFallbackToWaypoints(bs))
+	{
+		StandardBotAI(bs, thinktime);
+		return;
+	}
 
 	if (!bs->frame_Enemy_Vis && bs->frame_Enemy_Len > 8096) {
 #if _ADVANCEDBOTSHIT
@@ -9581,43 +9688,7 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 		}
 	}
 
-	if (bot_honorableduelacceptance.integer)
-	{
-		if (bs->currentEnemy && bs->currentEnemy->client &&
-			bs->cur_ps.weapon == WP_SABER &&
-			g_privateDuel.integer &&
-			bs->frame_Enemy_Vis &&
-			bs->frame_Enemy_Len < 400 &&
-			bs->currentEnemy->client->ps.weapon == WP_SABER &&
-			bs->currentEnemy->client->ps.saberHolstered)
-		{
-			vec3_t e_ang_vec;
-
-			VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, e_ang_vec);
-
-			if (InFieldOfVision(bs->viewangles, 100, e_ang_vec))
-			{ //Our enemy has his saber holstered and has challenged us to a duel, so challenge him back
-				if (!bs->cur_ps.saberHolstered)
-				{
-					Cmd_ToggleSaber_f(&g_entities[bs->client]);
-				}
-				else
-				{
-					if (bs->currentEnemy->client->ps.duelIndex == bs->client &&
-						bs->currentEnemy->client->ps.duelTime > level.time &&
-						!bs->cur_ps.duelInProgress)
-					{
-						Cmd_EngageDuel_f(&g_entities[bs->client], dueltypes[bs->currentEnemy->client->ps.clientNum]);
-					}
-				}
-
-				bs->doAttack = 0;
-				bs->doAltAttack = 0;
-				bs->botChallengingTime = level.time + 100;
-				bs->beStill = level.time + 100;
-			}
-		}
-	}
+	BotTryAcceptAnyDuelChallenge(bs);
 	//Apparently this "allows you to cheese" when fighting against bots. I'm not sure why you'd want to con bots
 	//into an easy kill, since they're bots and all. But whatever.
 
