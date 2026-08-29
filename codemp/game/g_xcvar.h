@@ -342,7 +342,8 @@ XCVAR_DEF( bot_custom_reverse_yaw_chance,	"10",			NULL,				CVAR_ARCHIVE,								
 XCVAR_DEF( g_newBotAI,					"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( g_newBotAITarget,			"-1",			NULL,				CVAR_ARCHIVE,									qfalse )
 XCVAR_DEF( g_newBotAITargetDistance,	"4096",		NULL,				CVAR_ARCHIVE,									qtrue )
-XCVAR_DEF( bot_aggressionSkillScale,	"1.0",		NULL,				CVAR_ARCHIVE,									qtrue )
+XCVAR_DEF( bot_aggressionBias,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
+XCVAR_DEF( bot_responseTimeDelay,		"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_maxbots,					"0",			NULL,				CVAR_ARCHIVE,									qfalse )
 XCVAR_DEF( bot_team,					"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 
