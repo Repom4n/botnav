@@ -100,6 +100,8 @@ vmCvar_t bot_wp_distconnect;
 vmCvar_t bot_wp_visconnect;
 //end rww
 
+static float BotGetAggressionBias(void);
+
 wpobject_t *flagRed;
 wpobject_t *oFlagRed;
 wpobject_t *flagBlue;
@@ -7528,38 +7530,41 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 	float aggressionBias;
 	int hardRetreatHealth;
 	int softRetreatHealth;
+	float retreatDistance;
 
 	bs->combatAction = BOT_COMBAT_ACTION_AGGRESSION;
 
-	aggressionBias = bot_aggressionBias.value;
-	if (aggressionBias < -1.0f)
-	{
-		aggressionBias = -1.0f;
-	}
-	else if (aggressionBias > 1.0f)
-	{
-		aggressionBias = 1.0f;
-	}
+	aggressionBias = BotGetAggressionBias();
 
-	hardRetreatHealth = 25 - (int)(aggressionBias * 20.0f);
-	softRetreatHealth = 50 - (int)(aggressionBias * 25.0f);
+	hardRetreatHealth = 30 - (int)(aggressionBias * 25.0f);
+	softRetreatHealth = 60 - (int)(aggressionBias * 35.0f);
+	retreatDistance = 350.0f - (aggressionBias * 150.0f);
 
 	if (hardRetreatHealth < 5)
 	{
 		hardRetreatHealth = 5;
 	}
-	else if (hardRetreatHealth > 60)
+	else if (hardRetreatHealth > 80)
 	{
-		hardRetreatHealth = 60;
+		hardRetreatHealth = 80;
 	}
 
 	if (softRetreatHealth < 20)
 	{
 		softRetreatHealth = 20;
 	}
-	else if (softRetreatHealth > 85)
+	else if (softRetreatHealth > 95)
 	{
-		softRetreatHealth = 85;
+		softRetreatHealth = 95;
+	}
+
+	if (retreatDistance < 200.0f)
+	{
+		retreatDistance = 200.0f;
+	}
+	else if (retreatDistance > 550.0f)
+	{
+		retreatDistance = 550.0f;
 	}
 
 	if ((bs->frame_Enemy_Len > 2000) && (bs->currentEnemy && bs->currentEnemy->client && (hisWeapon == WP_SABER))) { //Chase movement
@@ -7678,7 +7683,7 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 				((g_entities[bs->client].health < softRetreatHealth)
 				&& (bs->cur_ps.fd.forcePower < 30)
 				&& !(bs->cur_ps.fd.forcePowersActive & (1 << FP_ABSORB))
-				&& (bs->frame_Enemy_Len < 450))) {
+				&& (bs->frame_Enemy_Len < retreatDistance))) {
 			qboolean wallRun = qfalse;
 			bs->combatAction = BOT_COMBAT_ACTION_RETREAT_DEFENSE;
 			//Running routine, we should add a wallrun search to this.
@@ -7823,7 +7828,7 @@ qboolean BG_InRoll3(int anim)
 
 static int BotGetResponseDelayMs(void)
 {
-	int delay = bot_responseTimeDelay.integer;
+	int delay = bot_delayresponsetime.integer;
 
 	if (delay < 0)
 	{
@@ -7835,6 +7840,132 @@ static int BotGetResponseDelayMs(void)
 	}
 
 	return delay;
+}
+
+static float BotGetTargetDistanceLimit(void)
+{
+	float targetDistanceLimit = bot_targetdistance.value;
+	if (targetDistanceLimit < 0.0f)
+	{
+		targetDistanceLimit = 0.0f;
+	}
+
+	return targetDistanceLimit;
+}
+
+static float BotGetAggressionBias(void)
+{
+	float aggressionBias = bot_aggressionbias.value;
+
+	if (aggressionBias < -1.0f)
+	{
+		aggressionBias = -1.0f;
+	}
+	else if (aggressionBias > 1.0f)
+	{
+		aggressionBias = 1.0f;
+	}
+
+	return aggressionBias;
+}
+
+static int BotGetStrafeFrequencyPercent(void)
+{
+	int frequency = bot_strafefrequency.integer;
+
+	if (frequency < 0)
+	{
+		frequency = 0;
+	}
+	else if (frequency > 100)
+	{
+		frequency = 100;
+	}
+
+	return frequency;
+}
+
+static int BotRollStrafeDurationMs(void)
+{
+	float normalizedDuration = bot_strafeduration.value / 100.0f;
+	float minDuration;
+	float maxDuration;
+	float roll;
+	float exponent;
+	float scaled;
+
+	if (normalizedDuration < 0.0f)
+	{
+		normalizedDuration = 0.0f;
+	}
+	else if (normalizedDuration > 1.0f)
+	{
+		normalizedDuration = 1.0f;
+	}
+
+	minDuration = 80.0f + (normalizedDuration * 420.0f);
+	maxDuration = 300.0f + (normalizedDuration * 2200.0f);
+
+	roll = Q_flrand(0.0f, 1.0f);
+	exponent = 1.0f - ((normalizedDuration - 0.5f) * 2.0f);
+	if (exponent < 0.35f)
+	{
+		exponent = 0.35f;
+	}
+	else if (exponent > 2.5f)
+	{
+		exponent = 2.5f;
+	}
+
+	scaled = powf(roll, exponent);
+
+	return (int)(minDuration + (scaled * (maxDuration - minDuration)));
+}
+
+static void NewBotAI_ApplyRandomStrafeOverlay(bot_state_t *bs)
+{
+	int frequency;
+
+	if (!bs->currentEnemy || bs->beStill > level.time || bs->doingFallback)
+	{
+		bs->randomStrafeDir = 0;
+		bs->randomStrafeEndTime = 0;
+		return;
+	}
+
+	frequency = BotGetStrafeFrequencyPercent();
+	if (!frequency)
+	{
+		bs->randomStrafeDir = 0;
+		bs->randomStrafeEndTime = 0;
+		return;
+	}
+
+	if (bs->randomStrafeEndTime <= level.time)
+	{
+		if (Q_irand(1, 100) <= frequency)
+		{
+			bs->randomStrafeDir = Q_irand(0, 1) ? 1 : -1;
+			bs->randomStrafeEndTime = level.time + BotRollStrafeDurationMs();
+		}
+		else
+		{
+			bs->randomStrafeDir = 0;
+			bs->randomStrafeEndTime = 0;
+		}
+	}
+
+	if (bs->randomStrafeEndTime > level.time)
+	{
+		if (bs->randomStrafeDir > 0)
+		{
+			trap->EA_MoveRight(bs->client);
+		}
+		else if (bs->randomStrafeDir < 0)
+		{
+			trap->EA_MoveLeft(bs->client);
+		}
+	}
 }
 
 qboolean NewBotAI_IsEnemyPullable(bot_state_t *bs) {
@@ -8876,6 +9007,19 @@ void NewBotAI_DoAloneStuff(bot_state_t *bs, float thinktime) {
 	//Run to it..
 }
 
+static void NewBotAI_RunNavigationOrAlone(bot_state_t *bs, float thinktime)
+{
+	if (bot_navigation.integer)
+	{
+		bs->navObstacleUntil = 0;
+		StandardBotAI(bs, thinktime);
+	}
+	else
+	{
+		NewBotAI_DoAloneStuff(bs, thinktime);
+	}
+}
+
 int NewBotAI_ScanForEnemies(bot_state_t* bs) {
 	vec3_t a;
 	float distcheck;
@@ -8885,7 +9029,7 @@ int NewBotAI_ScanForEnemies(bot_state_t* bs) {
 	float hasEnemyDist = 0;
 	qboolean noAttackNonJM = qfalse;
 	int ourHealth = g_entities[bs->client].health;
-	const float targetDistanceLimit = g_newBotAITargetDistance.value;
+	const float targetDistanceLimit = BotGetTargetDistanceLimit();
 
 	closest = 999999;
 	i = 0;
@@ -9020,7 +9164,7 @@ static qboolean NewBotAI_ShouldFallbackToWaypoints(bot_state_t *bs)
 {
 	vec3_t toEnemy, trTo, mins, maxs;
 	trace_t tr;
-	const float targetDistanceLimit = g_newBotAITargetDistance.value;
+	const float targetDistanceLimit = BotGetTargetDistanceLimit();
 
 	if (!bs->currentEnemy || !bs->currentEnemy->client)
 	{
@@ -9125,11 +9269,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	}
 
 	if (closestID == -1) {//Its just us, or they are too far away.
-#if _ADVANCEDBOTSHIT
-		NewBotAI_DoAloneStuff(bs, thinktime);
-#else
-		//StandardBotAI(bs, thinktime);
-#endif
+		NewBotAI_RunNavigationOrAlone(bs, thinktime);
 		return;
 	}
 
@@ -9156,7 +9296,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		else {
 			bs->currentEnemy = &g_entities[closestID];
 			if (bs->lastVisibleEnemyIndex < level.time - 10000) { //let him keep going for target for 10s before abandoning
-				NewBotAI_DoAloneStuff(bs, thinktime);
+				NewBotAI_RunNavigationOrAlone(bs, thinktime);
 				return;
 			}
 		}
@@ -9168,7 +9308,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	responseDelay = BotGetResponseDelayMs();
 	if (responseDelay > 0 && bs->currentEnemy && bs->currentEnemy->client)
 	{
-		if (bs->currentEnemy != oldEnemy || bs->timeToReact < level.time)
+		if (bs->currentEnemy != oldEnemy)
 		{
 			bs->timeToReact = level.time + responseDelay;
 		}
@@ -9187,7 +9327,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		return;
 	}
 
-	if (NewBotAI_ShouldFallbackToWaypoints(bs))
+	if (bot_navigation.integer && NewBotAI_ShouldFallbackToWaypoints(bs))
 	{
 		// If the bot is actively being attacked, don't divert to waypoint nav —
 		// keep full combat logic running so it can defend, dodge, and fight back.
@@ -9204,6 +9344,10 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 			StandardBotAI(bs, thinktime);
 			return;
 		}
+	}
+	else if (!bot_navigation.integer)
+	{
+		bs->navObstacleUntil = 0;
 	}
 
 	if (bs->navObstacleUntil > level.time)
@@ -9223,11 +9367,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	}
 
 	if (!bs->frame_Enemy_Vis && bs->frame_Enemy_Len > 8096) {
-#if _ADVANCEDBOTSHIT
-		NewBotAI_DoAloneStuff(bs, thinktime);
-#else
-		//StandardBotAI(bs, thinktime);
-#endif
+		NewBotAI_RunNavigationOrAlone(bs, thinktime);
 		return;
 	}
 
@@ -9240,6 +9380,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 
 	if (g_movementStyle.integer == MV_TRIBES && (g_startingItems.integer & (1 << HI_JETPACK))) {
 		NewBotAI_Tribes(bs, thinktime);
+		NewBotAI_ApplyRandomStrafeOverlay(bs);
 		return;
 	}
 
@@ -9260,6 +9401,8 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	else {//Ruh roh, NF with no kick!
 		NewBotAI_NF(bs);
 	}
+
+	NewBotAI_ApplyRandomStrafeOverlay(bs);
 }
 
 //the main AI loop.
