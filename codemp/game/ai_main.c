@@ -7527,6 +7527,35 @@ void NewBotAI_GetGroundDodge(bot_state_t *bs) {
 void NewBotAI_GetMovement(bot_state_t *bs)
 {
 	const int hisWeapon = bs->currentEnemy->client->ps.weapon;
+	float aggressionBias;
+	int hardRetreatHealth;
+	int softRetreatHealth;
+
+	aggressionBias = bot_aggressionbias.value;
+	if (aggressionBias < -1.0f)
+	{
+		aggressionBias = -1.0f;
+	}
+	else if (aggressionBias > 1.0f)
+	{
+		aggressionBias = 1.0f;
+	}
+
+	hardRetreatHealth = 25 - (int)(aggressionBias * 20.0f);
+	softRetreatHealth = 50 - (int)(aggressionBias * 25.0f);
+
+	if (hardRetreatHealth < 5)
+	{
+		hardRetreatHealth = 5;
+	}
+	if (softRetreatHealth < 10)
+	{
+		softRetreatHealth = 10;
+	}
+	if (softRetreatHealth <= hardRetreatHealth)
+	{
+		softRetreatHealth = hardRetreatHealth + 5;
+	}
 
 	if ((bs->frame_Enemy_Len > 2000) && (bs->currentEnemy && bs->currentEnemy->client && (hisWeapon == WP_SABER))) { //Chase movement
 		const vec3_t xyVelocity = {bs->cur_ps.velocity[0], bs->cur_ps.velocity[1]};
@@ -7640,8 +7669,8 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 				trap->EA_MoveForward(bs->client);
 			crouch = qtrue;
 		}
-		else if ((g_entities[bs->client].health < 25) ||
-				((g_entities[bs->client].health < 50)
+		else if ((g_entities[bs->client].health < hardRetreatHealth) ||
+				((g_entities[bs->client].health < softRetreatHealth)
 				&& (bs->cur_ps.fd.forcePower < 30)
 				&& !(bs->cur_ps.fd.forcePowersActive & (1 << FP_ABSORB))
 				&& (bs->frame_Enemy_Len < 450))) {
@@ -7784,6 +7813,22 @@ qboolean BG_InRoll3(int anim)
 		return qtrue;
 	}
 	return qfalse;
+}
+
+static int BotGetResponseDelayMs(void)
+{
+	int delay = bot_responseTimeDelay.integer;
+
+	if (delay < 0)
+	{
+		delay = 0;
+	}
+	else if (delay > 5000)
+	{
+		delay = 5000;
+	}
+
+	return delay;
 }
 
 qboolean NewBotAI_IsEnemyPullable(bot_state_t *bs) {
@@ -8916,8 +8961,10 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 {
 	int closestID = -1;
 	int i;
+	int responseDelay;
 	qboolean someonesHere = qfalse;
 	vec3_t headlevel;
+	gentity_t *oldEnemy = bs->currentEnemy;
 
 	bs->isCamper = 0; //reset this
 
@@ -9015,6 +9062,23 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 
 	bs->enemySeenTime = level.time + ENEMY_FORGET_MS;
 	bs->frame_Enemy_Len = NewBotAI_GetDist(bs);
+
+	responseDelay = BotGetResponseDelayMs();
+	if (responseDelay > 0 && bs->currentEnemy && bs->currentEnemy->client)
+	{
+		if (bs->currentEnemy != oldEnemy || bs->timeToReact < level.time)
+		{
+			bs->timeToReact = level.time + responseDelay;
+		}
+
+		if (bs->timeToReact > level.time)
+		{
+			bs->doAttack = 0;
+			bs->doAltAttack = 0;
+			bs->beStill = level.time + 50;
+			return;
+		}
+	}
 
 	if (!bs->frame_Enemy_Vis && bs->frame_Enemy_Len > 8096) {
 #if _ADVANCEDBOTSHIT
