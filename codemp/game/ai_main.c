@@ -5300,7 +5300,7 @@ int BotFallbackNavigation(bot_state_t *bs)
 	trto[1] = bs->origin[1] + fwd[1]*16;
 	trto[2] = bs->origin[2] + fwd[2]*16;
 
-	JP_Trace(&tr, bs->origin, mins, maxs, trto, ENTITYNUM_NONE, MASK_SOLID, qfalse, 0, 0);
+	JP_Trace(&tr, bs->origin, mins, maxs, trto, bs->client, MASK_SOLID, qfalse, 0, 0);
 
 	if (tr.fraction == 1)
 	{
