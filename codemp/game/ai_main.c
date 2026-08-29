@@ -5259,15 +5259,15 @@ int CombatBotAI(bot_state_t *bs, float thinktime)
 //good place.
 int BotFallbackNavigation(bot_state_t *bs)
 {
-    if (!bot_custom_nav_enable.integer)
+    if (!bot_navigation.integer)
     {
         return 0;
     }
 
     if (bs->customNavReverseTime < level.time)
     {
-        if (bot_custom_reverse_yaw_chance.integer > 0 &&
-            Q_irand(0, 99) < bot_custom_reverse_yaw_chance.integer)
+        if (bot_yawswitch.integer > 0 &&
+            Q_irand(0, 99) < bot_yawswitch.integer)
         {
             bs->goalAngles[YAW] = AngleNormalize360(bs->goalAngles[YAW] + 180.0f);
         }
