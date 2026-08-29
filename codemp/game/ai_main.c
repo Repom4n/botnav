@@ -100,6 +100,8 @@ vmCvar_t bot_wp_distconnect;
 vmCvar_t bot_wp_visconnect;
 //end rww
 
+static float BotGetAggressionBias(void);
+
 wpobject_t *flagRed;
 wpobject_t *oFlagRed;
 wpobject_t *flagBlue;
@@ -9376,6 +9378,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 
 	if (g_movementStyle.integer == MV_TRIBES && (g_startingItems.integer & (1 << HI_JETPACK))) {
 		NewBotAI_Tribes(bs, thinktime);
+		NewBotAI_ApplyRandomStrafeOverlay(bs);
 		return;
 	}
 
