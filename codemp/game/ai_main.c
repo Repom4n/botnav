@@ -7524,6 +7524,55 @@ void NewBotAI_GetGroundDodge(bot_state_t *bs) {
 void NewBotAI_GetMovement(bot_state_t *bs)
 {
 	const int hisWeapon = bs->currentEnemy->client->ps.weapon;
+	float skillNormalized;
+	float aggressionBias;
+	float defenseBias;
+	int hardRetreatHealth;
+	int softRetreatHealth;
+
+	bs->combatAction = BOT_COMBAT_ACTION_AGGRESSION;
+
+	skillNormalized = (bs->settings.skill - 1.0f) / 4.0f;
+	if (skillNormalized < 0.0f)
+	{
+		skillNormalized = 0.0f;
+	}
+	else if (skillNormalized > 1.0f)
+	{
+		skillNormalized = 1.0f;
+	}
+
+	if (bot_aggressionSkillScale.value < 0.0f)
+	{
+		aggressionBias = 0.0f;
+		defenseBias = 0.0f;
+	}
+	else
+	{
+		aggressionBias = skillNormalized * bot_aggressionSkillScale.value;
+		defenseBias = (1.0f - skillNormalized) * bot_aggressionSkillScale.value;
+	}
+
+	hardRetreatHealth = 25 + (int)(defenseBias * 15.0f) - (int)(aggressionBias * 10.0f);
+	softRetreatHealth = 50 + (int)(defenseBias * 15.0f) - (int)(aggressionBias * 10.0f);
+
+	if (hardRetreatHealth < 5)
+	{
+		hardRetreatHealth = 5;
+	}
+	else if (hardRetreatHealth > 60)
+	{
+		hardRetreatHealth = 60;
+	}
+
+	if (softRetreatHealth < 20)
+	{
+		softRetreatHealth = 20;
+	}
+	else if (softRetreatHealth > 85)
+	{
+		softRetreatHealth = 85;
+	}
 
 	if ((bs->frame_Enemy_Len > 2000) && (bs->currentEnemy && bs->currentEnemy->client && (hisWeapon == WP_SABER))) { //Chase movement
 		const vec3_t xyVelocity = {bs->cur_ps.velocity[0], bs->cur_ps.velocity[1]};
@@ -7637,12 +7686,13 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 				trap->EA_MoveForward(bs->client);
 			crouch = qtrue;
 		}
-		else if ((g_entities[bs->client].health < 25) ||
-				((g_entities[bs->client].health < 50)
+		else if ((g_entities[bs->client].health < hardRetreatHealth) ||
+				((g_entities[bs->client].health < softRetreatHealth)
 				&& (bs->cur_ps.fd.forcePower < 30)
 				&& !(bs->cur_ps.fd.forcePowersActive & (1 << FP_ABSORB))
 				&& (bs->frame_Enemy_Len < 450))) {
 			qboolean wallRun = qfalse;
+			bs->combatAction = BOT_COMBAT_ACTION_RETREAT_DEFENSE;
 			//Running routine, we should add a wallrun search to this.
 
 			//trap_EA_MoveBack(bs->client);//Always move forward i guess	
