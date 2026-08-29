@@ -99,6 +99,12 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
 
 typedef enum
 {
+	BOT_COMBAT_ACTION_AGGRESSION = 0,
+	BOT_COMBAT_ACTION_RETREAT_DEFENSE
+} bot_combat_action_t;
+
+typedef enum
+{
 	CTFSTATE_NONE,
 	CTFSTATE_ATTACKER,
 	CTFSTATE_DEFENDER,
@@ -298,6 +304,7 @@ typedef struct bot_state_s
 
 	int					runningLikeASissy;
 	int					runningToEscapeThreat;
+	int					combatAction;
 
 	//char				chatBuffer[MAX_CHAT_BUFFER_SIZE];
 	//Since we're once again not allocating bot structs dynamically,
