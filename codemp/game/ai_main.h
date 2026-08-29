@@ -361,6 +361,9 @@ typedef struct bot_state_s
 	int					forceMove_Forward;
 	int					forceMove_Right;
 	int					forceMove_Up;
+
+	int					navObstacleUntil; // stay in waypoint nav mode until this time when an obstacle blocks path to enemy
+	int					lastHurtTime;     // level.time when this bot last took damage (set in BotDamageNotification)
 	//end rww
 } bot_state_t;
 
