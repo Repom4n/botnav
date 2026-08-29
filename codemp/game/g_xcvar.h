@@ -337,6 +337,26 @@ XCVAR_DEF( sv_autoRaceDemo,				"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 //JAPRO BOTS
 XCVAR_DEF( bot_nochat,					"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_strafeOffset,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
+XCVAR_DEF( bot_forcepowers,				"1",			NULL,				CVAR_CHEAT,										qtrue )
+XCVAR_DEF( bot_forgimmick,				"0",			NULL,				CVAR_CHEAT,										qtrue )
+XCVAR_DEF( bot_honorableduelacceptance,	"0",			NULL,				CVAR_ARCHIVE,									qtrue )
+XCVAR_DEF( bot_pvstype,					"1",			NULL,				CVAR_CHEAT,										qtrue )
+XCVAR_DEF( bot_normgpath,				"0",			NULL,				CVAR_CHEAT,										qtrue )
+#ifndef FINAL_BUILD
+XCVAR_DEF( bot_getinthecarrr,			"0",			NULL,				CVAR_NONE,										qfalse )
+#endif
+#ifdef _DEBUG
+XCVAR_DEF( bot_nogoals,					"0",			NULL,				CVAR_CHEAT,										qfalse )
+XCVAR_DEF( bot_debugmessages,			"0",			NULL,				CVAR_CHEAT,										qfalse )
+#endif
+XCVAR_DEF( bot_attachments,				"1",			NULL,				CVAR_NONE,										qfalse )
+XCVAR_DEF( bot_camp,					"1",			NULL,				CVAR_NONE,										qfalse )
+XCVAR_DEF( bot_wp_info,					"1",			NULL,				CVAR_NONE,										qfalse )
+XCVAR_DEF( bot_wp_edit,					"0",			NULL,				CVAR_CHEAT,										qfalse )
+XCVAR_DEF( bot_wp_clearweight,			"1",			NULL,				CVAR_NONE,										qfalse )
+XCVAR_DEF( bot_wp_distconnect,			"1",			NULL,				CVAR_NONE,										qfalse )
+XCVAR_DEF( bot_wp_visconnect,			"1",			NULL,				CVAR_NONE,										qfalse )
+XCVAR_DEF( bot_aggressionbias,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_custom_nav_enable,		"1",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_custom_reverse_yaw_chance,	"10",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_custom_reverse_interval_ms,	"1000",			NULL,				CVAR_ARCHIVE,									qtrue )

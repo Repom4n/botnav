@@ -75,31 +75,6 @@ extern int imperial_attackers;
 
 boteventtracker_t gBotEventTracker[MAX_CLIENTS];
 
-//rww - new bot cvars..
-vmCvar_t bot_forcepowers;
-vmCvar_t bot_forgimmick;
-vmCvar_t bot_honorableduelacceptance;
-vmCvar_t bot_pvstype;
-vmCvar_t bot_normgpath;
-#ifndef FINAL_BUILD
-vmCvar_t bot_getinthecarrr;
-#endif
-
-#ifdef _DEBUG
-vmCvar_t bot_nogoals;
-vmCvar_t bot_debugmessages;
-#endif
-
-vmCvar_t bot_attachments;
-vmCvar_t bot_camp;
-
-vmCvar_t bot_wp_info;
-vmCvar_t bot_wp_edit;
-vmCvar_t bot_wp_clearweight;
-vmCvar_t bot_wp_distconnect;
-vmCvar_t bot_wp_visconnect;
-//end rww
-
 wpobject_t *flagRed;
 wpobject_t *oFlagRed;
 wpobject_t *flagBlue;
@@ -10727,32 +10702,6 @@ BotAISetup
 ==============
 */
 int BotAISetup( int restart ) {
-	//rww - new bot cvars..
-	trap->Cvar_Register(&bot_forcepowers, "bot_forcepowers", "1", CVAR_CHEAT);
-	trap->Cvar_Register(&bot_forgimmick, "bot_forgimmick", "0", CVAR_CHEAT);
-	trap->Cvar_Register(&bot_honorableduelacceptance, "bot_honorableduelacceptance", "0", CVAR_ARCHIVE);
-	trap->Cvar_Register(&bot_pvstype, "bot_pvstype", "1", CVAR_CHEAT);
-#ifndef FINAL_BUILD
-	trap->Cvar_Register(&bot_getinthecarrr, "bot_getinthecarrr", "0", 0);
-#endif
-
-#ifdef _DEBUG
-	trap->Cvar_Register(&bot_nogoals, "bot_nogoals", "0", CVAR_CHEAT);
-	trap->Cvar_Register(&bot_debugmessages, "bot_debugmessages", "0", CVAR_CHEAT);
-#endif
-
-	trap->Cvar_Register(&bot_attachments, "bot_attachments", "1", 0);
-	trap->Cvar_Register(&bot_camp, "bot_camp", "1", 0);
-
-	trap->Cvar_Register(&bot_wp_info, "bot_wp_info", "1", 0);
-	trap->Cvar_Register(&bot_wp_edit, "bot_wp_edit", "0", CVAR_CHEAT);
-	trap->Cvar_Register(&bot_wp_clearweight, "bot_wp_clearweight", "1", 0);
-	trap->Cvar_Register(&bot_wp_distconnect, "bot_wp_distconnect", "1", 0);
-	trap->Cvar_Register(&bot_wp_visconnect, "bot_wp_visconnect", "1", 0);
-
-	trap->Cvar_Update(&bot_forcepowers);
-	//end rww
-
 	//if the game is restarted for a tournament
 	if (restart) {
 		return qtrue;
