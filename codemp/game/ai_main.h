@@ -361,6 +361,9 @@ typedef struct bot_state_s
 	int					forceMove_Forward;
 	int					forceMove_Right;
 	int					forceMove_Up;
+	int					fanAttackTime;
+	int					fanAttackDir;
+	int					drainHoldTime;
 	int					randomStrafeDir;
 	int					randomStrafeEndTime;
 
