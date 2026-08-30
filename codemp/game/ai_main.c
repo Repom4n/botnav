@@ -100,7 +100,7 @@ vmCvar_t bot_wp_distconnect;
 vmCvar_t bot_wp_visconnect;
 //end rww
 
-static float BotGetAggressionBias(void);
+static float BotGetAggressionBias(bot_state_t *bs);
 
 wpobject_t *flagRed;
 wpobject_t *oFlagRed;
@@ -1800,7 +1800,7 @@ int PassStandardEnemyChecks(bot_state_t *bs, gentity_t *en)
 	if (en->client->ps.pm_type == PM_NOCLIP) 
 		return 0;
 
-	if ((g_newBotAITarget.integer < -1) && (en->r.svFlags & SVF_BOT))
+	if (!BotTargetModeAllowsBotEnemies(BotGetNewBotAITargetMode()) && (en->r.svFlags & SVF_BOT))
 		return 0;
 
 	if (en->health < 1)
@@ -7534,7 +7534,7 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 
 	bs->combatAction = BOT_COMBAT_ACTION_AGGRESSION;
 
-	aggressionBias = BotGetAggressionBias();
+	aggressionBias = BotGetAggressionBias(bs);
 
 	hardRetreatHealth = 30 - (int)(aggressionBias * 25.0f);
 	softRetreatHealth = 60 - (int)(aggressionBias * 35.0f);
@@ -7853,9 +7853,152 @@ static float BotGetTargetDistanceLimit(void)
 	return targetDistanceLimit;
 }
 
-static float BotGetAggressionBias(void)
+enum
+{
+	NEWBOTAI_TARGET_DEFAULT = -1,
+	NEWBOTAI_TARGET_HUMANS_ONLY = -2,
+	NEWBOTAI_TARGET_PREFER_HUMANS = -3
+};
+
+static int BotGetNewBotAITargetMode(void)
+{
+	switch (g_newBotAITarget.integer)
+	{
+	case NEWBOTAI_TARGET_DEFAULT:
+	case NEWBOTAI_TARGET_HUMANS_ONLY:
+	case NEWBOTAI_TARGET_PREFER_HUMANS:
+		return g_newBotAITarget.integer;
+	default:
+		break;
+	}
+
+	if (g_newBotAITarget.integer < NEWBOTAI_TARGET_PREFER_HUMANS)
+	{
+		return NEWBOTAI_TARGET_HUMANS_ONLY;
+	}
+
+	return g_newBotAITarget.integer;
+}
+
+static qboolean BotTargetModeAllowsBotEnemies(int targetMode)
+{
+	return (targetMode != NEWBOTAI_TARGET_HUMANS_ONLY);
+}
+
+static qboolean BotTargetModePassesScanFilter(int targetMode, gentity_t *ent, qboolean preferredHumansOnly)
+{
+	const qboolean isBot = (ent->r.svFlags & SVF_BOT) ? qtrue : qfalse;
+
+	if (isBot && !BotTargetModeAllowsBotEnemies(targetMode))
+	{
+		return qfalse;
+	}
+
+	if (preferredHumansOnly && isBot)
+	{
+		return qfalse;
+	}
+
+	return qtrue;
+}
+
+static int BotGetLowHangingFruitHP(void)
+{
+	int threshold = bot_lowhangingfruitHP.integer;
+
+	if (threshold < 0)
+	{
+		threshold = 0;
+	}
+	else if (threshold > 100)
+	{
+		threshold = 100;
+	}
+
+	return threshold;
+}
+
+static float BotGetLowHangingFruitDistance(void)
+{
+	float distance = bot_lowhanginfruitDistance.value;
+
+	if (distance < 0.0f)
+	{
+		distance = 0.0f;
+	}
+
+	return distance;
+}
+
+static float BotGetBiasWeight(float value)
+{
+	if (value < -1.0f)
+	{
+		return -1.0f;
+	}
+	else if (value > 1.0f)
+	{
+		return 1.0f;
+	}
+
+	return value;
+}
+
+static float BotGetAggressionBias(bot_state_t *bs)
 {
 	float aggressionBias = bot_aggressionbias.value;
+	float healthBias;
+	float forceBias;
+	float healthComponent;
+	float forceComponent;
+
+	if (aggressionBias < -1.0f)
+	{
+		aggressionBias = -1.0f;
+	}
+	else if (aggressionBias > 1.0f)
+	{
+		aggressionBias = 1.0f;
+	}
+
+	if (!bs)
+	{
+		return aggressionBias;
+	}
+
+	healthBias = BotGetBiasWeight(bot_healthbias.value);
+	forceBias = BotGetBiasWeight(bot_forcebias.value);
+
+	healthComponent = ((float)g_entities[bs->client].health - 50.0f) / 50.0f;
+	if (healthComponent < -1.0f)
+	{
+		healthComponent = -1.0f;
+	}
+	else if (healthComponent > 1.0f)
+	{
+		healthComponent = 1.0f;
+	}
+
+	if (bs->currentEnemy && bs->currentEnemy->client)
+	{
+		forceComponent = ((float)bs->cur_ps.fd.forcePower - (float)bs->currentEnemy->client->ps.fd.forcePower) / 100.0f;
+	}
+	else
+	{
+		forceComponent = ((float)bs->cur_ps.fd.forcePower - 50.0f) / 50.0f;
+	}
+
+	if (forceComponent < -1.0f)
+	{
+		forceComponent = -1.0f;
+	}
+	else if (forceComponent > 1.0f)
+	{
+		forceComponent = 1.0f;
+	}
+
+	aggressionBias += (healthComponent * healthBias);
+	aggressionBias += (forceComponent * forceBias);
 
 	if (aggressionBias < -1.0f)
 	{
@@ -9024,16 +9167,27 @@ int NewBotAI_ScanForEnemies(bot_state_t* bs) {
 	vec3_t a;
 	float distcheck;
 	float closest;
+	float lowFruitClosest;
+	float startingClosest = 999999;
 	int bestindex;
+	int lowFruitBestIndex;
 	int i;
+	int pass;
 	float hasEnemyDist = 0;
 	qboolean noAttackNonJM = qfalse;
+	qboolean allowLowHangingFruit;
 	int ourHealth = g_entities[bs->client].health;
+	int targetMode;
+	int lowHangingFruitHP;
+	float lowHangingFruitDistance;
 	const float targetDistanceLimit = BotGetTargetDistanceLimit();
 
-	closest = 999999;
-	i = 0;
-	bestindex = -1;
+	targetMode = BotGetNewBotAITargetMode();
+	lowHangingFruitHP = BotGetLowHangingFruitHP();
+	lowHangingFruitDistance = BotGetLowHangingFruitDistance();
+	allowLowHangingFruit = ((level.gametype == GT_FFA || level.gametype == GT_TEAM) &&
+		lowHangingFruitHP > 0 &&
+		lowHangingFruitDistance > 0.0f) ? qtrue : qfalse;
 
 	if (bs->currentEnemy) { //only switch to a new enemy if he's significantly closer
 		hasEnemyDist = 0;
@@ -9049,67 +9203,109 @@ int NewBotAI_ScanForEnemies(bot_state_t* bs) {
 				noAttackNonJM = qtrue;
 			}
 			else {
-				closest = 128; //only get mad at people if they get close enough to you to anger you, or hurt you
+				startingClosest = 128; //only get mad at people if they get close enough to you to anger you, or hurt you
 			}
 		}
 	}
 
-	//for (i = 0; i < level.numConnectedClients; i++) { //Go through each client, see if they are "afk", if everyone is afk, fuck this then.
-	for (i = 0; i < MAX_CLIENTS; i++) { //Go through each client, see if they are "afk", if everyone is afk, fuck this then.
-		//gentity_t* ent = &g_entities[level.sortedClients[i]];
-		gentity_t* ent = &g_entities[i];
+	for (pass = 0; pass < ((targetMode == NEWBOTAI_TARGET_PREFER_HUMANS) ? 2 : 1); pass++)
+	{
+		const qboolean preferHumansOnly = (targetMode == NEWBOTAI_TARGET_PREFER_HUMANS && pass == 0);
 
-		if (ent && ent->inuse && PassStandardEnemyChecks(bs, ent) && BotPVSCheck(ent->client->ps.origin, bs->eye) && PassLovedOneCheck(bs, ent)) {
-			float normalizedHealth = 0.25 + (ent->health - 1) * (1 - 0.25) / (100 - 1); //Range .25 to 1
-			if (ent->client->ps.fd.forceGripEntityNum == bs->cur_ps.clientNum) { //always aim at whos gripping us
-				bestindex = i;
-				break;
-			}
+		closest = startingClosest;
+		lowFruitClosest = startingClosest;
+		bestindex = -1;
+		lowFruitBestIndex = -1;
 
-			VectorSubtract(ent->client->ps.origin, bs->eye, a);
+		//for (i = 0; i < level.numConnectedClients; i++) { //Go through each client, see if they are "afk", if everyone is afk, fuck this then.
+		for (i = 0; i < MAX_CLIENTS; i++) { //Go through each client, see if they are "afk", if everyone is afk, fuck this then.
+			//gentity_t* ent = &g_entities[level.sortedClients[i]];
+			gentity_t* ent = &g_entities[i];
 
-			normalizedHealth += (100 - ourHealth) * 0.005; //Bring normalizedhealth closer to 1 the lower HP we ourselves are?, up to +0.5?
-			if (normalizedHealth > 1)
-				normalizedHealth = 1;
+			if (ent && ent->inuse && PassStandardEnemyChecks(bs, ent) && BotPVSCheck(ent->client->ps.origin, bs->eye) && PassLovedOneCheck(bs, ent)) {
+				float normalizedHealth = 0.25 + (ent->health - 1) * (1 - 0.25) / (100 - 1); //Range .25 to 1
+				qboolean isLowHangingFruit = qfalse;
+				float enemyDist;
 
-			//See if we have a LOS to them.  If not, scale the distcheck way up.. expensive?
+				if (!BotTargetModePassesScanFilter(targetMode, ent, preferHumansOnly))
+				{
+					continue;
+				}
 
-			const float enemyDist = VectorLength(a);
-			if (targetDistanceLimit > 0.0f && enemyDist > targetDistanceLimit)
-			{
-				continue;
-			}
+				if (ent->client->ps.fd.forceGripEntityNum == bs->cur_ps.clientNum) { //always aim at whos gripping us
+					return i;
+				}
 
-			distcheck = enemyDist * normalizedHealth;
-			vectoangles(a, a);
+				VectorSubtract(ent->client->ps.origin, bs->eye, a);
+				enemyDist = VectorLength(a);
 
-			if (ent->client->ps.isJediMaster) { //make us think the Jedi Master is close so we'll attack him above all
-				distcheck = 1;
-			}
+				normalizedHealth += (100 - ourHealth) * 0.005; //Bring normalizedhealth closer to 1 the lower HP we ourselves are?, up to +0.5?
+				if (normalizedHealth > 1)
+					normalizedHealth = 1;
 
-			if (distcheck < closest) {
+				//See if we have a LOS to them.  If not, scale the distcheck way up.. expensive?
+
+				if (targetDistanceLimit > 0.0f && enemyDist > targetDistanceLimit)
+				{
+					continue;
+				}
+
+				distcheck = enemyDist * normalizedHealth;
+				vectoangles(a, a);
+
+				if (ent->client->ps.isJediMaster) { //make us think the Jedi Master is close so we'll attack him above all
+					distcheck = 1;
+				}
+
+				if (allowLowHangingFruit && ent->health <= lowHangingFruitHP && enemyDist <= lowHangingFruitDistance)
+				{
+					isLowHangingFruit = qtrue;
+				}
+
 				if (BotMindTricked(bs->client, i)) {
-					if (distcheck < 256 || (level.time - ent->client->dangerTime) < 100) {
-						if (!hasEnemyDist || distcheck < (hasEnemyDist - 128)) { //if we have an enemy, only switch to closer if he is 128+ closer to avoid flipping out
-							if (!noAttackNonJM || ent->client->ps.isJediMaster) {
-								closest = distcheck;
-								bestindex = i;
-							}
-						}
+					if (!(distcheck < 256 || (level.time - ent->client->dangerTime) < 100)) {
+						continue;
 					}
 				}
-				else {
-					if (!hasEnemyDist || distcheck < (hasEnemyDist - 128)) {//if we have an enemy, only switch to closer if he is 128+ closer to avoid flipping out
-						if (!noAttackNonJM || ent->client->ps.isJediMaster) {
-							closest = distcheck;
-							bestindex = i;
-						}
+
+				if (hasEnemyDist && distcheck >= (hasEnemyDist - 128))
+				{
+					continue;
+				}
+
+				if (noAttackNonJM && !ent->client->ps.isJediMaster)
+				{
+					continue;
+				}
+
+				if (isLowHangingFruit)
+				{
+					if (distcheck < lowFruitClosest)
+					{
+						lowFruitClosest = distcheck;
+						lowFruitBestIndex = i;
 					}
+				}
+				else if (distcheck < closest)
+				{
+					closest = distcheck;
+					bestindex = i;
 				}
 			}
 		}
+
+		if (lowFruitBestIndex != -1)
+		{
+			return lowFruitBestIndex;
+		}
+
+		if (bestindex != -1 || targetMode != NEWBOTAI_TARGET_PREFER_HUMANS)
+		{
+			return bestindex;
+		}
 	}
-	return bestindex;
+
+	return -1;
 }
 
 #define _ADVANCEDBOTSHIT 1
@@ -9208,6 +9404,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	int closestID = -1;
 	int i;
 	int responseDelay;
+	int targetMode;
 	qboolean someonesHere = qfalse;
 	vec3_t headlevel;
 	gentity_t *oldEnemy = bs->currentEnemy;
@@ -9242,12 +9439,13 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	if (g_entities[bs->client].client->pers.amfreeze) //No AI if we are frozen
 		return;
 
+	targetMode = BotGetNewBotAITargetMode();
 
-	if (g_newBotAITarget.integer < 0)
+	if (targetMode < 0)
 		closestID = NewBotAI_ScanForEnemies(bs); //This has been modified to take health into account, and ignore FOV, mindtrick, etc, when newBotAI is being used.
 	else {
 		gclient_t	*cl;
-		closestID = g_newBotAITarget.integer;
+		closestID = targetMode;
 
 		if (closestID < 0 || closestID >= level.maxclients)
 			closestID = -1;
@@ -9277,7 +9475,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	VectorCopy(g_entities[closestID].client->ps.origin, headlevel);
 	headlevel[2] += g_entities[closestID].client->ps.viewheight - 24;
 
-	if ((bs->cur_ps.weapon == WP_DEMP2 && g_entities[bs->client].client->forcedFireMode != 1) || (g_newBotAITarget.integer >= 0) || OrgVisible(bs->eye, g_entities[closestID].client->ps.origin, bs->client)) { //We can see or dmg our closest enemy
+	if ((bs->cur_ps.weapon == WP_DEMP2 && g_entities[bs->client].client->forcedFireMode != 1) || (targetMode >= 0) || OrgVisible(bs->eye, g_entities[closestID].client->ps.origin, bs->client)) { //We can see or dmg our closest enemy
 		bs->currentEnemy = &g_entities[closestID];
 		bs->frame_Enemy_Vis = 1;
 		bs->lastVisibleEnemyIndex = level.time;
