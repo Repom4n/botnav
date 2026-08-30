@@ -106,6 +106,7 @@ static float BotGetChanceBiasPercent(float value);
 static int BotGetAggressionWeightedBonus(bot_state_t *bs, float biasPercent, int maxBonus, qboolean aggressiveOnly);
 static int BotGetDrainHoldBiasMs(bot_state_t *bs);
 static int NewBotAI_GetAntiDrainWeight(bot_state_t *bs);
+static int NewBotAI_GetLightningWeight(bot_state_t *bs);
 static int NewBotAI_GetPTKWeight(bot_state_t *bs);
 static qboolean NewBotAI_IsSaberSwingStartWindow(bot_state_t *bs);
 static qboolean NewBotAI_CanAttemptFlipkick(bot_state_t *bs);
@@ -115,6 +116,9 @@ static qboolean NewBotAI_CanUseSaberThrowDefenseBreakForce(bot_state_t *bs, qboo
 static void NewBotAI_AdjustSaberThrowArcAim(bot_state_t *bs, vec3_t headlevel);
 static void NewBotAI_TrySaberThrowDefenseBreak(bot_state_t *bs);
 qboolean NewBotAI_IsEnemyPullable(bot_state_t *bs);
+void Cmd_EngageDuel_f(gentity_t *ent, int dueltype);
+
+static qboolean BotHasActiveHumanPlayers(void);
 
 wpobject_t *flagRed;
 wpobject_t *oFlagRed;
@@ -5276,23 +5280,13 @@ int CombatBotAI(bot_state_t *bs, float thinktime)
 //good place.
 int BotFallbackNavigation(bot_state_t *bs)
 {
-    if (!bot_navigation.integer)
-    {
-        return 0;
-    }
-
-    if (bs->customNavReverseTime < level.time)
-    {
-        if (bot_yawswitch.integer > 0 &&
-            Q_irand(0, 99) < bot_yawswitch.integer)
-        {
-            bs->goalAngles[YAW] = AngleNormalize360(bs->goalAngles[YAW] + 180.0f);
-        }
-
-        bs->customNavReverseTime = level.time + 1000;
-    }
 	vec3_t b_angle, fwd, trto, mins, maxs;
 	trace_t tr;
+
+	if (!bot_navigation.integer)
+	{
+		return 0;
+	}
 
 	if (bs->currentEnemy && bs->frame_Enemy_Vis)
 	{
@@ -5326,10 +5320,17 @@ int BotFallbackNavigation(bot_state_t *bs)
 	}
 	else
 	{
-		bs->goalAngles[YAW] = rand()%360;
+		if (bs->customNavReverseTime < level.time)
+		{
+			bs->goalAngles[YAW] = AngleNormalize360(bs->goalAngles[YAW] + 180.0f);
+			bs->customNavReverseTime = level.time + 1000;
+		}
+		trto[0] = bs->origin[0] - fwd[0]*48;
+		trto[1] = bs->origin[1] - fwd[1]*48;
+		trto[2] = bs->origin[2];
+		VectorCopy(trto, bs->goalPosition);
+		return 1;
 	}
-
-	return 0;
 }
 
 int BotTryAnotherWeapon(bot_state_t *bs)
@@ -6555,7 +6556,8 @@ static qboolean NewBotAI_CanAttemptFlipkick(bot_state_t *bs)
 		return qfalse;
 	}
 
-	if (bs->cur_ps.duelInProgress && bs->cur_ps.weapon == WP_SABER)
+	if (bs->cur_ps.duelInProgress &&
+		dueltypes[bs->client] == 0)
 	{
 		return qfalse;
 	}
@@ -7988,6 +7990,132 @@ static qboolean BotTargetModePassesScanFilter(int targetMode, gentity_t *ent, qb
 	return qtrue;
 }
 
+static qboolean BotHasActiveHumanPlayers(void)
+{
+	int i;
+
+	for (i = 0; i < level.numConnectedClients; i++)
+	{
+		gentity_t *ent = &g_entities[level.sortedClients[i]];
+
+		if (!ent->inuse)
+		{
+			continue;
+		}
+		if (ent->r.svFlags & SVF_BOT)
+		{
+			continue;
+		}
+		if (!ent->client)
+		{
+			continue;
+		}
+		if (ent->client->lastHereTime > level.time - 120000)
+		{
+			return qtrue;
+		}
+	}
+
+	return qfalse;
+}
+
+static int BotGetRoundedSkillLevel(bot_state_t *bs)
+{
+	int skillLevel;
+
+	if (!bs)
+	{
+		return 0;
+	}
+
+	skillLevel = (int)(bs->settings.skill + 0.5f);
+	if (skillLevel < 1)
+	{
+		skillLevel = 1;
+	}
+	else if (skillLevel > 5)
+	{
+		skillLevel = 5;
+	}
+
+	return skillLevel;
+}
+
+static qboolean NewBotAI_ShouldIssueBotDuelChallenge(bot_state_t *bs, qboolean humansActive, int targetMode)
+{
+	bot_state_t *enemyBs;
+	int ourSkillLevel;
+	int enemySkillLevel;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return qfalse;
+	}
+	if (targetMode != NEWBOTAI_TARGET_PREFER_HUMANS || humansActive)
+	{
+		return qfalse;
+	}
+	if (!bot_honorableduelacceptance.integer || !g_privateDuel.integer)
+	{
+		return qfalse;
+	}
+	if (bs->cur_ps.duelInProgress || bs->currentEnemy->client->ps.duelInProgress || bs->botChallengingTime > level.time)
+	{
+		return qfalse;
+	}
+	if (!(g_entities[bs->client].r.svFlags & SVF_BOT) || !(bs->currentEnemy->r.svFlags & SVF_BOT))
+	{
+		return qfalse;
+	}
+	if (!bs->frame_Enemy_Vis || bs->frame_Enemy_Len > 220.0f)
+	{
+		return qfalse;
+	}
+
+	enemyBs = botstates[bs->currentEnemy->s.number];
+	if (!enemyBs)
+	{
+		return qfalse;
+	}
+
+	ourSkillLevel = BotGetRoundedSkillLevel(bs);
+	enemySkillLevel = BotGetRoundedSkillLevel(enemyBs);
+	if (ourSkillLevel == enemySkillLevel)
+	{
+		return qfalse;
+	}
+
+	return qtrue;
+}
+
+static qboolean NewBotAI_TryIssueBotDuelChallenge(bot_state_t *bs, qboolean humansActive, int targetMode)
+{
+	vec3_t toEnemy;
+	vec3_t oldViewAngles;
+	int duelType;
+
+	if (!NewBotAI_ShouldIssueBotDuelChallenge(bs, humansActive, targetMode))
+	{
+		return qfalse;
+	}
+
+	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, toEnemy);
+	vectoangles(toEnemy, toEnemy);
+	VectorCopy(g_entities[bs->client].client->ps.viewangles, oldViewAngles);
+	VectorCopy(toEnemy, g_entities[bs->client].client->ps.viewangles);
+	VectorCopy(toEnemy, bs->ideal_viewangles);
+
+	duelType = Q_irand(0, 1);
+	Cmd_EngageDuel_f(&g_entities[bs->client], duelType);
+
+	VectorCopy(oldViewAngles, g_entities[bs->client].client->ps.viewangles);
+	bs->botChallengingTime = level.time + 2500;
+	bs->beStill = level.time + 250;
+	bs->doAttack = 0;
+	bs->doAltAttack = 0;
+	return qtrue;
+}
+
 static int BotGetLowHangingFruitHP(void)
 {
 	int threshold = bot_lowhangingfruitHP.integer;
@@ -8188,6 +8316,94 @@ static int NewBotAI_GetAntiDrainWeight(bot_state_t *bs)
 	}
 
 	return 0;
+}
+
+static float BotGetLightningStartDistance(void)
+{
+	float startDistance = bot_lightningdistance.value;
+
+	if (startDistance < 0.0f)
+	{
+		startDistance = 0.0f;
+	}
+	if (startDistance > FORCE_LIGHTNING_RADIUS)
+	{
+		startDistance = FORCE_LIGHTNING_RADIUS;
+	}
+
+	return startDistance;
+}
+
+static int NewBotAI_GetLightningWeight(bot_state_t *bs)
+{
+	float lightningBias;
+	float aggressionBias;
+	float startDistance;
+	float distanceFactor;
+	float defensiveFactor;
+	vec3_t a_fo;
+
+	if (g_forcePowerDisable.integer & (1 << FP_LIGHTNING))
+	{
+		return 0;
+	}
+	if (!(bs->cur_ps.fd.forcePowersKnown & (1 << FP_LIGHTNING)))
+	{
+		return 0;
+	}
+	if (!bs->frame_Enemy_Vis || bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB))
+	{
+		return 0;
+	}
+	if (bs->cur_ps.fd.forcePower <= 50)
+	{
+		return 0;
+	}
+
+	lightningBias = BotGetChanceBiasPercent(bot_lightningbias.value);
+	if (lightningBias <= 0.0f)
+	{
+		return 0;
+	}
+
+	aggressionBias = BotGetAggressionBias(bs);
+	if (aggressionBias >= 0.0f)
+	{
+		return 0;
+	}
+
+	startDistance = BotGetLightningStartDistance();
+	if (bs->frame_Enemy_Len < startDistance || bs->frame_Enemy_Len > FORCE_LIGHTNING_RADIUS)
+	{
+		return 0;
+	}
+
+	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, a_fo);
+	vectoangles(a_fo, a_fo);
+	if (!InFieldOfVision(bs->viewangles, 50, a_fo))
+	{
+		return 0;
+	}
+
+	if (FORCE_LIGHTNING_RADIUS <= startDistance)
+	{
+		distanceFactor = 1.0f;
+	}
+	else
+	{
+		distanceFactor = (bs->frame_Enemy_Len - startDistance) / (FORCE_LIGHTNING_RADIUS - startDistance);
+		if (distanceFactor < 0.0f)
+		{
+			distanceFactor = 0.0f;
+		}
+		else if (distanceFactor > 1.0f)
+		{
+			distanceFactor = 1.0f;
+		}
+	}
+
+	defensiveFactor = -aggressionBias;
+	return (int)(defensiveFactor * distanceFactor * (lightningBias / 100.0f) * 85.0f);
 }
 
 static int NewBotAI_GetPTKWeight(bot_state_t *bs)
@@ -8847,7 +9063,7 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 {
 	vec3_t a_fo;
 	qboolean useTheForce = qfalse;
-	int pushWeight, pullWeight, drainWeight, gripWeight;//, doNothingWeight;
+	int pushWeight, pullWeight, lightningWeight, drainWeight, gripWeight;//, doNothingWeight;
 	int minWeight = 0;
 
 	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, a_fo);
@@ -8855,6 +9071,7 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 
 	pullWeight = NewBotAI_GetPull(bs);
 	pushWeight = NewBotAI_GetPush(bs);
+	lightningWeight = NewBotAI_GetLightningWeight(bs);
 	drainWeight = NewBotAI_GetDrain(bs);
 	gripWeight = NewBotAI_GetGrip(bs);
 	//doNothingWeight = NewBotAI_GetWait(bs);
@@ -8872,6 +9089,10 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 			NewBotAI_Flipkick(bs);
 
 		//trap->Print("Pulling -- Pull: %i, Push: %i, Drain: %i, Grip: %i\n", pullWeight, pushWeight, drainWeight, gripWeight);
+	}
+	else if (lightningWeight > pushWeight && lightningWeight > pullWeight && lightningWeight > drainWeight && lightningWeight > gripWeight && lightningWeight > minWeight) {
+		level.clients[bs->client].ps.fd.forcePowerSelected = FP_LIGHTNING;
+		useTheForce = qtrue;
 	}
 	else if (drainWeight > pushWeight && drainWeight > pullWeight && drainWeight > gripWeight && drainWeight > minWeight) {
 		level.clients[bs->client].ps.fd.forcePowerSelected = FP_DRAIN;
@@ -9648,9 +9869,11 @@ int NewBotAI_ScanForEnemies(bot_state_t* bs) {
 	float distcheck;
 	float closest;
 	float lowFruitClosest;
+	float fallbackClosest;
 	float startingClosest = 999999;
 	int bestindex;
 	int lowFruitBestIndex;
+	int fallbackBestIndex;
 	int i;
 	int pass;
 	float hasEnemyDist = 0;
@@ -9694,6 +9917,8 @@ int NewBotAI_ScanForEnemies(bot_state_t* bs) {
 
 		closest = startingClosest;
 		lowFruitClosest = startingClosest;
+		fallbackClosest = startingClosest;
+		fallbackBestIndex = -1;
 		bestindex = -1;
 		lowFruitBestIndex = -1;
 
@@ -9723,13 +9948,6 @@ int NewBotAI_ScanForEnemies(bot_state_t* bs) {
 				if (normalizedHealth > 1)
 					normalizedHealth = 1;
 
-				//See if we have a LOS to them.  If not, scale the distcheck way up.. expensive?
-
-				if (targetDistanceLimit > 0.0f && enemyDist > targetDistanceLimit)
-				{
-					continue;
-				}
-
 				distcheck = enemyDist * normalizedHealth;
 				vectoangles(a, a);
 
@@ -9758,6 +9976,17 @@ int NewBotAI_ScanForEnemies(bot_state_t* bs) {
 					continue;
 				}
 
+				if (distcheck < fallbackClosest)
+				{
+					fallbackClosest = distcheck;
+					fallbackBestIndex = i;
+				}
+
+				if (targetDistanceLimit > 0.0f && enemyDist > targetDistanceLimit)
+				{
+					continue;
+				}
+
 				if (isLowHangingFruit)
 				{
 					if (distcheck < lowFruitClosest)
@@ -9781,7 +10010,11 @@ int NewBotAI_ScanForEnemies(bot_state_t* bs) {
 
 		if (bestindex != -1 || targetMode != NEWBOTAI_TARGET_PREFER_HUMANS)
 		{
-			return bestindex;
+			if (bestindex != -1)
+			{
+				return bestindex;
+			}
+			return fallbackBestIndex;
 		}
 	}
 
@@ -9793,6 +10026,8 @@ int NewBotAI_ScanForEnemies(bot_state_t* bs) {
 static qboolean BotTryAcceptAnyDuelChallenge(bot_state_t *bs)
 {
 	int i;
+	const int targetMode = BotGetNewBotAITargetMode();
+	const qboolean humansActive = BotHasActiveHumanPlayers();
 
 	if (!bot_honorableduelacceptance.integer || !g_privateDuel.integer || bs->cur_ps.duelInProgress)
 	{
@@ -9815,6 +10050,18 @@ static qboolean BotTryAcceptAnyDuelChallenge(bot_state_t *bs)
 		}
 
 		duelType = dueltypes[challenger->client->ps.clientNum];
+
+		if (targetMode == NEWBOTAI_TARGET_PREFER_HUMANS &&
+			!humansActive &&
+			(g_entities[bs->client].r.svFlags & SVF_BOT) &&
+			(challenger->r.svFlags & SVF_BOT))
+		{
+			bot_state_t *challengerBs = botstates[challenger->s.number];
+			if (challengerBs && BotGetRoundedSkillLevel(challengerBs) == BotGetRoundedSkillLevel(bs))
+			{
+				continue;
+			}
+		}
 
 		if (duelType <= 1 && bs->cur_ps.weapon == WP_SABER && !bs->cur_ps.saberHolstered)
 		{
@@ -9894,23 +10141,6 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	if (bs->cur_ps.stats[STAT_RACEMODE])
 		return;
 
-	for (i=0; i<level.numConnectedClients; i++) { //Go through each client, see if they are "afk", if everyone is afk, fuck this then.
-		gentity_t *ent = &g_entities[level.sortedClients[i]];
-
-		if (!ent->inuse)
-			continue;
-		if (ent->r.svFlags & SVF_BOT)
-			continue;
-		if (!ent->client)
-			continue;//should never happen
-		if (ent->client->lastHereTime > level.time - 120000) { //They have moved in last 120 seconds.
-			someonesHere = qtrue;
-			break;
-		}
-	}
-	if (!someonesHere)
-		return;
-	
 	if (g_entities[bs->client].health < 1) { //We are dead, so respawn!
 		trap->EA_Attack(bs->client);
 		return;
@@ -9920,6 +10150,10 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		return;
 
 	targetMode = BotGetNewBotAITargetMode();
+	someonesHere = BotHasActiveHumanPlayers();
+
+	if (!someonesHere && targetMode != NEWBOTAI_TARGET_PREFER_HUMANS)
+		return;
 
 	if (targetMode < 0)
 		closestID = NewBotAI_ScanForEnemies(bs); //This has been modified to take health into account, and ignore FOV, mindtrick, etc, when newBotAI is being used.
@@ -10001,6 +10235,10 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	}
 
 	if (BotTryAcceptAnyDuelChallenge(bs))
+	{
+		return;
+	}
+	if (NewBotAI_TryIssueBotDuelChallenge(bs, someonesHere, targetMode))
 	{
 		return;
 	}
@@ -10908,18 +11146,6 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 	}
 	else //We can't find a waypoint, going to need a fallback routine.
 	{
-		/*if (level.gametype == GT_DUEL)*/
-		{ //helps them get out of messy situations
-			/*if ((level.time - bs->forceJumpChargeTime) > 3500)
-			{
-				bs->forceJumpChargeTime = level.time + 2000;
-				trap->EA_MoveForward(bs->client);
-			}
-			*/
-			bs->jumpTime = level.time + 1500;
-			bs->jumpHoldTime = level.time + 1500;
-			bs->jDelay = 0;
-		}
 		doingFallback = BotFallbackNavigation(bs);
 	}
 
@@ -10946,9 +11172,6 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 		bs->wpCurrent = NULL;
 		bs->wpSwitchTime = level.time + 150;
 		doingFallback = BotFallbackNavigation(bs);
-		bs->jumpTime = level.time + 150;
-		bs->jumpHoldTime = level.time + 150;
-		bs->jDelay = 0;
 		bs->lastSignificantChangeTime = level.time + 25000;
 	}
 
