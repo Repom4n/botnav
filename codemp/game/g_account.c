@@ -285,6 +285,39 @@ void G_AddPlayerLog(char *name, char *strIP, char *guid) {
 	//Somehow make this sorted..
 }
 
+qboolean G_GetDuelParticipantName(gentity_t *ent, char *name, int nameSize) {
+	char userinfo[MAX_INFO_STRING];
+	int level;
+
+	if (!name || nameSize < 1) {
+		return qfalse;
+	}
+
+	name[0] = '\0';
+
+	if (!ent || !ent->client) {
+		return qfalse;
+	}
+
+	if (ent->client->pers.userName[0]) {
+		Q_strncpyz(name, ent->client->pers.userName, nameSize);
+		return qtrue;
+	}
+
+	if (!g_eloRanking.integer || !g_newBotAI.integer || !(ent->r.svFlags & SVF_BOT)) {
+		return qfalse;
+	}
+
+	trap->GetUserinfo(ent->s.number, userinfo, sizeof(userinfo));
+	level = atoi(Info_ValueForKey(userinfo, "skill"));
+	if (level < 1 || level > 10) {
+		return qfalse;
+	}
+
+	Com_sprintf(name, nameSize, "botlvl%i", level);
+	return qtrue;
+}
+
 #if _ELORANKING	
 
 int GetDuelCount(char *username, int type, int end_time, sqlite3 * db) {
