@@ -106,6 +106,8 @@ static qboolean BotTargetModePassesScanFilter(int targetMode, gentity_t *ent, qb
 static int BotGetLowHangingFruitHP(void);
 static float BotGetLowHangingFruitDistance(void);
 static float BotGetAggressionBias(bot_state_t *bs);
+static float BotGetChanceBiasPercent(float value);
+static int BotGetAggressionWeightedBonus(bot_state_t *bs, float biasPercent, int maxBonus, qboolean aggressiveOnly);
 
 wpobject_t *flagRed;
 wpobject_t *oFlagRed;
@@ -6630,6 +6632,7 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 {
 	//float heightDiff = bs->cur_ps.origin[2] - bs->currentEnemy->client->ps.origin[2]; //We are above them by this much
 	int gripTime = level.time - bs->currentEnemy->client->ps.fd.forceGripStarted; //Milliseconds we have been gripping them
+	const int gripkickBonus = BotGetAggressionWeightedBonus(bs, BotGetChanceBiasPercent(bot_gripkickbias.value), 30, qtrue);
 
 	if (BG_InKnockDown(bs->currentEnemy->client->ps.legsAnim)) { //Splat and enough time? - how to see if they are splattable and were not gripped during midair. forcejumpzheight ?
 		float heightdiff = bs->currentEnemy->client->ps.origin[2] - bs->eye[2]; //Them minus ours,  they are 500, we are 300. height diff is 200.
@@ -6647,27 +6650,27 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 	}
 	else {
 		if (gripTime < 1000) { //[0-1] second in the grip (Aim down until in range, kick)
-			bs->ideal_viewangles[PITCH] = 60; //60?
+			bs->ideal_viewangles[PITCH] = 60 + (gripkickBonus / 3); //60?
 			trap->EA_MoveForward(bs->client);
 
 		}
 		else if (gripTime < 2000) { //[1-2] seconds in the grip (Aim up, spin)
-			bs->ideal_viewangles[PITCH] = -80; //-80
+			bs->ideal_viewangles[PITCH] = -80 - (gripkickBonus / 6); //-80
 
 			if (level.time % 10000 > 5000) {
 				trap->EA_MoveRight(bs->client);
-				bs->ideal_viewangles[YAW] += 80; //80?
+				bs->ideal_viewangles[YAW] += 80 + gripkickBonus; //80?
 			}
 			else {
 				trap->EA_MoveLeft(bs->client);
-				bs->ideal_viewangles[YAW] -= 80;//80?
+				bs->ideal_viewangles[YAW] -= 80 + gripkickBonus;//80?
 			}
 		}
 		else if (gripTime < 2200) { //[2-2.2] seconds in the grip (Aim at center for a split second, so they dont get stuck on our head)
 			bs->ideal_viewangles[PITCH] = 0;
 		}
 		else if (gripTime < 4000) { //[2.2-4] seconds in the grip (Aim down until in range, kick)
-			bs->ideal_viewangles[PITCH] = -70; //-70?
+			bs->ideal_viewangles[PITCH] = -70 - (gripkickBonus / 5); //-70?
 			trap->EA_MoveForward(bs->client);
 		}
 
@@ -7949,6 +7952,47 @@ static float BotGetBiasWeight(float value)
 	return value;
 }
 
+static float BotGetChanceBiasPercent(float value)
+{
+	if (value < 0.0f)
+	{
+		return 0.0f;
+	}
+	else if (value > 100.0f)
+	{
+		return 100.0f;
+	}
+
+	return value;
+}
+
+static int BotGetAggressionWeightedBonus(bot_state_t *bs, float biasPercent, int maxBonus, qboolean aggressiveOnly)
+{
+	float aggressionBias;
+	float normalized;
+
+	if (biasPercent <= 0.0f || maxBonus <= 0)
+	{
+		return 0;
+	}
+
+	aggressionBias = BotGetAggressionBias(bs);
+	if (aggressiveOnly)
+	{
+		if (aggressionBias <= 0.0f)
+		{
+			return 0;
+		}
+		normalized = aggressionBias;
+	}
+	else
+	{
+		normalized = fabsf(aggressionBias);
+	}
+
+	return (int)(normalized * (biasPercent / 100.0f) * (float)maxBonus);
+}
+
 static float BotGetAggressionBias(bot_state_t *bs)
 {
 	float aggressionBias = bot_aggressionbias.value;
@@ -8283,6 +8327,8 @@ int NewBotAI_GetWait(bot_state_t *bs) { //Sometimes the best attack is nothing, 
 int NewBotAI_GetGrip(bot_state_t *bs) {
 	const int ourHealth = g_entities[bs->client].health, hisHealth = bs->currentEnemy->health, ourForce = bs->cur_ps.fd.forcePower, hisForce = bs->currentEnemy->client->ps.fd.forcePower;
 	int weight = 100;
+	const float gripkickBias = BotGetChanceBiasPercent(bot_gripkickbias.value);
+	const int aggressionBonus = BotGetAggressionWeightedBonus(bs, gripkickBias, 35, qtrue);
 
 	if (g_forcePowerDisable.integer & (1 << FP_GRIP))
 		return 0;
@@ -8303,13 +8349,16 @@ int NewBotAI_GetGrip(bot_state_t *bs) {
 	if (hisForce < 20) {
 		if (((bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_LEVITATION))) || (bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_SPEED)) || (bs->currentEnemy->client->saberKnockedTime > level.time )) {
 			if (hisHealth < 52)
-				return 100;
-			return (weight - 10);
+				return 100 + aggressionBonus;
+			return (weight - 10 + aggressionBonus);
 		}
 	}
 	
 	if ((bs->currentEnemy->client->ps.saberMove > 1) && (bs->currentEnemy->client->ps.fd.saberAnimLevel == SS_STRONG && !(bs->cur_ps.weaponstate == WEAPON_CHARGING_ALT)))
-		return (ourHealth - hisForce);
+		return (ourHealth - hisForce + aggressionBonus);
+
+	if (gripkickBias > 0.0f && ourForce > 65 && ourHealth > 55 && hisHealth < 80)
+		return aggressionBonus;
 
 	return 0;
 }
@@ -8349,27 +8398,53 @@ int NewBotAI_GetTeamEnergize(bot_state_t* bs) {
 }
 
 int NewBotAI_GetSaberthrow(bot_state_t* bs) {
+	const int ourHealth = g_entities[bs->client].health;
+	const int ourForce = bs->cur_ps.fd.forcePower;
+	const int enemyTotalHealth = bs->currentEnemy->health + bs->currentEnemy->client->ps.stats[STAT_ARMOR];
+	const float saberthrowBias = BotGetChanceBiasPercent(bot_saberthrowbias.value);
+	int weight = 0;
 
 	//Check if we should saberthrow I guess.
-	if (bs->cur_ps.weapon == WP_SABER && /*(bs->cur_ps.fd.forcePowersKnown & (1 << FP_SABERTHROW)*/ bs->frame_Enemy_Len < 400) {
-		if (BG_InKnockDown(bs->currentEnemy->client->ps.legsAnim)) {
-			g_entities[bs->client].client->ps.fd.forcePowerLevel[FP_SABERTHROW] = 3;
-			g_entities[bs->client].client->ps.fd.forcePowersKnown |= (1 << FP_SABERTHROW);
+	if (bs->cur_ps.weapon != WP_SABER || bs->frame_Enemy_Len >= 400 || bs->cur_ps.saberInFlight)
+		return 0;
+	if (!bs->frame_Enemy_Vis)
+		return 0;
+	if (bs->cur_ps.fd.saberAnimLevel == SS_STAFF)
+		return 0;
 
-			if (bs->cur_ps.fd.forcePower > 40 && (bs->currentEnemy->health + bs->currentEnemy->client->ps.stats[STAT_ARMOR]) <= 50) {
-				trap->EA_Alt_Attack(bs->client);
-				return 100;
-			}
-			/*
-			else if ((((bs->cur_ps.fd.forcePower > bs->currentEnemy->client->ps.fd.forcePower) && bs->cur_ps.fd.forcePower > 40) || (bs->cur_ps.fd.forcePower > 70)) && g_entities[bs->client].health > 75 && bs->currentEnemy->health < 70) {
-				trap->EA_Alt_Attack(bs->client);
-				Com_Printf("Throwing 2\n");
-				return;
-			}
-			*/
+	g_entities[bs->client].client->ps.fd.forcePowerLevel[FP_SABERTHROW] = 3;
+	g_entities[bs->client].client->ps.fd.forcePowersKnown |= (1 << FP_SABERTHROW);
+
+	if (BG_InKnockDown(bs->currentEnemy->client->ps.legsAnim)) {
+		if (ourForce > 40 && enemyTotalHealth <= 50) {
+			weight = 100;
+		}
+		else if (ourForce > 30) {
+			weight = 60;
 		}
 	}
-	return 0;
+
+	if (saberthrowBias > 0.0f && ourForce > 45 && bs->frame_Enemy_Len > 120)
+	{
+		int aggressionBonus = BotGetAggressionWeightedBonus(bs, saberthrowBias, 45, qtrue);
+		int finishingBonus = 0;
+
+		if (enemyTotalHealth <= 70)
+		{
+			finishingBonus = 15;
+		}
+		if (ourHealth > 55)
+		{
+			finishingBonus += 10;
+		}
+
+		if (aggressionBonus + finishingBonus > weight)
+		{
+			weight = aggressionBonus + finishingBonus;
+		}
+	}
+
+	return weight;
 }
 
 void NewBotAI_GetDSForcepower(bot_state_t *bs)

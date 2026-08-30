@@ -350,6 +350,8 @@ XCVAR_DEF( bot_aggressionbias,			"0",			NULL,				CVAR_SERVERINFO|CVAR_ARCHIVE,		
 XCVAR_DEF( bot_aggressionBias,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_healthbias,				"0",			NULL,				CVAR_SERVERINFO|CVAR_ARCHIVE,					qtrue )
 XCVAR_DEF( bot_forcebias,				"0",			NULL,				CVAR_SERVERINFO|CVAR_ARCHIVE,					qtrue )
+XCVAR_DEF( bot_saberthrowbias,			"0",			NULL,				CVAR_SERVERINFO|CVAR_ARCHIVE,					qtrue )
+XCVAR_DEF( bot_gripkickbias,			"0",			NULL,				CVAR_SERVERINFO|CVAR_ARCHIVE,					qtrue )
 XCVAR_DEF( bot_delayresponsetime,		"0",			NULL,				CVAR_SERVERINFO|CVAR_ARCHIVE,					qtrue )
 XCVAR_DEF( bot_responseTimeDelay,		"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_strafefrequency,			"0",			NULL,				CVAR_SERVERINFO|CVAR_ARCHIVE,					qtrue )
