@@ -287,7 +287,6 @@ void G_AddPlayerLog(char *name, char *strIP, char *guid) {
 
 qboolean G_GetDuelParticipantName(gentity_t *ent, char *name, int nameSize) {
 	char userinfo[MAX_INFO_STRING];
-	float skill;
 	int level;
 
 	if (!name || nameSize < 1) {
@@ -310,8 +309,7 @@ qboolean G_GetDuelParticipantName(gentity_t *ent, char *name, int nameSize) {
 	}
 
 	trap->GetUserinfo(ent->s.number, userinfo, sizeof(userinfo));
-	skill = atof(Info_ValueForKey(userinfo, "skill"));
-	level = Round(skill);
+	level = atoi(Info_ValueForKey(userinfo, "skill"));
 	if (level < 1 || level > 10) {
 		return qfalse;
 	}
