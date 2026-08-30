@@ -1156,6 +1156,7 @@ SetTeam
 =================
 */
  void G_AddDuel(char *winner, char *loser, int start_time, int type, int winner_hp, int winner_shield);
+qboolean G_GetDuelParticipantName(gentity_t *ent, char *name, int nameSize);
 
 qboolean g_dontPenalizeTeam = qfalse;
 qboolean g_preventTeamBegin = qfalse;
@@ -4309,6 +4310,12 @@ void Cmd_EngageDuel_f(gentity_t *ent, int dueltype)//JAPRO - Serverside - Fullfo
 			(dueltypes[challenged->client->ps.clientNum] != 0 && (dueltypes[challenged->client->ps.clientNum] != 1) && dueltype > 1)
 			))
 		{
+			char entDuelName[sizeof(ent->client->pers.lastUserName)] = {0};
+			char challengedDuelName[sizeof(challenged->client->pers.lastUserName)] = {0};
+			const qboolean duelIsRanked = g_eloRanking.integer &&
+				G_GetDuelParticipantName(ent, entDuelName, sizeof(entDuelName)) &&
+				G_GetDuelParticipantName(challenged, challengedDuelName, sizeof(challengedDuelName));
+
 			ent->client->ps.duelInProgress = qtrue;
 			challenged->client->ps.duelInProgress = qtrue;
 
@@ -4327,7 +4334,7 @@ void Cmd_EngageDuel_f(gentity_t *ent, int dueltype)//JAPRO - Serverside - Fullfo
 					//Saber Duel
 					G_AddEvent(ent, EV_PRIVATE_DUEL, 1);
 					G_AddEvent(challenged, EV_PRIVATE_DUEL, 1);
-					if (g_eloRanking.integer && ent->client->pers.userName[0] && challenged->client->pers.userName[0])
+					if (duelIsRanked)
 						trap->SendServerCommand(-1, va("print \"%s^7 %s %s^7! (Saber) [Ranked]\n\"", challenged->client->pers.netname, G_GetStringEdString("MP_SVGAME", "PLDUELACCEPT"), ent->client->pers.netname) );
 					else
 						trap->SendServerCommand(-1, va("print \"%s^7 %s %s^7! (Saber)\n\"", challenged->client->pers.netname, G_GetStringEdString("MP_SVGAME", "PLDUELACCEPT"), ent->client->pers.netname) );
@@ -4335,7 +4342,7 @@ void Cmd_EngageDuel_f(gentity_t *ent, int dueltype)//JAPRO - Serverside - Fullfo
 				case	1://FF Duel
 					G_AddEvent(ent, EV_PRIVATE_DUEL, 2);
 					G_AddEvent(challenged, EV_PRIVATE_DUEL, 2);
-					if (g_eloRanking.integer && ent->client->pers.userName[0] && challenged->client->pers.userName[0])
+					if (duelIsRanked)
 						trap->SendServerCommand(-1, va("print \"%s^7 %s %s^7! (Force) [Ranked]\n\"", challenged->client->pers.netname, G_GetStringEdString("MP_SVGAME", "PLDUELACCEPT"), ent->client->pers.netname) );
 					else
 						trap->SendServerCommand(-1, va("print \"%s^7 %s %s^7! (Force)\n\"", challenged->client->pers.netname, G_GetStringEdString("MP_SVGAME", "PLDUELACCEPT"), ent->client->pers.netname) );
@@ -4343,7 +4350,7 @@ void Cmd_EngageDuel_f(gentity_t *ent, int dueltype)//JAPRO - Serverside - Fullfo
 				default://Gun duel
 					G_AddEvent(ent, EV_PRIVATE_DUEL, dueltypes[ent->client->ps.clientNum]);
 					G_AddEvent(challenged, EV_PRIVATE_DUEL, dueltypes[challenged->client->ps.clientNum]);
-					if (g_eloRanking.integer && ent->client->pers.userName[0] && challenged->client->pers.userName[0])
+					if (duelIsRanked)
 						trap->SendServerCommand(-1, va("print \"%s^7 %s %s^7! (Gun) [Ranked]\n\"", challenged->client->pers.netname, G_GetStringEdString("MP_SVGAME", "PLDUELACCEPT"), ent->client->pers.netname) );
 					else
 						trap->SendServerCommand(-1, va("print \"%s^7 %s %s^7! (Gun)\n\"", challenged->client->pers.netname, G_GetStringEdString("MP_SVGAME", "PLDUELACCEPT"), ent->client->pers.netname) );
@@ -4457,8 +4464,10 @@ void Cmd_EngageDuel_f(gentity_t *ent, int dueltype)//JAPRO - Serverside - Fullfo
 				challenged->client->ps.forceHandExtendTime = level.time + 2000; //2 seconds of weaponlock at start of duel
 			}
 
-			Q_strncpyz(ent->client->pers.lastUserName, ent->client->pers.userName, sizeof(ent->client->pers.lastUserName));
-			Q_strncpyz(challenged->client->pers.lastUserName, challenged->client->pers.userName, sizeof(challenged->client->pers.lastUserName));
+			G_GetDuelParticipantName(ent, entDuelName, sizeof(entDuelName));
+			G_GetDuelParticipantName(challenged, challengedDuelName, sizeof(challengedDuelName));
+			Q_strncpyz(ent->client->pers.lastUserName, entDuelName, sizeof(ent->client->pers.lastUserName));
+			Q_strncpyz(challenged->client->pers.lastUserName, challengedDuelName, sizeof(challenged->client->pers.lastUserName));
 			ent->client->pers.duelStartTime = level.time;
 			challenged->client->pers.duelStartTime = level.time;
 		}
