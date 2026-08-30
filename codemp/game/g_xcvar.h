@@ -366,6 +366,8 @@ XCVAR_DEF( bot_strafeduration,			"50",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_ptk_FPbias,				"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_ptk_enemyhpbias,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_ptk_aggressionbias,		"0",			NULL,				CVAR_ARCHIVE,									qtrue )
+XCVAR_DEF( bot_lightningbias,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
+XCVAR_DEF( bot_lightningdistance,		"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_maxbots,					"0",			NULL,				CVAR_ARCHIVE,									qfalse )
 XCVAR_DEF( bot_team,					"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 
