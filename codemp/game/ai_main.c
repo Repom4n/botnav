@@ -76,10 +76,6 @@ extern int imperial_attackers;
 boteventtracker_t gBotEventTracker[MAX_CLIENTS];
 
 //rww - new bot cvars..
-vmCvar_t bot_forcepowers;
-vmCvar_t bot_forgimmick;
-vmCvar_t bot_honorableduelacceptance;
-vmCvar_t bot_pvstype;
 vmCvar_t bot_normgpath;
 #ifndef FINAL_BUILD
 vmCvar_t bot_getinthecarrr;
@@ -112,8 +108,11 @@ static int BotGetDrainHoldBiasMs(bot_state_t *bs);
 static int NewBotAI_GetAntiDrainWeight(bot_state_t *bs);
 static int NewBotAI_GetPTKWeight(bot_state_t *bs);
 static qboolean NewBotAI_IsSaberSwingStartWindow(bot_state_t *bs);
+static qboolean NewBotAI_CanAttemptFlipkick(bot_state_t *bs);
 static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs);
 static void NewBotAI_ApplyHorizontalSwingMove(bot_state_t *bs);
+static qboolean NewBotAI_CanUseSaberThrowDefenseBreakForce(bot_state_t *bs, qboolean preferPull);
+static void NewBotAI_AdjustSaberThrowArcAim(bot_state_t *bs, vec3_t headlevel);
 static void NewBotAI_TrySaberThrowDefenseBreak(bot_state_t *bs);
 qboolean NewBotAI_IsEnemyPullable(bot_state_t *bs);
 
@@ -6373,7 +6372,10 @@ void NewBotAI_GetAim(bot_state_t *bs)
 		if (bs->currentEnemy && bs->currentEnemy->client)
 			headlevel[2] += bs->currentEnemy->client->ps.viewheight - 16;//aim at chest?
 		if (bs->cur_ps.saberInFlight)
+		{
 			headlevel[2] += 24; //aim a bit higher for saberthrow
+			NewBotAI_AdjustSaberThrowArcAim(bs, headlevel);
+		}
 		G_NewBotAIAimLeading(bs, headlevel);
 	}
 	VectorCopy(bs->goalAngles, bs->ideal_viewangles);
@@ -6546,9 +6548,42 @@ void NewBotAI_Getup(bot_state_t *bs)
 	}
 }
 
+static qboolean NewBotAI_CanAttemptFlipkick(bot_state_t *bs)
+{
+	if (!g_flipKick.integer)
+	{
+		return qfalse;
+	}
+
+	if (bs->cur_ps.duelInProgress && bs->cur_ps.weapon == WP_SABER)
+	{
+		return qfalse;
+	}
+
+	return qtrue;
+}
+
 void NewBotAI_Flipkick(bot_state_t *bs)
 {
 	qboolean enemySwing = qfalse;
+
+	if (!NewBotAI_CanAttemptFlipkick(bs))
+	{
+		return;
+	}
+
+	if (bs->lastFlipkickAttemptTime > level.time)
+	{
+		return;
+	}
+
+	if (bs->frame_Enemy_Len < 140 && VectorLengthSquared(bs->cur_ps.velocity) < 6400)
+	{
+		return;
+	}
+
+	bs->lastFlipkickAttemptTime = level.time + 300;
+
 	if (bs->currentEnemy && bs->currentEnemy->client && bs->currentEnemy->client->ps.weapon == WP_SABER && bs->cur_ps.torsoTimer) {
 		enemySwing = qtrue;
 	}
@@ -6639,8 +6674,10 @@ void NewBotAI_ReactToBeingGripped(bot_state_t *bs) //Test this more, does it pus
 void NewBotAI_Gripkick(bot_state_t *bs)
 {
 	//float heightDiff = bs->cur_ps.origin[2] - bs->currentEnemy->client->ps.origin[2]; //We are above them by this much
-	int gripTime = level.time - bs->currentEnemy->client->ps.fd.forceGripStarted; //Milliseconds we have been gripping them
+	const int gripTime = level.time - bs->currentEnemy->client->ps.fd.forceGripStarted; //Milliseconds we have been gripping them
 	const int gripkickBonus = BotGetAggressionWeightedBonus(bs, BotGetChanceBiasPercent(bot_gripkickbias.value), 30, qtrue);
+	const int yawJerkMag = Q_irand(140, 200);
+	const int yawJerkDir = Q_irand(0, 1) ? 1 : -1;
 
 	if (BG_InKnockDown(bs->currentEnemy->client->ps.legsAnim)) { //Splat and enough time? - how to see if they are splattable and were not gripped during midair. forcejumpzheight ?
 		float heightdiff = bs->currentEnemy->client->ps.origin[2] - bs->eye[2]; //Them minus ours,  they are 500, we are 300. height diff is 200.
@@ -6657,36 +6694,33 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 		//not a good splat, has to predict based on their momentum
 	}
 	else {
-		if (gripTime < 1000) { //[0-1] second in the grip (Aim down until in range, kick)
-			bs->ideal_viewangles[PITCH] = 60 + (gripkickBonus / 3); //60?
-			trap->EA_MoveForward(bs->client);
-
-		}
-		else if (gripTime < 2000) { //[1-2] seconds in the grip (Aim up, spin)
-			bs->ideal_viewangles[PITCH] = -80 - (gripkickBonus / 6); //-80
-
-			if (level.time % 10000 > 5000) {
-				trap->EA_MoveRight(bs->client);
-				bs->ideal_viewangles[YAW] += 80 + gripkickBonus; //80?
-			}
-			else {
-				trap->EA_MoveLeft(bs->client);
-				bs->ideal_viewangles[YAW] -= 80 + gripkickBonus;//80?
-			}
-		}
-		else if (gripTime < 2200) { //[2-2.2] seconds in the grip (Aim at center for a split second, so they dont get stuck on our head)
-			bs->ideal_viewangles[PITCH] = 0;
-		}
-		else if (gripTime < 4000) { //[2.2-4] seconds in the grip (Aim down until in range, kick)
-			bs->ideal_viewangles[PITCH] = -70 - (gripkickBonus / 5); //-70?
+		if (gripTime < 700) { //[0-0.7] lock in and close distance
+			bs->ideal_viewangles[PITCH] = 55 + (gripkickBonus / 4);
 			trap->EA_MoveForward(bs->client);
 		}
-
-		if ((bs->cur_ps.groundEntityNum == ENTITYNUM_NONE - 1) && NewBotAI_GetTimeToInRange(bs, 40, 100) < 100) { //Start a kick if we are in range and on ground
+		else if (gripTime < 1050) { //[0.7-1.05] first flipkick attempt
+			bs->ideal_viewangles[PITCH] = 65 + (gripkickBonus / 5);
 			NewBotAI_Flipkick(bs);
 		}
-		else if (bs->cur_ps.groundEntityNum != ENTITYNUM_NONE - 1) { //Always try to flipkick while we are in air
+		else if (gripTime < 1600) { //[1.05-1.6] yaw jerk up
+			bs->ideal_viewangles[PITCH] = -70 - (gripkickBonus / 7);
+			bs->ideal_viewangles[YAW] += (float)(yawJerkDir * yawJerkMag);
+		}
+		else if (gripTime < 1950) { //[1.6-1.95] pitch jerk down into second attempt
+			bs->ideal_viewangles[PITCH] = 70 + (gripkickBonus / 6);
 			NewBotAI_Flipkick(bs);
+		}
+		else if (gripTime < 2450) { //[1.95-2.45] second yaw jerk up
+			bs->ideal_viewangles[PITCH] = -65 - (gripkickBonus / 8);
+			bs->ideal_viewangles[YAW] += (float)(yawJerkDir * yawJerkMag);
+		}
+		else if (gripTime < 2800) { //[2.45-2.8] pitch jerk down into third attempt
+			bs->ideal_viewangles[PITCH] = 72 + (gripkickBonus / 7);
+			NewBotAI_Flipkick(bs);
+		}
+		else if (gripTime < 4000) { //[2.8-4] hold grip pressure and keep closing
+			bs->ideal_viewangles[PITCH] = 65 + (gripkickBonus / 8);
+			trap->EA_MoveForward(bs->client);
 		}
 	}
 
@@ -7829,7 +7863,14 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 				trap->EA_Crouch(bs->client); 
 			}
 			else {
-				NewBotAI_Flipkick(bs);
+				if (NewBotAI_CanAttemptFlipkick(bs))
+				{
+					NewBotAI_Flipkick(bs);
+				}
+				else if (bs->frame_Enemy_Len < 120)
+				{
+					trap->EA_MoveBack(bs->client);
+				}
 			}
 
 		}
@@ -8272,6 +8313,71 @@ static void NewBotAI_ApplyHorizontalSwingMove(bot_state_t *bs)
 	}
 }
 
+static qboolean NewBotAI_CanUseSaberThrowDefenseBreakForce(bot_state_t *bs, qboolean preferPull)
+{
+	const int forcePower = bs->cur_ps.fd.forcePower;
+	const qboolean canPull = (!(g_forcePowerDisable.integer & (1 << FP_PULL)) &&
+		(bs->cur_ps.fd.forcePowersKnown & (1 << FP_PULL)) &&
+		forcePower >= 20 &&
+		!(bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB))) ? qtrue : qfalse;
+	const qboolean canPush = (!(g_forcePowerDisable.integer & (1 << FP_PUSH)) &&
+		(bs->cur_ps.fd.forcePowersKnown & (1 << FP_PUSH)) &&
+		forcePower >= 20) ? qtrue : qfalse;
+
+	if (preferPull && canPull)
+	{
+		return qtrue;
+	}
+	if (!preferPull && canPush)
+	{
+		return qtrue;
+	}
+	return (canPull || canPush) ? qtrue : qfalse;
+}
+
+static void NewBotAI_AdjustSaberThrowArcAim(bot_state_t *bs, vec3_t headlevel)
+{
+	gentity_t *saberEnt;
+	vec3_t saberVec, enemyVec;
+	float enemyDistSq;
+	float saberProgress;
+	qboolean preferPull;
+
+	if (!bs->currentEnemy || !bs->currentEnemy->client || !bs->cur_ps.saberInFlight || !bs->cur_ps.saberEntityNum)
+	{
+		return;
+	}
+
+	preferPull = (BotGetAggressionBias(bs) > 0.0f) ? qtrue : qfalse;
+	if (NewBotAI_CanUseSaberThrowDefenseBreakForce(bs, preferPull))
+	{
+		return;
+	}
+
+	saberEnt = &g_entities[bs->cur_ps.saberEntityNum];
+	VectorSubtract(saberEnt->s.pos.trBase, bs->eye, saberVec);
+	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, enemyVec);
+	enemyDistSq = DotProduct(enemyVec, enemyVec);
+	if (enemyDistSq <= 1.0f)
+	{
+		return;
+	}
+
+	saberProgress = DotProduct(saberVec, enemyVec) / enemyDistSq;
+	if (saberProgress < 1.0f)
+	{
+		headlevel[2] += 36;
+	}
+	else if (saberProgress < 1.35f)
+	{
+		headlevel[2] -= 18;
+	}
+	else
+	{
+		headlevel[2] -= 34;
+	}
+}
+
 static void NewBotAI_TrySaberThrowDefenseBreak(bot_state_t *bs)
 {
 	vec3_t a_fo;
@@ -8300,6 +8406,11 @@ static void NewBotAI_TrySaberThrowDefenseBreak(bot_state_t *bs)
 	}
 
 	preferPull = (BotGetAggressionBias(bs) > 0.0f) ? qtrue : qfalse;
+
+	if (!NewBotAI_CanUseSaberThrowDefenseBreakForce(bs, preferPull))
+	{
+		return;
+	}
 
 	if (preferPull &&
 		!(g_forcePowerDisable.integer & (1 << FP_PULL)) &&
@@ -8391,6 +8502,13 @@ static void NewBotAI_ApplyRandomStrafeOverlay(bot_state_t *bs)
 
 	if (NewBotAI_IsSaberSwingStartWindow(bs))
 	{
+		return;
+	}
+	if (bs->frame_Enemy_Vis && bs->frame_Enemy_Len < 220 && VectorLengthSquared(bs->cur_ps.velocity) < 10000)
+	{
+		bs->randomStrafeDir = 0;
+		bs->randomStrafeEndTime = 0;
+		trap->EA_MoveForward(bs->client);
 		return;
 	}
 
@@ -8630,7 +8748,7 @@ int NewBotAI_GetGrip(bot_state_t *bs) {
 		return (ourHealth - hisForce + aggressionBonus);
 
 	if (gripkickBias > 0.0f && ourForce > 65 && ourHealth > 55 && hisHealth < 80)
-		return aggressionBonus;
+		return 45 + aggressionBonus;
 
 	return 0;
 }
@@ -8701,6 +8819,7 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 	{
 		int aggressionBonus = BotGetAggressionWeightedBonus(bs, saberthrowBias, 45, qtrue);
 		int finishingBonus = 0;
+		const qboolean flipkickUnavailable = (!NewBotAI_CanAttemptFlipkick(bs)) ? qtrue : qfalse;
 
 		if (enemyTotalHealth <= 70)
 		{
@@ -8709,6 +8828,10 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 		if (ourHealth > 55)
 		{
 			finishingBonus += 10;
+		}
+		if (flipkickUnavailable && bs->frame_Enemy_Len > 140)
+		{
+			finishingBonus += 20;
 		}
 
 		if (aggressionBonus + finishingBonus + antiDrainWeight > weight)
@@ -9705,8 +9828,8 @@ static qboolean BotTryAcceptAnyDuelChallenge(bot_state_t *bs)
 		bs->currentEnemy = challenger;
 		bs->doAttack = 0;
 		bs->doAltAttack = 0;
-		bs->botChallengingTime = level.time + 100;
-		bs->beStill = level.time + 100;
+		bs->botChallengingTime = level.time + 2500;
+		bs->beStill = level.time + 2500;
 		return qtrue;
 	}
 
@@ -9880,6 +10003,23 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	if (BotTryAcceptAnyDuelChallenge(bs))
 	{
 		return;
+	}
+	if (bs->botChallengingTime > level.time)
+	{
+		for (i = 0; i < MAX_CLIENTS; i++)
+		{
+			gentity_t *challenger = &g_entities[i];
+			if (!challenger->inuse || !challenger->client || challenger->health < 1 || i == bs->client)
+			{
+				continue;
+			}
+			if (challenger->client->ps.duelIndex == bs->client && challenger->client->ps.duelTime > level.time)
+			{
+				bs->currentEnemy = challenger;
+				break;
+			}
+		}
+		bs->ideal_viewangles[YAW] = AngleNormalize360(bs->ideal_viewangles[YAW] + 24);
 	}
 
 	if (bot_navigation.integer && NewBotAI_ShouldFallbackToWaypoints(bs))
@@ -11428,12 +11568,6 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 		}
 	}
 
-	if (bs->botChallengingTime > level.time)
-	{
-		bs->doAttack = 0;
-		bs->doAltAttack = 0;
-	}
-
 	if (bs->cur_ps.weapon == WP_SABER &&
 		bs->cur_ps.saberInFlight &&
 		!bs->cur_ps.saberEntityNum)
@@ -11449,11 +11583,6 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 	else if (bs->doAltAttack)
 	{
 		trap->EA_Alt_Attack(bs->client);
-	}
-
-	if (useTheForce && forceHostile && bs->botChallengingTime > level.time)
-	{
-		useTheForce = qfalse;
 	}
 
 	if (useTheForce)
@@ -11495,11 +11624,8 @@ int BotAIStartFrame(int time) {
 
 	if (gUpdateVars < level.time)
 	{
-		trap->Cvar_Update(&bot_pvstype);
 		trap->Cvar_Update(&bot_camp);
 		trap->Cvar_Update(&bot_attachments);
-		trap->Cvar_Update(&bot_forgimmick);
-		trap->Cvar_Update(&bot_honorableduelacceptance);
 #ifndef FINAL_BUILD
 		trap->Cvar_Update(&bot_getinthecarrr);
 #endif
@@ -11571,10 +11697,6 @@ BotAISetup
 */
 int BotAISetup( int restart ) {
 	//rww - new bot cvars..
-	trap->Cvar_Register(&bot_forcepowers, "bot_forcepowers", "1", CVAR_CHEAT);
-	trap->Cvar_Register(&bot_forgimmick, "bot_forgimmick", "0", CVAR_CHEAT);
-	trap->Cvar_Register(&bot_honorableduelacceptance, "bot_honorableduelacceptance", "0", CVAR_ARCHIVE);
-	trap->Cvar_Register(&bot_pvstype, "bot_pvstype", "1", CVAR_CHEAT);
 #ifndef FINAL_BUILD
 	trap->Cvar_Register(&bot_getinthecarrr, "bot_getinthecarrr", "0", 0);
 #endif
@@ -11593,7 +11715,6 @@ int BotAISetup( int restart ) {
 	trap->Cvar_Register(&bot_wp_distconnect, "bot_wp_distconnect", "1", 0);
 	trap->Cvar_Register(&bot_wp_visconnect, "bot_wp_visconnect", "1", 0);
 
-	trap->Cvar_Update(&bot_forcepowers);
 	//end rww
 
 	//if the game is restarted for a tournament
