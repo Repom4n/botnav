@@ -100,6 +100,11 @@ vmCvar_t bot_wp_distconnect;
 vmCvar_t bot_wp_visconnect;
 //end rww
 
+static int BotGetNewBotAITargetMode(void);
+static qboolean BotTargetModeAllowsBotEnemies(int targetMode);
+static qboolean BotTargetModePassesScanFilter(int targetMode, gentity_t *ent, qboolean preferredHumansOnly);
+static int BotGetLowHangingFruitHP(void);
+static float BotGetLowHangingFruitDistance(void);
 static float BotGetAggressionBias(bot_state_t *bs);
 
 wpobject_t *flagRed;
