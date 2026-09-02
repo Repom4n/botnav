@@ -372,6 +372,8 @@ typedef struct bot_state_s
 	int					randomStrafeDir;
 	int					randomStrafeEndTime;
 	int					lastFlipkickAttemptTime;
+	int					drainRollDir; // -1 left, 0 back, 1 right; used by NewBotAI_DrainRollEscape
+	int					drainRollResetTime;
 
 	int					navObstacleUntil; // stay in waypoint nav mode until this time when an obstacle blocks path to enemy
 	int					lastHurtTime;     // level.time when this bot last took damage (set in BotDamageNotification)

@@ -370,8 +370,12 @@ XCVAR_DEF( bot_responseTimeDelay,		"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_aimspeed,				"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_strafefrequency,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_strafeduration,			"50",			NULL,				CVAR_ARCHIVE,									qtrue )
-XCVAR_DEF( bot_ptk_FPbias,				"0",			NULL,				CVAR_ARCHIVE,									qtrue )
-XCVAR_DEF( bot_ptk_enemyhpbias,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
+// Force-point advantage (ours minus target's) required before PTK (pull-throw-kick) weight is
+// boosted. Replaces the old absolute-threshold bot_ptk_FPbias.
+XCVAR_DEF( bot_ptk_fpdifference,		"20",			NULL,				CVAR_ARCHIVE,									qtrue )
+// Health advantage (ours minus target's) required before PTK weight is boosted. Replaces the
+// old absolute-threshold bot_ptk_enemyhpbias.
+XCVAR_DEF( bot_ptk_hpdifference,		"15",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_ptk_aggressionbias,		"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_maxbots,					"0",			NULL,				CVAR_ARCHIVE,									qfalse )
 XCVAR_DEF( bot_team,					"0",			NULL,				CVAR_ARCHIVE,									qtrue )

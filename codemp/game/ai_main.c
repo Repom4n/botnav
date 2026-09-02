@@ -6656,12 +6656,71 @@ static qboolean NewBotAI_CanAttemptFlipkick(bot_state_t *bs)
 	return qtrue;
 }
 
+// Executes the "drain + sideways/backward roll" escape used in place of a flipkick when our
+// bot is too low on health to risk the flipkick's vulnerability window (see NewBotAI_Flipkick).
+// Crouching while moving at running speed triggers the engine's roll (PM_TryRoll in
+// bg_pmove.c), giving the bot a genuine dodge instead of standing still and eating a hit.
+static void NewBotAI_DrainRollEscape(bot_state_t *bs)
+{
+	if (!(g_forcePowerDisable.integer & (1 << FP_DRAIN)) && (bs->cur_ps.fd.forcePowersKnown & (1 << FP_DRAIN)))
+	{
+		level.clients[bs->client].ps.fd.forcePowerSelected = FP_DRAIN;
+		trap->EA_ForcePower(bs->client);
+	}
+
+	if (bs->drainRollResetTime < level.time)
+	{
+		bs->drainRollDir = Q_irand(0, 2) - 1; //-1 left, 0 back, 1 right, chosen at random
+		bs->drainRollResetTime = level.time + 400;
+	}
+
+	trap->EA_Crouch(bs->client);
+
+	if (bs->drainRollDir < 0)
+	{
+		trap->EA_MoveLeft(bs->client);
+	}
+	else if (bs->drainRollDir > 0)
+	{
+		trap->EA_MoveRight(bs->client);
+	}
+	else
+	{
+		trap->EA_MoveBack(bs->client);
+	}
+}
+
+// The only scenario where our bot should avoid flipkicking despite being able to: the enemy has
+// enough health to survive a fight (>49) while we are critically low (<20), meaning we would be
+// one hit from dying during the flipkick's vulnerable window. In that exact scenario we drain and
+// roll away instead of kicking.
+static qboolean NewBotAI_ShouldAvoidFlipkickForSafety(bot_state_t *bs)
+{
+	if (!bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return qfalse;
+	}
+
+	if (bs->currentEnemy->health > 49 && g_entities[bs->client].health < 20)
+	{
+		return qtrue;
+	}
+
+	return qfalse;
+}
+
 void NewBotAI_Flipkick(bot_state_t *bs)
 {
 	qboolean enemySwing = qfalse;
 
 	if (!NewBotAI_CanAttemptFlipkick(bs))
 	{
+		return;
+	}
+
+	if (NewBotAI_ShouldAvoidFlipkickForSafety(bs))
+	{
+		NewBotAI_DrainRollEscape(bs);
 		return;
 	}
 
@@ -7933,7 +7992,10 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 			//see if they are running away
 			//dot product of our vel and theirs, if its high, bhop to them? or push/pull stun them
 			if (dot > 50000) { //Running away nicely
-				if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE) {
+				if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE && !NewBotAI_CanAttemptFlipkick(bs)) {
+					//Only strafe when we aren't about to flipkick; flipkicks require straight-forward
+					//movement only, and mixing in lateral input here was causing diagonal air movement
+					//that made the kick miss.
 					if (level.time % 1000 > 500)
 						trap->EA_MoveRight(bs->client);
 					else
@@ -8546,6 +8608,10 @@ static int NewBotAI_GetPTKWeight(bot_state_t *bs)
 	const int ourHealth = g_entities[bs->client].health;
 	const int ourForce = bs->cur_ps.fd.forcePower;
 	const int hisHealth = bs->currentEnemy->health;
+	const int hisForce = bs->currentEnemy->client->ps.fd.forcePower;
+	const int fpDifference = ourForce - hisForce;
+	const int hpDifference = ourHealth - hisHealth;
+	const int aggressionWeight = BotGetChanceBiasPercent(bot_ptk_aggressionbias.value);
 	int weight = 0;
 
 	if (!NewBotAI_IsEnemyPullable(bs) || !g_flipKick.integer)
@@ -8558,17 +8624,17 @@ static int NewBotAI_GetPTKWeight(bot_state_t *bs)
 		return 0;
 	}
 
-	if (ourForce > 62 && ourHealth > 70)
+	if (fpDifference >= bot_ptk_fpdifference.integer)
 	{
-		weight += (int)(BotGetChanceBiasPercent(bot_ptk_FPbias.value) * 0.4f);
+		weight += (int)(aggressionWeight * 0.4f);
 	}
 
-	if (hisHealth < 66)
+	if (hpDifference >= bot_ptk_hpdifference.integer)
 	{
-		weight += (int)(BotGetChanceBiasPercent(bot_ptk_enemyhpbias.value) * 0.35f);
+		weight += (int)(aggressionWeight * 0.35f);
 	}
 
-	weight += BotGetAggressionWeightedBonus(bs, BotGetChanceBiasPercent(bot_ptk_aggressionbias.value), 35, qtrue);
+	weight += BotGetAggressionWeightedBonus(bs, aggressionWeight, 35, qtrue);
 	weight += NewBotAI_GetAntiDrainWeight(bs);
 
 	return weight;
@@ -9220,7 +9286,10 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 	else if (pullWeight > pushWeight && pullWeight > drainWeight && pullWeight > gripWeight && pullWeight > minWeight) {
 		level.clients[bs->client].ps.fd.forcePowerSelected = FP_PULL;
 		useTheForce = qtrue;
-		if (NewBotAI_GetPTKWeight(bs) > 30 && bs->frame_Enemy_Len < 220)
+		//A pull that brings the enemy into flipkick range should always follow through with the
+		//kick (PTK combo) -- PTK weight only influences whether we chose to pull in the first
+		//place (see NewBotAI_GetPull), it should not gate the kick itself.
+		if (bs->frame_Enemy_Len < 220)
 			NewBotAI_Flipkick(bs);
 
 		//trap->Print("Pulling -- Pull: %i, Push: %i, Drain: %i, Grip: %i\n", pullWeight, pushWeight, drainWeight, gripWeight);
@@ -9351,7 +9420,10 @@ void NewBotAI_GetLSForcepower(bot_state_t *bs)
 	else if (pullWeight > pushWeight && pullWeight > absorbWeight && pullWeight > protectWeight && pullWeight > healWeight && pullWeight > minWeight) {
 		level.clients[bs->client].ps.fd.forcePowerSelected = FP_PULL;
 		useTheForce = qtrue;
-		if (NewBotAI_GetPTKWeight(bs) > 30 && bs->frame_Enemy_Len < 220)
+		//A pull that brings the enemy into flipkick range should always follow through with the
+		//kick (PTK combo) -- PTK weight only influences whether we chose to pull in the first
+		//place (see NewBotAI_GetPull), it should not gate the kick itself.
+		if (bs->frame_Enemy_Len < 220)
 			NewBotAI_Flipkick(bs);
 		//trap->Print("Pull - Weights -- Pull: %i, Push: %i, Absorb: %i, Protect: %i, Heal %i\n", pullWeight, pushWeight, absorbWeight, protectWeight, healWeight);
 	}
