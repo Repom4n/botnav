@@ -640,6 +640,7 @@ void BotUtilizePersonality(bot_state_t *bs)
 	fileHandle_t f;
 	int len, rlen;
 	int failed;
+	qboolean fileOk;
 	int i;
 	//char buf[131072];
 	char *buf = (char *)B_TempAlloc(131072);
@@ -648,38 +649,44 @@ void BotUtilizePersonality(bot_state_t *bs)
 	len = trap->FS_Open(bs->settings.personalityfile, &f, FS_READ);
 
 	failed = 0;
+	fileOk = qfalse;
 
+	//Note: even when the personality file is missing/oversized/malformed, we must still
+	//fall through to the default-value assignments below (reflex, hatelevel, etc.) instead
+	//of returning early, so bots without a valid .jkb always get sane defaults rather than
+	//zeroed-out skills/personality fields.
 	if (!f)
 	{
 		trap->Print(S_COLOR_RED "Error: Specified personality not found\n");
-		B_TempFree(131072); //buf
-		return;
+		failed = 1;
 	}
-
-	if (len >= 131072)
+	else if (len >= 131072)
 	{
 		trap->Print(S_COLOR_RED "Personality file exceeds maximum length\n");
-		B_TempFree(131072); //buf
 		trap->FS_Close( f );
-		return;
+		f = 0;
+		failed = 1;
 	}
+	else
+	{
+		trap->FS_Read(buf, len, f);
 
-	trap->FS_Read(buf, len, f);
+		rlen = len;
 
-	rlen = len;
+		while (len < 131072)
+		{ //kill all characters after the file length, since sometimes FS_Read doesn't do that entirely (or so it seems)
+			buf[len] = '\0';
+			len++;
+		}
 
-	while (len < 131072)
-	{ //kill all characters after the file length, since sometimes FS_Read doesn't do that entirely (or so it seems)
-		buf[len] = '\0';
-		len++;
+		len = rlen;
+		fileOk = qtrue;
 	}
-
-	len = rlen;
 
 	readbuf = (char *)B_TempAlloc(1024);
 	group = (char *)B_TempAlloc(65536);
 
-	if (!GetValueGroup(buf, "GeneralBotInfo", group))
+	if (fileOk && !GetValueGroup(buf, "GeneralBotInfo", group))
 	{
 		trap->Print(S_COLOR_RED "Personality file contains no GeneralBotInfo group\n");
 		failed = 1; //set failed so we know to set everything to default values
@@ -815,7 +822,7 @@ void BotUtilizePersonality(bot_state_t *bs)
 		i++;
 	}
 
-	if (bs->canChat)
+	if (fileOk && bs->canChat)
 	{
 		if (!ReadChatGroups(bs, buf))
 		{
@@ -823,7 +830,7 @@ void BotUtilizePersonality(bot_state_t *bs)
 		}
 	}
 
-	if (GetValueGroup(buf, "BotWeaponWeights", group))
+	if (fileOk && GetValueGroup(buf, "BotWeaponWeights", group))
 	{
 		if (GetPairedValue(group, "WP_STUN_BATON", readbuf))
 		{
@@ -894,7 +901,7 @@ void BotUtilizePersonality(bot_state_t *bs)
 
 	bs->lovednum = 0;
 
-	if (GetValueGroup(buf, "EmotionalAttachments", group))
+	if (fileOk && GetValueGroup(buf, "EmotionalAttachments", group))
 	{
 		ParseEmotionalAttachments(bs, group);
 	}
@@ -902,5 +909,8 @@ void BotUtilizePersonality(bot_state_t *bs)
 	B_TempFree(131072); //buf
 	B_TempFree(1024); //readbuf
 	B_TempFree(65536); //group
-	trap->FS_Close(f);
+	if (f)
+	{
+		trap->FS_Close(f);
+	}
 }
