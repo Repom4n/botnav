@@ -114,6 +114,8 @@ static int NewBotAI_GetLightningWeight(bot_state_t *bs);
 static int NewBotAI_GetPTKWeight(bot_state_t *bs);
 static qboolean NewBotAI_IsSaberSwingStartWindow(bot_state_t *bs);
 static qboolean NewBotAI_CanAttemptFlipkick(bot_state_t *bs);
+static float NewBotAI_GetEnemyClosingSpeed(bot_state_t *bs);
+static void NewBotAI_SaberDuelIndecisionFallback(bot_state_t *bs, qboolean horizontalSwingStart);
 static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs);
 static void NewBotAI_ApplyHorizontalSwingMove(bot_state_t *bs);
 static qboolean NewBotAI_CanUseSaberThrowDefenseBreakForce(bot_state_t *bs, qboolean preferPull);
@@ -7747,6 +7749,55 @@ void NewBotAI_GetGroundDodge(bot_state_t *bs) {
 	}
 }
 
+// Returns how fast the enemy is closing the distance towards us (their velocity projected onto
+// the direction from them to us). Positive values mean they are approaching; used to detect a
+// fast incoming enemy in saber duels when flipkick is unavailable (see item 2B).
+static float NewBotAI_GetEnemyClosingSpeed(bot_state_t *bs)
+{
+	vec3_t toUs;
+
+	if (!bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return 0.0f;
+	}
+
+	VectorSubtract(bs->eye, bs->currentEnemy->client->ps.origin, toUs);
+	VectorNormalize(toUs);
+
+	return DotProduct(bs->currentEnemy->client->ps.velocity, toUs);
+}
+
+// Saber-duel deadlock fix: when flipkick isn't available (g_flipkick disabled, or the duel type
+// disallows it), give the bot a real goal instead of standing indecisively -- lean on fan-chain
+// attacks, bias saber style toward red (strong) swing chains, and add a more pronounced
+// side-to-side wiggle than the subtle fan-chain strafe.
+static void NewBotAI_SaberDuelIndecisionFallback(bot_state_t *bs, qboolean horizontalSwingStart)
+{
+	const float fanBias = BotGetChanceBiasPercent(bot_fanbias.value);
+
+	if (g_entities[bs->client].client->ps.fd.saberAnimLevel != SS_STRONG &&
+		fanBias > 0.0f && Q_irand(1, 100) <= (int)fanBias)
+	{
+		g_entities[bs->client].client->ps.fd.saberAnimLevel = SS_STRONG;
+	}
+
+	if (horizontalSwingStart)
+	{
+		NewBotAI_ApplyHorizontalSwingMove(bs);
+		return;
+	}
+
+	//Pronounced wiggle: faster alternating strafe than the ~150ms fan-chain cadence.
+	if ((level.time / 80) % 2)
+	{
+		trap->EA_MoveRight(bs->client);
+	}
+	else
+	{
+		trap->EA_MoveLeft(bs->client);
+	}
+}
+
 void NewBotAI_GetMovement(bot_state_t *bs)
 {
 	const int hisWeapon = bs->currentEnemy->client->ps.weapon;
@@ -7905,6 +7956,17 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 				trap->EA_MoveForward(bs->client);
 			crouch = qtrue;
 		}
+		else if (!NewBotAI_CanAttemptFlipkick(bs) && NewBotAI_GetEnemyClosingSpeed(bs) > 420.0f) {
+			//Item 2B: retreat from a fast incoming enemy (saber duel / flipkick disabled) instead of
+			//our normal forward approach. Attacks and jumps are unaffected -- they're decided by
+			//NewBotAI_GetAttack and this block, respectively -- only the forward/back choice changes.
+			bs->combatAction = BOT_COMBAT_ACTION_RETREAT_DEFENSE;
+			trap->EA_MoveBack(bs->client);
+			if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE - 1)
+			{
+				trap->EA_Jump(bs->client);
+			}
+		}
 		else if ((g_entities[bs->client].health < hardRetreatHealth) ||
 				((g_entities[bs->client].health < softRetreatHealth)
 				&& (bs->cur_ps.fd.forcePower < 30)
@@ -8022,9 +8084,12 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 				{
 					NewBotAI_Flipkick(bs);
 				}
-				else if (bs->frame_Enemy_Len < 120)
+				else
 				{
-					trap->EA_MoveBack(bs->client);
+					//Item 2A: no flipkick available here (g_flipKick disabled or duel type disallows
+					//it) -- use the fan-chain/red-swing/wiggle fallback instead of leaving the bot
+					//to stand indecisively.
+					NewBotAI_SaberDuelIndecisionFallback(bs, horizontalSwingStart);
 				}
 			}
 
