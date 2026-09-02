@@ -363,6 +363,11 @@ XCVAR_DEF( bot_lightningbias,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_lightningdistance,		"400",		NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_delayresponsetime,		"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_responseTimeDelay,		"0",			NULL,				CVAR_ARCHIVE,									qtrue )
+// 0: disabled, use each bot's .jkb turnspeed_combat/reflex unmodified (legacy behavior).
+// 1-10: server-selected aim quality target, blended with each bot's own .jkb turnspeed_combat
+// for personality variance. 9 = near-perfect aim with minimal response delay, 10 = perfect
+// aim with zero response delay.
+XCVAR_DEF( bot_aimspeed,				"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_strafefrequency,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_strafeduration,			"50",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_ptk_FPbias,				"0",			NULL,				CVAR_ARCHIVE,									qtrue )

@@ -102,6 +102,10 @@ static qboolean BotTargetModePassesScanFilter(int targetMode, gentity_t *ent, qb
 static int BotGetLowHangingFruitHP(void);
 static float BotGetLowHangingFruitDistance(void);
 static float BotGetAggressionBias(bot_state_t *bs);
+static float BotGetAimSpeedLevel(void);
+static float BotGetAimSpeedFactor(bot_state_t *bs);
+static float BotGetAimSpeedMaxChange(bot_state_t *bs, float legacyMaxChange);
+static int BotGetReflexScaledResponseDelayMs(bot_state_t *bs);
 static float BotGetChanceBiasPercent(float value);
 static int BotGetAggressionWeightedBonus(bot_state_t *bs, float biasPercent, int maxBonus, qboolean aggressiveOnly);
 static int BotGetDrainHoldBiasMs(bot_state_t *bs);
@@ -498,13 +502,92 @@ float BotChangeViewAngle(float angle, float ideal_angle, float speed) {
 	return AngleMod(angle + move);
 }
 
+//Returns the clamped [0,10] server-selected bot_aimspeed level. 0 means disabled (legacy
+//per-bot .jkb turnspeed_combat/turnspeed behavior applies unmodified).
+static float BotGetAimSpeedLevel(void)
+{
+	float level = bot_aimspeed.value;
+
+	if (level < 0.0f)
+	{
+		level = 0.0f;
+	}
+	else if (level > 10.0f)
+	{
+		level = 10.0f;
+	}
+
+	return level;
+}
+
+//Blends the server-selected bot_aimspeed level with this bot's own .jkb turnspeed_combat
+//so individual bots keep some personality variance, while level 10 converges on truly
+//uniform "perfect" aim regardless of personality. Returns < 0 if aimspeed is disabled,
+//in which case the caller should fall back to the legacy factor calculation.
+static float BotGetAimSpeedFactor(bot_state_t *bs)
+{
+	float level = BotGetAimSpeedLevel();
+	float t;
+	float baseFactor;
+	float personalityMultiplier;
+
+	if (level <= 0.0f || !bs)
+	{
+		return -1.0f;
+	}
+
+	t = level / 10.0f; //1..10 -> 0.1..1.0
+
+	baseFactor = 0.03f + (t * t) * 0.97f; //level1: slow, deliberate aim; ramps sharply near 9-10
+
+	personalityMultiplier = bs->skills.turnspeed_combat / 0.05f; //0.05 is the .jkb default baseline
+	if (personalityMultiplier < 0.5f)
+	{
+		personalityMultiplier = 0.5f;
+	}
+	else if (personalityMultiplier > 2.0f)
+	{
+		personalityMultiplier = 2.0f;
+	}
+
+	//Personality variance fades out as the level approaches 10, so "perfect aim" is uniform.
+	baseFactor *= (personalityMultiplier * (1.0f - t)) + t;
+
+	if (baseFactor > 1.0f)
+	{
+		baseFactor = 1.0f;
+	}
+	else if (baseFactor < 0.001f)
+	{
+		baseFactor = 0.001f;
+	}
+
+	return baseFactor;
+}
+
+//Ramps the view-slew cap toward effectively instantaneous as bot_aimspeed approaches 9-10,
+//so aim isn't bottlenecked by turn rate once response delay is already minimal/zero.
+static float BotGetAimSpeedMaxChange(bot_state_t *bs, float legacyMaxChange)
+{
+	float level = BotGetAimSpeedLevel();
+	float t;
+
+	if (level <= 0.0f || !bs)
+	{
+		return legacyMaxChange;
+	}
+
+	t = level / 10.0f;
+	return legacyMaxChange * (1.0f + (t * t * t * t) * 400.0f);
+}
+
 /*
 ==============
 BotChangeViewAngles
 ==============
 */
 void BotChangeViewAngles(bot_state_t *bs, float thinktime) {
-	float diff, factor, maxchange, anglespeed, disired_speed;
+	float diff, factor, maxchange, anglespeed, disired_speed, aimSpeedFactor;
 	int i;
 
 	if (bs->ideal_viewangles[PITCH] > 180) bs->ideal_viewangles[PITCH] -= 360;
@@ -538,12 +621,20 @@ void BotChangeViewAngles(bot_state_t *bs, float thinktime) {
 	if (factor < 0.001)
 		factor = 0.001f;
 
+	aimSpeedFactor = BotGetAimSpeedFactor(bs);
+	if (aimSpeedFactor >= 0.0f)
+	{
+		factor = aimSpeedFactor;
+	}
+
 	maxchange = bs->skills.maxturn;
 
 	if (g_newBotAI.integer) {
 		maxchange = 1800;
 	}
-	
+
+	maxchange = BotGetAimSpeedMaxChange(bs, maxchange);
+
 	//if (maxchange < 240) maxchange = 240;
 	maxchange *= thinktime;
 	for (i = 0; i < 2; i++) {
@@ -7930,6 +8021,45 @@ static int BotGetResponseDelayMs(void)
 	return delay;
 }
 
+//Scales the configured response delay by this bot's .jkb "reflex" value (default 100,
+//so unmodified bots see no change), then applies the bot_aimspeed override: level 10 forces
+//zero response delay (perfect aim), level 9 caps it to a very small floor (near-perfect aim).
+static int BotGetReflexScaledResponseDelayMs(bot_state_t *bs)
+{
+	int delay = BotGetResponseDelayMs();
+	float reflexScale;
+	float aimLevel;
+
+	if (!bs)
+	{
+		return delay;
+	}
+
+	reflexScale = 100.0f / (float)((bs->skills.reflex > 0) ? bs->skills.reflex : 100);
+	delay = (int)((float)delay * reflexScale);
+
+	aimLevel = BotGetAimSpeedLevel();
+	if (aimLevel >= 10.0f)
+	{
+		return 0;
+	}
+	if (aimLevel >= 9.0f && delay > 25)
+	{
+		delay = 25;
+	}
+
+	if (delay < 0)
+	{
+		delay = 0;
+	}
+	else if (delay > 5000)
+	{
+		delay = 5000;
+	}
+
+	return delay;
+}
+
 static float BotGetTargetDistanceLimit(void)
 {
 	float targetDistanceLimit = bot_targetdistance.value;
@@ -8279,6 +8409,11 @@ static float BotGetAggressionBias(bot_state_t *bs)
 
 	aggressionBias += (healthComponent * healthBias);
 	aggressionBias += (forceComponent * forceBias);
+
+	//Per-bot personality nudge derived from the .jkb "hatelevel" value (see
+	//B_LoadPersonality in ai_util.c). This is additive on top of the server-wide
+	//bot_aggressionbias cvar so individual bots can have distinct personalities.
+	aggressionBias += bs->hateLevelAggressionBias;
 
 	if (aggressionBias < -1.0f)
 	{
@@ -10217,7 +10352,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	bs->enemySeenTime = level.time + ENEMY_FORGET_MS;
 	bs->frame_Enemy_Len = NewBotAI_GetDist(bs);
 
-	responseDelay = BotGetResponseDelayMs();
+	responseDelay = BotGetReflexScaledResponseDelayMs(bs);
 	if (responseDelay > 0 && bs->currentEnemy && bs->currentEnemy->client)
 	{
 		if (bs->currentEnemy != oldEnemy)
@@ -10795,7 +10930,7 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 		return;
 	}*/
 
-	reaction = BotGetResponseDelayMs();
+	reaction = BotGetReflexScaledResponseDelayMs(bs);
 
 	if (reaction < 0)
 	{

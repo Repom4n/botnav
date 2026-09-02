@@ -766,6 +766,20 @@ void BotUtilizePersonality(bot_state_t *bs)
 		bs->loved_death_thresh = 3; //default
 	}
 
+	//Legacy "hatelevel" also seeds a per-bot personality aggression bias so bots defined
+	//in different .jkb files can lean toward aggression/defense independently of the
+	//global bot_aggressionbias cvar. 3 is the default/neutral hatelevel, so bots that
+	//don't customize it get a 0 bias contribution (no behavior change).
+	bs->hateLevelAggressionBias = ((float)bs->loved_death_thresh - 3.0f) / 7.0f;
+	if (bs->hateLevelAggressionBias < -1.0f)
+	{
+		bs->hateLevelAggressionBias = -1.0f;
+	}
+	else if (bs->hateLevelAggressionBias > 1.0f)
+	{
+		bs->hateLevelAggressionBias = 1.0f;
+	}
+
 	if (!failed && GetPairedValue(group, "camper", readbuf))
 	{
 		bs->isCamper = atoi(readbuf);
