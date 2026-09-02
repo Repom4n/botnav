@@ -317,6 +317,11 @@ typedef struct bot_state_s
 
 	int					loved_death_thresh;
 
+	//Personality bias derived from the bot's .jkb "hatelevel" value, feeding into
+	//BotGetAggressionBias() so individual bots can have distinct aggression leanings
+	//without touching the global bot_aggressionbias cvar. Range [-1,1], 0 = neutral.
+	float				hateLevelAggressionBias;
+
 	int					deathActivitiesDone;
 
 	float				botWeaponWeights[WP_NUM_WEAPONS];
@@ -367,6 +372,8 @@ typedef struct bot_state_s
 	int					randomStrafeDir;
 	int					randomStrafeEndTime;
 	int					lastFlipkickAttemptTime;
+	int					drainRollDir; // -1 left, 0 back, 1 right; used by NewBotAI_DrainRollEscape
+	int					drainRollResetTime;
 
 	int					navObstacleUntil; // stay in waypoint nav mode until this time when an obstacle blocks path to enemy
 	int					lastHurtTime;     // level.time when this bot last took damage (set in BotDamageNotification)

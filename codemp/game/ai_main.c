@@ -102,6 +102,10 @@ static qboolean BotTargetModePassesScanFilter(int targetMode, gentity_t *ent, qb
 static int BotGetLowHangingFruitHP(void);
 static float BotGetLowHangingFruitDistance(void);
 static float BotGetAggressionBias(bot_state_t *bs);
+static float BotGetAimSpeedLevel(void);
+static float BotGetAimSpeedFactor(bot_state_t *bs);
+static float BotGetAimSpeedMaxChange(bot_state_t *bs, float legacyMaxChange);
+static int BotGetReflexScaledResponseDelayMs(bot_state_t *bs);
 static float BotGetChanceBiasPercent(float value);
 static int BotGetAggressionWeightedBonus(bot_state_t *bs, float biasPercent, int maxBonus, qboolean aggressiveOnly);
 static int BotGetDrainHoldBiasMs(bot_state_t *bs);
@@ -110,6 +114,8 @@ static int NewBotAI_GetLightningWeight(bot_state_t *bs);
 static int NewBotAI_GetPTKWeight(bot_state_t *bs);
 static qboolean NewBotAI_IsSaberSwingStartWindow(bot_state_t *bs);
 static qboolean NewBotAI_CanAttemptFlipkick(bot_state_t *bs);
+static float NewBotAI_GetEnemyClosingSpeed(bot_state_t *bs);
+static void NewBotAI_SaberDuelIndecisionFallback(bot_state_t *bs, qboolean horizontalSwingStart);
 static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs);
 static void NewBotAI_ApplyHorizontalSwingMove(bot_state_t *bs);
 static qboolean NewBotAI_CanUseSaberThrowDefenseBreakForce(bot_state_t *bs, qboolean preferPull);
@@ -498,13 +504,92 @@ float BotChangeViewAngle(float angle, float ideal_angle, float speed) {
 	return AngleMod(angle + move);
 }
 
+//Returns the clamped [0,10] server-selected bot_aimspeed level. 0 means disabled (legacy
+//per-bot .jkb turnspeed_combat/turnspeed behavior applies unmodified).
+static float BotGetAimSpeedLevel(void)
+{
+	float level = bot_aimspeed.value;
+
+	if (level < 0.0f)
+	{
+		level = 0.0f;
+	}
+	else if (level > 10.0f)
+	{
+		level = 10.0f;
+	}
+
+	return level;
+}
+
+//Blends the server-selected bot_aimspeed level with this bot's own .jkb turnspeed_combat
+//so individual bots keep some personality variance, while level 10 converges on truly
+//uniform "perfect" aim regardless of personality. Returns < 0 if aimspeed is disabled,
+//in which case the caller should fall back to the legacy factor calculation.
+static float BotGetAimSpeedFactor(bot_state_t *bs)
+{
+	float level = BotGetAimSpeedLevel();
+	float t;
+	float baseFactor;
+	float personalityMultiplier;
+
+	if (level <= 0.0f || !bs)
+	{
+		return -1.0f;
+	}
+
+	t = level / 10.0f; //1..10 -> 0.1..1.0
+
+	baseFactor = 0.03f + (t * t) * 0.97f; //level1: slow, deliberate aim; ramps sharply near 9-10
+
+	personalityMultiplier = bs->skills.turnspeed_combat / 0.05f; //0.05 is the .jkb default baseline
+	if (personalityMultiplier < 0.5f)
+	{
+		personalityMultiplier = 0.5f;
+	}
+	else if (personalityMultiplier > 2.0f)
+	{
+		personalityMultiplier = 2.0f;
+	}
+
+	//Personality variance fades out as the level approaches 10, so "perfect aim" is uniform.
+	baseFactor *= (personalityMultiplier * (1.0f - t)) + t;
+
+	if (baseFactor > 1.0f)
+	{
+		baseFactor = 1.0f;
+	}
+	else if (baseFactor < 0.001f)
+	{
+		baseFactor = 0.001f;
+	}
+
+	return baseFactor;
+}
+
+//Ramps the view-slew cap toward effectively instantaneous as bot_aimspeed approaches 9-10,
+//so aim isn't bottlenecked by turn rate once response delay is already minimal/zero.
+static float BotGetAimSpeedMaxChange(bot_state_t *bs, float legacyMaxChange)
+{
+	float level = BotGetAimSpeedLevel();
+	float t;
+
+	if (level <= 0.0f || !bs)
+	{
+		return legacyMaxChange;
+	}
+
+	t = level / 10.0f;
+	return legacyMaxChange * (1.0f + (t * t * t * t) * 400.0f);
+}
+
 /*
 ==============
 BotChangeViewAngles
 ==============
 */
 void BotChangeViewAngles(bot_state_t *bs, float thinktime) {
-	float diff, factor, maxchange, anglespeed, disired_speed;
+	float diff, factor, maxchange, anglespeed, disired_speed, aimSpeedFactor;
 	int i;
 
 	if (bs->ideal_viewangles[PITCH] > 180) bs->ideal_viewangles[PITCH] -= 360;
@@ -538,12 +623,20 @@ void BotChangeViewAngles(bot_state_t *bs, float thinktime) {
 	if (factor < 0.001)
 		factor = 0.001f;
 
+	aimSpeedFactor = BotGetAimSpeedFactor(bs);
+	if (aimSpeedFactor >= 0.0f)
+	{
+		factor = aimSpeedFactor;
+	}
+
 	maxchange = bs->skills.maxturn;
 
 	if (g_newBotAI.integer) {
 		maxchange = 1800;
 	}
-	
+
+	maxchange = BotGetAimSpeedMaxChange(bs, maxchange);
+
 	//if (maxchange < 240) maxchange = 240;
 	maxchange *= thinktime;
 	for (i = 0; i < 2; i++) {
@@ -6565,12 +6658,71 @@ static qboolean NewBotAI_CanAttemptFlipkick(bot_state_t *bs)
 	return qtrue;
 }
 
+// Executes the "drain + sideways/backward roll" escape used in place of a flipkick when our
+// bot is too low on health to risk the flipkick's vulnerability window (see NewBotAI_Flipkick).
+// Crouching while moving at running speed triggers the engine's roll (PM_TryRoll in
+// bg_pmove.c), giving the bot a genuine dodge instead of standing still and eating a hit.
+static void NewBotAI_DrainRollEscape(bot_state_t *bs)
+{
+	if (!(g_forcePowerDisable.integer & (1 << FP_DRAIN)) && (bs->cur_ps.fd.forcePowersKnown & (1 << FP_DRAIN)))
+	{
+		level.clients[bs->client].ps.fd.forcePowerSelected = FP_DRAIN;
+		trap->EA_ForcePower(bs->client);
+	}
+
+	if (bs->drainRollResetTime < level.time)
+	{
+		bs->drainRollDir = Q_irand(0, 2) - 1; //-1 left, 0 back, 1 right, chosen at random
+		bs->drainRollResetTime = level.time + 400;
+	}
+
+	trap->EA_Crouch(bs->client);
+
+	if (bs->drainRollDir < 0)
+	{
+		trap->EA_MoveLeft(bs->client);
+	}
+	else if (bs->drainRollDir > 0)
+	{
+		trap->EA_MoveRight(bs->client);
+	}
+	else
+	{
+		trap->EA_MoveBack(bs->client);
+	}
+}
+
+// The only scenario where our bot should avoid flipkicking despite being able to: the enemy has
+// enough health to survive a fight (>49) while we are critically low (<20), meaning we would be
+// one hit from dying during the flipkick's vulnerable window. In that exact scenario we drain and
+// roll away instead of kicking.
+static qboolean NewBotAI_ShouldAvoidFlipkickForSafety(bot_state_t *bs)
+{
+	if (!bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return qfalse;
+	}
+
+	if (bs->currentEnemy->health > 49 && g_entities[bs->client].health < 20)
+	{
+		return qtrue;
+	}
+
+	return qfalse;
+}
+
 void NewBotAI_Flipkick(bot_state_t *bs)
 {
 	qboolean enemySwing = qfalse;
 
 	if (!NewBotAI_CanAttemptFlipkick(bs))
 	{
+		return;
+	}
+
+	if (NewBotAI_ShouldAvoidFlipkickForSafety(bs))
+	{
+		NewBotAI_DrainRollEscape(bs);
 		return;
 	}
 
@@ -7597,6 +7749,55 @@ void NewBotAI_GetGroundDodge(bot_state_t *bs) {
 	}
 }
 
+// Returns how fast the enemy is closing the distance towards us (their velocity projected onto
+// the direction from them to us). Positive values mean they are approaching; used to detect a
+// fast incoming enemy in saber duels when flipkick is unavailable (see item 2B).
+static float NewBotAI_GetEnemyClosingSpeed(bot_state_t *bs)
+{
+	vec3_t toUs;
+
+	if (!bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return 0.0f;
+	}
+
+	VectorSubtract(bs->eye, bs->currentEnemy->client->ps.origin, toUs);
+	VectorNormalize(toUs);
+
+	return DotProduct(bs->currentEnemy->client->ps.velocity, toUs);
+}
+
+// Saber-duel deadlock fix: when flipkick isn't available (g_flipkick disabled, or the duel type
+// disallows it), give the bot a real goal instead of standing indecisively -- lean on fan-chain
+// attacks, bias saber style toward red (strong) swing chains, and add a more pronounced
+// side-to-side wiggle than the subtle fan-chain strafe.
+static void NewBotAI_SaberDuelIndecisionFallback(bot_state_t *bs, qboolean horizontalSwingStart)
+{
+	const float fanBias = BotGetChanceBiasPercent(bot_fanbias.value);
+
+	if (g_entities[bs->client].client->ps.fd.saberAnimLevel != SS_STRONG &&
+		fanBias > 0.0f && Q_irand(1, 100) <= (int)fanBias)
+	{
+		g_entities[bs->client].client->ps.fd.saberAnimLevel = SS_STRONG;
+	}
+
+	if (horizontalSwingStart)
+	{
+		NewBotAI_ApplyHorizontalSwingMove(bs);
+		return;
+	}
+
+	//Pronounced wiggle: faster alternating strafe than the ~150ms fan-chain cadence.
+	if ((level.time / 80) % 2)
+	{
+		trap->EA_MoveRight(bs->client);
+	}
+	else
+	{
+		trap->EA_MoveLeft(bs->client);
+	}
+}
+
 void NewBotAI_GetMovement(bot_state_t *bs)
 {
 	const int hisWeapon = bs->currentEnemy->client->ps.weapon;
@@ -7755,6 +7956,17 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 				trap->EA_MoveForward(bs->client);
 			crouch = qtrue;
 		}
+		else if (!NewBotAI_CanAttemptFlipkick(bs) && NewBotAI_GetEnemyClosingSpeed(bs) > 420.0f) {
+			//Item 2B: retreat from a fast incoming enemy (saber duel / flipkick disabled) instead of
+			//our normal forward approach. Attacks and jumps are unaffected -- they're decided by
+			//NewBotAI_GetAttack and this block, respectively -- only the forward/back choice changes.
+			bs->combatAction = BOT_COMBAT_ACTION_RETREAT_DEFENSE;
+			trap->EA_MoveBack(bs->client);
+			if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE - 1)
+			{
+				trap->EA_Jump(bs->client);
+			}
+		}
 		else if ((g_entities[bs->client].health < hardRetreatHealth) ||
 				((g_entities[bs->client].health < softRetreatHealth)
 				&& (bs->cur_ps.fd.forcePower < 30)
@@ -7842,7 +8054,10 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 			//see if they are running away
 			//dot product of our vel and theirs, if its high, bhop to them? or push/pull stun them
 			if (dot > 50000) { //Running away nicely
-				if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE) {
+				if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE && !NewBotAI_CanAttemptFlipkick(bs)) {
+					//Only strafe when we aren't about to flipkick; flipkicks require straight-forward
+					//movement only, and mixing in lateral input here was causing diagonal air movement
+					//that made the kick miss.
 					if (level.time % 1000 > 500)
 						trap->EA_MoveRight(bs->client);
 					else
@@ -7869,9 +8084,12 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 				{
 					NewBotAI_Flipkick(bs);
 				}
-				else if (bs->frame_Enemy_Len < 120)
+				else
 				{
-					trap->EA_MoveBack(bs->client);
+					//Item 2A: no flipkick available here (g_flipKick disabled or duel type disallows
+					//it) -- use the fan-chain/red-swing/wiggle fallback instead of leaving the bot
+					//to stand indecisively.
+					NewBotAI_SaberDuelIndecisionFallback(bs, horizontalSwingStart);
 				}
 			}
 
@@ -7917,6 +8135,45 @@ qboolean BG_InRoll3(int anim)
 static int BotGetResponseDelayMs(void)
 {
 	int delay = bot_delayresponsetime.integer;
+
+	if (delay < 0)
+	{
+		delay = 0;
+	}
+	else if (delay > 5000)
+	{
+		delay = 5000;
+	}
+
+	return delay;
+}
+
+//Scales the configured response delay by this bot's .jkb "reflex" value (default 100,
+//so unmodified bots see no change), then applies the bot_aimspeed override: level 10 forces
+//zero response delay (perfect aim), level 9 caps it to a very small floor (near-perfect aim).
+static int BotGetReflexScaledResponseDelayMs(bot_state_t *bs)
+{
+	int delay = BotGetResponseDelayMs();
+	float reflexScale;
+	float aimLevel;
+
+	if (!bs)
+	{
+		return delay;
+	}
+
+	reflexScale = 100.0f / (float)((bs->skills.reflex > 0) ? bs->skills.reflex : 100);
+	delay = (int)((float)delay * reflexScale);
+
+	aimLevel = BotGetAimSpeedLevel();
+	if (aimLevel >= 10.0f)
+	{
+		return 0;
+	}
+	if (aimLevel >= 9.0f && delay > 25)
+	{
+		delay = 25;
+	}
 
 	if (delay < 0)
 	{
@@ -8280,6 +8537,11 @@ static float BotGetAggressionBias(bot_state_t *bs)
 	aggressionBias += (healthComponent * healthBias);
 	aggressionBias += (forceComponent * forceBias);
 
+	//Per-bot personality nudge derived from the .jkb "hatelevel" value (see
+	//B_LoadPersonality in ai_util.c). This is additive on top of the server-wide
+	//bot_aggressionbias cvar so individual bots can have distinct personalities.
+	aggressionBias += bs->hateLevelAggressionBias;
+
 	if (aggressionBias < -1.0f)
 	{
 		aggressionBias = -1.0f;
@@ -8411,6 +8673,10 @@ static int NewBotAI_GetPTKWeight(bot_state_t *bs)
 	const int ourHealth = g_entities[bs->client].health;
 	const int ourForce = bs->cur_ps.fd.forcePower;
 	const int hisHealth = bs->currentEnemy->health;
+	const int hisForce = bs->currentEnemy->client->ps.fd.forcePower;
+	const int fpDifference = ourForce - hisForce;
+	const int hpDifference = ourHealth - hisHealth;
+	const int aggressionWeight = BotGetChanceBiasPercent(bot_ptk_aggressionbias.value);
 	int weight = 0;
 
 	if (!NewBotAI_IsEnemyPullable(bs) || !g_flipKick.integer)
@@ -8423,17 +8689,17 @@ static int NewBotAI_GetPTKWeight(bot_state_t *bs)
 		return 0;
 	}
 
-	if (ourForce > 62 && ourHealth > 70)
+	if (fpDifference >= bot_ptk_fpdifference.integer)
 	{
-		weight += (int)(BotGetChanceBiasPercent(bot_ptk_FPbias.value) * 0.4f);
+		weight += (int)(aggressionWeight * 0.4f);
 	}
 
-	if (hisHealth < 66)
+	if (hpDifference >= bot_ptk_hpdifference.integer)
 	{
-		weight += (int)(BotGetChanceBiasPercent(bot_ptk_enemyhpbias.value) * 0.35f);
+		weight += (int)(aggressionWeight * 0.35f);
 	}
 
-	weight += BotGetAggressionWeightedBonus(bs, BotGetChanceBiasPercent(bot_ptk_aggressionbias.value), 35, qtrue);
+	weight += BotGetAggressionWeightedBonus(bs, aggressionWeight, 35, qtrue);
 	weight += NewBotAI_GetAntiDrainWeight(bs);
 
 	return weight;
@@ -9085,7 +9351,10 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 	else if (pullWeight > pushWeight && pullWeight > drainWeight && pullWeight > gripWeight && pullWeight > minWeight) {
 		level.clients[bs->client].ps.fd.forcePowerSelected = FP_PULL;
 		useTheForce = qtrue;
-		if (NewBotAI_GetPTKWeight(bs) > 30 && bs->frame_Enemy_Len < 220)
+		//A pull that brings the enemy into flipkick range should always follow through with the
+		//kick (PTK combo) -- PTK weight only influences whether we chose to pull in the first
+		//place (see NewBotAI_GetPull), it should not gate the kick itself.
+		if (bs->frame_Enemy_Len < 220)
 			NewBotAI_Flipkick(bs);
 
 		//trap->Print("Pulling -- Pull: %i, Push: %i, Drain: %i, Grip: %i\n", pullWeight, pushWeight, drainWeight, gripWeight);
@@ -9216,7 +9485,10 @@ void NewBotAI_GetLSForcepower(bot_state_t *bs)
 	else if (pullWeight > pushWeight && pullWeight > absorbWeight && pullWeight > protectWeight && pullWeight > healWeight && pullWeight > minWeight) {
 		level.clients[bs->client].ps.fd.forcePowerSelected = FP_PULL;
 		useTheForce = qtrue;
-		if (NewBotAI_GetPTKWeight(bs) > 30 && bs->frame_Enemy_Len < 220)
+		//A pull that brings the enemy into flipkick range should always follow through with the
+		//kick (PTK combo) -- PTK weight only influences whether we chose to pull in the first
+		//place (see NewBotAI_GetPull), it should not gate the kick itself.
+		if (bs->frame_Enemy_Len < 220)
 			NewBotAI_Flipkick(bs);
 		//trap->Print("Pull - Weights -- Pull: %i, Push: %i, Absorb: %i, Protect: %i, Heal %i\n", pullWeight, pushWeight, absorbWeight, protectWeight, healWeight);
 	}
@@ -10217,7 +10489,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	bs->enemySeenTime = level.time + ENEMY_FORGET_MS;
 	bs->frame_Enemy_Len = NewBotAI_GetDist(bs);
 
-	responseDelay = BotGetResponseDelayMs();
+	responseDelay = BotGetReflexScaledResponseDelayMs(bs);
 	if (responseDelay > 0 && bs->currentEnemy && bs->currentEnemy->client)
 	{
 		if (bs->currentEnemy != oldEnemy)
@@ -10795,7 +11067,7 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 		return;
 	}*/
 
-	reaction = BotGetResponseDelayMs();
+	reaction = BotGetReflexScaledResponseDelayMs(bs);
 
 	if (reaction < 0)
 	{
