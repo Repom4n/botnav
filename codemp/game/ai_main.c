@@ -116,6 +116,7 @@ static int NewBotAI_GetLightningWeight(bot_state_t *bs);
 static int NewBotAI_GetPTKWeight(bot_state_t *bs);
 static qboolean NewBotAI_IsSaberSwingStartWindow(bot_state_t *bs);
 static qboolean NewBotAI_CanAttemptFlipkick(bot_state_t *bs);
+static void NewBotAI_BackAwayFromEnemyForSwing(bot_state_t *bs);
 static float NewBotAI_GetEnemyClosingSpeed(bot_state_t *bs);
 static void NewBotAI_SaberDuelIndecisionFallback(bot_state_t *bs, qboolean horizontalSwingStart);
 static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs);
@@ -4978,18 +4979,29 @@ void G_NewBotAIAimLeading(bot_state_t* bs, vec3_t headlevel) {
 	VectorCopy(ang, bs->goalAngles);
 
 	if (bs->cur_ps.weapon == WP_SABER && bs->cur_ps.saberMove >= 4) { //Poke and Wiggle
-		if (level.time % 100 > 50) {
-			bs->goalAngles[YAW] += 1.5f;
-		}
-		else {
-			bs->goalAngles[YAW] -= 1.5f;
-		}
+		//Restrict the wiggle to saber attacks that are actually about to land a hit, and never
+		//during the first 100ms of the swing (while it's still winding up). torsoTimer counts
+		//down from the start of the swing: elapsed = animLength - torsoTimer. We only wiggle once
+		//the swing is past the wind-up and the enemy is close enough to be hit.
+		const int animLength = (int)PM_AnimLength(0, (animNumber_t)bs->cur_ps.torsoAnim);
+		const qboolean swingAboutToLand =
+			(bs->cur_ps.torsoTimer > 0 && (animLength - bs->cur_ps.torsoTimer) > 100 &&
+			 bs->frame_Enemy_Len < 110) ? qtrue : qfalse;
 
-		if (level.time % 200 > 100) {
-			bs->goalAngles[PITCH] += 3.0f;
-		}
-		else {
-			bs->goalAngles[PITCH] -= 3.0f;
+		if (swingAboutToLand) {
+			if (level.time % 100 > 50) {
+				bs->goalAngles[YAW] += 1.5f;
+			}
+			else {
+				bs->goalAngles[YAW] -= 1.5f;
+			}
+
+			if (level.time % 200 > 100) {
+				bs->goalAngles[PITCH] += 3.0f;
+			}
+			else {
+				bs->goalAngles[PITCH] -= 3.0f;
+			}
 		}
 
 		if (bs->cur_ps.saberMove == LS_A_T2B) {
@@ -7736,6 +7748,12 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 
 			if ((g_entities[bs->client].client->ps.saberMove == LS_NONE || g_entities[bs->client].client->ps.saberMove == LS_READY) && bs->frame_Enemy_Len < 256 && ((NewBotAI_GetTimeToInRange(bs, 75, 800) < 800) || bs->frame_Enemy_Len < 128)) {
 				if (g_entities[bs->client].health > 40) {
+					//Don't start a swing point-blank: sabers lock with the opponent before the
+					//swing has a chance to wind up. Back/strafe away to gain separation first.
+					if (bs->frame_Enemy_Len < 90) {
+						NewBotAI_BackAwayFromEnemyForSwing(bs);
+						return;
+					}
 					//See if they can't saberthrow?
 					//Com_Printf("Their torso time is %i\n", bs->currentEnemy->client->ps.torsoTimer);
 					//if ((bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_DRAIN) || (bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB))) || ((bs->frame_Enemy_Len < 70) && (bs->currentEnemy->client->ps.origin[2] - bs->cur_ps.origin[2]) > 50)) {
@@ -7792,6 +7810,12 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 			//todo - skip if we are already during a swing
 			if ((g_entities[bs->client].client->ps.saberMove == LS_NONE || g_entities[bs->client].client->ps.saberMove == LS_READY) && NewBotAI_GetTimeToInRange(bs, 75, 600) < 600) {
 				if (g_entities[bs->client].health > 70) {
+					//Don't start a swing point-blank: sabers lock with the opponent before the
+					//swing has a chance to wind up. Back/strafe away to gain separation first.
+					if (bs->frame_Enemy_Len < 90) {
+						NewBotAI_BackAwayFromEnemyForSwing(bs);
+						return;
+					}
 					if ((bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_DRAIN) || (bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB))) ||
 						((bs->cur_ps.fd.forcePower < 60) || ((bs->frame_Enemy_Len < 70) && (bs->currentEnemy->client->ps.origin[2] - bs->cur_ps.origin[2]) > 50))) {
 						if (bs->fanAttackTime <= level.time)
@@ -7860,6 +7884,22 @@ void NewBotAI_GetGroundDodge(bot_state_t *bs) {
 			bs->forceMove_Right = 1;
 		else
 			bs->forceMove_Right = -1;
+	}
+}
+
+// Backs/strafes away from a point-blank enemy to gain separation before starting a saber
+// swing, so the swing has room to wind up instead of saber-locking with the opponent.
+// Alternates lateral direction so the bot doesn't just retreat in a straight, predictable line.
+static void NewBotAI_BackAwayFromEnemyForSwing(bot_state_t *bs)
+{
+	trap->EA_MoveBack(bs->client);
+	if ((level.time / 200) % 2)
+	{
+		trap->EA_MoveRight(bs->client);
+	}
+	else
+	{
+		trap->EA_MoveLeft(bs->client);
 	}
 }
 
@@ -8493,7 +8533,10 @@ static qboolean NewBotAI_TryIssueBotDuelChallenge(bot_state_t *bs, qboolean huma
 	VectorCopy(toEnemy, g_entities[bs->client].client->ps.viewangles);
 	VectorCopy(toEnemy, bs->ideal_viewangles);
 
-	duelType = Q_irand(0, 1);
+	//Only issue force (full-force) duels. Bots challenging each other to saber-only duels
+	//(duelType 0) prevents them from using force powers (and flipkick), which causes them to
+	//stand indecisively. Force duels keep the full moveset available.
+	duelType = 1;
 	Cmd_EngageDuel_f(&g_entities[bs->client], duelType);
 
 	VectorCopy(oldViewAngles, g_entities[bs->client].client->ps.viewangles);
@@ -8900,7 +8943,17 @@ static qboolean NewBotAI_IsSaberSwingStartWindow(bot_state_t *bs)
 static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 {
 	const float fanBias = BotGetChanceBiasPercent(bot_fanbias.value);
-	const int fanHoldMs = 160 + (int)(fanBias * 5.0f) + Q_irand(0, 120);
+	//Chain horizontal swings together for longer. The hold time is extended so that, when
+	//uninterrupted by a successful hit or incoming damage, the bot keeps fanning side-to-side.
+	const int fanHoldMs = 260 + (int)(fanBias * 8.0f) + Q_irand(0, 220);
+
+	//Don't let the fan-chain (fanbias) override a flipkick that is available and being set
+	//up - we want to chain saber attacks directly into flipkicks. Skip fan setup while a
+	//flipkick input is being pressed or the enemy is in flipkick range and we can kick.
+	if (bs->flipkickInputTime > level.time)
+	{
+		return;
+	}
 
 	if (!NewBotAI_IsSaberSwingStartWindow(bs))
 	{
