@@ -8375,11 +8375,16 @@ static int BotGetNewBotAITargetMode(void)
 }
 
 //-3 and -4 both prefer human targets first, then fall back to allowing bot-vs-bot
-//targeting/dueling once no humans are active; -4 additionally leans on bot duel challenges
-//to build ELO (see NewBotAI_ShouldIssueBotDuelChallenge).
+//targeting once no humans are active; -4 additionally allows bot duel challenges to
+//build ELO (see NewBotAI_ShouldIssueBotDuelChallenge).
 static qboolean BotTargetModePrefersHumansThenBots(int targetMode)
 {
 	return (targetMode == NEWBOTAI_TARGET_PREFER_HUMANS || targetMode == NEWBOTAI_TARGET_PREFER_HUMANS_DUEL);
+}
+
+static qboolean BotTargetModeAllowsBotDuelChallenges(int targetMode)
+{
+	return (targetMode == NEWBOTAI_TARGET_PREFER_HUMANS_DUEL);
 }
 
 static qboolean BotTargetModeAllowsBotEnemies(int targetMode)
@@ -8441,7 +8446,7 @@ static qboolean NewBotAI_ShouldIssueBotDuelChallenge(bot_state_t *bs, qboolean h
 	{
 		return qfalse;
 	}
-	if (!BotTargetModePrefersHumansThenBots(targetMode) || humansActive)
+	if (!BotTargetModeAllowsBotDuelChallenges(targetMode) || humansActive)
 	{
 		return qfalse;
 	}
