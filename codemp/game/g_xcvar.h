@@ -344,7 +344,9 @@ XCVAR_DEF( bot_forgimmick,				"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_honorableduelacceptance, "0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_pvstype,				"1",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( g_newBotAI,					"0",			NULL,				CVAR_ARCHIVE,									qtrue )
-// -1: default target selection, -2: human targets only, -3: prefer humans then allow bots, >=0: force client index
+// -1: default target selection, -2: human targets only, -3: prefer humans then allow bots,
+// -4: same as -3 but also biases bots toward issuing/accepting duel challenges against each
+// other (to build ELO) once no humans are active, >=0: force client index
 XCVAR_DEF( g_newBotAITarget,			"-1",			NULL,				CVAR_ARCHIVE,									qfalse )
 XCVAR_DEF( bot_targetdistance,			"4096",		NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( g_newBotAITargetDistance,	"4096",		NULL,				CVAR_ARCHIVE,									qtrue )
@@ -356,6 +358,10 @@ XCVAR_DEF( bot_healthbias,				"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_forcebias,				"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_saberthrowbias,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_gripkickbias,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
+// Scales how long (in percent, 100 = default timings) a bot lingers in each Gripkick phase
+// (lock-in, flipkick attempts, yaw/pitch jerks) before moving to the next. Lower values make
+// bots cycle through their grip sequence faster; higher values make them dwell longer per phase.
+XCVAR_DEF( bot_gripkickdwell,			"100",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_antidrainbias,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_fanbias,					"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_drainbias,				"0",			NULL,				CVAR_ARCHIVE,									qtrue )

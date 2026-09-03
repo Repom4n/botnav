@@ -4924,17 +4924,17 @@ void G_NewBotAIAimLeading(bot_state_t* bs, vec3_t headlevel) {
 
 	if (bs->cur_ps.weapon == WP_SABER && bs->cur_ps.saberMove >= 4) { //Poke and Wiggle
 		if (level.time % 100 > 50) {
-			bs->goalAngles[YAW] += 3.0f;
+			bs->goalAngles[YAW] += 1.5f;
 		}
 		else {
-			bs->goalAngles[YAW] -= 3.0f;
+			bs->goalAngles[YAW] -= 1.5f;
 		}
 
 		if (level.time % 200 > 100) {
-			bs->goalAngles[PITCH] += 6.0f;
+			bs->goalAngles[PITCH] += 3.0f;
 		}
 		else {
-			bs->goalAngles[PITCH] -= 6.0f;
+			bs->goalAngles[PITCH] -= 3.0f;
 		}
 
 		if (bs->cur_ps.saberMove == LS_A_T2B) {
@@ -6731,9 +6731,26 @@ static qboolean NewBotAI_ShouldAvoidFlipkickForSafety(bot_state_t *bs)
 void NewBotAI_Flipkick(bot_state_t *bs)
 {
 	qboolean enemySwing = qfalse;
+	//During Gripkick our own forward move / velocity is dictated by chasing the gripped
+	//target, not a normal engagement decision, so the range/speed gate below (meant to stop
+	//us kicking at a stationary point-blank enemy) doesn't apply - always let the grip
+	//sequence's flipkick attempts through.
+	const qboolean isGripSequence = (bs->cur_ps.fd.forcePowersActive & (1 << FP_GRIP)) ? qtrue : qfalse;
 
 	if (!NewBotAI_CanAttemptFlipkick(bs))
 	{
+		return;
+	}
+
+	//We already committed to a flipkick and are still airborne and rising - keep
+	//re-arming the jump press/release toggle for the whole ascent instead of only a
+	//narrow window after the initial jump, so we don't stop pressing before the engine's
+	//own timing (velocity[2]>200, near ground) has a chance to land the kick.
+	if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE && bs->cur_ps.velocity[2] > 0 && bs->flipkickInputTime > level.time)
+	{
+		trap->EA_MoveForward(bs->client);
+		trap->EA_DelayedJump(bs->client);
+		bs->flipkickInputTime = level.time + 350;
 		return;
 	}
 
@@ -6743,12 +6760,12 @@ void NewBotAI_Flipkick(bot_state_t *bs)
 		return;
 	}
 
-	if (bs->lastFlipkickAttemptTime > level.time)
+	if (!isGripSequence && bs->lastFlipkickAttemptTime > level.time)
 	{
 		return;
 	}
 
-	if (bs->frame_Enemy_Len < 140 && VectorLengthSquared(bs->cur_ps.velocity) < 6400)
+	if (!isGripSequence && bs->frame_Enemy_Len < 140 && VectorLengthSquared(bs->cur_ps.velocity) < 6400)
 	{
 		return;
 	}
@@ -6852,7 +6869,13 @@ void NewBotAI_ReactToBeingGripped(bot_state_t *bs) //Test this more, does it pus
 void NewBotAI_Gripkick(bot_state_t *bs)
 {
 	//float heightDiff = bs->cur_ps.origin[2] - bs->currentEnemy->client->ps.origin[2]; //We are above them by this much
-	const int gripTime = level.time - bs->currentEnemy->client->ps.fd.forceGripStarted; //Milliseconds we have been gripping them
+	int dwellPercent = bot_gripkickdwell.integer;
+	//bot_gripkickdwell scales how long we linger in each phase below (100 = default timings);
+	//dividing the raw grip time by it means a higher dwell percentage makes gripTime advance
+	//more slowly through the phase thresholds, i.e. we dwell longer per phase.
+	const int gripTime = (dwellPercent > 0) ?
+		(int)((level.time - bs->currentEnemy->client->ps.fd.forceGripStarted) * 100 / dwellPercent) :
+		(level.time - bs->currentEnemy->client->ps.fd.forceGripStarted); //Milliseconds we have been gripping them, dwell-scaled
 	const int gripkickBonus = BotGetAggressionWeightedBonus(bs, BotGetChanceBiasPercent(bot_gripkickbias.value), 30, qtrue);
 	const int yawJerkMag = Q_irand(140, 200);
 	const int yawJerkDir = Q_irand(0, 1) ? 1 : -1;
@@ -8226,7 +8249,8 @@ enum
 {
 	NEWBOTAI_TARGET_DEFAULT = -1,
 	NEWBOTAI_TARGET_HUMANS_ONLY = -2,
-	NEWBOTAI_TARGET_PREFER_HUMANS = -3
+	NEWBOTAI_TARGET_PREFER_HUMANS = -3,
+	NEWBOTAI_TARGET_PREFER_HUMANS_DUEL = -4
 };
 
 static int BotGetNewBotAITargetMode(void)
@@ -8236,17 +8260,26 @@ static int BotGetNewBotAITargetMode(void)
 	case NEWBOTAI_TARGET_DEFAULT:
 	case NEWBOTAI_TARGET_HUMANS_ONLY:
 	case NEWBOTAI_TARGET_PREFER_HUMANS:
+	case NEWBOTAI_TARGET_PREFER_HUMANS_DUEL:
 		return g_newBotAITarget.integer;
 	default:
 		break;
 	}
 
-	if (g_newBotAITarget.integer < NEWBOTAI_TARGET_PREFER_HUMANS)
+	if (g_newBotAITarget.integer < NEWBOTAI_TARGET_PREFER_HUMANS_DUEL)
 	{
 		return NEWBOTAI_TARGET_HUMANS_ONLY;
 	}
 
 	return g_newBotAITarget.integer;
+}
+
+//-3 and -4 both prefer human targets first, then fall back to allowing bot-vs-bot
+//targeting/dueling once no humans are active; -4 additionally leans on bot duel challenges
+//to build ELO (see NewBotAI_ShouldIssueBotDuelChallenge).
+static qboolean BotTargetModePrefersHumansThenBots(int targetMode)
+{
+	return (targetMode == NEWBOTAI_TARGET_PREFER_HUMANS || targetMode == NEWBOTAI_TARGET_PREFER_HUMANS_DUEL);
 }
 
 static qboolean BotTargetModeAllowsBotEnemies(int targetMode)
@@ -8300,39 +8333,15 @@ static qboolean BotHasActiveHumanPlayers(void)
 	return qfalse;
 }
 
-static int BotGetRoundedSkillLevel(bot_state_t *bs)
-{
-	int skillLevel;
-
-	if (!bs)
-	{
-		return 0;
-	}
-
-	skillLevel = (int)(bs->settings.skill + 0.5f);
-	if (skillLevel < 1)
-	{
-		skillLevel = 1;
-	}
-	else if (skillLevel > 5)
-	{
-		skillLevel = 5;
-	}
-
-	return skillLevel;
-}
-
 static qboolean NewBotAI_ShouldIssueBotDuelChallenge(bot_state_t *bs, qboolean humansActive, int targetMode)
 {
 	bot_state_t *enemyBs;
-	int ourSkillLevel;
-	int enemySkillLevel;
 
 	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
 	{
 		return qfalse;
 	}
-	if (targetMode != NEWBOTAI_TARGET_PREFER_HUMANS || humansActive)
+	if (!BotTargetModePrefersHumansThenBots(targetMode) || humansActive)
 	{
 		return qfalse;
 	}
@@ -8359,12 +8368,10 @@ static qboolean NewBotAI_ShouldIssueBotDuelChallenge(bot_state_t *bs, qboolean h
 		return qfalse;
 	}
 
-	ourSkillLevel = BotGetRoundedSkillLevel(bs);
-	enemySkillLevel = BotGetRoundedSkillLevel(enemyBs);
-	if (ourSkillLevel == enemySkillLevel)
-	{
-		return qfalse;
-	}
+	//Bots duel each other at random regardless of matching skill level - most servers run
+	//every bot at the same configured skill, and only allowing challenges across differing
+	//skill levels meant duels (and the ELO tracking that comes with them) almost never
+	//happened in practice.
 
 	return qtrue;
 }
@@ -10214,9 +10221,9 @@ int NewBotAI_ScanForEnemies(bot_state_t* bs) {
 		}
 	}
 
-	for (pass = 0; pass < ((targetMode == NEWBOTAI_TARGET_PREFER_HUMANS) ? 2 : 1); pass++)
+	for (pass = 0; pass < (BotTargetModePrefersHumansThenBots(targetMode) ? 2 : 1); pass++)
 	{
-		const qboolean preferHumansOnly = (targetMode == NEWBOTAI_TARGET_PREFER_HUMANS && pass == 0);
+		const qboolean preferHumansOnly = (BotTargetModePrefersHumansThenBots(targetMode) && pass == 0);
 
 		closest = startingClosest;
 		lowFruitClosest = startingClosest;
@@ -10311,7 +10318,7 @@ int NewBotAI_ScanForEnemies(bot_state_t* bs) {
 			return lowFruitBestIndex;
 		}
 
-		if (bestindex != -1 || targetMode != NEWBOTAI_TARGET_PREFER_HUMANS)
+		if (bestindex != -1 || !BotTargetModePrefersHumansThenBots(targetMode))
 		{
 			if (bestindex != -1)
 			{
@@ -10329,8 +10336,6 @@ int NewBotAI_ScanForEnemies(bot_state_t* bs) {
 static qboolean BotTryAcceptAnyDuelChallenge(bot_state_t *bs)
 {
 	int i;
-	const int targetMode = BotGetNewBotAITargetMode();
-	const qboolean humansActive = BotHasActiveHumanPlayers();
 
 	if (!bot_honorableduelacceptance.integer || !g_privateDuel.integer || bs->cur_ps.duelInProgress)
 	{
@@ -10353,18 +10358,6 @@ static qboolean BotTryAcceptAnyDuelChallenge(bot_state_t *bs)
 		}
 
 		duelType = dueltypes[challenger->client->ps.clientNum];
-
-		if (targetMode == NEWBOTAI_TARGET_PREFER_HUMANS &&
-			!humansActive &&
-			(g_entities[bs->client].r.svFlags & SVF_BOT) &&
-			(challenger->r.svFlags & SVF_BOT))
-		{
-			bot_state_t *challengerBs = botstates[challenger->s.number];
-			if (challengerBs && BotGetRoundedSkillLevel(challengerBs) == BotGetRoundedSkillLevel(bs))
-			{
-				continue;
-			}
-		}
 
 		if (duelType <= 1 && bs->cur_ps.weapon == WP_SABER && !bs->cur_ps.saberHolstered)
 		{
@@ -10455,7 +10448,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	targetMode = BotGetNewBotAITargetMode();
 	someonesHere = BotHasActiveHumanPlayers();
 
-	if (!someonesHere && targetMode != NEWBOTAI_TARGET_PREFER_HUMANS)
+	if (!someonesHere && !BotTargetModePrefersHumansThenBots(targetMode))
 		return;
 
 	if (targetMode < 0)
@@ -11025,6 +11018,22 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 			level.clients[bs->client].ps.fd.forcePowerSelected = FP_HEAL;
 			useTheForce = 1;
 			forceHostile = 0;
+		}
+		else if (!bs->currentEnemy && bs->wpDestination &&
+			(bs->cur_ps.fd.forcePowersKnown & (1 << FP_SPEED)) &&
+			level.clients[bs->client].ps.fd.forcePower > forcePowerNeeded[level.clients[bs->client].ps.fd.forcePowerLevel[FP_SPEED]][FP_SPEED])
+		{ //Not targeting anyone and far from our waypoint destination - use force speed to
+		  //close the distance through the waypoint network faster instead of only relying
+		  //on it defensively/offensively during combat.
+			vec3_t toDestination;
+
+			VectorSubtract(bs->wpDestination->origin, bs->origin, toDestination);
+			if (VectorLengthSquared(toDestination) > (512.0f * 512.0f))
+			{
+				level.clients[bs->client].ps.fd.forcePowerSelected = FP_SPEED;
+				useTheForce = 1;
+				forceHostile = 0;
+			}
 		}
 	}
 
