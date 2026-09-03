@@ -8375,11 +8375,16 @@ static int BotGetNewBotAITargetMode(void)
 }
 
 //-3 and -4 both prefer human targets first, then fall back to allowing bot-vs-bot
-//targeting/dueling once no humans are active; -4 additionally leans on bot duel challenges
-//to build ELO (see NewBotAI_ShouldIssueBotDuelChallenge).
+//targeting once no humans are active; -4 additionally allows bot duel challenges to
+//build ELO (see NewBotAI_ShouldIssueBotDuelChallenge).
 static qboolean BotTargetModePrefersHumansThenBots(int targetMode)
 {
 	return (targetMode == NEWBOTAI_TARGET_PREFER_HUMANS || targetMode == NEWBOTAI_TARGET_PREFER_HUMANS_DUEL);
+}
+
+static qboolean BotTargetModeAllowsBotDuelChallenges(int targetMode)
+{
+	return (targetMode == NEWBOTAI_TARGET_PREFER_HUMANS_DUEL);
 }
 
 static qboolean BotTargetModeAllowsBotEnemies(int targetMode)
@@ -8441,7 +8446,7 @@ static qboolean NewBotAI_ShouldIssueBotDuelChallenge(bot_state_t *bs, qboolean h
 	{
 		return qfalse;
 	}
-	if (!BotTargetModePrefersHumansThenBots(targetMode) || humansActive)
+	if (!BotTargetModeAllowsBotDuelChallenges(targetMode) || humansActive)
 	{
 		return qfalse;
 	}
@@ -8854,6 +8859,45 @@ static int NewBotAI_GetPTKWeight(bot_state_t *bs)
 	if (bs->cur_ps.weapon != WP_SABER && bs->cur_ps.weapon != WP_MELEE)
 	{
 		return 0;
+	}
+
+	if (hisForce < 20)
+	{
+		//Low-force opponents are especially vulnerable to quick drain taps and
+		//pullkick follow-up chains, so PTK gets an extra nudge when their FP is nearly spent.
+		weight += (int)(aggressionWeight * 0.6f) + 20;
+	}
+
+	if (hisHealth < 45)
+	{
+		//Low-health targets are prime PTK finishers: add a strong bias when the enemy is
+		//close to dropping so the bot chases the finish with a pullkick sequence.
+		weight += 35;
+	}
+
+	if (ourHealth > 70)
+	{
+		const float fanBias = BotGetChanceBiasPercent(bot_fanbias.value);
+
+		if (ourForce < hisForce)
+		{
+			//When the bot is healthy but behind in force, a fan-heavy approach keeps them
+			//pressuring the enemy without overcommitting to a drain or a desperate chase.
+			weight += (int)(fanBias * 0.7f) + 15;
+		}
+		else if (ourForce > hisForce)
+		{
+			//A healthy force edge is the ideal moment to commit to the pullkick follow-up
+			//instead of chancing a low-value exchange.
+			weight += (int)(fanBias * 0.4f) + 10;
+		}
+	}
+
+	if (bs->cur_ps.weapon == WP_SABER && BG_SaberInAttack(bs->cur_ps.saberMove) && bs->frame_Enemy_Len < 200)
+	{
+		//Immediately follow a successful saber exchange with more PTK intent so the
+		//bot can chain into a pullkick while the target is still staggered or exposed.
+		weight += 30;
 	}
 
 	if (fpDifference >= bot_ptk_fpdifference.integer)
