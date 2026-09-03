@@ -8172,8 +8172,8 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 				//Periodically pick a random lateral direction to break the symmetry.
 				if (hisWeapon == WP_SABER && bs->cur_ps.weapon == WP_SABER && bs->cur_ps.groundEntityNum != ENTITYNUM_NONE) {
 					if (bs->randomStrafeEndTime <= level.time) {
-						bs->randomStrafeDir = Q_irand(0, 2) - 1; //-1 left, 0 none, 1 right
-						bs->randomStrafeEndTime = level.time + Q_irand(300, 800);
+						bs->randomStrafeDir = Q_irand(-1, 1); //-1 left, 0 none, 1 right
+						bs->randomStrafeEndTime = level.time + Q_irand(180, 700 + (int)(BotGetChanceBiasPercent(bot_fanbias.value) * 5.0f));
 					}
 					if (bs->randomStrafeDir > 0)
 						trap->EA_MoveRight(bs->client);
@@ -8858,6 +8858,7 @@ static qboolean NewBotAI_IsSaberSwingStartWindow(bot_state_t *bs)
 static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 {
 	const float fanBias = BotGetChanceBiasPercent(bot_fanbias.value);
+	const int fanHoldMs = 160 + (int)(fanBias * 5.0f) + Q_irand(0, 120);
 
 	if (!NewBotAI_IsSaberSwingStartWindow(bs))
 	{
@@ -8873,6 +8874,21 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 		return;
 	}
 
+	if (bs->lastHurtTime > level.time - 200)
+	{
+		bs->fanAttackDir = 0;
+		bs->fanAttackTime = level.time;
+		return;
+	}
+
+	if (bs->currentEnemy && bs->currentEnemy->client && bs->fanAttackEnemyHealth > 0 &&
+		bs->currentEnemy->health < bs->fanAttackEnemyHealth)
+	{
+		bs->fanAttackDir = 0;
+		bs->fanAttackTime = level.time;
+		return;
+	}
+
 	if (bs->fanAttackTime > level.time && bs->fanAttackDir)
 	{
 		return;
@@ -8881,7 +8897,15 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 	if (bs->randomStrafeEndTime > level.time && bs->randomStrafeDir)
 	{
 		bs->fanAttackDir = bs->randomStrafeDir;
-		bs->fanAttackTime = level.time + 150;
+		bs->fanAttackTime = level.time + fanHoldMs;
+		if (bs->currentEnemy && bs->currentEnemy->client)
+		{
+			bs->fanAttackEnemyHealth = bs->currentEnemy->health;
+		}
+		else
+		{
+			bs->fanAttackEnemyHealth = 0;
+		}
 		return;
 	}
 
@@ -8899,7 +8923,11 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 		{
 			bs->fanAttackDir = Q_irand(0, 1) ? 1 : -1;
 		}
-		bs->fanAttackTime = level.time + 150;
+		bs->fanAttackTime = level.time + fanHoldMs;
+		if (bs->currentEnemy && bs->currentEnemy->client)
+		{
+			bs->fanAttackEnemyHealth = bs->currentEnemy->health;
+		}
 	}
 }
 
@@ -8907,6 +8935,21 @@ static void NewBotAI_ApplyHorizontalSwingMove(bot_state_t *bs)
 {
 	if (bs->fanAttackTime <= level.time || !bs->fanAttackDir)
 	{
+		return;
+	}
+
+	if (bs->lastHurtTime > level.time - 200)
+	{
+		bs->fanAttackDir = 0;
+		bs->fanAttackTime = level.time;
+		return;
+	}
+
+	if (bs->currentEnemy && bs->currentEnemy->client && bs->fanAttackEnemyHealth > 0 &&
+		bs->currentEnemy->health < bs->fanAttackEnemyHealth)
+	{
+		bs->fanAttackDir = 0;
+		bs->fanAttackTime = level.time;
 		return;
 	}
 
