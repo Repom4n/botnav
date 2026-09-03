@@ -107,6 +107,7 @@ static float BotGetAimSpeedFactor(bot_state_t *bs);
 static float BotGetAimSpeedMaxChange(bot_state_t *bs, float legacyMaxChange);
 static int BotGetReflexScaledResponseDelayMs(bot_state_t *bs);
 static float BotGetChanceBiasPercent(float value);
+static float BotGetMistakeBiasChance(bot_state_t *bs);
 static int BotGetAggressionWeightedBonus(bot_state_t *bs, float biasPercent, int maxBonus, qboolean aggressiveOnly);
 static int BotGetDrainHoldBiasMs(bot_state_t *bs);
 static int NewBotAI_GetAntiDrainWeight(bot_state_t *bs);
@@ -6879,11 +6880,17 @@ void NewBotAI_ReactToBeingGripped(bot_state_t *bs) //Test this more, does it pus
 	}
 	else if (!(g_forcePowerDisable.integer & (1 << FP_PULL)) && !(g_forcePowerDisable.integer & (1 << FP_PUSH)) && (bs->cur_ps.fd.forcePowersKnown & (1 << FP_PULL)) && (bs->cur_ps.fd.forcePowersKnown & (1 << FP_PUSH))) {//Can push or pull
 		if (bs->cur_ps.fd.forcePower >= 20 && InFieldOfVision(bs->viewangles, 50, a_fo)) {
+			const float mistakeChance = BotGetMistakeBiasChance(bs);
 			if (g_entities[bs->client].health < 30) {
 				level.clients[bs->client].ps.fd.forcePowerSelected = FP_PUSH;
 				useTheForce = qtrue;
 			}
 			else {
+				if (mistakeChance > 0.0f && Q_irand(1, 100) <= (int)mistakeChance)
+				{
+					NewBotAI_Flipkick(bs);
+					return;
+				}
 				level.clients[bs->client].ps.fd.forcePowerSelected = FP_PULL;
 				useTheForce = qtrue;
 			}
@@ -6891,6 +6898,12 @@ void NewBotAI_ReactToBeingGripped(bot_state_t *bs) //Test this more, does it pus
 	}
 	else if (!(g_forcePowerDisable.integer & (1 << FP_PULL)) && bs->cur_ps.fd.forcePowersKnown & (1 << FP_PULL)) {//Can pull and not push
 		if (bs->cur_ps.fd.forcePower >= 20 && InFieldOfVision(bs->viewangles, 50, a_fo)) {
+			const float mistakeChance = BotGetMistakeBiasChance(bs);
+			if (mistakeChance > 0.0f && Q_irand(1, 100) <= (int)mistakeChance)
+			{
+				NewBotAI_Flipkick(bs);
+				return;
+			}
 			level.clients[bs->client].ps.fd.forcePowerSelected = FP_PULL;
 			useTheForce = qtrue;
 		}
@@ -8545,6 +8558,35 @@ static float BotGetChanceBiasPercent(float value)
 	}
 
 	return value;
+}
+
+static float BotGetMistakeBiasChance(bot_state_t *bs)
+{
+	float skillScale;
+	float chance;
+
+	if (!bs)
+	{
+		return 0.0f;
+	}
+
+	chance = BotGetChanceBiasPercent(bot_mistakebias.value);
+	if (chance <= 0.0f)
+	{
+		return 0.0f;
+	}
+
+	skillScale = (6.0f - bs->settings.skill) / 5.0f;
+	if (skillScale < 0.0f)
+	{
+		skillScale = 0.0f;
+	}
+	else if (skillScale > 1.0f)
+	{
+		skillScale = 1.0f;
+	}
+
+	return chance * skillScale;
 }
 
 static int BotGetAggressionWeightedBonus(bot_state_t *bs, float biasPercent, int maxBonus, qboolean aggressiveOnly)

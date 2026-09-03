@@ -358,6 +358,9 @@ XCVAR_DEF( bot_healthbias,				"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_forcebias,				"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_saberthrowbias,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_gripkickbias,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
+// Chance for a bot to misfire or delay a gripkick escape attempt when it has a pull available.
+// Scales with bot skill: lower-skill bots are more likely to miss/delay the pull.
+XCVAR_DEF( bot_mistakebias, 			"0", 			NULL, 				CVAR_ARCHIVE, 							qtrue )
 // Scales how long (in percent, 100 = default timings) a bot lingers in each Gripkick phase
 // (lock-in, flipkick attempts, yaw/pitch jerks) before moving to the next. Lower values make
 // bots cycle through their grip sequence faster; higher values make them dwell longer per phase.
