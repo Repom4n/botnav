@@ -122,6 +122,7 @@ static void NewBotAI_ApplyHorizontalSwingMove(bot_state_t *bs);
 static qboolean NewBotAI_CanUseSaberThrowDefenseBreakForce(bot_state_t *bs, qboolean preferPull);
 static void NewBotAI_AdjustSaberThrowArcAim(bot_state_t *bs, vec3_t headlevel);
 static void NewBotAI_TrySaberThrowDefenseBreak(bot_state_t *bs);
+static qboolean BotNav_CheckFallingHazard(bot_state_t *bs, vec3_t moveDir);
 qboolean NewBotAI_IsEnemyPullable(bot_state_t *bs);
 void Cmd_EngageDuel_f(gentity_t *ent, int dueltype);
 
@@ -1907,6 +1908,59 @@ int BotTrace_Duck(bot_state_t *bs, vec3_t traceto)
 	}
 
 	return 0;
+}
+
+//Trace ahead in the movement direction to detect falling hazards (ledges, lava, death pits).
+//Returns qtrue if walking in moveDir would lead the bot off a dangerous drop or into lava.
+static qboolean BotNav_CheckFallingHazard(bot_state_t *bs, vec3_t moveDir)
+{
+	vec3_t start, end, downEnd;
+	trace_t tr;
+
+	if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE)
+	{
+		return qfalse; //already airborne, can't steer
+	}
+
+	//Project a point ahead of the bot in the movement direction
+	VectorCopy(bs->origin, start);
+	start[0] += moveDir[0] * 48.0f;
+	start[1] += moveDir[1] * 48.0f;
+
+	//First check: is there ground ahead at all?
+	VectorCopy(start, end);
+	end[2] -= 256.0f; //trace down looking for floor
+
+	JP_Trace(&tr, start, NULL, NULL, end, bs->client, MASK_PLAYERSOLID, qfalse, 0, 0);
+
+	if (tr.fraction == 1.0f)
+	{
+		return qtrue; //no ground within 256 units below our next step - it's a deadly fall
+	}
+
+	//Check if the ground we'd land on is lava or a death pit
+	if (tr.contents & (CONTENTS_LAVA | CONTENTS_NODROP))
+	{
+		return qtrue;
+	}
+
+	//Second check: trace down from our current position to see how far the drop is.
+	//If the landing point is far below and the fall would kill us, avoid it.
+	VectorCopy(bs->origin, start);
+	start[0] += moveDir[0] * 48.0f;
+	start[1] += moveDir[1] * 48.0f;
+	start[2] = tr.endpos[2]; //start from the landing surface
+
+	VectorCopy(start, downEnd);
+	downEnd[2] = bs->origin[2]; //trace back up to our level
+
+	//If the drop is more than ~200 units, it's likely a damaging or deadly fall
+	if ((bs->origin[2] - tr.endpos[2]) > 200.0f)
+	{
+		return qtrue;
+	}
+
+	return qfalse;
 }
 
 //check of the potential enemy is a valid one
@@ -6750,7 +6804,7 @@ void NewBotAI_Flipkick(bot_state_t *bs)
 	{
 		trap->EA_MoveForward(bs->client);
 		trap->EA_DelayedJump(bs->client);
-		bs->flipkickInputTime = level.time + 350;
+		bs->flipkickInputTime = level.time + 500;
 		return;
 	}
 
@@ -6765,7 +6819,7 @@ void NewBotAI_Flipkick(bot_state_t *bs)
 		return;
 	}
 
-	if (!isGripSequence && bs->frame_Enemy_Len < 140 && VectorLengthSquared(bs->cur_ps.velocity) < 6400)
+	if (!isGripSequence && bs->frame_Enemy_Len < 160 && VectorLengthSquared(bs->cur_ps.velocity) < 4900)
 	{
 		return;
 	}
@@ -6785,7 +6839,7 @@ void NewBotAI_Flipkick(bot_state_t *bs)
 	if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE - 1 || bs->cur_ps.fd.forceJumpZStart < 16) {//idk
 		trap->EA_MoveForward(bs->client);
 		trap->EA_Jump(bs->client);
-		bs->flipkickInputTime = level.time + 350;
+		bs->flipkickInputTime = level.time + 500;
 		bs->flipkickJumpHeld = qtrue;
 	}
 
@@ -8112,13 +8166,38 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 				}
 				NewBotAI_Flipkick(bs);
 			}
-			if (!horizontalSwingStart)
+			if (!horizontalSwingStart) {
 				trap->EA_MoveForward(bs->client);//Always move forward i guess
+				//In saber duels, two bots walking straight at each other glitch together.
+				//Periodically pick a random lateral direction to break the symmetry.
+				if (hisWeapon == WP_SABER && bs->cur_ps.weapon == WP_SABER && bs->cur_ps.groundEntityNum != ENTITYNUM_NONE) {
+					if (bs->randomStrafeEndTime <= level.time) {
+						bs->randomStrafeDir = Q_irand(0, 2) - 1; //-1 left, 0 none, 1 right
+						bs->randomStrafeEndTime = level.time + Q_irand(300, 800);
+					}
+					if (bs->randomStrafeDir > 0)
+						trap->EA_MoveRight(bs->client);
+					else if (bs->randomStrafeDir < 0)
+						trap->EA_MoveLeft(bs->client);
+				}
+			}
 			else
 				NewBotAI_ApplyHorizontalSwingMove(bs);
 		}
-		else if (!horizontalSwingStart)
+		else if (!horizontalSwingStart) {
 			trap->EA_MoveForward(bs->client);
+			//Point-blank saber duel: also wiggle laterally to avoid glitching into each other.
+			if (hisWeapon == WP_SABER && bs->cur_ps.weapon == WP_SABER && bs->cur_ps.groundEntityNum != ENTITYNUM_NONE) {
+				if (bs->randomStrafeEndTime <= level.time) {
+					bs->randomStrafeDir = Q_irand(0, 2) - 1;
+					bs->randomStrafeEndTime = level.time + Q_irand(200, 600);
+				}
+				if (bs->randomStrafeDir > 0)
+					trap->EA_MoveRight(bs->client);
+				else if (bs->randomStrafeDir < 0)
+					trap->EA_MoveLeft(bs->client);
+			}
+		}
 		else
 			NewBotAI_ApplyHorizontalSwingMove(bs);
 
@@ -8925,6 +9004,8 @@ static void NewBotAI_TrySaberThrowDefenseBreak(bot_state_t *bs)
 		return;
 	}
 
+	//When our actions are PTK-weighted (aggressive bias) we pull them in for the kick
+	//follow-up; when defensive we push to break their guard instead.
 	preferPull = (BotGetAggressionBias(bs) > 0.0f) ? qtrue : qfalse;
 
 	if (!NewBotAI_CanUseSaberThrowDefenseBreakForce(bs, preferPull))
@@ -9340,6 +9421,7 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 		int aggressionBonus = BotGetAggressionWeightedBonus(bs, saberthrowBias, 45, qtrue);
 		int finishingBonus = 0;
 		const qboolean flipkickUnavailable = (!NewBotAI_CanAttemptFlipkick(bs)) ? qtrue : qfalse;
+		const qboolean enemyAttacking = BG_SaberInAttack(bs->currentEnemy->client->ps.saberMove) ? qtrue : qfalse;
 
 		if (enemyTotalHealth <= 70)
 		{
@@ -9352,6 +9434,12 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 		if (flipkickUnavailable && bs->frame_Enemy_Len > 140)
 		{
 			finishingBonus += 20;
+		}
+		//An enemy mid-swing is committed to their attack animation and can't dodge or
+		//block the throw - this is the best time to land a saber throw.
+		if (enemyAttacking)
+		{
+			finishingBonus += 15;
 		}
 
 		if (aggressionBonus + finishingBonus + antiDrainWeight > weight)
@@ -9439,6 +9527,29 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 
 	if (NewBotAI_GetSaberthrow(bs) > minWeight) {
 		trap->EA_Alt_Attack(bs->client);
+		//Pre-select pull or push so it fires as the saber approaches the target. Pull when
+		//aggressive (PTK setup), push when defensive (break their guard). This runs after the
+		//normal force-power selection above so it can override a less useful pick.
+		{
+			const qboolean ptkWeighted = (BotGetAggressionBias(bs) > 0.0f) ? qtrue : qfalse;
+			if (ptkWeighted && !(g_forcePowerDisable.integer & (1 << FP_PULL)) &&
+				(bs->cur_ps.fd.forcePowersKnown & (1 << FP_PULL)) &&
+				bs->cur_ps.fd.forcePower >= 40 &&
+				!(bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB)) &&
+				bs->frame_Enemy_Len >= 96 && bs->frame_Enemy_Len <= 640)
+			{
+				level.clients[bs->client].ps.fd.forcePowerSelected = FP_PULL;
+				useTheForce = qtrue;
+			}
+			else if (!ptkWeighted && !(g_forcePowerDisable.integer & (1 << FP_PUSH)) &&
+				(bs->cur_ps.fd.forcePowersKnown & (1 << FP_PUSH)) &&
+				bs->cur_ps.fd.forcePower >= 40 &&
+				bs->frame_Enemy_Len >= 96 && bs->frame_Enemy_Len <= 640)
+			{
+				level.clients[bs->client].ps.fd.forcePowerSelected = FP_PUSH;
+				useTheForce = qtrue;
+			}
+		}
 	}
 
 	if (useTheForce && (level.framenum % 2) && (!bs->currentEnemy->client->invulnerableTimer || (bs->currentEnemy->client->invulnerableTimer <= level.time)))
@@ -9565,6 +9676,31 @@ void NewBotAI_GetLSForcepower(bot_state_t *bs)
 	//Check if we should saberthrow I guess.
 	if (NewBotAI_GetSaberthrow(bs) > minWeight) {
 		trap->EA_Alt_Attack(bs->client);
+		//Pre-select pull or push so it fires as the saber approaches the target. Pull when
+		//aggressive (PTK setup), push when defensive (break their guard). This runs after the
+		//normal force-power selection above so it can override a less useful pick.
+		{
+			const qboolean ptkWeighted = (BotGetAggressionBias(bs) > 0.0f) ? qtrue : qfalse;
+			if (ptkWeighted && !(g_forcePowerDisable.integer & (1 << FP_PULL)) &&
+				(bs->cur_ps.fd.forcePowersKnown & (1 << FP_PULL)) &&
+				bs->cur_ps.fd.forcePower >= 40 &&
+				!(bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB)) &&
+				bs->frame_Enemy_Len >= 96 && bs->frame_Enemy_Len <= 640)
+			{
+				level.clients[bs->client].ps.fd.forcePowerSelected = FP_PULL;
+				useTheForce = qtrue;
+			}
+			else if (!ptkWeighted && !(g_forcePowerDisable.integer & (1 << FP_PUSH)) &&
+				(bs->cur_ps.fd.forcePowersKnown & (1 << FP_PUSH)) &&
+				bs->cur_ps.fd.forcePower >= 40 &&
+				bs->frame_Enemy_Len >= 96 && bs->frame_Enemy_Len <= 640)
+			{
+				level.clients[bs->client].ps.fd.forcePowerSelected = FP_PUSH;
+				useTheForce = qtrue;
+			}
+		}
+		if (useTheForce && (level.framenum % 2) && (!bs->currentEnemy->client->invulnerableTimer || (bs->currentEnemy->client->invulnerableTimer <= level.time)))
+			trap->EA_ForcePower(bs->client);
 		return;
 	}
 
@@ -11928,7 +12064,15 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 		VectorSubtract(bs->goalPosition, bs->origin, bs->goalMovedir);
 		VectorNormalize(bs->goalMovedir);
 
-		if (bs->jumpTime > level.time && bs->jDelay < level.time &&
+		//Falling hazard awareness: don't walk off ledges or into lava/death pits.
+		//If the movement direction leads to a dangerous drop, stop and let the
+		//waypoint system re-path on the next think.
+		if (BotNav_CheckFallingHazard(bs, bs->goalMovedir))
+		{
+			bs->beStill = level.time + 100;
+			bs->wpCurrent = NULL; //force re-path
+		}
+		else if (bs->jumpTime > level.time && bs->jDelay < level.time &&
 			level.clients[bs->client].pers.cmd.upmove > 0)
 		{
 		//	trap->EA_Move(bs->client, bs->origin, 5000);
@@ -11962,8 +12106,11 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 			bs->duckTime = level.time + 100;
 		}
 #ifdef BOT_STRAFE_AVOIDANCE
-		else
+		else if (!bs->frame_Enemy_Vis || !bs->currentEnemy || bs->frame_Enemy_Len > 512)
 		{
+			//Only strafe around obstacles when not actively engaged in close combat.
+			//When fighting at saber/melee range, lateral obstacle avoidance causes the
+			//bot to stutter and glitch about walls instead of focusing on the fight.
 			int strafeAround = BotTrace_Strafe(bs, bs->goalPosition);
 
 			if (strafeAround == STRAFEAROUND_RIGHT)
