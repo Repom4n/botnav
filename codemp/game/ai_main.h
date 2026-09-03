@@ -267,6 +267,8 @@ typedef struct bot_state_s
 	int					randomNavTime;
 	int					randomNav;
     int					customNavReverseTime;
+	int					lastWPIndex;	//index of the waypoint we were travelling to before wpCurrent was cleared; -1 if none
+	int					lastWPDir;		//wpDirection we were travelling in when lastWPIndex was set
 
 	int					saberSpecialist;
 
