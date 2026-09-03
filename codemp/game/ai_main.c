@@ -8861,6 +8861,20 @@ static int NewBotAI_GetPTKWeight(bot_state_t *bs)
 		return 0;
 	}
 
+	if (hisForce < 20)
+	{
+		//Low-force opponents are especially vulnerable to quick drain taps and
+		//pullkick follow-up chains, so PTK gets an extra nudge when their FP is nearly spent.
+		weight += (int)(aggressionWeight * 0.6f) + 20;
+	}
+
+	if (bs->cur_ps.weapon == WP_SABER && BG_SaberInAttack(bs->cur_ps.saberMove) && bs->frame_Enemy_Len < 200)
+	{
+		//Immediately follow a successful saber exchange with more PTK intent so the
+		//bot can chain into a pullkick while the target is still staggered or exposed.
+		weight += 30;
+	}
+
 	if (fpDifference >= bot_ptk_fpdifference.integer)
 	{
 		weight += (int)(aggressionWeight * 0.4f);
