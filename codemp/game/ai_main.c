@@ -8868,6 +8868,13 @@ static int NewBotAI_GetPTKWeight(bot_state_t *bs)
 		weight += (int)(aggressionWeight * 0.6f) + 20;
 	}
 
+	if (hisHealth < 45)
+	{
+		//Low-health targets are prime PTK finishers: add a strong bias when the enemy is
+		//close to dropping so the bot chases the finish with a pullkick sequence.
+		weight += 35;
+	}
+
 	if (bs->cur_ps.weapon == WP_SABER && BG_SaberInAttack(bs->cur_ps.saberMove) && bs->frame_Enemy_Len < 200)
 	{
 		//Immediately follow a successful saber exchange with more PTK intent so the
