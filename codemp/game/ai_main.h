@@ -374,6 +374,8 @@ typedef struct bot_state_s
 	int					randomStrafeDir;
 	int					randomStrafeEndTime;
 	int					lastFlipkickAttemptTime;
+	int					flipkickInputTime; // next time (level.time) the flipkick jump press/release toggles (~2ms cadence)
+	qboolean			flipkickJumpHeld; // our last flipkick input was a jump press (drives the press/release toggle)
 	int					drainRollDir; // -1 left, 0 back, 1 right; used by NewBotAI_DrainRollEscape
 	int					drainRollResetTime;
 

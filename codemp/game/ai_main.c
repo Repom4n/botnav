@@ -6763,15 +6763,44 @@ void NewBotAI_Flipkick(bot_state_t *bs)
 		}
 	}
 
-	//The engine's forward flipkick (BOTH_WALL_FLIP_BACK1) is only triggered by moving
-	//straight forward into the enemy while rapidly repeating jump inputs - it is not an
-	//alt-attack move. Pressing alt-attack here would instead trigger a staff-style
-	//(double bladed saber) kick/spin move, which is a different move entirely and must
-	//not be mixed into a flipkick attempt. Keep this purely forward+jump.
-	if (((bs->origin[2] - bs->cur_ps.fd.forceJumpZStart) > 24) && ((bs->origin[2] - bs->cur_ps.fd.forceJumpZStart) < 48))
+	//The engine's forward flipkick (BOTH_WALL_FLIP_BACK1, bg_pmove.c PM_CheckJump) is an
+	//airborne move: it only triggers while in the air, rising (velocity[2] > 200), low to
+	//the ground (PM_GroundDistance() <= 80), pushing straight forward (cmd.forwardmove > 0),
+	//and with jump freshly pressed while !PMF_JUMP_HELD. Reaching that "!PMF_JUMP_HELD +
+	//fresh upmove" state requires a genuine press/release of jump, which a single EA_Jump
+	//per 100ms think never produces -- the jump stays held the whole way up, so the branch
+	//is never eligible. So once airborne we repeat a jump input every ~2ms (alternating a
+	//press with a release) while moving straight forward, which clears PMF_JUMP_HELD on the
+	//release edge and re-presses on the next edge, making the flipkick branch reachable.
+	//It is NOT an alt-attack move; alt-attack triggers a staff-style kick and must not be
+	//mixed in. Keep movement purely forward (no strafe) so the 32-unit forward trace stays
+	//on the enemy.
+	if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE && bs->cur_ps.velocity[2] > 200)
 	{
-		if (level.framenum % 2)
-			trap->EA_Jump(bs->client);
+		//airborne and rising into the flipkick window: hold straight forward and toggle a
+		//jump press every 2ms. EA_DelayedJump on the press edge makes the next outgoing
+		//usercmd carry upmove (BotInputToUserCommand promotes DELAYEDJUMP->JUMP); the
+		//release edge sends no jump, so upmove goes out clear and PMF_JUMP_HELD resets.
+		trap->EA_MoveForward(bs->client);
+		if (level.time >= bs->flipkickInputTime)
+		{
+			if (bs->flipkickJumpHeld)
+			{
+				//release edge: no EA_*Jump, so upmove goes out clear this frame
+				bs->flipkickJumpHeld = qfalse;
+			}
+			else
+			{
+				trap->EA_DelayedJump(bs->client); //press edge
+				bs->flipkickJumpHeld = qtrue;
+			}
+			bs->flipkickInputTime = level.time + 2;
+		}
+	}
+	else
+	{
+		//on the ground / no longer rising: end any held press so the next attempt starts clean
+		bs->flipkickJumpHeld = qfalse;
 	}
 }
 
