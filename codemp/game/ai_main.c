@@ -107,6 +107,7 @@ static float BotGetAimSpeedFactor(bot_state_t *bs);
 static float BotGetAimSpeedMaxChange(bot_state_t *bs, float legacyMaxChange);
 static int BotGetReflexScaledResponseDelayMs(bot_state_t *bs);
 static float BotGetChanceBiasPercent(float value);
+static float BotGetMistakeBiasChance(bot_state_t *bs);
 static int BotGetAggressionWeightedBonus(bot_state_t *bs, float biasPercent, int maxBonus, qboolean aggressiveOnly);
 static int BotGetDrainHoldBiasMs(bot_state_t *bs);
 static int NewBotAI_GetAntiDrainWeight(bot_state_t *bs);
@@ -6879,11 +6880,17 @@ void NewBotAI_ReactToBeingGripped(bot_state_t *bs) //Test this more, does it pus
 	}
 	else if (!(g_forcePowerDisable.integer & (1 << FP_PULL)) && !(g_forcePowerDisable.integer & (1 << FP_PUSH)) && (bs->cur_ps.fd.forcePowersKnown & (1 << FP_PULL)) && (bs->cur_ps.fd.forcePowersKnown & (1 << FP_PUSH))) {//Can push or pull
 		if (bs->cur_ps.fd.forcePower >= 20 && InFieldOfVision(bs->viewangles, 50, a_fo)) {
+			const float mistakeChance = BotGetMistakeBiasChance(bs);
 			if (g_entities[bs->client].health < 30) {
 				level.clients[bs->client].ps.fd.forcePowerSelected = FP_PUSH;
 				useTheForce = qtrue;
 			}
 			else {
+				if (mistakeChance > 0.0f && Q_irand(1, 100) <= (int)mistakeChance)
+				{
+					NewBotAI_Flipkick(bs);
+					return;
+				}
 				level.clients[bs->client].ps.fd.forcePowerSelected = FP_PULL;
 				useTheForce = qtrue;
 			}
@@ -6891,6 +6898,12 @@ void NewBotAI_ReactToBeingGripped(bot_state_t *bs) //Test this more, does it pus
 	}
 	else if (!(g_forcePowerDisable.integer & (1 << FP_PULL)) && bs->cur_ps.fd.forcePowersKnown & (1 << FP_PULL)) {//Can pull and not push
 		if (bs->cur_ps.fd.forcePower >= 20 && InFieldOfVision(bs->viewangles, 50, a_fo)) {
+			const float mistakeChance = BotGetMistakeBiasChance(bs);
+			if (mistakeChance > 0.0f && Q_irand(1, 100) <= (int)mistakeChance)
+			{
+				NewBotAI_Flipkick(bs);
+				return;
+			}
 			level.clients[bs->client].ps.fd.forcePowerSelected = FP_PULL;
 			useTheForce = qtrue;
 		}
@@ -8172,8 +8185,8 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 				//Periodically pick a random lateral direction to break the symmetry.
 				if (hisWeapon == WP_SABER && bs->cur_ps.weapon == WP_SABER && bs->cur_ps.groundEntityNum != ENTITYNUM_NONE) {
 					if (bs->randomStrafeEndTime <= level.time) {
-						bs->randomStrafeDir = Q_irand(0, 2) - 1; //-1 left, 0 none, 1 right
-						bs->randomStrafeEndTime = level.time + Q_irand(300, 800);
+						bs->randomStrafeDir = Q_irand(-1, 1); //-1 left, 0 none, 1 right
+						bs->randomStrafeEndTime = level.time + Q_irand(180, 700 + (int)(BotGetChanceBiasPercent(bot_fanbias.value) * 5.0f));
 					}
 					if (bs->randomStrafeDir > 0)
 						trap->EA_MoveRight(bs->client);
@@ -8316,6 +8329,14 @@ static int BotGetReflexScaledResponseDelayMs(bot_state_t *bs)
 static float BotGetTargetDistanceLimit(void)
 {
 	float targetDistanceLimit = bot_targetdistance.value;
+
+	// g_newBotAITargetDistance is the dedicated NewBotAI target-distance override.
+	// Preserve the legacy bot_targetdistance cvar as the general fallback, but let a
+	// specific NewBotAI value take priority whenever it is changed from its default.
+	if (g_newBotAITargetDistance.value != 4096.0f)
+	{
+		targetDistanceLimit = g_newBotAITargetDistance.value;
+	}
 	if (targetDistanceLimit < 0.0f)
 	{
 		targetDistanceLimit = 0.0f;
@@ -8537,6 +8558,35 @@ static float BotGetChanceBiasPercent(float value)
 	}
 
 	return value;
+}
+
+static float BotGetMistakeBiasChance(bot_state_t *bs)
+{
+	float skillScale;
+	float chance;
+
+	if (!bs)
+	{
+		return 0.0f;
+	}
+
+	chance = BotGetChanceBiasPercent(bot_mistakebias.value);
+	if (chance <= 0.0f)
+	{
+		return 0.0f;
+	}
+
+	skillScale = (6.0f - bs->settings.skill) / 5.0f;
+	if (skillScale < 0.0f)
+	{
+		skillScale = 0.0f;
+	}
+	else if (skillScale > 1.0f)
+	{
+		skillScale = 1.0f;
+	}
+
+	return chance * skillScale;
 }
 
 static int BotGetAggressionWeightedBonus(bot_state_t *bs, float biasPercent, int maxBonus, qboolean aggressiveOnly)
@@ -8850,6 +8900,7 @@ static qboolean NewBotAI_IsSaberSwingStartWindow(bot_state_t *bs)
 static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 {
 	const float fanBias = BotGetChanceBiasPercent(bot_fanbias.value);
+	const int fanHoldMs = 160 + (int)(fanBias * 5.0f) + Q_irand(0, 120);
 
 	if (!NewBotAI_IsSaberSwingStartWindow(bs))
 	{
@@ -8865,6 +8916,21 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 		return;
 	}
 
+	if (bs->lastHurtTime > level.time - 200)
+	{
+		bs->fanAttackDir = 0;
+		bs->fanAttackTime = level.time;
+		return;
+	}
+
+	if (bs->currentEnemy && bs->currentEnemy->client && bs->fanAttackEnemyHealth > 0 &&
+		bs->currentEnemy->health < bs->fanAttackEnemyHealth)
+	{
+		bs->fanAttackDir = 0;
+		bs->fanAttackTime = level.time;
+		return;
+	}
+
 	if (bs->fanAttackTime > level.time && bs->fanAttackDir)
 	{
 		return;
@@ -8873,7 +8939,15 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 	if (bs->randomStrafeEndTime > level.time && bs->randomStrafeDir)
 	{
 		bs->fanAttackDir = bs->randomStrafeDir;
-		bs->fanAttackTime = level.time + 150;
+		bs->fanAttackTime = level.time + fanHoldMs;
+		if (bs->currentEnemy && bs->currentEnemy->client)
+		{
+			bs->fanAttackEnemyHealth = bs->currentEnemy->health;
+		}
+		else
+		{
+			bs->fanAttackEnemyHealth = 0;
+		}
 		return;
 	}
 
@@ -8891,7 +8965,11 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 		{
 			bs->fanAttackDir = Q_irand(0, 1) ? 1 : -1;
 		}
-		bs->fanAttackTime = level.time + 150;
+		bs->fanAttackTime = level.time + fanHoldMs;
+		if (bs->currentEnemy && bs->currentEnemy->client)
+		{
+			bs->fanAttackEnemyHealth = bs->currentEnemy->health;
+		}
 	}
 }
 
@@ -8899,6 +8977,21 @@ static void NewBotAI_ApplyHorizontalSwingMove(bot_state_t *bs)
 {
 	if (bs->fanAttackTime <= level.time || !bs->fanAttackDir)
 	{
+		return;
+	}
+
+	if (bs->lastHurtTime > level.time - 200)
+	{
+		bs->fanAttackDir = 0;
+		bs->fanAttackTime = level.time;
+		return;
+	}
+
+	if (bs->currentEnemy && bs->currentEnemy->client && bs->fanAttackEnemyHealth > 0 &&
+		bs->currentEnemy->health < bs->fanAttackEnemyHealth)
+	{
+		bs->fanAttackDir = 0;
+		bs->fanAttackTime = level.time;
 		return;
 	}
 
