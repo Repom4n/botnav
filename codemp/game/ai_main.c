@@ -8875,6 +8875,24 @@ static int NewBotAI_GetPTKWeight(bot_state_t *bs)
 		weight += 35;
 	}
 
+	if (ourHealth > 70)
+	{
+		const float fanBias = BotGetChanceBiasPercent(bot_fanbias.value);
+
+		if (ourForce < hisForce)
+		{
+			//When the bot is healthy but behind in force, a fan-heavy approach keeps them
+			//pressuring the enemy without overcommitting to a drain or a desperate chase.
+			weight += (int)(fanBias * 0.7f) + 15;
+		}
+		else if (ourForce > hisForce)
+		{
+			//A healthy force edge is the ideal moment to commit to the pullkick follow-up
+			//instead of chancing a low-value exchange.
+			weight += (int)(fanBias * 0.4f) + 10;
+		}
+	}
+
 	if (bs->cur_ps.weapon == WP_SABER && BG_SaberInAttack(bs->cur_ps.saberMove) && bs->frame_Enemy_Len < 200)
 	{
 		//Immediately follow a successful saber exchange with more PTK intent so the
