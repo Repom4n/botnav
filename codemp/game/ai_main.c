@@ -8316,6 +8316,14 @@ static int BotGetReflexScaledResponseDelayMs(bot_state_t *bs)
 static float BotGetTargetDistanceLimit(void)
 {
 	float targetDistanceLimit = bot_targetdistance.value;
+
+	// g_newBotAITargetDistance is the dedicated NewBotAI target-distance override.
+	// Preserve the legacy bot_targetdistance cvar as the general fallback, but let a
+	// specific NewBotAI value take priority whenever it is changed from its default.
+	if (g_newBotAITargetDistance.value != 4096.0f)
+	{
+		targetDistanceLimit = g_newBotAITargetDistance.value;
+	}
 	if (targetDistanceLimit < 0.0f)
 	{
 		targetDistanceLimit = 0.0f;
