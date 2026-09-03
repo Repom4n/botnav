@@ -6763,22 +6763,12 @@ void NewBotAI_Flipkick(bot_state_t *bs)
 		}
 	}
 
-	//Actually swing the kick at the enemy. The hop above only gets us airborne; the
-	//engine's forward flipkick (BOTH_WALL_FLIP_BACK1) needs the enemy within a 32-unit
-	//trace to trigger at all, so at normal combat range bots were just jumping into
-	//each other. Pressing alt-attack while airborne runs PM_KickMoveForConditions
-	//(bg_pmove.c) and gives us a real kick (LS_KICK_F_AIR). Keep movement strictly
-	//forward so the kick doesn't convert to a side kick and the aim stays true.
-	if (bs->currentEnemy && bs->currentEnemy->client &&
-		bs->cur_ps.groundEntityNum == ENTITYNUM_NONE &&
-		bs->frame_Enemy_Len < 130 &&
-		!BG_KickingAnim(bs->cur_ps.legsAnim) &&
-		!BG_KickingAnim(bs->cur_ps.torsoAnim))
-	{
-		trap->EA_Alt_Attack(bs->client);
-	}
-
-	else if (((bs->origin[2] - bs->cur_ps.fd.forceJumpZStart) > 24) && ((bs->origin[2] - bs->cur_ps.fd.forceJumpZStart) < 48))
+	//The engine's forward flipkick (BOTH_WALL_FLIP_BACK1) is only triggered by moving
+	//straight forward into the enemy while rapidly repeating jump inputs - it is not an
+	//alt-attack move. Pressing alt-attack here would instead trigger a staff-style
+	//(double bladed saber) kick/spin move, which is a different move entirely and must
+	//not be mixed into a flipkick attempt. Keep this purely forward+jump.
+	if (((bs->origin[2] - bs->cur_ps.fd.forceJumpZStart) > 24) && ((bs->origin[2] - bs->cur_ps.fd.forceJumpZStart) < 48))
 	{
 		if (level.framenum % 2)
 			trap->EA_Jump(bs->client);
