@@ -374,6 +374,8 @@ typedef struct bot_state_s
 	int					randomStrafeDir;
 	int					randomStrafeEndTime;
 	int					lastFlipkickAttemptTime;
+	int					flipkickInputTime;
+	qboolean			flipkickJumpHeld;
 	int					drainRollDir; // -1 left, 0 back, 1 right; used by NewBotAI_DrainRollEscape
 	int					drainRollResetTime;
 
