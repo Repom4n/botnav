@@ -790,6 +790,21 @@ void BotUpdateInput(bot_state_t *bs, int time, int elapsed_time) {
 	BotChangeViewAngles(bs, (float) elapsed_time / 1000);
 	//retrieve the bot input
 	trap->EA_GetInput(bs->client, (float) time / 1000, &bi);
+	//Flipkicks need a fresh jump press and release on successive user commands. The
+	//bot think loop is much slower than command generation, so maintain that edge
+	//here instead of leaving PMF_JUMP_HELD latched between AI updates.
+	if (bs->flipkickInputTime > time)
+	{
+		bs->flipkickJumpHeld = !bs->flipkickJumpHeld;
+		if (bs->flipkickJumpHeld)
+			bi.actionflags |= ACTION_JUMP;
+		else
+			bi.actionflags &= ~(ACTION_JUMP | ACTION_DELAYEDJUMP);
+	}
+	else
+	{
+		bs->flipkickJumpHeld = qfalse;
+	}
 	//respawn hack
 	if (bi.actionflags & ACTION_RESPAWN) {
 		if (bs->lastucmd.buttons & BUTTON_ATTACK) bi.actionflags &= ~(ACTION_RESPAWN|ACTION_ATTACK);
@@ -6753,6 +6768,8 @@ void NewBotAI_Flipkick(bot_state_t *bs)
 	if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE - 1 || bs->cur_ps.fd.forceJumpZStart < 16) {//idk
 		trap->EA_MoveForward(bs->client);
 		trap->EA_Jump(bs->client);
+		bs->flipkickInputTime = level.time + 350;
+		bs->flipkickJumpHeld = qtrue;
 	}
 
 	//if red swing and during the good part of anim and they are in range of saber dont kick them.. yet
@@ -6770,8 +6787,8 @@ void NewBotAI_Flipkick(bot_state_t *bs)
 	//not be mixed into a flipkick attempt. Keep this purely forward+jump.
 	if (((bs->origin[2] - bs->cur_ps.fd.forceJumpZStart) > 24) && ((bs->origin[2] - bs->cur_ps.fd.forceJumpZStart) < 48))
 	{
-		if (level.framenum % 2)
-			trap->EA_Jump(bs->client);
+		trap->EA_DelayedJump(bs->client);
+		bs->flipkickInputTime = level.time + 350;
 	}
 }
 
