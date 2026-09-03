@@ -110,6 +110,7 @@ static float BotGetChanceBiasPercent(float value);
 static int BotGetAggressionWeightedBonus(bot_state_t *bs, float biasPercent, int maxBonus, qboolean aggressiveOnly);
 static int BotGetDrainHoldBiasMs(bot_state_t *bs);
 static int NewBotAI_GetAntiDrainWeight(bot_state_t *bs);
+static float BotGetLightningStartDistance(void);
 static int NewBotAI_GetLightningWeight(bot_state_t *bs);
 static int NewBotAI_GetPTKWeight(bot_state_t *bs);
 static qboolean NewBotAI_IsSaberSwingStartWindow(bot_state_t *bs);
@@ -1100,6 +1101,7 @@ void BotResetState(bot_state_t *bs) {
 	bs->client = client;
 	bs->entitynum = entitynum;
 	bs->entergame_time = entergame_time;
+	bs->lastWPIndex = -1; //no waypoint memory yet (0 is a valid index, so memset isn't enough)
 	//reset several states
 	if (bs->ms) trap->BotResetMoveState(bs->ms);
 	if (bs->gs) trap->BotResetGoalState(bs->gs);
@@ -6761,6 +6763,21 @@ void NewBotAI_Flipkick(bot_state_t *bs)
 		}
 	}
 
+	//Actually swing the kick at the enemy. The hop above only gets us airborne; the
+	//engine's forward flipkick (BOTH_WALL_FLIP_BACK1) needs the enemy within a 32-unit
+	//trace to trigger at all, so at normal combat range bots were just jumping into
+	//each other. Pressing alt-attack while airborne runs PM_KickMoveForConditions
+	//(bg_pmove.c) and gives us a real kick (LS_KICK_F_AIR). Keep movement strictly
+	//forward so the kick doesn't convert to a side kick and the aim stays true.
+	if (bs->currentEnemy && bs->currentEnemy->client &&
+		bs->cur_ps.groundEntityNum == ENTITYNUM_NONE &&
+		bs->frame_Enemy_Len < 130 &&
+		!BG_KickingAnim(bs->cur_ps.legsAnim) &&
+		!BG_KickingAnim(bs->cur_ps.torsoAnim))
+	{
+		trap->EA_Alt_Attack(bs->client);
+	}
+
 	else if (((bs->origin[2] - bs->cur_ps.fd.forceJumpZStart) > 24) && ((bs->origin[2] - bs->cur_ps.fd.forceJumpZStart) < 48))
 	{
 		if (level.framenum % 2)
@@ -8611,6 +8628,13 @@ static int NewBotAI_GetLightningWeight(bot_state_t *bs)
 	}
 	if (!(bs->cur_ps.fd.forcePowersKnown & (1 << FP_LIGHTNING)))
 	{
+		return 0;
+	}
+	if (bs->cur_ps.fd.forcePowerLevel[FP_LIGHTNING] > FORCE_LEVEL_2)
+	{
+		//Never use lightning level 3: its close-range arc both wastes the force pool
+		//on splash and leaves us wide open at saber range. Level 2's straight beam
+		//is the only version worth using, and only at distance (checked below).
 		return 0;
 	}
 	if (!bs->frame_Enemy_Vis || bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB))
@@ -10891,8 +10915,8 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 				useTheForce = 1;
 				forceHostile = 1;
 			}
-			else if ((bs->cur_ps.fd.forcePowersKnown & (1 << FP_LIGHTNING)) && bs->frame_Enemy_Len < FORCE_LIGHTNING_RADIUS && level.clients[bs->client].ps.fd.forcePower > 50 && InFieldOfVision(bs->viewangles, 50, a_fo))
-			{
+			else if ((bs->cur_ps.fd.forcePowersKnown & (1 << FP_LIGHTNING)) && bs->cur_ps.fd.forcePowerLevel[FP_LIGHTNING] <= FORCE_LEVEL_2 && bs->frame_Enemy_Len >= BotGetLightningStartDistance() && bs->frame_Enemy_Len < FORCE_LIGHTNING_RADIUS && level.clients[bs->client].ps.fd.forcePower > 50 && InFieldOfVision(bs->viewangles, 50, a_fo))
+			{ //only lightning level 2, and only from the configured range out; point-blank zaps waste force on level-3's short arc
 				level.clients[bs->client].ps.fd.forcePowerSelected = FP_LIGHTNING;
 				useTheForce = 1;
 				forceHostile = 1;
@@ -11106,6 +11130,8 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 	if (bs->wpCurrent &&
 		(bs->wpSeenTime < level.time || bs->wpTravelTime < level.time))
 	{
+		bs->lastWPIndex = bs->wpCurrent->index;
+		bs->lastWPDir = bs->wpDirection;
 		bs->wpCurrent = NULL;
 	}
 
@@ -11148,9 +11174,50 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 
 		if (wp != -1)
 		{
+			//Avoid the pick-a-waypoint-behind-us loop that makes bots pace back and
+			//forth along the trail: if the nearest visible waypoint would send us back
+			//the way we just came and there's no live destination or enemy pulling us,
+			//keep travelling in our previous direction instead of reversing. A real
+			//destination (item, objective) or a visible enemy always wins over linear
+			//wandering.
+			if (!bs->wpDestination && !bs->currentEnemy &&
+				bs->lastWPIndex >= 0 && gWPArray[bs->lastWPIndex] && gWPArray[bs->lastWPIndex]->inuse)
+			{
+				int aheadIndex = bs->lastWPDir ? (bs->lastWPIndex - 1) : (bs->lastWPIndex + 1);
+				int backIndex  = bs->lastWPDir ? (bs->lastWPIndex + 1) : (bs->lastWPIndex - 1);
+
+				//the waypoint we were heading to -- if we can see it, just keep going
+				if (WPOrgVisible(&g_entities[bs->client], bs->origin, gWPArray[bs->lastWPIndex]->origin, bs->client) == 1 &&
+					PassWayCheck(bs, bs->lastWPIndex))
+				{
+					wp = bs->lastWPIndex;
+					bs->wpDirection = bs->lastWPDir;
+				}
+				//otherwise prefer the next point ahead of where we were, so we keep
+				//moving linearly along the trail rather than snapping back to the
+				//nearest point behind us
+				else if (aheadIndex >= 0 && aheadIndex < gWPNum &&
+					gWPArray[aheadIndex] && gWPArray[aheadIndex]->inuse &&
+					PassWayCheck(bs, aheadIndex) &&
+					WPOrgVisible(&g_entities[bs->client], bs->origin, gWPArray[aheadIndex]->origin, bs->client) == 1)
+				{
+					wp = aheadIndex;
+					bs->wpDirection = bs->lastWPDir;
+				}
+				//if the nearest visible point is the one directly behind where we were
+				//heading, that's the pacing case -- leave wpDirection at lastWPDir so we
+				//turn right back around at it instead of settling into a 2-point loop
+				else if (wp == backIndex)
+				{
+					bs->wpDirection = bs->lastWPDir;
+				}
+			}
+
 			bs->wpCurrent = gWPArray[wp];
 			bs->wpSeenTime = level.time + 1500;
 			bs->wpTravelTime = level.time + 10000; //never take more than 10 seconds to travel to a waypoint
+			bs->lastWPIndex = bs->wpCurrent->index;
+			bs->lastWPDir = bs->wpDirection;
 		}
 	}
 
@@ -11395,6 +11462,8 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 				desiredIndex >= 0 &&
 				PassWayCheck(bs, desiredIndex))
 			{
+				bs->lastWPIndex = bs->wpCurrent->index;
+				bs->lastWPDir = bs->wpDirection;
 				bs->wpCurrent = gWPArray[desiredIndex];
 			}
 			else
@@ -11405,6 +11474,8 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 					bs->destinationGrabTime = level.time + 10000;
 				}
 
+				bs->lastWPIndex = bs->wpCurrent->index;
+
 				if (bs->wpDirection)
 				{
 					bs->wpDirection = 0;
@@ -11413,6 +11484,8 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 				{
 					bs->wpDirection = 1;
 				}
+
+				bs->lastWPDir = bs->wpDirection;
 			}
 		}
 	}
