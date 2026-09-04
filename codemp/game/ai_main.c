@@ -6783,6 +6783,63 @@ static qboolean NewBotAI_ShouldAvoidFlipkickForSafety(bot_state_t *bs)
 	return qfalse;
 }
 
+// Mirror of the engine's forward flipkick window (bg_pmove.c BOTH_WALL_FLIP_BACK1 branch):
+// the kick fires only when moving forward, airborne with velocity[2]>200, within 80 units of
+// the ground, and a 32-unit forward hull trace from the player origin hits a client or NPC.
+// Since the bot cannot see its own velocity mid-jump before deciding to press jump, we gate the
+// initial press on the parts we can check from the ground: jump level, not in a special jump,
+// no jump already latched, and the 32-unit forward trace hitting something kickable. That way
+// the flipkick path never injects a jump input that has no chance of producing a kick.
+static qboolean NewBotAI_CanLandFlipkickNow(bot_state_t *bs)
+{
+	vec3_t mins, maxs, fwd, fwdAngles, traceto;
+	trace_t tr;
+
+	if (bs->cur_ps.fd.forcePowerLevel[FP_LEVITATION] <= FORCE_LEVEL_1)
+	{
+		return qfalse;
+	}
+
+	if (BG_InSpecialJump(bs->cur_ps.legsAnim))
+	{
+		return qfalse;
+	}
+
+	//A fresh jump press only registers when the previous one was released; if jump is still
+	//held, pressing again does nothing and would just be a wasted hop.
+	if (bs->cur_ps.pm_flags & PMF_JUMP_HELD)
+	{
+		return qfalse;
+	}
+
+	if (bs->cur_ps.groundEntityNum != ENTITYNUM_NONE)
+	{
+		//On the ground: the follow-up airborne flip requires something kickable roughly in
+		//front of us before the jump is worth taking at all. Use the same standing-player hull
+		//the engine's own kick trace uses (bg_pmove.c): +/-15 X/Y, full height.
+		VectorSet(fwdAngles, 0, bs->viewangles[YAW], 0);
+		AngleVectors(fwdAngles, fwd, NULL, NULL);
+		VectorMA(bs->origin, 32, fwd, traceto);
+		VectorSet(mins, -15, -15, DEFAULT_MINS_2);
+		VectorSet(maxs, 15, 15, DEFAULT_MAXS_2);
+		JP_Trace(&tr, bs->origin, mins, maxs, traceto, bs->client, MASK_PLAYERSOLID, qfalse, 0, 0);
+
+		if (tr.fraction >= 1.0f)
+		{
+			return qfalse;
+		}
+		if (tr.entityNum >= MAX_CLIENTS)
+		{
+			if (tr.entityNum >= level.num_entities || g_entities[tr.entityNum].s.eType != ET_NPC)
+			{
+				return qfalse;
+			}
+		}
+	}
+
+	return qtrue;
+}
+
 void NewBotAI_Flipkick(bot_state_t *bs)
 {
 	qboolean enemySwing = qfalse;
@@ -6838,10 +6895,15 @@ void NewBotAI_Flipkick(bot_state_t *bs)
 	}
 
 	if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE - 1 || bs->cur_ps.fd.forceJumpZStart < 16) {//idk
-		trap->EA_MoveForward(bs->client);
-		trap->EA_Jump(bs->client);
-		bs->flipkickInputTime = level.time + 500;
-		bs->flipkickJumpHeld = qtrue;
+		//Only commit to the jump when the engine could actually turn it into a kick right now;
+		//otherwise this is just a random hop that leaves us floating and out of position.
+		if (NewBotAI_CanLandFlipkickNow(bs))
+		{
+			trap->EA_MoveForward(bs->client);
+			trap->EA_Jump(bs->client);
+			bs->flipkickInputTime = level.time + 500;
+			bs->flipkickJumpHeld = qtrue;
+		}
 	}
 
 	//if red swing and during the good part of anim and they are in range of saber dont kick them.. yet
@@ -6970,17 +7032,19 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 			bs->ideal_viewangles[PITCH] = 65 + (gripkickBonus / 5);
 			NewBotAI_Flipkick(bs);
 		}
-		else if (gripTime < 1600) { //[1.05-1.6] yaw jerk up
+		else if (gripTime < 1600) { //[1.05-1.6] yaw jerk up - back away while swinging them upward
 			bs->ideal_viewangles[PITCH] = -70 - (gripkickBonus / 7);
 			bs->ideal_viewangles[YAW] += (float)(yawJerkDir * yawJerkMag);
+			trap->EA_MoveBack(bs->client);
 		}
 		else if (gripTime < 1950) { //[1.6-1.95] pitch jerk down into second attempt
 			bs->ideal_viewangles[PITCH] = 70 + (gripkickBonus / 6);
 			NewBotAI_Flipkick(bs);
 		}
-		else if (gripTime < 2450) { //[1.95-2.45] second yaw jerk up
+		else if (gripTime < 2450) { //[1.95-2.45] second yaw jerk up - back away while swinging them upward
 			bs->ideal_viewangles[PITCH] = -65 - (gripkickBonus / 8);
 			bs->ideal_viewangles[YAW] += (float)(yawJerkDir * yawJerkMag);
+			trap->EA_MoveBack(bs->client);
 		}
 		else if (gripTime < 2800) { //[2.45-2.8] pitch jerk down into third attempt
 			bs->ideal_viewangles[PITCH] = 72 + (gripkickBonus / 7);
@@ -8213,6 +8277,18 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 		}
 		else
 			NewBotAI_ApplyHorizontalSwingMove(bs);
+
+		//Ambient hopping: flipkick now only presses jump when a kick can actually land, so any
+		//desired baseline hop frequency lives here instead of being a byproduct of failed kicks.
+		//Kept deliberately rare (bot_hopfrequency percent per ~100ms combat think) and never
+		//fired while a flipkick jump sequence is in progress, so it can't stack extra jumps on
+		//top of an active kick attempt.
+		if (!crouch && hisWeapon == WP_SABER && bs->cur_ps.groundEntityNum != ENTITYNUM_NONE &&
+			bs->flipkickInputTime <= level.time && !(bs->cur_ps.pm_flags & PMF_JUMP_HELD) &&
+			bot_hopfrequency.integer > 0 && Q_irand(1, 100) <= bot_hopfrequency.integer)
+		{
+			trap->EA_Jump(bs->client);
+		}
 
 		if (!crouch && ((bs->cur_ps.groundEntityNum != ENTITYNUM_NONE - 1) || (bs->currentEnemy->client->ps.saberInFlight && saber->s.pos.trTime) || (NewBotAI_GetTimeToInRange(bs, 60, 100) < 100))) { //Jump if they will be in range of flipkick or they are trying to saberthrow
 			if ((bs->cur_ps.groundEntityNum != ENTITYNUM_NONE - 1) && bs->currentEnemy->client->ps.saberInFlight && bs->frame_Enemy_Len > 250 && (BS_GroundDistance(bs) > 20)) {

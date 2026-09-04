@@ -365,6 +365,10 @@ XCVAR_DEF( bot_mistakebias, 			"0", 			NULL, 				CVAR_ARCHIVE, 							qtrue )
 // (lock-in, flipkick attempts, yaw/pitch jerks) before moving to the next. Lower values make
 // bots cycle through their grip sequence faster; higher values make them dwell longer per phase.
 XCVAR_DEF( bot_gripkickdwell,			"100",			NULL,				CVAR_ARCHIVE,									qtrue )
+// Percent chance (0-100, 0 = never) per combat think that a bot in a saber fight hops on its
+// own initiative when no flipkick is currently viable. Flipkick logic itself only presses jump
+// when a kick can actually land, so this cvar is the sole source of "ambient" hopping.
+XCVAR_DEF( bot_hopfrequency,			"5",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_antidrainbias,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_fanbias,					"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_drainbias,				"0",			NULL,				CVAR_ARCHIVE,									qtrue )
