@@ -379,6 +379,9 @@ typedef struct bot_state_s
 	qboolean			flipkickJumpHeld;
 	int					drainRollDir; // -1 left, 0 back, 1 right; used by NewBotAI_DrainRollEscape
 	int					drainRollResetTime;
+	int					drainTapStartTime; // level.time when the current drain activation started; used to tap minimal drain
+	int					drainTapStopTime;  // bookkeeping for when a pullkick drain tap was released
+	qboolean			gripStarted;       // set when our grip first takes hold; cleared while not gripping
 
 	int					navObstacleUntil; // stay in waypoint nav mode until this time when an obstacle blocks path to enemy
 	int					lastHurtTime;     // level.time when this bot last took damage (set in BotDamageNotification)

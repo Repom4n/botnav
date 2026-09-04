@@ -114,6 +114,8 @@ static int NewBotAI_GetAntiDrainWeight(bot_state_t *bs);
 static float BotGetLightningStartDistance(void);
 static int NewBotAI_GetLightningWeight(bot_state_t *bs);
 static int NewBotAI_GetPTKWeight(bot_state_t *bs);
+static int NewBotAI_GetDrainTapTargetCost(bot_state_t *bs);
+static qboolean NewBotAI_IsPullkickDrainWindow(bot_state_t *bs);
 static qboolean NewBotAI_IsSaberSwingStartWindow(bot_state_t *bs);
 static qboolean NewBotAI_CanAttemptFlipkick(bot_state_t *bs);
 static float NewBotAI_GetEnemyClosingSpeed(bot_state_t *bs);
@@ -6797,6 +6799,13 @@ void NewBotAI_Flipkick(bot_state_t *bs)
 		return;
 	}
 
+	//Never kick while our own saber is mid-flight: draining during a saber throw is already
+	//blocked by weight, but a kick here would leave us empty-handed against a counter.
+	if (bs->cur_ps.saberInFlight)
+	{
+		return;
+	}
+
 	//We already committed to a flipkick and are still airborne and rising - keep
 	//re-arming the jump press/release toggle for the whole ascent instead of only a
 	//narrow window after the initial jump, so we don't stop pressing before the engine's
@@ -6823,6 +6832,16 @@ void NewBotAI_Flipkick(bot_state_t *bs)
 	if (!isGripSequence && bs->frame_Enemy_Len < 160 && VectorLengthSquared(bs->cur_ps.velocity) < 4900)
 	{
 		return;
+	}
+
+	//The flipkick branch in pmove requires pure straight-forward movement: any lateral
+	//input mixed with forward can trigger a diagonal wallrun off the enemy or a wall
+	//instead of a kick. Force-release any strafe the movement code picked up this frame.
+	trap->EA_Move(bs->client, vec3_origin, 0.0f);
+	if (bs->randomStrafeEndTime > level.time)
+	{
+		bs->randomStrafeDir = 0;
+		bs->randomStrafeEndTime = 0;
 	}
 
 	bs->lastFlipkickAttemptTime = level.time + 300;
@@ -6947,6 +6966,11 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 	const int yawJerkMag = Q_irand(140, 200);
 	const int yawJerkDir = Q_irand(0, 1) ? 1 : -1;
 
+	if (!bs->gripStarted)
+	{
+		bs->gripStarted = qtrue;
+	}
+
 	if (BG_InKnockDown(bs->currentEnemy->client->ps.legsAnim)) { //Splat and enough time? - how to see if they are splattable and were not gripped during midair. forcejumpzheight ?
 		float heightdiff = bs->currentEnemy->client->ps.origin[2] - bs->eye[2]; //Them minus ours,  they are 500, we are 300. height diff is 200.
 
@@ -6962,33 +6986,39 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 		//not a good splat, has to predict based on their momentum
 	}
 	else {
-		if (gripTime < 700) { //[0-0.7] lock in and close distance
-			bs->ideal_viewangles[PITCH] = 55 + (gripkickBonus / 4);
+		//Looking nearly straight down brings the gripped target close to our body, which is
+		//what makes the kick connect. Initiate the gripkick by snapping down before the first
+		//flipkick and kick as soon as possible within the grip.
+		if (gripTime < 300) { //[0-0.3] look almost straight down to bring them in close
+			bs->ideal_viewangles[PITCH] = 78 + (gripkickBonus / 5);
 			trap->EA_MoveForward(bs->client);
 		}
-		else if (gripTime < 1050) { //[0.7-1.05] first flipkick attempt
-			bs->ideal_viewangles[PITCH] = 65 + (gripkickBonus / 5);
-			NewBotAI_Flipkick(bs);
-		}
-		else if (gripTime < 1600) { //[1.05-1.6] yaw jerk up
-			bs->ideal_viewangles[PITCH] = -70 - (gripkickBonus / 7);
-			bs->ideal_viewangles[YAW] += (float)(yawJerkDir * yawJerkMag);
-		}
-		else if (gripTime < 1950) { //[1.6-1.95] pitch jerk down into second attempt
+		else if (gripTime < 750) { //[0.3-0.75] first flipkick attempt as soon as possible within the grip
 			bs->ideal_viewangles[PITCH] = 70 + (gripkickBonus / 6);
 			NewBotAI_Flipkick(bs);
 		}
-		else if (gripTime < 2450) { //[1.95-2.45] second yaw jerk up
+		else if (gripTime < 1150) { //[0.75-1.15] yaw jerk up between attempts
+			bs->ideal_viewangles[PITCH] = -70 - (gripkickBonus / 7);
+			bs->ideal_viewangles[YAW] += (float)(yawJerkDir * yawJerkMag);
+			trap->EA_MoveForward(bs->client);
+		}
+		else if (gripTime < 1600) { //[1.15-1.6] pitch back down into the second attempt
+			bs->ideal_viewangles[PITCH] = 72 + (gripkickBonus / 6);
+			NewBotAI_Flipkick(bs);
+		}
+		else if (gripTime < 2050) { //[1.6-2.05] second yaw jerk up
 			bs->ideal_viewangles[PITCH] = -65 - (gripkickBonus / 8);
 			bs->ideal_viewangles[YAW] += (float)(yawJerkDir * yawJerkMag);
+			trap->EA_MoveForward(bs->client);
 		}
-		else if (gripTime < 2800) { //[2.45-2.8] pitch jerk down into third attempt
+		else if (gripTime < 2500) { //[2.05-2.5] pitch back down into the third attempt
 			bs->ideal_viewangles[PITCH] = 72 + (gripkickBonus / 7);
 			NewBotAI_Flipkick(bs);
 		}
-		else if (gripTime < 4000) { //[2.8-4] hold grip pressure and keep closing
-			bs->ideal_viewangles[PITCH] = 65 + (gripkickBonus / 8);
+		else if (gripTime < 4000) { //[2.5-4] keep them dragged close and keep attempting kicks
+			bs->ideal_viewangles[PITCH] = 70 + (gripkickBonus / 8);
 			trap->EA_MoveForward(bs->client);
+			NewBotAI_Flipkick(bs);
 		}
 	}
 
@@ -7001,11 +7031,29 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 void NewBotAI_Draining(bot_state_t *bs)
 {
 	const int extraHoldMs = BotGetDrainHoldBiasMs(bs);
+	const float aggressionBias = BotGetAggressionBias(bs);
+	const int hisForce = bs->currentEnemy->client->ps.fd.forcePower;
+	const int tapTarget = NewBotAI_GetDrainTapTargetCost(bs);
 	qboolean shouldHold = qfalse;
 
 	//level.clients[bs->client].ps.fd.forcePowerSelected = FP_GRIP;
 	//useTheForce = qtrue;
 	//}
+
+	if (!bs->drainTapStartTime)
+	{
+		bs->drainTapStartTime = level.time;
+	}
+
+	//While drain is active our movement is free, so attempt pullkick follow-ups in between
+	//drain taps whenever we are force-biased and the enemy is drained low enough to pull.
+	if (aggressionBias > 0.0f &&
+		hisForce < 18 &&
+		NewBotAI_IsEnemyPullable(bs) &&
+		bs->frame_Enemy_Len < 250)
+	{
+		NewBotAI_Flipkick(bs);
+	}
 
 	if (((g_entities[bs->client].health) < 100 && bs->currentEnemy->client->ps.fd.forcePower && !(bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB)) && OrgVisible(bs->eye, bs->currentEnemy->client->ps.origin, bs->client)))
 	{
@@ -7015,6 +7063,31 @@ void NewBotAI_Draining(bot_state_t *bs)
 	else if (bs->drainHoldTime > level.time)
 	{
 		shouldHold = qtrue;
+	}
+
+	if (shouldHold)
+	{
+		//Force-biased bots drain to bring the enemy below 18 FP for a free pullkick, then
+		//release and kick; health-biased bots release the tap as soon as it has paid for
+		//itself so no force points are wasted holding drain open.
+		if (aggressionBias > 0.0f)
+		{
+			const int spent = (int)((level.time - bs->drainTapStartTime) / 100) * 5;
+			if (hisForce < 18 || (tapTarget > 0 && spent >= tapTarget))
+			{
+				shouldHold = qfalse;
+				bs->drainTapStopTime = level.time + 300;
+			}
+		}
+		else
+		{
+			const int spent = (int)((level.time - bs->drainTapStartTime) / 100) * 5;
+			if (spent >= 5)
+			{
+				shouldHold = qfalse;
+				bs->drainTapStopTime = level.time + 200;
+			}
+		}
 	}
 
 	if (shouldHold)
@@ -8182,8 +8255,10 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 			if (!horizontalSwingStart) {
 				trap->EA_MoveForward(bs->client);//Always move forward i guess
 				//In saber duels, two bots walking straight at each other glitch together.
-				//Periodically pick a random lateral direction to break the symmetry.
-				if (hisWeapon == WP_SABER && bs->cur_ps.weapon == WP_SABER && bs->cur_ps.groundEntityNum != ENTITYNUM_NONE) {
+				//Periodically pick a random lateral direction to break the symmetry. Suppress
+				//the strafe while a flipkick sequence is live: mixing lateral input with the
+				//kick's forward movement produces diagonal wallruns off the enemy or walls.
+				if (hisWeapon == WP_SABER && bs->cur_ps.weapon == WP_SABER && bs->cur_ps.groundEntityNum != ENTITYNUM_NONE && bs->flipkickInputTime <= level.time) {
 					if (bs->randomStrafeEndTime <= level.time) {
 						bs->randomStrafeDir = Q_irand(-1, 1); //-1 left, 0 none, 1 right
 						bs->randomStrafeEndTime = level.time + Q_irand(180, 700 + (int)(BotGetChanceBiasPercent(bot_fanbias.value) * 5.0f));
@@ -8200,7 +8275,8 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 		else if (!horizontalSwingStart) {
 			trap->EA_MoveForward(bs->client);
 			//Point-blank saber duel: also wiggle laterally to avoid glitching into each other.
-			if (hisWeapon == WP_SABER && bs->cur_ps.weapon == WP_SABER && bs->cur_ps.groundEntityNum != ENTITYNUM_NONE) {
+			//Same flipkick suppression as above - no diagonal input during a kick sequence.
+			if (hisWeapon == WP_SABER && bs->cur_ps.weapon == WP_SABER && bs->cur_ps.groundEntityNum != ENTITYNUM_NONE && bs->flipkickInputTime <= level.time) {
 				if (bs->randomStrafeEndTime <= level.time) {
 					bs->randomStrafeDir = Q_irand(0, 2) - 1;
 					bs->randomStrafeEndTime = level.time + Q_irand(200, 600);
@@ -8644,6 +8720,68 @@ static int BotGetDrainHoldBiasMs(bot_state_t *bs)
 	}
 
 	return (int)(skillScale * (biasPercent / 100.0f) * 100.0f);
+}
+
+//Drain math: each drain tick costs us 5 FP and removes 4 enemy FP from our opponent
+//(3 with the FT_DRAINDMGNERF tweak), so spending 15 FP removes 12, spending 20 removes
+//16, and so on. ForceDrainDamage ticks roughly every 100ms, so each 100ms the drain key
+//is held costs about 5 FP. This returns how many FP we must spend to bring the enemy
+//below 18 so they can no longer resist a pull (free pullkick).
+static int NewBotAI_GetDrainTapTargetCost(bot_state_t *bs)
+{
+	const int hisForce = bs->currentEnemy->client->ps.fd.forcePower;
+	const int drainPerTick = (g_tweakForce.integer & FT_DRAINDMGNERF) ? 3 : 4;
+	int ticks;
+
+	if (hisForce < 18)
+	{
+		return 0;
+	}
+
+	ticks = (hisForce - 18 + drainPerTick) / drainPerTick; //ceil((hisForce-17)/drainPerTick)
+	return ticks * 5;
+}
+
+//True when we are force-biased, PTK-weighted, and the enemy still has enough force to
+//resist a pull - the window where drain taps are used to set up a free pullkick.
+static qboolean NewBotAI_IsPullkickDrainWindow(bot_state_t *bs)
+{
+	const int hisForce = bs->currentEnemy->client->ps.fd.forcePower;
+	const int tapTarget = NewBotAI_GetDrainTapTargetCost(bs);
+
+	if (tapTarget <= 0)
+	{
+		return qfalse;
+	}
+
+	if (BotGetAggressionBias(bs) <= 0.0f)
+	{
+		return qfalse;
+	}
+
+	if (NewBotAI_GetPTKWeight(bs) <= 0)
+	{
+		return qfalse;
+	}
+
+	if (!g_flipKick.integer)
+	{
+		return qfalse;
+	}
+
+	//Don't spend more force draining than we can afford and still pull afterwards
+	if (bs->cur_ps.fd.forcePower - tapTarget < 20)
+	{
+		return qfalse;
+	}
+
+	//Enemy is about to be pullable anyway, no need to drain them down
+	if (hisForce < 20)
+	{
+		return qfalse;
+	}
+
+	return qtrue;
 }
 
 static float BotGetAggressionBias(bot_state_t *bs)
@@ -9100,17 +9238,20 @@ static void NewBotAI_AdjustSaberThrowArcAim(bot_state_t *bs, vec3_t headlevel)
 	}
 
 	saberProgress = DotProduct(saberVec, enemyVec) / enemyDistSq;
-	if (saberProgress < 1.0f)
+	//At the default throw range (~250 units) 0.1 progress is roughly 100ms of saber flight,
+	//so starting the downward arc at 0.9 instead of 1.0 turns it down ~100ms sooner, and the
+	//final arcs land the saber a bit below the target so it drops onto them.
+	if (saberProgress < 0.9f)
 	{
 		headlevel[2] += 36;
 	}
-	else if (saberProgress < 1.35f)
+	else if (saberProgress < 1.25f)
 	{
-		headlevel[2] -= 18;
+		headlevel[2] -= 26;
 	}
 	else
 	{
-		headlevel[2] -= 34;
+		headlevel[2] -= 44;
 	}
 }
 
@@ -9410,6 +9551,8 @@ int NewBotAI_GetPush(bot_state_t *bs) {
 
 int NewBotAI_GetDrain(bot_state_t *bs) {
 	const int ourHealth = g_entities[bs->client].health, ourForce = bs->cur_ps.fd.forcePower, hisForce = bs->currentEnemy->client->ps.fd.forcePower;
+	const float aggressionBias = BotGetAggressionBias(bs);
+	const int tapTarget = NewBotAI_GetDrainTapTargetCost(bs);
 	int weight = 100;
 
 	if (g_forcePowerDisable.integer & (1 << FP_DRAIN))
@@ -9428,6 +9571,8 @@ int NewBotAI_GetDrain(bot_state_t *bs) {
 		return 0;
 	if (bs->cur_ps.weaponstate == WEAPON_CHARGING_ALT && bs->cur_ps.weaponChargeTime > 700) //don't drain if we are at a charge
 		return 0;
+	if (bs->cur_ps.saberInFlight) //never drain while our own saber is mid-flight
+		return 0;
 
 	if (bs->currentEnemy->client->ps.saberInFlight) { //They are saberthrowing
 		if (ourHealth > 40) {//We can take the hit
@@ -9435,6 +9580,13 @@ int NewBotAI_GetDrain(bot_state_t *bs) {
 				return (weight - 30);
 		}
 		else return 0;
+	}
+
+	//Force-biased bots with PTK weights use drain to bring the enemy below 18 FP so the
+	//follow-up pullkick is free - value the tap by how efficiently it removes their FP.
+	if (NewBotAI_IsPullkickDrainWindow(bs))
+	{
+		return 60 + tapTarget + (int)(aggressionBias * 20.0f);
 	}
 
 	if (ourHealth < 100)
@@ -9629,6 +9781,11 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 	else if (drainWeight > pushWeight && drainWeight > pullWeight && drainWeight > gripWeight && drainWeight > minWeight) {
 		level.clients[bs->client].ps.fd.forcePowerSelected = FP_DRAIN;
 		useTheForce = qtrue;
+
+		//When draining to bring them below 18 FP for a free pullkick, kick in between the
+		//drain taps so the setup chains into the finish instead of being wasted time.
+		if (NewBotAI_IsPullkickDrainWindow(bs) && bs->frame_Enemy_Len < 250)
+			NewBotAI_Flipkick(bs);
 
 		//trap->Print("Draining -- Pull: %i, Push: %i, Drain: %i, Grip: %i\n", pullWeight, pushWeight, drainWeight, gripWeight);
 	}
@@ -9859,6 +10016,11 @@ void NewBotAI_DSvDS(bot_state_t *bs)
 		return;
 	}
 
+	if (!(bs->cur_ps.fd.forcePowersActive & (1 << FP_GRIP)))
+		bs->gripStarted = qfalse;
+	if (!(bs->cur_ps.fd.forcePowersActive & (1 << FP_DRAIN)))
+		bs->drainTapStartTime = 0;
+
 	if (bs->cur_ps.fd.forceGripBeingGripped > level.time) {//We are being gripped //bs->cur_ps.fd.forceGripCripple
 		NewBotAI_ReactToBeingGripped(bs);
 		return;
@@ -9900,6 +10062,11 @@ void NewBotAI_DSvLS(bot_state_t *bs)
 		NewBotAI_Getup(bs);
 		return;
 	}
+
+	if (!(bs->cur_ps.fd.forcePowersActive & (1 << FP_GRIP)))
+		bs->gripStarted = qfalse;
+	if (!(bs->cur_ps.fd.forcePowersActive & (1 << FP_DRAIN)))
+		bs->drainTapStartTime = 0;
 
 	if (bs->cur_ps.fd.forcePowersActive & (1 << FP_GRIP)) {
 		NewBotAI_Gripkick(bs);
