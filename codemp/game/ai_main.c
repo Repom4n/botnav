@@ -7048,8 +7048,14 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 
 		if (targetInFront) {
 			//Target is back in front - bring them in for the flipkick, moving
-			//exclusively straight forward. Look down to pull them in close.
-			bs->ideal_viewangles[PITCH] = 55 + (gripkickBonus / 5);
+			//exclusively straight forward. Only look down to pull them in once they're
+			//close to kick range; at longer range keep the aim level so we close faster.
+			if (bs->frame_Enemy_Len < 220) {
+				bs->ideal_viewangles[PITCH] = 55 + (gripkickBonus / 5);
+			}
+			else {
+				bs->ideal_viewangles[PITCH] = 10;
+			}
 			trap->EA_Move(bs->client, vec3_origin, 0);
 			trap->EA_MoveForward(bs->client);
 		}
