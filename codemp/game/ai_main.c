@@ -7010,30 +7010,34 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 		//(non-grip) flipkick keeps repeating forward move + jump input until it lands -
 		//NewBotAI_Flipkick's isGripSequence bypass already skips the range/cooldown gates
 		//that would otherwise block these back-to-back attempts. Pitch looks down (positive)
-		//during attempt windows to bring the opponent in close for the kick, then jerks
-		//upward (negative) along with yaw between attempts for showmanship before the next
-		//kick pulls them back down.
-		trap->EA_MoveForward(bs->client);
-
+		//and we move forward during attempt windows to bring the opponent in close for the
+		//kick; between attempts we jerk the view upward (negative pitch) along with yaw and
+		//move backward for showmanship before the next kick pulls them back down.
 		if (gripTime < 700) { //[0-0.7] lock in and close distance
 			bs->ideal_viewangles[PITCH] = 55 + (gripkickBonus / 4);
+			trap->EA_MoveForward(bs->client);
 		}
 		else if (gripTime < 1600) { //[0.7-1.6] first flipkick attempt window
 			bs->ideal_viewangles[PITCH] = 65 + (gripkickBonus / 5);
+			trap->EA_MoveForward(bs->client);
 		}
-		else if (gripTime < 1950) { //[1.6-1.95] yaw jerk, look upward between attempts
+		else if (gripTime < 1950) { //[1.6-1.95] yaw jerk, look upward and back off between attempts
 			bs->ideal_viewangles[PITCH] = -70 - (gripkickBonus / 7);
 			bs->ideal_viewangles[YAW] += (float)(yawJerkDir * yawJerkMag);
+			trap->EA_MoveBack(bs->client);
 		}
 		else if (gripTime < 2450) { //[1.95-2.45] second flipkick attempt window
 			bs->ideal_viewangles[PITCH] = 68 + (gripkickBonus / 6);
+			trap->EA_MoveForward(bs->client);
 		}
-		else if (gripTime < 2800) { //[2.45-2.8] second yaw jerk, look upward between attempts
+		else if (gripTime < 2800) { //[2.45-2.8] second yaw jerk, look upward and back off between attempts
 			bs->ideal_viewangles[PITCH] = -65 - (gripkickBonus / 8);
 			bs->ideal_viewangles[YAW] += (float)(yawJerkDir * yawJerkMag);
+			trap->EA_MoveBack(bs->client);
 		}
 		else if (gripTime < 4000) { //[2.8-4] hold grip pressure and keep closing for a third attempt
 			bs->ideal_viewangles[PITCH] = 65 + (gripkickBonus / 8);
+			trap->EA_MoveForward(bs->client);
 		}
 
 		NewBotAI_Flipkick(bs);
