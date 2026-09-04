@@ -7009,10 +7009,10 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 		//Chase and attempt the flipkick every think while gripping, the same way a normal
 		//(non-grip) flipkick keeps repeating forward move + jump input until it lands -
 		//NewBotAI_Flipkick's isGripSequence bypass already skips the range/cooldown gates
-		//that would otherwise block these back-to-back attempts. Pitch stays looking down
-		//(positive) the whole sequence instead of jerking up and away between kicks, so the
-		//grip keeps the opponent pulled in close for the next attempt; only yaw is jerked for
-		//showmanship.
+		//that would otherwise block these back-to-back attempts. Pitch looks down (positive)
+		//during attempt windows to bring the opponent in close for the kick, then jerks
+		//upward (negative) along with yaw between attempts for showmanship before the next
+		//kick pulls them back down.
 		trap->EA_MoveForward(bs->client);
 
 		if (gripTime < 700) { //[0-0.7] lock in and close distance
@@ -7021,15 +7021,15 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 		else if (gripTime < 1600) { //[0.7-1.6] first flipkick attempt window
 			bs->ideal_viewangles[PITCH] = 65 + (gripkickBonus / 5);
 		}
-		else if (gripTime < 1950) { //[1.6-1.95] yaw jerk, still looking down to keep them close
-			bs->ideal_viewangles[PITCH] = 70 + (gripkickBonus / 6);
+		else if (gripTime < 1950) { //[1.6-1.95] yaw jerk, look upward between attempts
+			bs->ideal_viewangles[PITCH] = -70 - (gripkickBonus / 7);
 			bs->ideal_viewangles[YAW] += (float)(yawJerkDir * yawJerkMag);
 		}
 		else if (gripTime < 2450) { //[1.95-2.45] second flipkick attempt window
 			bs->ideal_viewangles[PITCH] = 68 + (gripkickBonus / 6);
 		}
-		else if (gripTime < 2800) { //[2.45-2.8] second yaw jerk, still looking down to keep them close
-			bs->ideal_viewangles[PITCH] = 72 + (gripkickBonus / 7);
+		else if (gripTime < 2800) { //[2.45-2.8] second yaw jerk, look upward between attempts
+			bs->ideal_viewangles[PITCH] = -65 - (gripkickBonus / 8);
 			bs->ideal_viewangles[YAW] += (float)(yawJerkDir * yawJerkMag);
 		}
 		else if (gripTime < 4000) { //[2.8-4] hold grip pressure and keep closing for a third attempt
