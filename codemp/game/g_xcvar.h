@@ -370,6 +370,10 @@ XCVAR_DEF( bot_fanbias,					"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_drainbias,				"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_lightningbias,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_lightningdistance,		"400",		NULL,				CVAR_ARCHIVE,									qtrue )
+// 0-100: chance per AI think (when close to a saber enemy) that the bot adds a random hop.
+// Hopping is intentionally random/opt-in instead of being spammed by the flipkick code so
+// bots don't bounce incessantly when a flipkick isn't actually possible.
+XCVAR_DEF( bot_hopfrequency,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_delayresponsetime,		"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_responseTimeDelay,		"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 // 0: disabled, use each bot's .jkb turnspeed_combat/reflex unmodified (legacy behavior).
