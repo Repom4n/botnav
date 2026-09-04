@@ -121,7 +121,6 @@ static void NewBotAI_SaberDuelIndecisionFallback(bot_state_t *bs, qboolean horiz
 static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs);
 static void NewBotAI_ApplyHorizontalSwingMove(bot_state_t *bs);
 static qboolean NewBotAI_CanUseSaberThrowDefenseBreakForce(bot_state_t *bs, qboolean preferPull);
-static qboolean NewBotAI_CanStartFlipkick(bot_state_t *bs, qboolean isGripSequence);
 static void NewBotAI_TryRandomHop(bot_state_t *bs);
 static int NewBotAI_GetDrainTapTargetCost(bot_state_t *bs);
 static qboolean NewBotAI_IsPullkickDrainWindow(bot_state_t *bs);
@@ -6791,39 +6790,6 @@ static qboolean NewBotAI_ShouldAvoidFlipkickForSafety(bot_state_t *bs)
 	return qfalse;
 }
 
-// Whether the bot is in a state where the engine's forward flipkick (BOTH_WALL_FLIP_BACK1,
-// bg_pmove.c) is actually reachable right now: jump must be enabled, enough height above the
-// jump start to be airborne, and either a rising arc (fresh jump) or close enough to the enemy
-// that the 32-unit forward kick trace could connect. When this is false the bot should not be
-// pressing jump for a flipkick at all - that stray jump input was the cause of bots hopping
-// incessantly without ever kicking.
-// isGripSequence bypasses all of these: during gripkick the bot is standing on the ground and
-// MUST jump first, so the airborne/height checks can never pass on the frame the kick starts.
-static qboolean NewBotAI_CanStartFlipkick(bot_state_t *bs, qboolean isGripSequence)
-{
-	if (isGripSequence)
-	{
-		return qtrue;
-	}
-
-	if (bs->cur_ps.fd.forceJumpZStart < 16)
-	{
-		return qfalse;
-	}
-
-	if ((bs->origin[2] - bs->cur_ps.fd.forceJumpZStart) <= 24)
-	{
-		return qfalse;
-	}
-
-	if (bs->cur_ps.groundEntityNum != ENTITYNUM_NONE && bs->cur_ps.velocity[2] <= 0 && bs->frame_Enemy_Len > 64)
-	{
-		return qfalse;
-	}
-
-	return qtrue;
-}
-
 // Optional random hop. Flipkicks only add jump input when a kick is truly possible, so any
 // ambient hopping is handled here instead: bot_hopfrequency (0-100) is the chance per AI think
 // to hop while close to a saber enemy. Disabled by default.
@@ -6905,14 +6871,6 @@ void NewBotAI_Flipkick(bot_state_t *bs)
 		if (bs->cur_ps.torsoTimer < 350 && bs->cur_ps.torsoTimer > 100 && bs->frame_Enemy_Len < 130) {
 			return;
 		}
-	}
-
-	//Only commit jump input to a new flipkick when the engine's kick branch is actually
-	//reachable; otherwise leave jump alone so the bot doesn't hop incessantly chasing a kick
-	//that can't trigger.
-	if (!NewBotAI_CanStartFlipkick(bs, isGripSequence))
-	{
-		return;
 	}
 
 	bs->lastFlipkickAttemptTime = level.time + 300;
@@ -7048,38 +7006,41 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 		//not a good splat, has to predict based on their momentum
 	}
 	else {
+		//Chase and attempt the flipkick every think while gripping, the same way a normal
+		//(non-grip) flipkick keeps repeating forward move + jump input until it lands -
+		//NewBotAI_Flipkick's isGripSequence bypass already skips the range/cooldown gates
+		//that would otherwise block these back-to-back attempts. Pitch looks down (positive)
+		//and we move forward during attempt windows to bring the opponent in close for the
+		//kick; between attempts we jerk the view upward (negative pitch) along with yaw and
+		//move backward for showmanship before the next kick pulls them back down.
 		if (gripTime < 700) { //[0-0.7] lock in and close distance
 			bs->ideal_viewangles[PITCH] = 55 + (gripkickBonus / 4);
 			trap->EA_MoveForward(bs->client);
 		}
-		else if (gripTime < 1050) { //[0.7-1.05] first flipkick attempt
+		else if (gripTime < 1600) { //[0.7-1.6] first flipkick attempt window
 			bs->ideal_viewangles[PITCH] = 65 + (gripkickBonus / 5);
-			NewBotAI_Flipkick(bs);
+			trap->EA_MoveForward(bs->client);
 		}
-		else if (gripTime < 1600) { //[1.05-1.6] yaw jerk up
+		else if (gripTime < 1950) { //[1.6-1.95] yaw jerk, look upward and back off between attempts
 			bs->ideal_viewangles[PITCH] = -70 - (gripkickBonus / 7);
 			bs->ideal_viewangles[YAW] += (float)(yawJerkDir * yawJerkMag);
-			//No movement input here: EA_MoveBack persisted between AI thinks and fought the
-			//flipkick's required forwardmove > 0 at the start of the next kick attempt.
+			trap->EA_MoveBack(bs->client);
 		}
-		else if (gripTime < 1950) { //[1.6-1.95] pitch jerk down into second attempt
-			bs->ideal_viewangles[PITCH] = 70 + (gripkickBonus / 6);
-			NewBotAI_Flipkick(bs);
+		else if (gripTime < 2450) { //[1.95-2.45] second flipkick attempt window
+			bs->ideal_viewangles[PITCH] = 68 + (gripkickBonus / 6);
+			trap->EA_MoveForward(bs->client);
 		}
-		else if (gripTime < 2450) { //[1.95-2.45] second yaw jerk up
+		else if (gripTime < 2800) { //[2.45-2.8] second yaw jerk, look upward and back off between attempts
 			bs->ideal_viewangles[PITCH] = -65 - (gripkickBonus / 8);
 			bs->ideal_viewangles[YAW] += (float)(yawJerkDir * yawJerkMag);
-			//No movement input here: EA_MoveBack persisted between AI thinks and fought the
-			//flipkick's required forwardmove > 0 at the start of the next kick attempt.
+			trap->EA_MoveBack(bs->client);
 		}
-		else if (gripTime < 2800) { //[2.45-2.8] pitch jerk down into third attempt
-			bs->ideal_viewangles[PITCH] = 72 + (gripkickBonus / 7);
-			NewBotAI_Flipkick(bs);
-		}
-		else if (gripTime < 4000) { //[2.8-4] hold grip pressure and keep closing
+		else if (gripTime < 4000) { //[2.8-4] hold grip pressure and keep closing for a third attempt
 			bs->ideal_viewangles[PITCH] = 65 + (gripkickBonus / 8);
 			trap->EA_MoveForward(bs->client);
 		}
+
+		NewBotAI_Flipkick(bs);
 	}
 
 	bs->ideal_viewangles[YAW] = AngleNormalize360(bs->ideal_viewangles[YAW]); //Normalize the angles
