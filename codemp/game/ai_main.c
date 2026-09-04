@@ -127,6 +127,7 @@ static qboolean NewBotAI_IsPullkickDrainWindow(bot_state_t *bs);
 static void NewBotAI_AdjustSaberThrowArcAim(bot_state_t *bs, vec3_t headlevel);
 static void NewBotAI_AdjustSaberThrowLead(bot_state_t *bs);
 static void NewBotAI_TrySaberThrowDefenseBreak(bot_state_t *bs);
+static void NewBotAI_MaybeChangeSaberStyle(bot_state_t *bs);
 static qboolean BotNav_CheckFallingHazard(bot_state_t *bs, vec3_t moveDir);
 qboolean NewBotAI_IsEnemyPullable(bot_state_t *bs);
 void Cmd_EngageDuel_f(gentity_t *ent, int dueltype);
@@ -7790,6 +7791,38 @@ int NewBotAI_GetCharge(bot_state_t* bs)
 }
 
 
+// Staff (double bladed) and akimbo/dual saber styles can't saber throw (see
+// NewBotAI_GetSaberthrow and the throw trigger in NewBotAI_GetDS/LSForcepower), so a bot stuck
+// in one of those stances would never throw its saber. Applies to both force sides: on a random
+// cooldown, while not mid-swing or mid-throw, roll a chance to toggle out of the double-bladed
+// stance into the bot's configured single-blade style (single/medium/yellow) so a saber throw
+// becomes available again.
+static void NewBotAI_MaybeChangeSaberStyle(bot_state_t *bs)
+{
+	if (g_entities[bs->client].client->ps.fd.saberAnimLevel != SS_STAFF &&
+		g_entities[bs->client].client->ps.fd.saberAnimLevel != SS_DUAL)
+	{
+		return;
+	}
+
+	if (BG_SaberInAttack(bs->cur_ps.saberMove) || bs->cur_ps.saberInFlight || bs->cur_ps.saberHolstered)
+	{
+		return;
+	}
+
+	if (bs->saberStyleChangeTime > level.time)
+	{
+		return;
+	}
+
+	bs->saberStyleChangeTime = level.time + Q_irand(2000, 6000);
+
+	if (Q_irand(1, 100) <= 50)
+	{
+		Cmd_SaberAttackCycle_f(&g_entities[bs->client]);
+	}
+}
+
 void NewBotAI_GetAttack(bot_state_t *bs)
 {
 	int weapon;
@@ -7815,19 +7848,14 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 	}
 
 	if (bs->cur_ps.weapon == WP_SABER) {//Fullforce saber attacks
+		NewBotAI_MaybeChangeSaberStyle(bs);
+
 		if (bs->cur_ps.fd.forceSide == FORCE_LIGHTSIDE) { //Yellow sweep
 
 			if (BG_SaberInAttack(bs->cur_ps.saberMove)) {
 				if (g_entities[bs->client].client->ps.fd.saberAnimLevel == SS_MEDIUM)
 					Cmd_SaberAttackCycle_f(&g_entities[bs->client]);
 			}
-			else if (g_entities[bs->client].client->ps.fd.saberAnimLevel == SS_STAFF)
-				Cmd_SaberAttackCycle_f(&g_entities[bs->client]);
-				//g_entities[bs->client].client->ps.fd.saberAnimLevel = SS_MEDIUM; //SS_STAFF
-				//Cmd_SaberAttackCycle_f(&g_entities[bs->client]);
-			//else
-				//g_entities[bs->client].client->ps.fd.saberAnimLevel = SS_STAFF; //SS_STAFF
-			//g_entities[bs->client].client->ps.fd.saberAnimLevel = SS_MEDIUM; //SS_STAFF
 
 			if (bs->hitSpotted) //don't start a swing if a saberthrow is near us?
 				return;

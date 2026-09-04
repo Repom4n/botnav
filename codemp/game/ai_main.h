@@ -380,6 +380,22 @@ typedef struct bot_state_s
 	int					drainRollDir; // -1 left, 0 back, 1 right; used by NewBotAI_DrainRollEscape
 	int					drainRollResetTime;
 
+	// Gripkick sequencing (see NewBotAI_Gripkick): look straight down and close in on the
+	// target for a flipkick, then upon landing it jerk our view upward for bot_gripdwell ms
+	// (moving exclusively backward) a random number of times before flipkicking again.
+	qboolean			gripkickActive;			// qtrue once we've grabbed a target and started the sequence
+	int					gripkickFlipCount;		// flipkicks landed so far this grip (0-3+)
+	qboolean			gripkickJerking;		// qtrue while holding an upward jerk between flipkick attempts
+	qboolean			gripkickWasFlipAnim;	// legsAnim flip-kick state last think, to edge-detect a landed kick
+	int					gripkickJerksTarget;	// total jerks planned for the current post-flipkick jerk sequence
+	int					gripkickJerksDone;		// jerks completed so far in the current jerk sequence
+	int					gripkickJerkDir;		// yaw direction of the current jerk, -1 left / 1 right
+	int					gripkickJerkEndTime;	// level.time when the current jerk hold ends
+
+	// Random cooldown before a staff/dual-saber-wielding bot considers switching out of its
+	// double-bladed stance (see NewBotAI_MaybeChangeSaberStyle) so it can saber throw.
+	int					saberStyleChangeTime;
+
 	int					navObstacleUntil; // stay in waypoint nav mode until this time when an obstacle blocks path to enemy
 	int					lastHurtTime;     // level.time when this bot last took damage (set in BotDamageNotification)
 	//end rww
