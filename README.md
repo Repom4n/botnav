@@ -1,80 +1,85 @@
-# TaystJK
-[![build](https://github.com/taysta/TaystJK/actions/workflows/build.yml/badge.svg)](https://github.com/taysta/TaystJK/actions/workflows/build.yml)
-### To see a list of new features, check the [wiki](https://taysta.github.io/TaystJK/)
+# Botnav
 
-## License
-[![License](https://img.shields.io/github/license/eternalcodes/EternalJK.svg)](https://github.com/taysta/TaystJK/blob/master/LICENSE.txt)
-OpenJK is licensed under GPLv2 as free software. You are free to use, modify and redistribute OpenJK following the terms in LICENSE.txt.
+An attempt at improving bot AI and navigation in Jedi Academy/OpenJK.
 
-## Maintainers
-* [tayst](https://github.com/taysta)
+## Overview
 
-## Upstream Repositories
-This project is maintained against the following repositories:
-* [OpenJK](https://github.com/JACoders/OpenJK)
-* [jaPRO](https://github.com/videoP/jaPRO)
-* [EternalJK](https://github.com/eternalcodes/EternalJK)
-* [EternalJK-Vulkan](https://github.com/JKSunny/EternalJK)
+This is an OpenJK-derived C-based project focused on enhancements to bot behavior, navigation systems, and related gameplay improvements for Jedi Academy multiplayer and singleplayer modes.
 
-# OpenJK
+## What's in this repository
 
-OpenJK is a community effort to maintain and improve the game and engine powering Jedi Academy, while maintaining _full backwards compatibility_ with the existing games and mods.  
-This fork focuses on the jaPRO integration and Client Engine modifications.
+- **Bot AI & Navigation** (`codemp/botlib/`) – bot state management, entity tracking, pathfinding
+- **Gameplay & Game Logic** (`codemp/game/`) – game rules, NPCs, force abilities, item handling
+- **Server Systems** (`codemp/server/`) – server management, heartbeat, master server communication
+- **Multiplayer Code** (`codemp/`) – client/server engine, rendering, mod code modules
+- **Rendering** (`shared/rd-rend2/`) – graphics post-processing, tone mapping, tone mapping
+- **Supporting Libraries** (`lib/`) – zlib, libjpeg, GSL-lite, and other dependencies
+- **Documentation** (`docs/`) – gameplay commands, mod configuration, server options
+- **Build & Deployment** – Dockerfile for containerized server runtime
 
-Our aims are to:
+## Recent Changes
 
-- Improve the stability of the engine by fixing bugs and improving performance.
-- Support more hardware (x86_64, Arm, Apple Silicon) and software platforms (Linux, macOS)
-- Provide a clean base from which new code modifications can be made.
+Key improvements documented in `CHANGELOG.md`:
 
+### Bot & AI
+- Improved bot logging and entity state tracking
+- Enhanced navigation and entity linking systems
 
-## For players
+### Server & Gameplay
+- Better dedicated server console with color and tab completion
+- New server commands: `kickall`, `kickbots`, `kicknum`, weapon/force toggles
+- Improved `globalservers` master server support (up to 5 masters)
+- Player tracking via `ja_guid` userinfo field
+- Server-side demo recording from client perspective
 
-To install TaystJK, you will first need Jedi Academy installed. If you don't already own the game you can buy it from online stores such as [Steam](https://store.steampowered.com/app/6020/), [Amazon](https://www.amazon.com/Star-Wars-Jedi-Knight-Academy-Pc/dp/B0000A2MCN) or [GOG](https://www.gog.com/game/star_wars_jedi_knight_jedi_academy).
+### UI & Client
+- New HUD styles and overlay options
+- Speedometer with configurable jump counts
+- Pitch angle helper for aiming
+- Movement key display styles (updated visual feedback)
+- Keyboard modifier support (Ctrl, Shift, Alt key combinations)
 
-Download the [latest build](https://github.com/taysta/TaystJK/releases/tag/latest) for your operating system.
+### Rendering & Graphics
+- Improved shader file ordering and precedence
+- Fixed radar and rocket locking rendering
+- Support for widescreen levelshots (16:9)
+- Vulkan renderer option included
 
-Installing and running TaystJK:
+### Bug Fixes
+- Fixed memory leaks (NPC navigation, clipboard pasting)
+- Fixed buffer overflows in filesystem code
+- Fixed various out-of-bounds memory access issues
+- Improved console/chat field completion
 
-1. Extract the contents of the file into the Jedi Academy `GameData/` folder. For Steam users, this will be in `<Steam Folder>/steamapps/common/Jedi Academy/GameData/`.
-2. Run `taystjk.x86.exe` (Windows), `taystjk.i386` (Linux 32-bit), `taystjk.x86_64` (Linux 64-bit) or the `TaystJK` app bundle (macOS), depending on your operating system.
+For a complete list of changes, see **[CHANGELOG.md](CHANGELOG.md)**.
 
-### Linux Instructions
+## Getting Started
 
-If you do not have an existing JKA installation and need to download the base game:
-
-1. Download and Install SteamCMD [SteamCMD](https://developer.valvesoftware.com/wiki/SteamCMD#Linux).
-2. Set the download path using steamCMD: `force_install_dir /path/to/install/jka/`
-3. Using SteamCMD Set the platform to windows to download any windows game on steam. @sSteamCmdForcePlatformType "windows"
-4. Using SteamCMD download the game, `app_update 6020`.
-
-Extract the contents of the file into the Jedi Academy `GameData/` folder. For Steam users, this will be in `<Steam Folder>/steamapps/common/Jedi Academy/GameData/`.
-
-### macOS Instructions
-
-If you have the Mac App Store Version of Jedi Academy, follow these steps to get TaystJK runnning under macOS:
-
-1. Install [Homebrew](https://brew.sh/) if you don't have it.
-2. Open the Terminal app, and enter the command `brew install sdl2`.
-3. Extract the contents of the TaystJK DMG into the game directory `/Applications/Star Wars Jedi Knight: Jedi Academy.app/Contents/`
-4. Run `TaystJK.app`
-5. Savegames, Config Files and Log Files are stored in `/Users/$USER/Library/Application Support/TaystJK/`
-
-## For Developers
-
-### Building TaystJK
-
+### Building
 - [Compilation guide](https://github.com/JACoders/OpenJK/wiki/Compilation-guide)
 - [Debugging guide](https://github.com/JACoders/OpenJK/wiki/Debugging)
 
-### Contributing to TaystJK
+### Running (Containerized)
+The project includes a `Dockerfile` for easy deployment of a dedicated server:
 
-- [Fork](https://github.com/Taysta/TaystJK/fork) the project on GitHub
-- Create a new branch and make your changes
-- Send a [pull request](https://help.github.com/articles/creating-a-pull-request) to upstream (Taysta/TaystJK)
+```bash
+docker build -t botnav-server .
+docker run -it botnav-server
+```
 
-### Using TaystJK as a base for a new mod
+### Contributing
+1. [Fork](https://github.com/Repom4n/botnav/fork) the repository
+2. Create a feature branch
+3. Make your changes
+4. Submit a pull request
 
-- [Fork](https://github.com/Taysta/TaystJK/fork) the project on GitHub
-- Change the `GAMEVERSION` define in [codemp/game/g_local.h](https://github.com/Taysta/TaystJK/blob/master/codemp/game/g_local.h) from "OpenJK" to your project name
-- If you make a nice change, please consider back-porting to upstream via pull request as described above. This is so everyone benefits without having to reinvent the wheel for every project.
+## License
+
+Licensed under GPLv2 as free software. See [LICENSE.txt](LICENSE.txt) for details.
+
+## Upstream Projects
+
+This project is maintained against:
+- [OpenJK](https://github.com/JACoders/OpenJK)
+- [jaPRO](https://github.com/videoP/jaPRO)
+- [EternalJK](https://github.com/eternalcodes/EternalJK)
