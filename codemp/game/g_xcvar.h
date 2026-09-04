@@ -361,10 +361,10 @@ XCVAR_DEF( bot_gripkickbias,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 // Chance for a bot to misfire or delay a gripkick escape attempt when it has a pull available.
 // Scales with bot skill: lower-skill bots are more likely to miss/delay the pull.
 XCVAR_DEF( bot_mistakebias, 			"0", 			NULL, 				CVAR_ARCHIVE, 							qtrue )
-// Deprecated: the Gripkick sequence is driven by the target's position relative to our
-// 90 degree front cone (forward to flipkick / backward during the yaw jerk) instead of
-// fixed timings, so this no longer has any effect. Kept only for config compatibility.
-XCVAR_DEF( bot_gripkickdwell,			"100",			NULL,				CVAR_ARCHIVE,									qtrue )
+// How long (in ms) a Gripkick upward jerk is held before it either re-arms for another jerk
+// or ends the jerk cycle - see NewBotAI_Gripkick. Mild per-jerk random variance is applied
+// on top of this base value.
+XCVAR_DEF( bot_gripkickdwell,			"600",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_antidrainbias,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_fanbias,					"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_drainbias,				"0",			NULL,				CVAR_ARCHIVE,									qtrue )

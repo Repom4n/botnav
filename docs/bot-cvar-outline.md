@@ -47,7 +47,7 @@ These are all percentage-based (0-100) chance weights that gate specific behavio
 
 | Cvar | Default | Description |
 |------|---------|-------------|
-| `bot_saberthrowbias` | `0` | Chance weight for saber throw decisions. Higher = more throws. Feeds into `NewBotAI_GetSaberthrow()`. |
+| `bot_saberthrowbias` | `0` | Chance weight for saber throw decisions. Higher = more throws. Feeds into `NewBotAI_GetSaberthrow()`. Staff style can never throw (engine turns alt-attack into a kick instead) — `NewBotAI_TryLeaveStaffForSaberThrow()` randomly cycles a staff-wielding bot down to a single-blade style first so it can eventually throw. |
 | `bot_gripkickbias` | `0` | Chance weight for grip-kick combo initiation. Feeds into `NewBotAI_GetGrip()`. |
 | `bot_fanbias` | `0` | Chance weight for fan-chain attack patterns (horizontal swing chains). Used in `NewBotAI_PrepareHorizontalSwingStart()`. |
 | `bot_drainbias` | `0` | Scales how long bots hold drain. Higher = longer drain holds. Feeds `BotGetDrainHoldBiasMs()`. |
@@ -89,7 +89,7 @@ These are all percentage-based (0-100) chance weights that gate specific behavio
 
 | Cvar | Default | Description |
 |------|---------|-------------|
-| `bot_gripkickdwell` | `100` | Percent scaling of grip phase durations. 100 = default timings. Higher = longer dwell per phase, lower = faster cycling. |
+| `bot_gripkickdwell` | `600` | Milliseconds each Gripkick upward jerk is held before re-arming for another jerk (or ending the jerk cycle), with mild per-jerk variance. See `NewBotAI_Gripkick`. |
 
 ## Miscellaneous
 

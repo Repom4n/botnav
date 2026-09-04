@@ -7010,12 +7010,33 @@ void NewBotAI_ReactToBeingGripped(bot_state_t *bs) //Test this more, does it pus
 	}
 }
 
+// Edge-detects a landed forward flipkick. The engine only sets our own legsAnim to
+// BOTH_WALL_FLIP_BACK1 (see bg_pmove.c's forward-flipkick branch) when the forward trace
+// actually connects with a valid target, so a fresh transition into that anim is a reliable
+// "our flipkick just landed" signal. This is edge-triggered (not level-triggered) since the
+// anim is held for several hundred ms - without the edge-detect a single landed kick would be
+// reported as several.
+static qboolean NewBotAI_DidFlipkickLand(bot_state_t *bs)
+{
+	const qboolean isFlipAnimNow = (bs->cur_ps.legsAnim == BOTH_WALL_FLIP_BACK1) ? qtrue : qfalse;
+	const qboolean landed = (isFlipAnimNow && !bs->gripkickWasFlipAnim) ? qtrue : qfalse;
+
+	bs->gripkickWasFlipAnim = isFlipAnimNow;
+	return landed;
+}
+
+// Gripkick, from scratch: grab a target with force grip, immediately look straight down,
+// then yaw toward them and move exclusively forward until a flipkick can land. Every landed
+// flipkick is followed by 1-3 (first kick) or 1-2 (every kick after) upward jerks - each one
+// yanking our aim up to about 70 degrees and holding it there for bot_gripkickdwell ms (with
+// mild variance) while moving exclusively backward and doing nothing else (no jumping, no
+// other actions) - before we look straight down again, aim back at the target once they're
+// back in front of us, and go for the next flipkick. The force grip key is held the entire
+// time regardless of phase.
 void NewBotAI_Gripkick(bot_state_t *bs)
 {
-	//float heightDiff = bs->cur_ps.origin[2] - bs->currentEnemy->client->ps.origin[2]; //We are above them by this much
 	const int gripkickBonus = BotGetAggressionWeightedBonus(bs, BotGetChanceBiasPercent(bot_gripkickbias.value), 30, qtrue);
-	const int yawJerkMag = Q_irand(140, 200);
-	const int yawJerkDir = Q_irand(0, 1) ? 1 : -1;
+	const qboolean flipkickLanded = NewBotAI_DidFlipkickLand(bs);
 
 	if (BG_InKnockDown(bs->currentEnemy->client->ps.legsAnim)) { //Splat and enough time? - how to see if they are splattable and were not gripped during midair. forcejumpzheight ?
 		float heightdiff = bs->currentEnemy->client->ps.origin[2] - bs->eye[2]; //Them minus ours,  they are 500, we are 300. height diff is 200.
@@ -7032,43 +7053,103 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 		//not a good splat, has to predict based on their momentum
 	}
 	else {
-		//Gripkick discipline: movement, a held force grip, and flipkicks - nothing else.
-		//Move exclusively straight forward while bringing the gripped target in close for
-		//the flipkick. After a kick (or during the jerk windows below) move exclusively
-		//backward while the yaw jerk swings them, until the jerk brings them back in
-		//front of us inside the 90 degree cone - then move forward and flipkick again.
-		//NewBotAI_Flipkick gates its own grip-sequence attempts on that same 90 degree
-		//cone and on kick range, so simply offer it the kick every think.
-		vec3_t a_fo;
-		qboolean targetInFront;
+		//A gap since we last ran the state machine means the grip was just (re)acquired -
+		//reset the whole approach/jerk cycle and look straight down immediately.
+		if (bs->gripkickLastActiveTime < level.time - 300) {
+			bs->gripkickJerking = qfalse;
+			bs->gripkickFlipkickCount = 0;
+			bs->gripkickJerksPlanned = 0;
+			bs->gripkickJerksDone = 0;
+			bs->gripkickJerkEndTime = 0;
+			bs->gripkickWasFlipAnim = qfalse;
+			bs->gripkickLookDownUntil = level.time + Q_irand(250, 450);
+		}
+		bs->gripkickLastActiveTime = level.time;
 
-		VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, a_fo);
-		vectoangles(a_fo, a_fo);
-		targetInFront = InFieldOfVision(bs->viewangles, 90, a_fo);
+		if (bs->gripkickJerking) {
+			//Jerk phase - a landed flipkick isn't possible from here since we never call
+			//Flipkick in this branch, so just (re)arm/advance the jerk timer.
+			if (bs->gripkickJerkEndTime <= level.time) {
+				const int dwellBase = (bot_gripkickdwell.integer > 0) ? bot_gripkickdwell.integer : 100;
+				const int dwellVariance = (dwellBase / 5 > 0) ? dwellBase / 5 : 1;
 
-		if (targetInFront) {
-			//Target is back in front - bring them in for the flipkick, moving
-			//exclusively straight forward. Only look down to pull them in once they're
-			//close to kick range; at longer range keep the aim level so we close faster.
-			if (bs->frame_Enemy_Len < 220) {
-				bs->ideal_viewangles[PITCH] = 55 + (gripkickBonus / 5);
+				bs->gripkickJerksDone++;
+
+				if (bs->gripkickJerksDone > bs->gripkickJerksPlanned) {
+					//Done jerking for this cycle - go back to looking straight down and
+					//closing in for another flipkick attempt.
+					bs->gripkickJerking = qfalse;
+					bs->gripkickJerksDone = 0;
+					bs->gripkickJerksPlanned = 0;
+					bs->gripkickLookDownUntil = level.time + Q_irand(250, 450);
+				}
+				else {
+					//Arm the next jerk: a fresh random direction and dwell.
+					bs->gripkickJerkDir = Q_irand(0, 1) ? 1 : -1;
+					bs->ideal_viewangles[YAW] += (float)(bs->gripkickJerkDir * Q_irand(140, 200));
+					bs->gripkickJerkEndTime = level.time + dwellBase + Q_irand(-dwellVariance, dwellVariance);
+				}
+			}
+
+			if (bs->gripkickJerking) {
+				//Jerk upward to ~70 degrees (mild variance) and move exclusively backward -
+				//no jumping, no other actions while jerking.
+				bs->ideal_viewangles[PITCH] = -70 + Q_irand(-8, 8);
+				trap->EA_Move(bs->client, vec3_origin, 0);
+				trap->EA_MoveBack(bs->client);
+
+				bs->ideal_viewangles[YAW] = AngleNormalize360(bs->ideal_viewangles[YAW]);
+				bs->ideal_viewangles[PITCH] = AngleNormalize360(bs->ideal_viewangles[PITCH]);
+				trap->EA_ForcePower(bs->client); //Always hold grip key during grip
+				return;
+			}
+			//Jerk cycle just ended - fall through into the approach phase below this same think.
+		}
+
+		//Approach/flipkick phase: yaw toward the target and move exclusively forward, only
+		//actually attempting the flipkick once they're back inside our forward 90 degree
+		//cone (NewBotAI_Flipkick also gates its own grip-sequence attempts on that same cone
+		//and on kick range).
+		{
+			vec3_t a_fo;
+			qboolean targetInFront;
+
+			VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, a_fo);
+			vectoangles(a_fo, a_fo);
+			targetInFront = InFieldOfVision(bs->viewangles, 90, a_fo);
+
+			//Every flipkick attempt looks straight down first, then aims at the target once
+			//close enough to actually initiate the kick.
+			if (bs->gripkickLookDownUntil > level.time) {
+				bs->ideal_viewangles[PITCH] = 85 + (gripkickBonus / 10);
+			}
+			else if (bs->frame_Enemy_Len < 220) {
+				bs->ideal_viewangles[PITCH] = 15 + (gripkickBonus / 10);
 			}
 			else {
-				bs->ideal_viewangles[PITCH] = 10;
+				bs->ideal_viewangles[PITCH] = 70 + (gripkickBonus / 8);
 			}
+
 			trap->EA_Move(bs->client, vec3_origin, 0);
-			trap->EA_MoveForward(bs->client);
-		}
-		else {
-			//Target swung out of the forward cone after a kick - back off exclusively
-			//while the yaw jerk drags them back around in front of us.
-			bs->ideal_viewangles[PITCH] = -70 - (gripkickBonus / 7);
-			bs->ideal_viewangles[YAW] += (float)(yawJerkDir * yawJerkMag);
-			trap->EA_Move(bs->client, vec3_origin, 0);
-			trap->EA_MoveBack(bs->client);
+
+			if (targetInFront) {
+				trap->EA_MoveForward(bs->client);
+				NewBotAI_Flipkick(bs);
+			}
+			else {
+				//Not lined up in front of us yet - hold position instead of kicking blind.
+				trap->EA_MoveBack(bs->client);
+			}
 		}
 
-		NewBotAI_Flipkick(bs);
+		if (flipkickLanded) {
+			bs->gripkickFlipkickCount++;
+			bs->gripkickJerking = qtrue;
+			bs->gripkickJerksDone = 0;
+			//First flipkick: 1-3 jerks. Every flipkick after that: 1-2 jerks.
+			bs->gripkickJerksPlanned = (bs->gripkickFlipkickCount <= 1) ? Q_irand(1, 3) : Q_irand(1, 2);
+			bs->gripkickJerkEndTime = level.time; //arm the first jerk immediately next think
+		}
 	}
 
 	bs->ideal_viewangles[YAW] = AngleNormalize360(bs->ideal_viewangles[YAW]); //Normalize the angles
@@ -9779,6 +9860,32 @@ int NewBotAI_GetTeamEnergize(bot_state_t* bs) {
 	return weight;
 }
 
+// Staff (and dual) saber styles can never perform a saber throw - alt-attack instead does a
+// kick while in SS_STAFF (see bg_saber.c's alt-attack handling), so a staff-wielding bot that
+// wants to throw first has to randomly cycle its saber style down to a single-blade style
+// (e.g. medium/yellow) via Cmd_SaberAttackCycle_f before it can actually throw.
+static void NewBotAI_TryLeaveStaffForSaberThrow(bot_state_t *bs)
+{
+	if (bs->cur_ps.fd.saberAnimLevel != SS_STAFF)
+	{
+		return;
+	}
+
+	if (bs->staffThrowSwitchTime > level.time)
+	{
+		return;
+	}
+
+	bs->staffThrowSwitchTime = level.time + 500;
+
+	//Random chance per attempt so staff bots don't rigidly abandon staff style the instant
+	//they'd merely be capable of a throw.
+	if (Q_irand(1, 100) <= 20)
+	{
+		Cmd_SaberAttackCycle_f(&g_entities[bs->client]);
+	}
+}
+
 int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 	const int ourHealth = g_entities[bs->client].health;
 	const int ourForce = bs->cur_ps.fd.forcePower;
@@ -9792,8 +9899,10 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 		return 0;
 	if (!bs->frame_Enemy_Vis)
 		return 0;
-	if (bs->cur_ps.fd.saberAnimLevel == SS_STAFF)
+	if (bs->cur_ps.fd.saberAnimLevel == SS_STAFF) {
+		NewBotAI_TryLeaveStaffForSaberThrow(bs);
 		return 0;
+	}
 
 	g_entities[bs->client].client->ps.fd.forcePowerLevel[FP_SABERTHROW] = 3;
 	g_entities[bs->client].client->ps.fd.forcePowersKnown |= (1 << FP_SABERTHROW);
@@ -12275,6 +12384,17 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 			{
 				bs->doAltAttack = 1;
 				bs->doAttack = 0;
+			}
+			else if (bs->saberThrowTime < level.time && !bs->cur_ps.saberInFlight &&
+				(bs->cur_ps.fd.forcePowersKnown & (1 << FP_SABERTHROW)) &&
+				InFieldOfVision(bs->viewangles, 30, a_fo) &&
+				bs->frame_Enemy_Len < BOT_SABER_THROW_RANGE &&
+				bs->cur_ps.fd.saberAnimLevel == SS_STAFF)
+			{
+				//Otherwise identical to the throw case above, but we're stuck in staff style
+				//which can never throw - randomly cycle out of staff so a later think can
+				//actually fire the throw.
+				NewBotAI_TryLeaveStaffForSaberThrow(bs);
 			}
 			else if (bs->cur_ps.saberInFlight && bs->frame_Enemy_Len > 300 && bs->frame_Enemy_Len < BOT_SABER_THROW_RANGE)
 			{
