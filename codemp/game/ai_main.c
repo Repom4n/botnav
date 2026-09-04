@@ -121,7 +121,7 @@ static void NewBotAI_SaberDuelIndecisionFallback(bot_state_t *bs, qboolean horiz
 static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs);
 static void NewBotAI_ApplyHorizontalSwingMove(bot_state_t *bs);
 static qboolean NewBotAI_CanUseSaberThrowDefenseBreakForce(bot_state_t *bs, qboolean preferPull);
-static qboolean NewBotAI_CanStartFlipkick(bot_state_t *bs);
+static qboolean NewBotAI_CanStartFlipkick(bot_state_t *bs, qboolean isGripSequence);
 static void NewBotAI_TryRandomHop(bot_state_t *bs);
 static int NewBotAI_GetDrainTapTargetCost(bot_state_t *bs);
 static qboolean NewBotAI_IsPullkickDrainWindow(bot_state_t *bs);
@@ -533,6 +533,8 @@ static float BotGetAimSpeedLevel(void)
 //so individual bots keep some personality variance, while level 10 converges on truly
 //uniform "perfect" aim regardless of personality. Returns < 0 if aimspeed is disabled,
 //in which case the caller should fall back to the legacy factor calculation.
+//The factor ramps near-linearly from 0.10 at level 1 to 1.0 at level 10 so every step
+//produces a clearly visible change in aim speed (the old t^2 curve was flat below ~7).
 static float BotGetAimSpeedFactor(bot_state_t *bs)
 {
 	float level = BotGetAimSpeedLevel();
@@ -547,7 +549,7 @@ static float BotGetAimSpeedFactor(bot_state_t *bs)
 
 	t = level / 10.0f; //1..10 -> 0.1..1.0
 
-	baseFactor = 0.03f + (t * t) * 0.97f; //level1: slow, deliberate aim; ramps sharply near 9-10
+	baseFactor = 0.10f + t * 0.90f; //level 1: 0.19, each step +0.09 up to 1.0 at level 10
 
 	personalityMultiplier = bs->skills.turnspeed_combat / 0.05f; //0.05 is the .jkb default baseline
 	if (personalityMultiplier < 0.5f)
@@ -576,6 +578,8 @@ static float BotGetAimSpeedFactor(bot_state_t *bs)
 
 //Ramps the view-slew cap toward effectively instantaneous as bot_aimspeed approaches 9-10,
 //so aim isn't bottlenecked by turn rate once response delay is already minimal/zero.
+//Quadratic ramp: every level widens the cap noticeably (x1 at 0, x6 at 5, x101 at 10),
+//unlike the old t^4 curve which barely moved below level 8.
 static float BotGetAimSpeedMaxChange(bot_state_t *bs, float legacyMaxChange)
 {
 	float level = BotGetAimSpeedLevel();
@@ -587,7 +591,7 @@ static float BotGetAimSpeedMaxChange(bot_state_t *bs, float legacyMaxChange)
 	}
 
 	t = level / 10.0f;
-	return legacyMaxChange * (1.0f + (t * t * t * t) * 400.0f);
+	return legacyMaxChange * (1.0f + (t * t) * 100.0f);
 }
 
 /*
@@ -6793,8 +6797,15 @@ static qboolean NewBotAI_ShouldAvoidFlipkickForSafety(bot_state_t *bs)
 // that the 32-unit forward kick trace could connect. When this is false the bot should not be
 // pressing jump for a flipkick at all - that stray jump input was the cause of bots hopping
 // incessantly without ever kicking.
-static qboolean NewBotAI_CanStartFlipkick(bot_state_t *bs)
+// isGripSequence bypasses all of these: during gripkick the bot is standing on the ground and
+// MUST jump first, so the airborne/height checks can never pass on the frame the kick starts.
+static qboolean NewBotAI_CanStartFlipkick(bot_state_t *bs, qboolean isGripSequence)
 {
+	if (isGripSequence)
+	{
+		return qtrue;
+	}
+
 	if (bs->cur_ps.fd.forceJumpZStart < 16)
 	{
 		return qfalse;
@@ -6899,7 +6910,7 @@ void NewBotAI_Flipkick(bot_state_t *bs)
 	//Only commit jump input to a new flipkick when the engine's kick branch is actually
 	//reachable; otherwise leave jump alone so the bot doesn't hop incessantly chasing a kick
 	//that can't trigger.
-	if (!NewBotAI_CanStartFlipkick(bs))
+	if (!NewBotAI_CanStartFlipkick(bs, isGripSequence))
 	{
 		return;
 	}
@@ -6919,9 +6930,10 @@ void NewBotAI_Flipkick(bot_state_t *bs)
 	}
 
 	//if red swing and during the good part of anim and they are in range of saber dont kick them.. yet
+	//Crouch removed: it interrupted the flipkick approach (crouch negates the kick's forward
+	//movement window); just hold the kick instead.
 	if (bs->currentEnemy && bs->currentEnemy->client && bs->cur_ps.saberMove == LS_A_T2B && (bs->currentEnemy->client->ps.saberMove != LS_READY || bs->currentEnemy->client->ps.weapon != WP_SABER || bs->currentEnemy->client->ps.fd.saberAnimLevel != SS_STRONG) && bs->frame_Enemy_Len < 180 && !enemySwing) {//In range and they can't block it
 		if (bs->cur_ps.torsoTimer < 250 && bs->cur_ps.torsoTimer > 100 && bs->frame_Enemy_Len < 110) {
-			trap->EA_Crouch(bs->client);
 			return;
 		}
 	}
@@ -7047,7 +7059,8 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 		else if (gripTime < 1600) { //[1.05-1.6] yaw jerk up
 			bs->ideal_viewangles[PITCH] = -70 - (gripkickBonus / 7);
 			bs->ideal_viewangles[YAW] += (float)(yawJerkDir * yawJerkMag);
-			trap->EA_MoveBack(bs->client); //back off during the upward jerk, forward is for kick approach
+			//No movement input here: EA_MoveBack persisted between AI thinks and fought the
+			//flipkick's required forwardmove > 0 at the start of the next kick attempt.
 		}
 		else if (gripTime < 1950) { //[1.6-1.95] pitch jerk down into second attempt
 			bs->ideal_viewangles[PITCH] = 70 + (gripkickBonus / 6);
@@ -7056,7 +7069,8 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 		else if (gripTime < 2450) { //[1.95-2.45] second yaw jerk up
 			bs->ideal_viewangles[PITCH] = -65 - (gripkickBonus / 8);
 			bs->ideal_viewangles[YAW] += (float)(yawJerkDir * yawJerkMag);
-			trap->EA_MoveBack(bs->client); //back off during the upward jerk, forward is for kick approach
+			//No movement input here: EA_MoveBack persisted between AI thinks and fought the
+			//flipkick's required forwardmove > 0 at the start of the next kick attempt.
 		}
 		else if (gripTime < 2800) { //[2.45-2.8] pitch jerk down into third attempt
 			bs->ideal_viewangles[PITCH] = 72 + (gripkickBonus / 7);
@@ -8396,8 +8410,9 @@ static int BotGetResponseDelayMs(void)
 }
 
 //Scales the configured response delay by this bot's .jkb "reflex" value (default 100,
-//so unmodified bots see no change), then applies the bot_aimspeed override: level 10 forces
-//zero response delay (perfect aim), level 9 caps it to a very small floor (near-perfect aim).
+//so unmodified bots see no change), then applies the bot_aimspeed override: the delay
+//shrinks linearly with the level (level 1 ~ x0.9, level 9 ~ x0.1) so every level makes
+//bots react visibly faster, with level 10 forcing zero delay (perfect aim).
 static int BotGetReflexScaledResponseDelayMs(bot_state_t *bs)
 {
 	int delay = BotGetResponseDelayMs();
@@ -8417,9 +8432,9 @@ static int BotGetReflexScaledResponseDelayMs(bot_state_t *bs)
 	{
 		return 0;
 	}
-	if (aimLevel >= 9.0f && delay > 25)
+	if (aimLevel > 0.0f)
 	{
-		delay = 25;
+		delay = (int)((float)delay * (1.0f - (aimLevel / 10.0f)));
 	}
 
 	if (delay < 0)
@@ -9036,11 +9051,6 @@ static qboolean NewBotAI_IsSaberSwingStartWindow(bot_state_t *bs)
 		return qfalse;
 	}
 
-	if (bs->cur_ps.saberMove != LS_NONE && bs->cur_ps.saberMove != LS_READY)
-	{
-		return qfalse;
-	}
-
 	if (!bs->frame_Enemy_Vis || bs->frame_Enemy_Len > 256 || bs->hitSpotted)
 	{
 		return qfalse;
@@ -9078,13 +9088,26 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 	if (bs->currentEnemy && bs->currentEnemy->client && bs->fanAttackEnemyHealth > 0 &&
 		bs->currentEnemy->health < bs->fanAttackEnemyHealth)
 	{
-		bs->fanAttackDir = 0;
-		bs->fanAttackTime = level.time;
+		//Landed a hit: keep the horizontal chain going instead of ending it. Refresh the
+		//baseline and flip direction so the swings keep alternating left/right.
+		bs->fanAttackEnemyHealth = bs->currentEnemy->health;
+		bs->fanAttackDir = -bs->fanAttackDir;
+		bs->fanAttackTime = level.time + fanHoldMs;
 		return;
 	}
 
 	if (bs->fanAttackTime > level.time && bs->fanAttackDir)
 	{
+		return;
+	}
+
+	if (bs->fanAttackDir)
+	{
+		//The hold window expired without landing a hit or taking damage: re-press attack by
+		//flipping the strafe direction (attack input comes from NewBotAI_GetAttack) and start
+		//a new window, so the chain only stops once a swing actually connects or we get hit.
+		bs->fanAttackDir = -bs->fanAttackDir;
+		bs->fanAttackTime = level.time + fanHoldMs;
 		return;
 	}
 
@@ -9139,13 +9162,8 @@ static void NewBotAI_ApplyHorizontalSwingMove(bot_state_t *bs)
 		return;
 	}
 
-	if (bs->currentEnemy && bs->currentEnemy->client && bs->fanAttackEnemyHealth > 0 &&
-		bs->currentEnemy->health < bs->fanAttackEnemyHealth)
-	{
-		bs->fanAttackDir = 0;
-		bs->fanAttackTime = level.time;
-		return;
-	}
+	//Landing a hit no longer ends the chain (NewBotAI_PrepareHorizontalSwingStart keeps it
+	//going); only taking damage (above) or the window expiring ends the strafe input here.
 
 	if (bs->fanAttackDir > 0)
 	{
