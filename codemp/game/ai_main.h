@@ -382,6 +382,7 @@ typedef struct bot_state_s
 	int					gripkickJerkUntil;
 	int					gripkickJerkCount;
 	int					gripkickKickCount;
+	int					gripkickJerkDirection;
 	qboolean			gripkickActive;
 
 	int					navObstacleUntil; // stay in waypoint nav mode until this time when an obstacle blocks path to enemy

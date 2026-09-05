@@ -7039,6 +7039,7 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 		bs->gripkickJerkUntil = 0;
 		bs->gripkickJerkCount = 0;
 		bs->gripkickKickCount = 0;
+		bs->gripkickJerkDirection = 0;
 	}
 
 	if (BG_InKnockDown(bs->currentEnemy->client->ps.legsAnim)) { //Splat and enough time? - how to see if they are splattable and were not gripped during midair. forcejumpzheight ?
@@ -7078,6 +7079,21 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 			trap->EA_Move(bs->client, vec3_origin, 0);
 			trap->EA_MoveBack(bs->client);
 		}
+		else if (bs->gripkickJerkCount > 0) {
+			const int dwellPercent = Com_Clampi(10, 300, bot_gripkickdwell.integer);
+
+			//Complete one randomized jerk at a time so bot_gripkickdwell controls
+			//each upward hold rather than collapsing the whole sequence into one
+			//long phase.
+			bs->gripkickJerkCount--;
+			bs->gripkickJerkDirection = (Q_irand(0, 1) * 2) - 1;
+			bs->gripkickJerkUntil = level.time +
+				(Q_irand(700, 1100) * dwellPercent) / 100;
+			bs->ideal_viewangles[YAW] += bs->gripkickJerkDirection * 18.0f;
+			bs->ideal_viewangles[PITCH] = -70 - (gripkickBonus / 7);
+			trap->EA_Move(bs->client, vec3_origin, 0);
+			trap->EA_MoveBack(bs->client);
+		}
 		else if (targetInFront) {
 			//Every kick approach starts by looking straight down and moving
 			//only forward while holding grip.
@@ -7105,7 +7121,7 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 		{
 			bs->gripkickKickCount++;
 			bs->gripkickJerkCount = (bs->gripkickKickCount == 1) ? Q_irand(1, 3) : Q_irand(1, 2);
-			bs->gripkickJerkUntil = level.time + Q_irand(700, 1100) * bs->gripkickJerkCount;
+			bs->gripkickJerkUntil = 0;
 		}
 	}
 
@@ -9881,11 +9897,11 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 		return 0;
 	if (bs->cur_ps.fd.saberAnimLevel == SS_STAFF)
 	{
-		//A staff cannot initiate saber throw. Toggle to its single-blade
-		//style first; the next think can then issue the throw.
+		//A staff cannot initiate saber throw. Select a throw-capable style
+		//directly instead of cycling through styles used by combat logic.
 		if (bs->saberThrowTime < level.time)
 		{
-			Cmd_SaberAttackCycle_f(&g_entities[bs->client]);
+			g_entities[bs->client].client->ps.fd.saberAnimLevel = SS_MEDIUM;
 			bs->saberThrowTime = level.time + 350;
 		}
 		return 0;
