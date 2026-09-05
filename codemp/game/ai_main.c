@@ -127,7 +127,8 @@ static qboolean NewBotAI_IsPullkickDrainWindow(bot_state_t *bs);
 static void NewBotAI_AdjustSaberThrowArcAim(bot_state_t *bs, vec3_t headlevel);
 static void NewBotAI_AdjustSaberThrowLead(bot_state_t *bs);
 static void NewBotAI_TrySaberThrowDefenseBreak(bot_state_t *bs);
-static qboolean BotNav_CheckFallingHazard(bot_state_t *bs, vec3_t moveDir);
+static void NewBotAI_ApplyPullMistake(bot_state_t *bs);
+static qboolean BotNav_CheckFallingHazard(bot_state_t *bs, vec3_t moveDir, qboolean inCombat);
 qboolean NewBotAI_IsEnemyPullable(bot_state_t *bs);
 void Cmd_EngageDuel_f(gentity_t *ent, int dueltype);
 
@@ -1921,7 +1922,7 @@ int BotTrace_Duck(bot_state_t *bs, vec3_t traceto)
 
 //Trace ahead in the movement direction to detect falling hazards (ledges, lava, death pits).
 //Returns qtrue if walking in moveDir would lead the bot off a dangerous drop or into lava.
-static qboolean BotNav_CheckFallingHazard(bot_state_t *bs, vec3_t moveDir)
+static qboolean BotNav_CheckFallingHazard(bot_state_t *bs, vec3_t moveDir, qboolean inCombat)
 {
 	vec3_t start, end, downEnd;
 	trace_t tr;
@@ -1963,8 +1964,9 @@ static qboolean BotNav_CheckFallingHazard(bot_state_t *bs, vec3_t moveDir)
 	VectorCopy(start, downEnd);
 	downEnd[2] = bs->origin[2]; //trace back up to our level
 
-	//If the drop is more than ~200 units, it's likely a damaging or deadly fall
-	if ((bs->origin[2] - tr.endpos[2]) > 200.0f)
+	//Ordinary ledges are acceptable during combat; retain protection from actual
+	//environmental hazards above.
+	if (!inCombat && (bs->origin[2] - tr.endpos[2]) > 200.0f)
 	{
 		return qtrue;
 	}
@@ -6790,6 +6792,22 @@ static qboolean NewBotAI_ShouldAvoidFlipkickForSafety(bot_state_t *bs)
 	return qfalse;
 }
 
+static qboolean NewBotAI_CanBackflip(bot_state_t *bs)
+{
+	const qboolean enemyCanDrain = (bs->currentEnemy && bs->currentEnemy->client &&
+		((bs->currentEnemy->client->ps.fd.forcePowersKnown & (1 << FP_DRAIN)) ||
+		 (bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_DRAIN)))) ? qtrue : qfalse;
+	const qboolean enemyCanGrip = (bs->currentEnemy && bs->currentEnemy->client &&
+		((bs->currentEnemy->client->ps.fd.forcePowersKnown & (1 << FP_GRIP)) ||
+		 (bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_GRIP)))) ? qtrue : qfalse;
+
+	return (g_entities[bs->client].health == 100 &&
+		enemyCanDrain &&
+		NewBotAI_GetAntiDrainWeight(bs) > 0 &&
+		!enemyCanGrip &&
+		bs->frame_Enemy_Len > MAX_GRIP_DISTANCE * 2) ? qtrue : qfalse;
+}
+
 // Optional random hop. Flipkicks only add jump input when a kick is truly possible, so any
 // ambient hopping is handled here instead: bot_hopfrequency (0-100) is the chance per AI think
 // to hop while close to a saber enemy. Disabled by default.
@@ -7014,8 +7032,14 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 {
 	//float heightDiff = bs->cur_ps.origin[2] - bs->currentEnemy->client->ps.origin[2]; //We are above them by this much
 	const int gripkickBonus = BotGetAggressionWeightedBonus(bs, BotGetChanceBiasPercent(bot_gripkickbias.value), 30, qtrue);
-	const int yawJerkMag = Q_irand(140, 200);
-	const int yawJerkDir = Q_irand(0, 1) ? 1 : -1;
+
+	if (!bs->gripkickActive)
+	{
+		bs->gripkickActive = qtrue;
+		bs->gripkickJerkUntil = 0;
+		bs->gripkickJerkCount = 0;
+		bs->gripkickKickCount = 0;
+	}
 
 	if (BG_InKnockDown(bs->currentEnemy->client->ps.legsAnim)) { //Splat and enough time? - how to see if they are splattable and were not gripped during midair. forcejumpzheight ?
 		float heightdiff = bs->currentEnemy->client->ps.origin[2] - bs->eye[2]; //Them minus ours,  they are 500, we are 300. height diff is 200.
@@ -7041,34 +7065,48 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 		//cone and on kick range, so simply offer it the kick every think.
 		vec3_t a_fo;
 		qboolean targetInFront;
+		qboolean attemptedKick = qfalse;
 
 		VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, a_fo);
 		vectoangles(a_fo, a_fo);
 		targetInFront = InFieldOfVision(bs->viewangles, 90, a_fo);
 
-		if (targetInFront) {
-			//Target is back in front - bring them in for the flipkick, moving
-			//exclusively straight forward. Only look down to pull them in once they're
-			//close to kick range; at longer range keep the aim level so we close faster.
-			if (bs->frame_Enemy_Len < 220) {
-				bs->ideal_viewangles[PITCH] = 55 + (gripkickBonus / 5);
-			}
-			else {
-				bs->ideal_viewangles[PITCH] = 10;
-			}
+		if (bs->gripkickJerkUntil > level.time) {
+			//Jerk phases only move backward while looking up; do not issue
+			//jump, attack, or other competing inputs during them.
+			bs->ideal_viewangles[PITCH] = -70 - (gripkickBonus / 7);
+			trap->EA_Move(bs->client, vec3_origin, 0);
+			trap->EA_MoveBack(bs->client);
+		}
+		else if (targetInFront) {
+			//Every kick approach starts by looking straight down and moving
+			//only forward while holding grip.
+			VectorCopy(a_fo, bs->ideal_viewangles);
+			bs->ideal_viewangles[PITCH] = 89;
 			trap->EA_Move(bs->client, vec3_origin, 0);
 			trap->EA_MoveForward(bs->client);
+			if (bs->frame_Enemy_Len <= 160)
+			{
+				const int previousAttempt = bs->lastFlipkickAttemptTime;
+				NewBotAI_Flipkick(bs);
+				attemptedKick = (bs->lastFlipkickAttemptTime != previousAttempt) ? qtrue : qfalse;
+			}
 		}
 		else {
-			//Target swung out of the forward cone after a kick - back off exclusively
-			//while the yaw jerk drags them back around in front of us.
-			bs->ideal_viewangles[PITCH] = -70 - (gripkickBonus / 7);
-			bs->ideal_viewangles[YAW] += (float)(yawJerkDir * yawJerkMag);
+			//Slowly yaw toward the target while backing away until it is
+			//inside the forward kick cone again.
+			bs->ideal_viewangles[PITCH] = 89;
+			bs->ideal_viewangles[YAW] += (a_fo[YAW] > bs->viewangles[YAW]) ? 12.0f : -12.0f;
 			trap->EA_Move(bs->client, vec3_origin, 0);
 			trap->EA_MoveBack(bs->client);
 		}
 
-		NewBotAI_Flipkick(bs);
+		if (attemptedKick && bs->gripkickKickCount < 3)
+		{
+			bs->gripkickKickCount++;
+			bs->gripkickJerkCount = (bs->gripkickKickCount == 1) ? Q_irand(1, 3) : Q_irand(1, 2);
+			bs->gripkickJerkUntil = level.time + Q_irand(700, 1100) * bs->gripkickJerkCount;
+		}
 	}
 
 	bs->ideal_viewangles[YAW] = AngleNormalize360(bs->ideal_viewangles[YAW]); //Normalize the angles
@@ -7197,6 +7235,13 @@ void NewBotAI_Absorbing(bot_state_t *bs)
 
 void NewBotAI_SaberThrowing(bot_state_t* bs)
 {
+	//Release alt-attack as soon as the bot's aggression turns defensive so the
+	//saber can begin its normal return instead of extending the throw.
+	if (BotGetAggressionBias(bs) <= 0.0f)
+	{
+		return;
+	}
+
 	trap->EA_Alt_Attack(bs->client);
 	NewBotAI_TrySaberThrowDefenseBreak(bs);
 }
@@ -8165,7 +8210,15 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 
 		saber = &g_entities[bs->currentEnemy->client->ps.saberEntityNum];
 
-		if (bs->currentEnemy->client->ps.legsAnim == BOTH_GETUP_BROLL_B && bs->frame_Enemy_Len < 100) {//Dodge a getup?
+		if (bs->cur_ps.weapon == WP_SABER && bs->cur_ps.saberInFlight && !bs->cur_ps.saberEntityNum)
+		{
+			//The thrown saber has been knocked away. Retreat while the normal
+			//attack-finalization path keeps pressing attack to call it back.
+			bs->combatAction = BOT_COMBAT_ACTION_RETREAT_DEFENSE;
+			trap->EA_MoveBack(bs->client);
+		}
+
+		else if (bs->currentEnemy->client->ps.legsAnim == BOTH_GETUP_BROLL_B && bs->frame_Enemy_Len < 100) {//Dodge a getup?
 			trap->EA_Crouch(bs->client);
 			if (bs->cur_ps.viewheight < 48) //only move forward if they are crouched
 				trap->EA_MoveForward(bs->client);
@@ -8355,6 +8408,17 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 		else if (Q_flrand(0.0f, 1.0f) < 0.01 && (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE - 1)) {
 			//trap->EA_MoveRight(bs->client);
 			//NewBotAI_Flipkick(bs);
+		}
+
+		if (!(bs->cur_ps.weapon == WP_SABER && bs->cur_ps.saberInFlight && !bs->cur_ps.saberEntityNum) &&
+			bs->frame_Enemy_Vis && bs->frame_Enemy_Len > 80 &&
+			VectorLengthSquared(bs->cur_ps.velocity) < 100.0f &&
+			bs->flipkickInputTime <= level.time)
+		{
+			//Break two-wall stalls with a small yaw drift and forward input
+			//instead of lateral obstacle avoidance during combat.
+			bs->ideal_viewangles[YAW] += (level.framenum & 1) ? 5.0f : -5.0f;
+			trap->EA_MoveForward(bs->client);
 		}
 	}
 }
@@ -8702,6 +8766,28 @@ static float BotGetMistakeBiasChance(bot_state_t *bs)
 	}
 
 	return chance * skillScale;
+}
+
+static void NewBotAI_ApplyPullMistake(bot_state_t *bs)
+{
+	const float mistakeChance = BotGetMistakeBiasChance(bs);
+	float missAngle;
+
+	if (mistakeChance <= 0.0f || Q_irand(1, 100) > (int)mistakeChance)
+	{
+		return;
+	}
+
+	missAngle = (float)Q_irand(60, 120);
+	if (Q_irand(0, 1))
+	{
+		missAngle = -missAngle;
+	}
+
+	//Keep the pull input intact but deliberately offset the aim so the
+	//force pull can miss its target.
+	bs->ideal_viewangles[YAW] = AngleNormalize360(bs->ideal_viewangles[YAW] + missAngle);
+	bs->goalAngles[YAW] = bs->ideal_viewangles[YAW];
 }
 
 static int BotGetAggressionWeightedBonus(bot_state_t *bs, float biasPercent, int maxBonus, qboolean aggressiveOnly)
@@ -9330,6 +9416,7 @@ static void NewBotAI_TrySaberThrowDefenseBreak(bot_state_t *bs)
 		!(bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB)))
 	{
 		level.clients[bs->client].ps.fd.forcePowerSelected = FP_PULL;
+		NewBotAI_ApplyPullMistake(bs);
 		if (level.framenum % 2)
 		{
 			trap->EA_ForcePower(bs->client);
@@ -9793,7 +9880,16 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 	if (!bs->frame_Enemy_Vis)
 		return 0;
 	if (bs->cur_ps.fd.saberAnimLevel == SS_STAFF)
+	{
+		//A staff cannot initiate saber throw. Toggle to its single-blade
+		//style first; the next think can then issue the throw.
+		if (bs->saberThrowTime < level.time)
+		{
+			Cmd_SaberAttackCycle_f(&g_entities[bs->client]);
+			bs->saberThrowTime = level.time + 350;
+		}
 		return 0;
+	}
 
 	g_entities[bs->client].client->ps.fd.forcePowerLevel[FP_SABERTHROW] = 3;
 	g_entities[bs->client].client->ps.fd.forcePowersKnown |= (1 << FP_SABERTHROW);
@@ -9848,6 +9944,7 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 	qboolean useTheForce = qfalse;
 	int pushWeight, pullWeight, lightningWeight, drainWeight, gripWeight;//, doNothingWeight;
 	int minWeight = 0;
+	const int ourHealth = g_entities[bs->client].health;
 
 	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, a_fo);
 	vectoangles(a_fo, a_fo);
@@ -9859,7 +9956,11 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 	gripWeight = NewBotAI_GetGrip(bs);
 	//doNothingWeight = NewBotAI_GetWait(bs);
 
-	if (pushWeight > pullWeight && pushWeight > drainWeight && pushWeight > gripWeight && pushWeight > minWeight) {
+	if (ourHealth < 100 && ourHealth <= bs->currentEnemy->health + 40 && drainWeight > minWeight) {
+		level.clients[bs->client].ps.fd.forcePowerSelected = FP_DRAIN;
+		useTheForce = qtrue;
+	}
+	else if (pushWeight > pullWeight && pushWeight > drainWeight && pushWeight > gripWeight && pushWeight > minWeight) {
 		level.clients[bs->client].ps.fd.forcePowerSelected = FP_PUSH;
 		useTheForce = qtrue;
 
@@ -9867,6 +9968,7 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 	}
 	else if (pullWeight > pushWeight && pullWeight > drainWeight && pullWeight > gripWeight && pullWeight > minWeight) {
 		level.clients[bs->client].ps.fd.forcePowerSelected = FP_PULL;
+		NewBotAI_ApplyPullMistake(bs);
 		useTheForce = qtrue;
 		//A pull that brings the enemy into flipkick range should always follow through with the
 		//kick (PTK combo) -- PTK weight only influences whether we chose to pull in the first
@@ -9923,6 +10025,7 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 				bs->frame_Enemy_Len >= 96 && bs->frame_Enemy_Len <= 640)
 			{
 				level.clients[bs->client].ps.fd.forcePowerSelected = FP_PULL;
+				NewBotAI_ApplyPullMistake(bs);
 				useTheForce = qtrue;
 			}
 			else if (!ptkWeighted && !(g_forcePowerDisable.integer & (1 << FP_PUSH)) &&
@@ -9999,6 +10102,7 @@ void NewBotAI_GetLSForcepower(bot_state_t *bs)
 	qboolean useTheForce = qfalse;
 	int pullWeight, pushWeight, absorbWeight, protectWeight, healWeight;
 	int minWeight = 0;
+	const int ourHealth = g_entities[bs->client].health;
 
 	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, a_fo);
 	vectoangles(a_fo, a_fo);
@@ -10010,13 +10114,18 @@ void NewBotAI_GetLSForcepower(bot_state_t *bs)
 	healWeight = NewBotAI_GetHeal(bs);
 	//get weights
 
-	if (pushWeight > pullWeight && pushWeight > absorbWeight && pushWeight > protectWeight && pushWeight > healWeight && pushWeight > minWeight) {
+	if (ourHealth < 100 && ourHealth <= bs->currentEnemy->health + 40 && healWeight > minWeight) {
+		level.clients[bs->client].ps.fd.forcePowerSelected = FP_HEAL;
+		useTheForce = qtrue;
+	}
+	else if (pushWeight > pullWeight && pushWeight > absorbWeight && pushWeight > protectWeight && pushWeight > healWeight && pushWeight > minWeight) {
 		level.clients[bs->client].ps.fd.forcePowerSelected = FP_PUSH;
 		useTheForce = qtrue;
 		//trap->Print("Push - Weights -- Pull: %i, Push: %i, Absorb: %i, Protect: %i, Heal %i\n", pullWeight, pushWeight, absorbWeight, protectWeight, healWeight);
 	}
 	else if (pullWeight > pushWeight && pullWeight > absorbWeight && pullWeight > protectWeight && pullWeight > healWeight && pullWeight > minWeight) {
 		level.clients[bs->client].ps.fd.forcePowerSelected = FP_PULL;
+		NewBotAI_ApplyPullMistake(bs);
 		useTheForce = qtrue;
 		//A pull that brings the enemy into flipkick range should always follow through with the
 		//kick (PTK combo) -- PTK weight only influences whether we chose to pull in the first
@@ -10072,6 +10181,7 @@ void NewBotAI_GetLSForcepower(bot_state_t *bs)
 				bs->frame_Enemy_Len >= 96 && bs->frame_Enemy_Len <= 640)
 			{
 				level.clients[bs->client].ps.fd.forcePowerSelected = FP_PULL;
+				NewBotAI_ApplyPullMistake(bs);
 				useTheForce = qtrue;
 			}
 			else if (!ptkWeighted && !(g_forcePowerDisable.integer & (1 << FP_PUSH)) &&
@@ -10261,11 +10371,12 @@ void NewBotAI_NF(bot_state_t *bs)
 		else if ((g_tweakSaber.integer & ST_EASYBACKSLASH) && (bs->frame_Enemy_Len < 128) && (g_backslashDamageScale.value >= 5 || (g_backslashDamageScale.value >= 3 && (g_tweakSaber.integer & ST_SPINBACKSLASH)))) {
 			//Do a backslash 
 			//bs->ideal_viewangles[YAW] += 180;
-			if (BS_GroundDistance(bs) < 20)
+			if (BS_GroundDistance(bs) < 20 && NewBotAI_CanBackflip(bs))
 				trap->EA_Jump(bs->client); 
 			else
 				trap->EA_Crouch(bs->client); 
-			trap->EA_MoveBack(bs->client); 
+			if (NewBotAI_CanBackflip(bs))
+				trap->EA_MoveBack(bs->client); 
 			if (g_entities[bs->client].client->ps.legsAnim != BOTH_ROLL_F)
 				trap->EA_Attack(bs->client);
 		}	
@@ -10287,10 +10398,12 @@ void NewBotAI_NF(bot_state_t *bs)
 	}
 	else if ((speed >= 125) && ((bs->frame_Enemy_Len / speed) > 0.7f)) {//Midrange
 		if ((sqrt(bs->cur_ps.velocity[0] * bs->cur_ps.velocity[0] +  bs->cur_ps.velocity[1] * bs->cur_ps.velocity[1])) > 240.0f) {
-			trap->EA_Jump(bs->client);
+			if (NewBotAI_CanBackflip(bs))
+				trap->EA_Jump(bs->client);
 			if (BS_GroundDistance(bs) > 20 && g_entities[bs->client].client->ps.saberMove <= 1) {
 				trap->EA_Crouch(bs->client); 
-				trap->EA_MoveBack(bs->client); 
+				if (NewBotAI_CanBackflip(bs))
+					trap->EA_MoveBack(bs->client); 
 				trap->EA_MoveRight(bs->client); 
 				trap->EA_Attack(bs->client);
 			}
@@ -11032,6 +11145,13 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 
 	bs->enemySeenTime = level.time + ENEMY_FORGET_MS;
 	bs->frame_Enemy_Len = NewBotAI_GetDist(bs);
+	bs->combatNavHoldUntil = level.time + 1500;
+	if (!(bs->cur_ps.fd.forcePowersActive & (1 << FP_GRIP)))
+	{
+		bs->gripkickActive = qfalse;
+		bs->gripkickJerkUntil = 0;
+		bs->gripkickKickCount = 0;
+	}
 
 	responseDelay = BotGetReflexScaledResponseDelayMs(bs);
 	if (responseDelay > 0 && bs->currentEnemy && bs->currentEnemy->client)
@@ -11080,7 +11200,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	{
 		// If the bot is actively being attacked, don't divert to waypoint nav —
 		// keep full combat logic running so it can defend, dodge, and fight back.
-		if (bs->lastHurtTime > level.time - 1500)
+		if (bs->combatNavHoldUntil > level.time || bs->lastHurtTime > level.time - 1500)
 		{
 			bs->navObstacleUntil = 0; // clear any pending hysteresis too
 		}
@@ -11104,7 +11224,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		// hysteresis: obstacle was recently blocking; keep following waypoints
 		// while StandardBotAI's enemy-aiming code keeps targeting the enemy.
 		// But if we're being actively attacked, override and run combat AI instead.
-		if (bs->lastHurtTime > level.time - 1500)
+		if (bs->combatNavHoldUntil > level.time || bs->lastHurtTime > level.time - 1500)
 		{
 			bs->navObstacleUntil = 0;
 		}
@@ -12451,7 +12571,8 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 		//Falling hazard awareness: don't walk off ledges or into lava/death pits.
 		//If the movement direction leads to a dangerous drop, stop and let the
 		//waypoint system re-path on the next think.
-		if (BotNav_CheckFallingHazard(bs, bs->goalMovedir))
+		if (BotNav_CheckFallingHazard(bs, bs->goalMovedir,
+			(bs->currentEnemy && bs->frame_Enemy_Vis) ? qtrue : qfalse))
 		{
 			bs->beStill = level.time + 100;
 			bs->wpCurrent = NULL; //force re-path

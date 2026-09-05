@@ -379,8 +379,13 @@ typedef struct bot_state_s
 	qboolean			flipkickJumpHeld;
 	int					drainRollDir; // -1 left, 0 back, 1 right; used by NewBotAI_DrainRollEscape
 	int					drainRollResetTime;
+	int					gripkickJerkUntil;
+	int					gripkickJerkCount;
+	int					gripkickKickCount;
+	qboolean			gripkickActive;
 
 	int					navObstacleUntil; // stay in waypoint nav mode until this time when an obstacle blocks path to enemy
+	int					combatNavHoldUntil; // remain in combat for 1500ms before returning to waypoint navigation
 	int					lastHurtTime;     // level.time when this bot last took damage (set in BotDamageNotification)
 	//end rww
 } bot_state_t;
