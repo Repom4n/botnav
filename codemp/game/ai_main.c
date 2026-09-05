@@ -7235,6 +7235,13 @@ void NewBotAI_Absorbing(bot_state_t *bs)
 
 void NewBotAI_SaberThrowing(bot_state_t* bs)
 {
+	//Release alt-attack as soon as the bot's aggression turns defensive so the
+	//saber can begin its normal return instead of extending the throw.
+	if (BotGetAggressionBias(bs) <= 0.0f)
+	{
+		return;
+	}
+
 	trap->EA_Alt_Attack(bs->client);
 	NewBotAI_TrySaberThrowDefenseBreak(bs);
 }
