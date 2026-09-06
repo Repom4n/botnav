@@ -129,13 +129,15 @@ static void NewBotAI_ApplyHorizontalSwingMove(bot_state_t *bs);
 static void NewBotAI_ResetFanChain(bot_state_t *bs);
 
 // Fan-chain phases (see NewBotAI_PrepareHorizontalSwingStart): DWELL is a free-movement
-// hold, TAP is a brief strafe-only commit pulse, SWING holds attack+strafe to actually
+// hold (bot_fandwell ms), TAP_PRE_SWING/TAP_POST_SWING are the 100ms strafe-only commit
+// pulses that bookend each side of a DWELL, and SWING holds attack+strafe to actually
 // throw the horizontal swing.
 enum {
 	FAN_PHASE_INACTIVE = 0,
 	FAN_PHASE_DWELL,
-	FAN_PHASE_TAP,
-	FAN_PHASE_SWING
+	FAN_PHASE_TAP_PRE_SWING,
+	FAN_PHASE_SWING,
+	FAN_PHASE_TAP_POST_SWING
 };
 
 static qboolean NewBotAI_CanUseSaberThrowDefenseBreakForce(bot_state_t *bs, qboolean preferPull);
@@ -7168,6 +7170,11 @@ static qboolean NewBotAI_GripHazardBehind(bot_state_t *bs)
 	return qfalse;
 }
 
+//Cap the jerk yaw swing so it can never push us outside the force grip's own
+//~26 degree facing cone (see w_force.c's InFront gate on FORCE_LEVEL_1/2 grip)
+//- exceeding that cone ends the grip immediately regardless of us still
+//holding the grip key.
+#define NEWBOTAI_GRIPKICK_JERK_MAX_YAW 20.0f
 void NewBotAI_Gripkick(bot_state_t *bs)
 {
 	//float heightDiff = bs->cur_ps.origin[2] - bs->currentEnemy->client->ps.origin[2]; //We are above them by this much
@@ -7180,6 +7187,7 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 		bs->gripkickJerkCount = 0;
 		bs->gripkickKickCount = 0;
 		bs->gripkickJerkDirection = 0;
+		bs->gripkickJerkYawOffset = 0.0f;
 		bs->gripkickAttemptTime = 0;
 		bs->gripkickDwellUntil = 0;
 		//Item 1A: force grip is initiated with a very quick backward tap, then the bot
@@ -7267,6 +7275,7 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 			bs->gripkickKickCount++;
 			bs->gripkickJerkCount = (bs->gripkickKickCount == 1) ? Q_irand(1, 3) : Q_irand(1, 2);
 			bs->gripkickJerkUntil = 0;
+			bs->gripkickJerkYawOffset = 0.0f;
 		}
 
 		if (bot_bully.integer && bs->gripkickKickCount == 0 && bs->gripkickJerkCount > 0 &&
@@ -7283,13 +7292,20 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 
 		if (bs->gripkickJerkUntil > level.time) {
 			//Jerk phases only move backward while looking up; do not issue
-			//jump, attack, or other competing inputs during them.
+			//jump, attack, or other competing inputs during them. Yaw is kept
+			//anchored to a_fo (the true, live direction to the gripped target)
+			//plus the clamped jerk offset every frame - a static/accumulating
+			//yaw here can drift far enough from the target to fail the force
+			//grip's own facing check and auto-break the grip well before our
+			//intended hold duration.
+			bs->ideal_viewangles[YAW] = a_fo[YAW] + bs->gripkickJerkYawOffset;
 			bs->ideal_viewangles[PITCH] = -70 - (gripkickBonus / 7);
 			trap->EA_Move(bs->client, vec3_origin, 0);
 			NewBotAI_RetreatDiagonal(bs, bs->gripkickJerkDirection < 0);
 		}
 		else if (bs->gripkickJerkCount > 0) {
 			const int dwellPercent = Com_Clampi(10, 300, bot_gripkickdwell.integer);
+			float newYawOffset;
 
 			//Complete one randomized jerk at a time so bot_gripkickdwell controls
 			//each upward hold rather than collapsing the whole sequence into one
@@ -7298,7 +7314,13 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 			bs->gripkickJerkDirection = (Q_irand(0, 1) * 2) - 1;
 			bs->gripkickJerkUntil = level.time +
 				(Q_irand(700, 1100) * dwellPercent) / 100;
-			bs->ideal_viewangles[YAW] += bs->gripkickJerkDirection * 18.0f;
+			newYawOffset = bs->gripkickJerkYawOffset + (bs->gripkickJerkDirection * 18.0f);
+			if (newYawOffset > NEWBOTAI_GRIPKICK_JERK_MAX_YAW)
+				newYawOffset = NEWBOTAI_GRIPKICK_JERK_MAX_YAW;
+			else if (newYawOffset < -NEWBOTAI_GRIPKICK_JERK_MAX_YAW)
+				newYawOffset = -NEWBOTAI_GRIPKICK_JERK_MAX_YAW;
+			bs->gripkickJerkYawOffset = newYawOffset;
+			bs->ideal_viewangles[YAW] = a_fo[YAW] + bs->gripkickJerkYawOffset;
 			bs->ideal_viewangles[PITCH] = -70 - (gripkickBonus / 7);
 			trap->EA_Move(bs->client, vec3_origin, 0);
 			NewBotAI_RetreatDiagonal(bs, bs->gripkickJerkDirection < 0);
@@ -8147,13 +8169,16 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 			}
 
 			//A committed fan chain keeps the attack button held for its entire duration
-			//(dwell, tap, and swing windows, up to the 3s chain cap) so the engine's
+			//(dwell, tap, and swing windows, up to the 3.5s chain cap) so the engine's
 			//saber combo keeps chaining across the dwell between direction taps instead
 			//of getting released mid-chain. Movement negation stays strafe-only during
-			//TAP/SWING via NewBotAI_ApplyHorizontalSwingMove; DWELL moves freely.
+			//the tap/swing phases via NewBotAI_ApplyHorizontalSwingMove; DWELL moves
+			//freely. Chain-ending conditions (time cap, any damage taken) are handled by
+			//NewBotAI_PrepareHorizontalSwingStart, so no separate health gate is needed
+			//here - it would otherwise end the hold early even without taking damage.
 			//Check this ahead of, and independent from, the saberMove-gated
 			//single-swing case below.
-			if (bs->fanPhase != FAN_PHASE_INACTIVE && g_entities[bs->client].health > 40)
+			if (bs->fanPhase != FAN_PHASE_INACTIVE)
 			{
 				NewBotAI_ApplyHorizontalSwingMove(bs);
 				trap->EA_Attack(bs->client);
@@ -8420,7 +8445,8 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 
 	aggressionBias = BotGetAggressionBias(bs);
 	NewBotAI_PrepareHorizontalSwingStart(bs);
-	horizontalSwingStart = (bs->fanPhase == FAN_PHASE_TAP || bs->fanPhase == FAN_PHASE_SWING) ? qtrue : qfalse;
+	horizontalSwingStart = (bs->fanPhase == FAN_PHASE_TAP_PRE_SWING || bs->fanPhase == FAN_PHASE_SWING ||
+		bs->fanPhase == FAN_PHASE_TAP_POST_SWING) ? qtrue : qfalse;
 
 	hardRetreatHealth = 30 - (int)(aggressionBias * 25.0f);
 	softRetreatHealth = 60 - (int)(aggressionBias * 35.0f);
@@ -9520,10 +9546,11 @@ static qboolean NewBotAI_IsSaberSwingStartWindow(bot_state_t *bs)
 }
 
 // Fan-chain phases (see NewBotAI_PrepareHorizontalSwingStart): DWELL is a free-movement
-// hold, TAP is a brief strafe-only commit pulse, SWING holds attack+strafe to actually
-// throw the horizontal swing.
+// hold, TAP_PRE_SWING/TAP_POST_SWING are brief strafe-only commit pulses bookending the
+// dwell, SWING holds attack+strafe to actually throw the horizontal swing. The whole chain
+// holds attack continually for up to 3.5 seconds, or until the bot takes any damage.
 #define NEWBOTAI_FAN_TAP_MS 100
-#define NEWBOTAI_FAN_CHAIN_MAX_MS 3000
+#define NEWBOTAI_FAN_CHAIN_MAX_MS 3500
 
 static void NewBotAI_ResetFanChain(bot_state_t *bs)
 {
@@ -9562,14 +9589,15 @@ static float NewBotAI_GetFanBiasPercent(bot_state_t *bs)
 }
 
 // Item 2: fan/fanning is a left-right (or right-left) alternating horizontal swing chain.
-// Each cycle is: DWELL (bot_fandwell ms, bot may move freely) -> TAP (100ms, strafe-only,
-// no forward/back/diagonal, still in the current direction) -> SWING (attack held while
-// strafing in the opposite direction of that tap - the actual swing). The chain then loops
-// back to DWELL with the new (post-swing) direction, so successive swings keep alternating
-// left/right. Attack stays held for the entire chain so the engine's combo keeps chaining
-// even across the dwell between direction taps, and the chain ends after a flat 3 second
-// cap or once the bot has taken more than 4 damage total during it, whichever comes first.
-#define NEWBOTAI_FAN_CHAIN_MAX_DAMAGE 4
+// Each cycle is: DWELL (bot_fandwell ms, bot may move freely) -> TAP_PRE_SWING (100ms,
+// strafe-only, no forward/back/diagonal, still in the current direction) -> SWING (attack
+// held while strafing in the opposite direction of that tap - the actual swing) ->
+// TAP_POST_SWING (100ms, strafe-only, still in the swing's direction) -> back to DWELL.
+// The two 100ms strafe-only taps bookend the free-movement dwell on either side, bridging
+// the movement space between the horizontal swing-inducing strafes. Attack stays held for
+// the entire chain so the engine's combo keeps chaining even across the dwell between
+// swings, and the chain only ends after a flat 3.5 second cap or as soon as the bot has
+// taken any damage during it, whichever comes first.
 static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 {
 	const float fanBias = NewBotAI_GetFanBiasPercent(bs);
@@ -9588,9 +9616,9 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 	}
 
 	if (bs->fanPhase != FAN_PHASE_INACTIVE &&
-		g_entities[bs->client].health < bs->fanChainStartHealth - NEWBOTAI_FAN_CHAIN_MAX_DAMAGE)
+		g_entities[bs->client].health < bs->fanChainStartHealth)
 	{
-		//Taking more than 4 total damage during the chain breaks it.
+		//Taking any damage during the chain breaks it.
 		NewBotAI_ResetFanChain(bs);
 		return;
 	}
@@ -9607,13 +9635,14 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 	case FAN_PHASE_DWELL:
 		if (bs->fanAttackTime <= level.time)
 		{
-			//Dwell window elapsed: commit to the tap, still in the current direction.
-			bs->fanPhase = FAN_PHASE_TAP;
+			//Dwell window elapsed: commit to the pre-swing tap, still in the
+			//current direction.
+			bs->fanPhase = FAN_PHASE_TAP_PRE_SWING;
 			bs->fanAttackTime = level.time + NEWBOTAI_FAN_TAP_MS;
 		}
 		break;
 
-	case FAN_PHASE_TAP:
+	case FAN_PHASE_TAP_PRE_SWING:
 		if (bs->fanAttackTime <= level.time)
 		{
 			//Tap window elapsed: engage the swing in the opposite direction of the
@@ -9627,8 +9656,19 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 	case FAN_PHASE_SWING:
 		if (bs->fanAttackTime <= level.time)
 		{
-			//Swing finished: loop back into a fresh dwell, keeping this direction as
-			//the baseline for the next tap/swing (so the chain keeps alternating).
+			//Swing finished: bookend it with a matching post-swing tap (still in the
+			//swing's direction) before the next free-movement dwell.
+			bs->fanPhase = FAN_PHASE_TAP_POST_SWING;
+			bs->fanAttackTime = level.time + NEWBOTAI_FAN_TAP_MS;
+		}
+		break;
+
+	case FAN_PHASE_TAP_POST_SWING:
+		if (bs->fanAttackTime <= level.time)
+		{
+			//Post-swing tap elapsed: loop back into a fresh dwell, keeping this
+			//direction as the baseline for the next tap/swing (so the chain keeps
+			//alternating).
 			bs->fanPhase = FAN_PHASE_DWELL;
 			bs->fanAttackTime = level.time + dwellMs;
 		}
@@ -9662,12 +9702,14 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 	}
 }
 
-// Strafe-only movement for the fan chain's TAP and SWING phases - forward/back/diagonal
-// input is negated so only the chosen strafe direction is issued. DWELL is free movement
-// and is left entirely to the bot's normal steering (this function does nothing then).
+// Strafe-only movement for the fan chain's TAP_PRE_SWING/SWING/TAP_POST_SWING phases -
+// forward/back/diagonal input is negated so only the chosen strafe direction is issued.
+// DWELL is free movement and is left entirely to the bot's normal steering (this function
+// does nothing then).
 static void NewBotAI_ApplyHorizontalSwingMove(bot_state_t *bs)
 {
-	if ((bs->fanPhase != FAN_PHASE_TAP && bs->fanPhase != FAN_PHASE_SWING) || !bs->fanAttackDir)
+	if ((bs->fanPhase != FAN_PHASE_TAP_PRE_SWING && bs->fanPhase != FAN_PHASE_SWING &&
+		bs->fanPhase != FAN_PHASE_TAP_POST_SWING) || !bs->fanAttackDir)
 	{
 		return;
 	}
