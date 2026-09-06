@@ -225,7 +225,6 @@ typedef struct bot_state_s
 	vec3_t				hereWhenSpotted;
 	int					lastVisibleEnemyIndex;
 	int					hitSpotted;
-	int				fanAttackEnemyHealth;
 
 	int				wpDirection;
 
@@ -370,8 +369,10 @@ typedef struct bot_state_s
 	int					forceMove_Forward;
 	int					forceMove_Right;
 	int					forceMove_Up;
-	int					fanAttackTime;
+	int					fanAttackTime; // level.time the current fan-chain phase (dwell/tap/swing) ends
 	int					fanAttackDir;
+	int					fanPhase; // FAN_PHASE_* - dwell (free move), tap (100ms strafe-only), swing (attack+strafe)
+	int					fanChainStartTime; // level.time the fan chain began - chain hard-caps at 3s
 	int					drainHoldTime;
 	int					randomStrafeDir;
 	int					randomStrafeEndTime;
@@ -387,6 +388,7 @@ typedef struct bot_state_s
 	qboolean			gripkickActive;
 	int					gripkickAttemptTime; // level.time of the most recent gripkick flipkick attempt (success window is measured from this)
 	int					gripkickDwellUntil; // while > level.time, gripkick holds the target with aim-down/forward-only movement before the next kick approach
+	int					gripkickOpenerTapUntil; // while > level.time, gripkick holds a brief backward tap before the first forward flipkick approach
 
 	qboolean			wasDuelInProgress; // previous-think duelInProgress, used to count completed duels
 	int					duelCompletedCount; // duels finished since the last explore window - see bot_duelcountmax
