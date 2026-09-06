@@ -8089,6 +8089,19 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 				return;
 			}
 
+			//A committed fan chain must keep the attack button held for its entire
+			//SWING window so the engine's saber combo actually chains into further
+			//swings instead of getting released mid-swing the instant saberMove
+			//leaves LS_NONE/LS_READY (which happens the frame the first swing of
+			//the chain starts). Check this ahead of, and independent from, the
+			//saberMove-gated single-swing case below.
+			if (bs->fanPhase == FAN_PHASE_SWING && g_entities[bs->client].health > 40)
+			{
+				NewBotAI_ApplyHorizontalSwingMove(bs);
+				trap->EA_Attack(bs->client);
+				return;
+			}
+
 			if ((g_entities[bs->client].client->ps.saberMove == LS_NONE || g_entities[bs->client].client->ps.saberMove == LS_READY) && bs->frame_Enemy_Len < 256 && ((NewBotAI_GetTimeToInRange(bs, 75, 800) < 800) || bs->frame_Enemy_Len < 128)) {
 				if (g_entities[bs->client].health > 40) {
 					//See if they can't saberthrow?
@@ -9468,6 +9481,29 @@ static void NewBotAI_ResetFanChain(bot_state_t *bs)
 	bs->fanChainStartTime = 0;
 }
 
+//Fanbias should weight heavily (effectively maxed out) whenever the bot is at full
+//health with under 40 force points to spend on anything else, and whenever the bot
+//is at a force point disadvantage against its target - in both cases fanning is the
+//best use of the bot's saber since force options are limited/losing.
+static float NewBotAI_GetFanBiasPercent(bot_state_t *bs)
+{
+	float fanBias = BotGetChanceBiasPercent(bot_fanbias.value);
+	const int ourHealth = g_entities[bs->client].health;
+	const int ourForce = bs->cur_ps.fd.forcePower;
+	const qboolean hasForceDisadvantage = (bs->currentEnemy && bs->currentEnemy->client &&
+		ourForce < bs->currentEnemy->client->ps.fd.forcePower) ? qtrue : qfalse;
+
+	if ((ourHealth >= 100 && ourForce < 40) || hasForceDisadvantage)
+	{
+		if (fanBias < 90.0f)
+		{
+			fanBias = 90.0f;
+		}
+	}
+
+	return fanBias;
+}
+
 // Item 2: fan/fanning is a left-right (or right-left) alternating horizontal swing chain.
 // Each cycle is: DWELL (bot_fandwell ms, bot may move freely) -> TAP (100ms, strafe-only,
 // no forward/back/diagonal, still in the current direction) -> SWING (attack held while
@@ -9477,7 +9513,7 @@ static void NewBotAI_ResetFanChain(bot_state_t *bs)
 // second cap, whichever comes first - landing a hit no longer extends or ends it.
 static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 {
-	const float fanBias = BotGetChanceBiasPercent(bot_fanbias.value);
+	const float fanBias = NewBotAI_GetFanBiasPercent(bs);
 	const int dwellMs = Com_Clampi(10, 3000, bot_fandwell.integer);
 	const int swingHoldMs = 160 + (int)(fanBias * 5.0f) + Q_irand(0, 120);
 
@@ -11663,7 +11699,12 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	{
 		return;
 	}
-	if (BotTargetModeIsForceDuelOnly(targetMode) && !bs->cur_ps.duelInProgress)
+	//While in the post-duel-limit FFA explore window, -4 must not lock onto chasing
+	//its old target with RunForceDuelOnly (which never attacks and never navigates
+	//away) - fall through into normal combat/navigation so it actually fights and
+	//explores for a new opponent, same as -3 already does.
+	if (BotTargetModeIsForceDuelOnly(targetMode) && !bs->cur_ps.duelInProgress &&
+		!NewBotAI_InFFAExploreWindow(bs, targetMode))
 	{
 		NewBotAI_RunForceDuelOnly(bs);
 		return;
