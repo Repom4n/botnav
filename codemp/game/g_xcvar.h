@@ -361,10 +361,16 @@ XCVAR_DEF( bot_gripkickbias,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 // Chance for a bot to misfire or delay a gripkick escape attempt when it has a pull available.
 // Scales with bot skill: lower-skill bots are more likely to miss/delay the pull.
 XCVAR_DEF( bot_mistakebias, 			"0", 			NULL, 				CVAR_ARCHIVE, 							qtrue )
-// Deprecated: the Gripkick sequence is driven by the target's position relative to our
-// 90 degree front cone (forward to flipkick / backward during the yaw jerk) instead of
-// fixed timings, so this no longer has any effect. Kept only for config compatibility.
+// Percentage scaler (10-300) for the Gripkick aim-down/hold phase: how long the bot
+// holds the gripped target and aims down toward it (forward-only movement) before the
+// flipkick approach, and how long a failed kick attempt dwells before retrying.
 XCVAR_DEF( bot_gripkickdwell,			"100",			NULL,				CVAR_ARCHIVE,									qtrue )
+// Number of completed duels after which -3/-4 bots return to FFA to find a new
+// opponent: duel issuing/acceptance is suppressed and the bot explores instead.
+XCVAR_DEF( bot_duelcountmax,			"3",			NULL,				CVAR_ARCHIVE,									qtrue )
+// How long (ms) a -4 bot keeps exploring for a new non-dueling opponent once the
+// post-duel FFA window begins, before it may duel again.
+XCVAR_DEF( bot_ffaexploretime,			"180000",		NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_antidrainbias,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_fanbias,					"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_drainbias,				"0",			NULL,				CVAR_ARCHIVE,									qtrue )

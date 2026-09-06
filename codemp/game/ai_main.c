@@ -100,6 +100,10 @@ static int BotGetNewBotAITargetMode(void);
 static qboolean BotTargetModeAllowsBotEnemies(int targetMode);
 static qboolean BotTargetModePassesScanFilter(int targetMode, gentity_t *ent, qboolean preferredHumansOnly);
 static qboolean BotTargetModeIsForceDuelOnly(int targetMode);
+static qboolean NewBotAI_InFFAExploreWindow(bot_state_t *bs, int targetMode);
+static qboolean NewBotAI_TouchingWallNotEnemy(bot_state_t *bs);
+static qboolean NewBotAI_ShouldWallrunAgainstWalls(bot_state_t *bs);
+static qboolean NewBotAI_ShouldAvoidDiagonalWallrun(bot_state_t *bs);
 static void NewBotAI_RetreatDiagonal(bot_state_t *bs, qboolean moveLeft);
 static int BotGetLowHangingFruitHP(void);
 static float BotGetLowHangingFruitDistance(void);
@@ -6842,7 +6846,66 @@ static void NewBotAI_TryRandomHop(bot_state_t *bs)
 		return;
 	}
 
+	//Item 2B: a hop into wall contact starts a vertical wallrun - skip it unless we
+	//are retreating for our life.
+	if (NewBotAI_TouchingWallNotEnemy(bs) && !NewBotAI_ShouldWallrunAgainstWalls(bs))
+	{
+		return;
+	}
+
 	trap->EA_Jump(bs->client);
+}
+
+//True while a short player-sized trace from the bot hits a solid wall and whatever
+//we hit is not our current enemy - i.e. we are making contact with map geometry
+//rather than an opponent's body (opponent contact stays kickable/wallrunnable).
+static qboolean NewBotAI_TouchingWallNotEnemy(bot_state_t *bs)
+{
+	trace_t tr;
+	vec3_t mins, maxs, traceto;
+
+	VectorCopy(bs->cur_ps.origin, traceto);
+	traceto[2] += 24;
+
+	mins[0] = -36;
+	mins[1] = -36;
+	mins[2] = 0;
+	maxs[0] = 36;
+	maxs[1] = 36;
+	maxs[2] = 12;
+
+	JP_Trace(&tr, bs->cur_ps.origin, mins, maxs, traceto, bs->cur_ps.clientNum, CONTENTS_SOLID, qfalse, 0, 0);
+
+	if (tr.fraction >= 1.0f)
+	{
+		return qfalse;
+	}
+
+	if (bs->currentEnemy && tr.entityNum == bs->currentEnemy->s.number)
+	{
+		return qfalse;
+	}
+
+	return qtrue;
+}
+
+//Vertical wallruns (repeat jump inputs while making wall contact) are only wanted as
+//an escape tool: while retreating below 49 health. Against opponents the same jump
+//input is the flipkick, so callers only consult this once they know the contact is a
+//wall.
+static qboolean NewBotAI_ShouldWallrunAgainstWalls(bot_state_t *bs)
+{
+	return (bs->combatAction == BOT_COMBAT_ACTION_RETREAT_DEFENSE &&
+		g_entities[bs->client].health < 49) ? qtrue : qfalse;
+}
+
+//Diagonal wallruns start from lateral+forward inputs followed by a jump while already
+//touching a wall - always avoided unless we are critically low (<20 health) and
+//desperately escaping.
+static qboolean NewBotAI_ShouldAvoidDiagonalWallrun(bot_state_t *bs)
+{
+	return (g_entities[bs->client].health >= 20 &&
+		NewBotAI_TouchingWallNotEnemy(bs)) ? qtrue : qfalse;
 }
 
 void NewBotAI_Flipkick(bot_state_t *bs)
@@ -6871,6 +6934,16 @@ void NewBotAI_Flipkick(bot_state_t *bs)
 	//own timing (velocity[2]>200, near ground) has a chance to land the kick.
 	if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE && bs->cur_ps.velocity[2] > 0 && bs->flipkickInputTime > level.time)
 	{
+		//Item 2B: while airborne and rising against a wall (not an opponent), the
+		//repeated jump press below is what starts a vertical wallrun - drop it unless
+		//we are retreating for our life. Against opponents the same input is the
+		//flipkick and is preserved.
+		if (!isGripSequence && NewBotAI_TouchingWallNotEnemy(bs) && !NewBotAI_ShouldWallrunAgainstWalls(bs))
+		{
+			trap->EA_MoveForward(bs->client);
+			bs->flipkickInputTime = 0;
+			return;
+		}
 		trap->EA_MoveForward(bs->client);
 		trap->EA_DelayedJump(bs->client);
 		bs->flipkickInputTime = level.time + 500;
@@ -7052,6 +7125,8 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 		bs->gripkickJerkCount = 0;
 		bs->gripkickKickCount = 0;
 		bs->gripkickJerkDirection = 0;
+		bs->gripkickAttemptTime = 0;
+		bs->gripkickDwellUntil = 0;
 	}
 
 	if (BG_InKnockDown(bs->currentEnemy->client->ps.legsAnim)) { //Splat and enough time? - how to see if they are splattable and were not gripped during midair. forcejumpzheight ?
@@ -7071,18 +7146,59 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 	else {
 		//Gripkick discipline: movement, a held force grip, and flipkicks - nothing else.
 		//Move exclusively straight forward while bringing the gripped target in close for
-		//the flipkick. After a kick (or during the jerk windows below) move exclusively
-		//backward while the yaw jerk swings them, until the jerk brings them back in
-		//front of us inside the 90 degree cone - then move forward and flipkick again.
-		//NewBotAI_Flipkick gates its own grip-sequence attempts on that same 90 degree
-		//cone and on kick range, so simply offer it the kick every think.
+		//the flipkick. After a confirmed kick (or during the jerk windows below) move
+		//exclusively backward while the yaw jerk swings them, until the jerk brings them
+		//back in front of us inside the 90 degree cone - then move forward and flipkick
+		//again. NewBotAI_Flipkick gates its own grip-sequence attempts on that same 90
+		//degree cone and on kick range, so simply offer it the kick every think.
 		vec3_t a_fo;
 		qboolean targetInFront;
 		qboolean attemptedKick = qfalse;
+		qboolean successfulKick = qfalse;
 
 		VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, a_fo);
 		vectoangles(a_fo, a_fo);
 		targetInFront = InFieldOfVision(bs->viewangles, 90, a_fo);
+
+		//Only a confirmed kick counts - our own kick/flip animation playing, or the
+		//gripped target knocked down right after our attempt. Counting mere attempts
+		//here was what cycled the bot into the next jerk phase without ever landing
+		//the kick.
+		if (bs->gripkickAttemptTime > level.time - 800)
+		{
+			switch (bs->cur_ps.legsAnim)
+			{
+			case BOTH_A7_KICK_F:
+			case BOTH_A7_KICK_B:
+			case BOTH_A7_KICK_R:
+			case BOTH_A7_KICK_L:
+			case BOTH_A7_KICK_S:
+			case BOTH_A7_KICK_BF:
+			case BOTH_A7_KICK_RL:
+			case BOTH_A7_KICK_F_AIR:
+			case BOTH_A7_KICK_B_AIR:
+			case BOTH_A7_KICK_R_AIR:
+			case BOTH_A7_KICK_L_AIR:
+			case BOTH_WALL_FLIP_BACK1:
+				successfulKick = qtrue;
+				break;
+			default:
+				break;
+			}
+			if (BG_InKnockDown(bs->currentEnemy->client->ps.legsAnim))
+			{
+				successfulKick = qtrue;
+			}
+		}
+
+		if (successfulKick && bs->gripkickKickCount < 3)
+		{
+			bs->gripkickAttemptTime = 0;
+			bs->gripkickDwellUntil = 0;
+			bs->gripkickKickCount++;
+			bs->gripkickJerkCount = (bs->gripkickKickCount == 1) ? Q_irand(1, 3) : Q_irand(1, 2);
+			bs->gripkickJerkUntil = 0;
+		}
 
 		if (bs->gripkickJerkUntil > level.time) {
 			//Jerk phases only move backward while looking up; do not issue
@@ -7106,6 +7222,16 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 			trap->EA_Move(bs->client, vec3_origin, 0);
 			NewBotAI_RetreatDiagonal(bs, bs->gripkickJerkDirection < 0);
 		}
+		else if (bs->gripkickDwellUntil > level.time) {
+			//bot_gripkickdwell-scaled hold: keep the target gripped and aimed slightly
+			//toward them (then down) while moving exclusively forward - no diagonal
+			//input - so the flipkick approach starts from a clean forward-only hold.
+			const float targetPitch = (a_fo[PITCH] > 20.0f) ? 20.0f : a_fo[PITCH];
+			bs->ideal_viewangles[YAW] = a_fo[YAW];
+			bs->ideal_viewangles[PITCH] = targetPitch;
+			trap->EA_Move(bs->client, vec3_origin, 0);
+			trap->EA_MoveForward(bs->client);
+		}
 		else if (targetInFront) {
 			//Every kick approach starts by looking straight down and moving
 			//only forward while holding grip.
@@ -7118,6 +7244,16 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 				const int previousAttempt = bs->lastFlipkickAttemptTime;
 				NewBotAI_Flipkick(bs);
 				attemptedKick = (bs->lastFlipkickAttemptTime != previousAttempt) ? qtrue : qfalse;
+				if (attemptedKick)
+				{
+					const int dwellPercent = Com_Clampi(10, 300, bot_gripkickdwell.integer);
+
+					//An unconfirmed attempt dwells here (aim-down hold, scaled by
+					//bot_gripkickdwell) before the next forward approach instead of
+					//immediately cycling into a jerk.
+					bs->gripkickAttemptTime = level.time;
+					bs->gripkickDwellUntil = level.time + (600 * dwellPercent) / 100;
+				}
 			}
 		}
 		else {
@@ -7127,13 +7263,6 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 			bs->ideal_viewangles[YAW] += (a_fo[YAW] > bs->viewangles[YAW]) ? 12.0f : -12.0f;
 			trap->EA_Move(bs->client, vec3_origin, 0);
 			NewBotAI_RetreatDiagonal(bs, a_fo[YAW] < bs->viewangles[YAW]);
-		}
-
-		if (attemptedKick && bs->gripkickKickCount < 3)
-		{
-			bs->gripkickKickCount++;
-			bs->gripkickJerkCount = (bs->gripkickKickCount == 1) ? Q_irand(1, 3) : Q_irand(1, 2);
-			bs->gripkickJerkUntil = 0;
 		}
 	}
 
@@ -8296,7 +8425,9 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 				}
 			}
 			else if (bs->cur_ps.fd.forcePower > 30) {
-				trap->EA_Jump(bs->client);
+				if (!NewBotAI_TouchingWallNotEnemy(bs) || NewBotAI_ShouldWallrunAgainstWalls(bs)) {
+					trap->EA_Jump(bs->client);
+				}
 			}
 			NewBotAI_GetGroundDodge(bs);
 			trap->EA_MoveForward(bs->client);
@@ -8306,7 +8437,9 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 			NewBotAI_GetGroundDodge(bs);
 			if (Q_flrand(0.0f, 1.0f) < 0.01) {
 				trap->EA_MoveForward(bs->client);
-				trap->EA_Jump(bs->client);
+				if (!NewBotAI_TouchingWallNotEnemy(bs) || NewBotAI_ShouldWallrunAgainstWalls(bs)) {
+					trap->EA_Jump(bs->client);
+				}
 			}
 		}
 	}
@@ -8347,7 +8480,8 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 			//NewBotAI_GetAttack and this block, respectively -- only the forward/back choice changes.
 			bs->combatAction = BOT_COMBAT_ACTION_RETREAT_DEFENSE;
 			NewBotAI_RetreatDiagonal(bs, qtrue);
-			if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE - 1)
+			if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE - 1 &&
+				(!NewBotAI_TouchingWallNotEnemy(bs) || NewBotAI_ShouldWallrunAgainstWalls(bs)))
 			{
 				trap->EA_Jump(bs->client);
 			}
@@ -8472,9 +8606,9 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 						bs->randomStrafeDir = Q_irand(-1, 1); //-1 left, 0 none, 1 right
 						bs->randomStrafeEndTime = level.time + Q_irand(180, 700 + (int)(BotGetChanceBiasPercent(bot_fanbias.value) * 5.0f));
 					}
-					if (bs->randomStrafeDir > 0)
+					if (bs->randomStrafeDir > 0 && !NewBotAI_ShouldAvoidDiagonalWallrun(bs))
 						trap->EA_MoveRight(bs->client);
-					else if (bs->randomStrafeDir < 0)
+					else if (bs->randomStrafeDir < 0 && !NewBotAI_ShouldAvoidDiagonalWallrun(bs))
 						trap->EA_MoveLeft(bs->client);
 				}
 			}
@@ -8489,9 +8623,11 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 					bs->randomStrafeDir = Q_irand(0, 2) - 1;
 					bs->randomStrafeEndTime = level.time + Q_irand(200, 600);
 				}
-				if (bs->randomStrafeDir > 0)
+				//Item 2C: lateral+forward while touching a wall becomes a diagonal wallrun -
+				//strip the lateral component unless we are critically low and escaping.
+				if (bs->randomStrafeDir > 0 && !NewBotAI_ShouldAvoidDiagonalWallrun(bs))
 					trap->EA_MoveRight(bs->client);
-				else if (bs->randomStrafeDir < 0)
+				else if (bs->randomStrafeDir < 0 && !NewBotAI_ShouldAvoidDiagonalWallrun(bs))
 					trap->EA_MoveLeft(bs->client);
 			}
 		}
@@ -8740,6 +8876,24 @@ static qboolean BotHasActiveHumanPlayers(void)
 	return qfalse;
 }
 
+//After bot_duelcountmax completed duels, -3/-4 bots return to FFA: they stop issuing
+//and accepting duel challenges while they explore for a new opponent (tracked in
+//NewBotAI via duelCompletedCount/ffaExploreUntil).
+static qboolean NewBotAI_InFFAExploreWindow(bot_state_t *bs, int targetMode)
+{
+	if (!BotTargetModeAllowsBotDuelChallenges(targetMode))
+	{
+		return qfalse;
+	}
+
+	if (bs->ffaExploreUntil > level.time)
+	{
+		return qtrue;
+	}
+
+	return (bs->duelCompletedCount >= bot_duelcountmax.integer) ? qtrue : qfalse;
+}
+
 static qboolean NewBotAI_ShouldIssueBotDuelChallenge(bot_state_t *bs, int targetMode)
 {
 	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
@@ -8747,6 +8901,10 @@ static qboolean NewBotAI_ShouldIssueBotDuelChallenge(bot_state_t *bs, int target
 		return qfalse;
 	}
 	if (!BotTargetModeAllowsBotDuelChallenges(targetMode))
+	{
+		return qfalse;
+	}
+	if (NewBotAI_InFFAExploreWindow(bs, targetMode))
 	{
 		return qfalse;
 	}
@@ -9666,6 +9824,13 @@ static void NewBotAI_ApplyRandomStrafeOverlay(bot_state_t *bs)
 
 	if (bs->randomStrafeEndTime > level.time)
 	{
+		//Item 2C: lateral overlay while touching a wall becomes a diagonal wallrun
+		//once a jump lands on top of it - strip the lateral component unless we are
+		//critically low and escaping.
+		if (NewBotAI_ShouldAvoidDiagonalWallrun(bs))
+		{
+			return;
+		}
 		if (bs->randomStrafeDir > 0)
 		{
 			trap->EA_MoveRight(bs->client);
@@ -11058,6 +11223,12 @@ int NewBotAI_ScanForEnemies(bot_state_t* bs) {
 				if (normalizedHealth > 1)
 					normalizedHealth = 1;
 
+				if (targetMode == NEWBOTAI_TARGET_PREFER_HUMANS) {
+					//-3 fights the nearest target like -1 - skip the health weighting
+					//entirely while keeping the bot/human duel-offer logic untouched.
+					normalizedHealth = 1.0f;
+				}
+
 				distcheck = enemyDist * normalizedHealth;
 				vectoangles(a, a);
 
@@ -11138,6 +11309,11 @@ static qboolean BotTryAcceptAnyDuelChallenge(bot_state_t *bs, int targetMode)
 	int i;
 
 	if (!bot_honorableduelacceptance.integer || !g_privateDuel.integer || bs->cur_ps.duelInProgress)
+	{
+		return qfalse;
+	}
+
+	if (NewBotAI_InFFAExploreWindow(bs, targetMode))
 	{
 		return qfalse;
 	}
@@ -11291,6 +11467,22 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	targetMode = BotGetNewBotAITargetMode();
 	someonesHere = BotHasActiveHumanPlayers();
 
+	//Count completed duels: once we hit bot_duelcountmax, -3/-4 go back to FFA for a
+	//while. For -4 that means exploring for a new opponent for bot_ffaexploretime ms.
+	if (bs->wasDuelInProgress && !bs->cur_ps.duelInProgress &&
+		BotTargetModeAllowsBotDuelChallenges(targetMode))
+	{
+		bs->duelCompletedCount++;
+		if (bs->duelCompletedCount >= bot_duelcountmax.integer)
+		{
+			if (targetMode == NEWBOTAI_TARGET_PREFER_HUMANS_DUEL)
+			{
+				bs->ffaExploreUntil = level.time + bot_ffaexploretime.integer;
+			}
+		}
+	}
+	bs->wasDuelInProgress = bs->cur_ps.duelInProgress;
+
 	if (!someonesHere && !BotTargetModePrefersHumansThenBots(targetMode))
 		return;
 
@@ -11320,7 +11512,18 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	}
 
 	if (closestID == -1) {//Its just us, or they are too far away.
-		NewBotAI_RunNavigationOrAlone(bs, thinktime);
+		if (NewBotAI_InFFAExploreWindow(bs, targetMode)) {
+			//Exploring after a few duels: keep roaming instead of dropping out of the
+			//FFA window just because nobody is in range this think.
+			NewBotAI_RunNavigationOrAlone(bs, thinktime);
+		}
+		else {
+			//Found nobody - the next scan is a fresh search, so any duel streak and
+			//explore window reset.
+			bs->duelCompletedCount = 0;
+			bs->ffaExploreUntil = 0;
+			NewBotAI_RunNavigationOrAlone(bs, thinktime);
+		}
 		return;
 	}
 
@@ -11332,6 +11535,12 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		bs->currentEnemy = &g_entities[closestID];
 		bs->frame_Enemy_Vis = 1;
 		bs->lastVisibleEnemyIndex = level.time;
+		if (!bs->cur_ps.duelInProgress && NewBotAI_InFFAExploreWindow(bs, targetMode)) {
+			//Exploring after a few duels: a new non-dueling opponent ends the search,
+			//and the duel streak starts over.
+			bs->duelCompletedCount = 0;
+			bs->ffaExploreUntil = 0;
+		}
 	}
 	else { //we can't see our closest enemy, use last attacker
 		const int attacker = g_entities[bs->client].client->ps.persistant[PERS_ATTACKER];
@@ -11363,6 +11572,8 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		bs->gripkickJerkCount = 0;
 		bs->gripkickKickCount = 0;
 		bs->gripkickJerkDirection = 0;
+		bs->gripkickAttemptTime = 0;
+		bs->gripkickDwellUntil = 0;
 	}
 	if (!bs->cur_ps.saberInFlight)
 		bs->saberThrowStartTime = 0;
@@ -11392,7 +11603,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	{
 		return;
 	}
-	if (BotTargetModeIsForceDuelOnly(targetMode))
+	if (BotTargetModeIsForceDuelOnly(targetMode) && !bs->cur_ps.duelInProgress)
 	{
 		NewBotAI_RunForceDuelOnly(bs);
 		return;

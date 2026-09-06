@@ -89,7 +89,18 @@ These are all percentage-based (0-100) chance weights that gate specific behavio
 
 | Cvar | Default | Description |
 |------|---------|-------------|
-| `bot_gripkickdwell` | `100` | Percent scaling of grip phase durations. 100 = default timings. Higher = longer dwell per phase, lower = faster cycling. |
+| `bot_gripkickdwell` | `100` | Percent scaling of grip phase durations, including the aim-down/hold phase that holds the target and aims toward it (forward-only movement) before the flipkick approach, and how long a failed kick attempt dwells before retrying. 100 = default timings. Higher = longer dwell per phase, lower = faster cycling. |
+
+## Duel & FFA Exploration (`g_newBotAITarget` -3 / -4)
+
+| Cvar | Default | Description |
+|------|---------|-------------|
+| `bot_duelcountmax` | `3` | Completed duels before a -3/-4 bot returns to FFA to find a new opponent: duel issuing/acceptance is suppressed while the bot explores. |
+| `bot_ffaexploretime` | `180000` | How long (ms) a -4 bot keeps exploring for a new non-dueling opponent once the post-duel FFA window begins (default 3 minutes), before it may duel again. |
+
+Notes:
+- `-4` bots fight normally once a duel actually starts (`duelInProgress`); the force-duel-only approach only applies while finding/challenging.
+- `-3` bots target the true nearest enemy (no health weighting), like `-1`, while still issuing/accepting duels.
 
 ## Miscellaneous
 
