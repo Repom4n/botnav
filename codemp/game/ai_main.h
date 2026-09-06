@@ -385,6 +385,12 @@ typedef struct bot_state_s
 	int					gripkickKickCount;
 	int					gripkickJerkDirection;
 	qboolean			gripkickActive;
+	int					gripkickAttemptTime; // level.time of the most recent gripkick flipkick attempt (success window is measured from this)
+	int					gripkickDwellUntil; // while > level.time, gripkick holds the target with aim-down/forward-only movement before the next kick approach
+
+	qboolean			wasDuelInProgress; // previous-think duelInProgress, used to count completed duels
+	int					duelCompletedCount; // duels finished since the last explore window - see bot_duelcountmax
+	int					ffaExploreUntil; // while > level.time, -3/-4 bots skip duel issue/accept and explore for a new opponent - see bot_ffaexploretime
 
 	int					conserveUntil; // while > level.time, bot disengages (no force power use) to regen FP - see bot_conservation
 	int					conserveNextRollTime; // debounce between chances to start a new conservation window
