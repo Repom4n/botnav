@@ -6837,8 +6837,9 @@ static qboolean NewBotAI_CanBackflip(bot_state_t *bs)
 }
 
 // Optional random hop. Flipkicks only add jump input when a kick is truly possible, so any
-// ambient hopping is handled here instead: bot_hopfrequency (0-100) is the chance per AI think
-// to hop while close to a saber enemy. Disabled by default.
+// ambient hopping is handled here instead: bot_hopfrequency scales how soon after each hop
+// the next one is scheduled (default 100 = a random 1-4 second interval, higher = more
+// frequent hops, lower = less frequent, 0 = disabled).
 static void NewBotAI_TryRandomHop(bot_state_t *bs)
 {
 	const int hopFrequency = bot_hopfrequency.integer;
@@ -6848,12 +6849,18 @@ static void NewBotAI_TryRandomHop(bot_state_t *bs)
 		return;
 	}
 
-	if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE)
+	if (bs->nextHopTime > level.time)
 	{
 		return;
 	}
 
-	if (Q_irand(1, 100) > hopFrequency)
+	// Schedule the next hop immediately (even if this one is vetoed below) so a brief
+	// airborne/wall-contact moment can't re-roll a hop on every think. At the default
+	// frequency the interval is a random 1-4 seconds; each hop re-rolls, so chained
+	// hops stay possible while the bot still spends most of its time on the ground.
+	bs->nextHopTime = level.time + (Q_irand(1000, 4000) * 100) / hopFrequency;
+
+	if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE)
 	{
 		return;
 	}
@@ -7125,6 +7132,42 @@ void NewBotAI_ReactToBeingGripped(bot_state_t *bs) //Test this more, does it pus
 	}
 }
 
+// bot_bully hazard check: trace backward off the bot's heels looking for a lethal fall,
+// lava, or a death pit. Used while gripping so a bully bot standing with its back to a
+// hazard can hurl its opponent over the edge during the backward jerk phases.
+static qboolean NewBotAI_GripHazardBehind(bot_state_t *bs)
+{
+	vec3_t start, end, fwd;
+	trace_t tr;
+
+	AngleVectors(bs->viewangles, fwd, NULL, NULL);
+
+	// A point just behind the bot - the jerk phases back the bot (and the gripped
+	// target it drags along) toward this spot.
+	VectorCopy(bs->origin, start);
+	start[0] -= fwd[0] * 48.0f;
+	start[1] -= fwd[1] * 48.0f;
+
+	// Look for ground below that point. No ground within 256 units means a lethal
+	// fall; CONTENTS_LAVA/CONTENTS_NODROP on the ground means lava or a death pit.
+	VectorCopy(start, end);
+	end[2] -= 256.0f;
+
+	JP_Trace(&tr, start, NULL, NULL, end, bs->client, MASK_PLAYERSOLID, qfalse, 0, 0);
+
+	if (tr.fraction == 1.0f)
+	{
+		return qtrue;
+	}
+
+	if (tr.contents & (CONTENTS_LAVA | CONTENTS_NODROP))
+	{
+		return qtrue;
+	}
+
+	return qfalse;
+}
+
 void NewBotAI_Gripkick(bot_state_t *bs)
 {
 	//float heightDiff = bs->cur_ps.origin[2] - bs->currentEnemy->client->ps.origin[2]; //We are above them by this much
@@ -7163,9 +7206,10 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 		else {
 			bs->ideal_viewangles[PITCH] = 90; //-80
 		}
-		if (bs->currentEnemy->client->ps.velocity[2] < -400) {//going fast enough to die, let go
+		if (bot_bully.integer && bs->currentEnemy->client->ps.velocity[2] < -400) {//going fast enough to die, let go
 			return;
 		}
+		//bot_bully is off: keep holding the grip instead of releasing for the splat.
 		//not a good splat, has to predict based on their momentum
 	}
 	else {
@@ -7225,6 +7269,18 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 			bs->gripkickJerkUntil = 0;
 		}
 
+		if (bot_bully.integer && bs->gripkickKickCount == 0 && bs->gripkickJerkCount > 0 &&
+			bs->gripkickJerkUntil > level.time && NewBotAI_GripHazardBehind(bs))
+		{
+			//bot_bully: our back is to lava or a lethal fall and the first jerk phase is
+			//already swinging the target past us toward it - let go mid-jerk so momentum
+			//carries them off the edge. Just stop holding the grip key; the natural grip
+			//release keeps the target flying along the jerk arc.
+			bs->ideal_viewangles[YAW] = AngleNormalize360(bs->ideal_viewangles[YAW]);
+			bs->ideal_viewangles[PITCH] = AngleNormalize360(bs->ideal_viewangles[PITCH]);
+			return;
+		}
+
 		if (bs->gripkickJerkUntil > level.time) {
 			//Jerk phases only move backward while looking up; do not issue
 			//jump, attack, or other competing inputs during them.
@@ -7248,11 +7304,11 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 			NewBotAI_RetreatDiagonal(bs, bs->gripkickJerkDirection < 0);
 		}
 		else if (bs->gripkickDwellUntil > level.time) {
-			//bot_gripkickdwell-scaled hold: keep the target gripped, yaw tracking them,
-			//while moving exclusively forward - no diagonal input - so the flipkick
-			//approach starts from a clean forward-only hold. Pitch stays straight down;
-			//aiming it back up toward the target here was breaking the follow-up
-			//flipkick approach.
+			//bot_gripkickdwell-scaled hold (twice the jerk scaling - aim-down dwells run
+			//double): keep the target gripped, yaw tracking them, while moving exclusively
+			//forward - no diagonal input - so the flipkick approach starts from a clean
+			//forward-only hold. Pitch stays straight down; aiming it back up toward the
+			//target here was breaking the follow-up flipkick approach.
 			bs->ideal_viewangles[YAW] = a_fo[YAW];
 			bs->ideal_viewangles[PITCH] = 89;
 			trap->EA_Move(bs->client, vec3_origin, 0);
@@ -7282,11 +7338,12 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 				{
 					const int dwellPercent = Com_Clampi(10, 300, bot_gripkickdwell.integer);
 
-					//An unconfirmed attempt dwells here (aim-down hold, scaled by
-					//bot_gripkickdwell) before the next forward approach instead of
-					//immediately cycling into a jerk.
+					//An unconfirmed attempt dwells here (aim-down hold) before the next
+					//forward approach instead of immediately cycling into a jerk. Aim-down
+					//dwells run twice as long as the upward jerks for the same
+					//bot_gripkickdwell setting.
 					bs->gripkickAttemptTime = level.time;
-					bs->gripkickDwellUntil = level.time + (600 * dwellPercent) / 100;
+					bs->gripkickDwellUntil = level.time + (600 * dwellPercent * 2) / 100;
 				}
 			}
 		}
@@ -8089,13 +8146,14 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 				return;
 			}
 
-			//A committed fan chain must keep the attack button held for its entire
-			//SWING window so the engine's saber combo actually chains into further
-			//swings instead of getting released mid-swing the instant saberMove
-			//leaves LS_NONE/LS_READY (which happens the frame the first swing of
-			//the chain starts). Check this ahead of, and independent from, the
-			//saberMove-gated single-swing case below.
-			if (bs->fanPhase == FAN_PHASE_SWING && g_entities[bs->client].health > 40)
+			//A committed fan chain keeps the attack button held for its entire duration
+			//(dwell, tap, and swing windows, up to the 3s chain cap) so the engine's
+			//saber combo keeps chaining across the dwell between direction taps instead
+			//of getting released mid-chain. Movement negation stays strafe-only during
+			//TAP/SWING via NewBotAI_ApplyHorizontalSwingMove; DWELL moves freely.
+			//Check this ahead of, and independent from, the saberMove-gated
+			//single-swing case below.
+			if (bs->fanPhase != FAN_PHASE_INACTIVE && g_entities[bs->client].health > 40)
 			{
 				NewBotAI_ApplyHorizontalSwingMove(bs);
 				trap->EA_Attack(bs->client);
@@ -8108,12 +8166,6 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 					//Com_Printf("Their torso time is %i\n", bs->currentEnemy->client->ps.torsoTimer);
 					//if ((bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_DRAIN) || (bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB))) || ((bs->frame_Enemy_Len < 70) && (bs->currentEnemy->client->ps.origin[2] - bs->cur_ps.origin[2]) > 50)) {
 						NewBotAI_ApplyHorizontalSwingMove(bs);
-						if (bs->fanPhase == FAN_PHASE_DWELL || bs->fanPhase == FAN_PHASE_TAP)
-						{
-							//A committed fan chain holds off attacking during its dwell/tap
-							//windows - the swing only fires once the chain reaches SWING.
-							return;
-						}
 						trap->EA_Attack(bs->client);
 						return;
 					//}
@@ -9479,6 +9531,7 @@ static void NewBotAI_ResetFanChain(bot_state_t *bs)
 	bs->fanAttackDir = 0;
 	bs->fanAttackTime = 0;
 	bs->fanChainStartTime = 0;
+	bs->fanChainStartHealth = 0;
 }
 
 //Fanbias should weight heavily (effectively maxed out) whenever the bot is at full
@@ -9513,8 +9566,10 @@ static float NewBotAI_GetFanBiasPercent(bot_state_t *bs)
 // no forward/back/diagonal, still in the current direction) -> SWING (attack held while
 // strafing in the opposite direction of that tap - the actual swing). The chain then loops
 // back to DWELL with the new (post-swing) direction, so successive swings keep alternating
-// left/right. The whole chain ends the instant the bot takes damage, or after a flat 3
-// second cap, whichever comes first - landing a hit no longer extends or ends it.
+// left/right. Attack stays held for the entire chain so the engine's combo keeps chaining
+// even across the dwell between direction taps, and the chain ends after a flat 3 second
+// cap or once the bot has taken more than 4 damage total during it, whichever comes first.
+#define NEWBOTAI_FAN_CHAIN_MAX_DAMAGE 4
 static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 {
 	const float fanBias = NewBotAI_GetFanBiasPercent(bs);
@@ -9532,9 +9587,10 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 		return;
 	}
 
-	if (bs->lastHurtTime > level.time - 200)
+	if (bs->fanPhase != FAN_PHASE_INACTIVE &&
+		g_entities[bs->client].health < bs->fanChainStartHealth - NEWBOTAI_FAN_CHAIN_MAX_DAMAGE)
 	{
-		//Taking damage always ends the chain immediately.
+		//Taking more than 4 total damage during the chain breaks it.
 		NewBotAI_ResetFanChain(bs);
 		return;
 	}
@@ -9599,6 +9655,7 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 			bs->fanPhase = FAN_PHASE_DWELL;
 			bs->fanAttackTime = level.time + dwellMs;
 			bs->fanChainStartTime = level.time;
+			bs->fanChainStartHealth = g_entities[bs->client].health;
 		}
 		break;
 	}
@@ -10293,6 +10350,14 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 	//flipkick, no throw) punishes their now-saberless state far better than trading
 	//throws would. Hold the saber instead of also throwing it.
 	if (bs->currentEnemy->client->ps.saberInFlight)
+		return 0;
+	//Losing the force game (under 50 points left): fanbias/drain/retreat options take
+	//priority over spending force on a throw.
+	if (ourForce < 50)
+		return 0;
+	//Winning the force game: grip (and the gripkick it feeds into) takes priority over
+	//throwing the saber away.
+	if (ourForce > bs->currentEnemy->client->ps.fd.forcePower)
 		return 0;
 	if (bs->cur_ps.fd.saberAnimLevel == SS_STAFF)
 	{
