@@ -49,7 +49,7 @@ These are all percentage-based (0-100) chance weights that gate specific behavio
 |------|---------|-------------|
 | `bot_saberthrowbias` | `0` | Chance weight for saber throw decisions. Higher = more throws. Feeds into `NewBotAI_GetSaberthrow()`. |
 | `bot_gripkickbias` | `0` | Chance weight for grip-kick combo initiation. Feeds into `NewBotAI_GetGrip()`. |
-| `bot_fanbias` | `0` | Chance weight for fan-chain attack patterns (horizontal swing chains). Used in `NewBotAI_PrepareHorizontalSwingStart()`. |
+| `bot_fanbias` | `0` | Chance weight for fan-chain attack patterns (horizontal swing chains). Used in `NewBotAI_PrepareHorizontalSwingStart()`. A committed chain holds attack for its whole duration (up to a 3s cap) and breaks only after taking more than 4 damage total. |
 | `bot_drainbias` | `0` | Scales how long bots hold drain. Higher = longer drain holds. Feeds `BotGetDrainHoldBiasMs()`. |
 | `bot_antidrainbias` | `0` | Weight bonus for attacking drain-users. When enemy can drain and is low HP, bots prioritize killing them. Feeds `NewBotAI_GetAntiDrainWeight()`. |
 | `bot_lightningbias` | `0` | Chance weight for using lightning. Only fires on defensive aggression bias. |
@@ -84,12 +84,14 @@ These are all percentage-based (0-100) chance weights that gate specific behavio
 | `bot_strafefrequency` | `0` | Percentage chance (0-100) per think tick to enter a random strafe. 0 = disabled. |
 | `bot_strafeduration` | `50` | Duration scale (0-100) for random strafes. 50 = 80-2500ms range. |
 | `bot_strafeOffset` | `0` | Legacy strafe offset. |
+| `bot_hopfrequency` | `0` | Scales how often the bot schedules its next random ambient hop while close to a saber enemy. After each hop the next one is scheduled at a random 1-4 second interval scaled inversely by this value (default 100 = 1-4s; higher = shorter interval, lower = longer, 0 = disabled). Each hop re-rolls its own interval, so short rolls can chain hops together while the bot otherwise stays on the ground. |
 
 ## Gripkick Tuning
 
 | Cvar | Default | Description |
 |------|---------|-------------|
-| `bot_gripkickdwell` | `100` | Percent scaling of grip phase durations, including the aim-down/hold phase that holds the target and aims toward it (forward-only movement) before the flipkick approach, and how long a failed kick attempt dwells before retrying. 100 = default timings. Higher = longer dwell per phase, lower = faster cycling. |
+| `bot_gripkickdwell` | `100` | Percent scaling of grip phase durations: the aim-down/hold phases (holding the target gripped with forward-only movement before the flipkick approach, and the dwell after a failed kick attempt) run at 2x this scaling, while the upward jerk phases run at 1x. 100 = default timings. Higher = longer dwell per phase, lower = faster cycling. |
+| `bot_bully` | `0` | 1 = bully mode: while gripping a knocked-down target that is falling fast enough to splat, release grip early to let them splat; and when the bot's back is to lava or a lethal fall, release grip after the first jerk phase begins so the jerk hurls the target off the edge. 0 (default) = keep holding the grip instead of releasing for the splat/hazard. |
 
 ## Duel & FFA Exploration (`g_newBotAITarget` -3 / -4)
 
@@ -163,10 +165,12 @@ g_newBotAI (master switch)
   |
   +-- Movement
   |     +-- bot_strafefrequency / bot_strafeduration
+  |     +-- bot_hopfrequency
   |     +-- bot_navigation
   |
   +-- Gripkick
   |     +-- bot_gripkickdwell
+  |     +-- bot_bully
   |
   +-- Misc
         +-- bot_nochat, bot_forcepowers, bot_maxbots, etc.

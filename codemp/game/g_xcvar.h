@@ -365,6 +365,9 @@ XCVAR_DEF( bot_mistakebias, 			"0", 			NULL, 				CVAR_ARCHIVE, 							qtrue )
 // holds the gripped target and aims down toward it (forward-only movement) before the
 // flipkick approach, and how long a failed kick attempt dwells before retrying.
 XCVAR_DEF( bot_gripkickdwell,			"100",			NULL,				CVAR_ARCHIVE,									qtrue )
+// 1: while gripping a knocked-down target that is falling fast enough to splat, the bot
+// releases grip early to let them splat. 0 (default): keep holding the grip.
+XCVAR_DEF( bot_bully,					"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 // Number of completed duels after which -3/-4 bots return to FFA to find a new
 // opponent: duel issuing/acceptance is suppressed and the bot explores instead.
 XCVAR_DEF( bot_duelcountmax,			"3",			NULL,				CVAR_ARCHIVE,									qtrue )
@@ -380,9 +383,11 @@ XCVAR_DEF( bot_fandwell,				"250",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_drainbias,				"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_lightningbias,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_lightningdistance,		"400",		NULL,				CVAR_ARCHIVE,									qtrue )
-// 0-100: chance per AI think (when close to a saber enemy) that the bot adds a random hop.
-// Hopping is intentionally random/opt-in instead of being spammed by the flipkick code so
-// bots don't bounce incessantly when a flipkick isn't actually possible.
+// Scales how often the bot schedules its next random ambient hop while close to a saber
+// enemy: at the default of 100 the next hop lands at a random 1-4 second interval, higher
+// values shorten the interval, lower values lengthen it, 0 = disabled. Hopping is
+// intentionally random/opt-in instead of being spammed by the flipkick code so bots don't
+// bounce incessantly when a flipkick isn't actually possible.
 XCVAR_DEF( bot_hopfrequency,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_delayresponsetime,		"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_responseTimeDelay,		"0",			NULL,				CVAR_ARCHIVE,									qtrue )
