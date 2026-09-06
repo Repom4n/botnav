@@ -11166,7 +11166,9 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	{
 		bs->gripkickActive = qfalse;
 		bs->gripkickJerkUntil = 0;
+		bs->gripkickJerkCount = 0;
 		bs->gripkickKickCount = 0;
+		bs->gripkickJerkDirection = 0;
 	}
 
 	responseDelay = BotGetReflexScaledResponseDelayMs(bs);
