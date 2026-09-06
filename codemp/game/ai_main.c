@@ -9141,6 +9141,15 @@ static int NewBotAI_GetPTKWeight(bot_state_t *bs)
 		weight += 30;
 	}
 
+	if (bs->currentEnemy->client->ps.saberInFlight)
+	{
+		//The enemy has already committed their saber to a throw - punish the opening
+		//with a pullkick (pull + flipkick) rather than trading throws of our own, and
+		//keep this window strongly favored so drain taps between pullkicks (see
+		//NewBotAI_IsPullkickDrainWindow) also engage more readily.
+		weight += 50;
+	}
+
 	if (fpDifference >= bot_ptk_fpdifference.integer)
 	{
 		weight += (int)(aggressionWeight * 0.4f);
@@ -9616,6 +9625,8 @@ qboolean NewBotAI_IsEnemyPullable(bot_state_t *bs) {
 		return qtrue;
 	if (BG_InRoll3(bs->currentEnemy->client->ps.legsAnim))
 		return qtrue;
+	if (bs->currentEnemy->client->ps.saberInFlight) //no blade in hand to defend the pull
+		return qtrue;
 
 	return qfalse;
 }
@@ -9645,8 +9656,12 @@ int NewBotAI_GetPull(bot_state_t *bs) {
 
 	ptkWeight = NewBotAI_GetPTKWeight(bs);
 
-	if (bs->currentEnemy->client->ps.saberInFlight)
-		weight = 0.1f;
+	if (bs->currentEnemy->client->ps.saberInFlight) {
+		//They've committed to a saber throw and have no blade in hand to defend a pull -
+		//this is the ideal pullkick (pull + flipkick, no throw of our own) window, so
+		//weight this heavily instead of the old near-zero suppression.
+		weight = 80.0f;
+	}
 
 	if ((bs->currentEnemy->client->ps.saberMove > 1) && bs->currentEnemy->client->ps.fd.saberAnimLevel != SS_STRONG)
 		weight *= 0.2f; //dont pull red vert swings into us unless we its really important
@@ -9940,6 +9955,12 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 	if (bs->cur_ps.weapon != WP_SABER || bs->frame_Enemy_Len >= 400 || bs->cur_ps.saberInFlight)
 		return 0;
 	if (!bs->frame_Enemy_Vis)
+		return 0;
+	//The enemy is already committed to a saber throw - keeping our own saber in hand
+	//maintains our block/defense against their incoming throw, and a pullkick (pull +
+	//flipkick, no throw) punishes their now-saberless state far better than trading
+	//throws would. Hold the saber instead of also throwing it.
+	if (bs->currentEnemy->client->ps.saberInFlight)
 		return 0;
 	if (bs->cur_ps.fd.saberAnimLevel == SS_STAFF)
 	{
