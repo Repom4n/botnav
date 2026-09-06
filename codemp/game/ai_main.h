@@ -345,6 +345,7 @@ typedef struct bot_state_s
 	int					saberBTime;
 	int					saberSTime;
 	int					saberThrowTime;
+	int					saberThrowStartTime;
 
 	qboolean			saberPower;
 	int					saberPowerTime;

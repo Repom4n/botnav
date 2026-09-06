@@ -99,6 +99,8 @@ vmCvar_t bot_wp_visconnect;
 static int BotGetNewBotAITargetMode(void);
 static qboolean BotTargetModeAllowsBotEnemies(int targetMode);
 static qboolean BotTargetModePassesScanFilter(int targetMode, gentity_t *ent, qboolean preferredHumansOnly);
+static qboolean BotTargetModeIsForceDuelOnly(int targetMode);
+static void NewBotAI_RetreatDiagonal(bot_state_t *bs, qboolean moveLeft);
 static int BotGetLowHangingFruitHP(void);
 static float BotGetLowHangingFruitDistance(void);
 static float BotGetAggressionBias(bot_state_t *bs);
@@ -6760,17 +6762,18 @@ static void NewBotAI_DrainRollEscape(bot_state_t *bs)
 	}
 
 	if (bs->drainRollDir < 0)
-	{
-		trap->EA_MoveLeft(bs->client);
-	}
-	else if (bs->drainRollDir > 0)
-	{
-		trap->EA_MoveRight(bs->client);
-	}
+		NewBotAI_RetreatDiagonal(bs, qtrue);
 	else
-	{
-		trap->EA_MoveBack(bs->client);
-	}
+		NewBotAI_RetreatDiagonal(bs, qfalse);
+}
+
+static void NewBotAI_RetreatDiagonal(bot_state_t *bs, qboolean moveLeft)
+{
+	trap->EA_MoveBack(bs->client);
+	if (moveLeft)
+		trap->EA_MoveLeft(bs->client);
+	else
+		trap->EA_MoveRight(bs->client);
 }
 
 // The only scenario where our bot should avoid flipkicking despite being able to: the enemy has
@@ -6865,7 +6868,7 @@ void NewBotAI_Flipkick(bot_state_t *bs)
 		return;
 	}
 
-	if (NewBotAI_ShouldAvoidFlipkickForSafety(bs))
+	if (!isGripSequence && NewBotAI_ShouldAvoidFlipkickForSafety(bs))
 	{
 		NewBotAI_DrainRollEscape(bs);
 		return;
@@ -7077,7 +7080,7 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 			//jump, attack, or other competing inputs during them.
 			bs->ideal_viewangles[PITCH] = -70 - (gripkickBonus / 7);
 			trap->EA_Move(bs->client, vec3_origin, 0);
-			trap->EA_MoveBack(bs->client);
+			NewBotAI_RetreatDiagonal(bs, bs->gripkickJerkDirection < 0);
 		}
 		else if (bs->gripkickJerkCount > 0) {
 			const int dwellPercent = Com_Clampi(10, 300, bot_gripkickdwell.integer);
@@ -7092,7 +7095,7 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 			bs->ideal_viewangles[YAW] += bs->gripkickJerkDirection * 18.0f;
 			bs->ideal_viewangles[PITCH] = -70 - (gripkickBonus / 7);
 			trap->EA_Move(bs->client, vec3_origin, 0);
-			trap->EA_MoveBack(bs->client);
+			NewBotAI_RetreatDiagonal(bs, bs->gripkickJerkDirection < 0);
 		}
 		else if (targetInFront) {
 			//Every kick approach starts by looking straight down and moving
@@ -7114,7 +7117,7 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 			bs->ideal_viewangles[PITCH] = 89;
 			bs->ideal_viewangles[YAW] += (a_fo[YAW] > bs->viewangles[YAW]) ? 12.0f : -12.0f;
 			trap->EA_Move(bs->client, vec3_origin, 0);
-			trap->EA_MoveBack(bs->client);
+			NewBotAI_RetreatDiagonal(bs, a_fo[YAW] < bs->viewangles[YAW]);
 		}
 
 		if (attemptedKick && bs->gripkickKickCount < 3)
@@ -7251,6 +7254,18 @@ void NewBotAI_Absorbing(bot_state_t *bs)
 
 void NewBotAI_SaberThrowing(bot_state_t* bs)
 {
+	const int ourHealth = g_entities[bs->client].health;
+	const int enemyHealth = bs->currentEnemy ? bs->currentEnemy->health : 0;
+	const int enemyForce = bs->currentEnemy ? bs->currentEnemy->client->ps.fd.forcePower : 0;
+
+	if ((enemyHealth > 30 && enemyForce >= bs->cur_ps.fd.forcePower + 50) ||
+		(ourHealth < 60 && ourHealth < enemyHealth &&
+		 bs->saberThrowStartTime > 0 &&
+		 level.time - bs->saberThrowStartTime >= 2000))
+	{
+		return;
+	}
+
 	//Release alt-attack as soon as the bot's aggression turns defensive so the
 	//saber can begin its normal return instead of extending the throw.
 	if (BotGetAggressionBias(bs) <= 0.0f)
@@ -8231,7 +8246,7 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 			//The thrown saber has been knocked away. Retreat while the normal
 			//attack-finalization path keeps pressing attack to call it back.
 			bs->combatAction = BOT_COMBAT_ACTION_RETREAT_DEFENSE;
-			trap->EA_MoveBack(bs->client);
+			NewBotAI_RetreatDiagonal(bs, qfalse);
 		}
 
 		else if (bs->currentEnemy->client->ps.legsAnim == BOTH_GETUP_BROLL_B && bs->frame_Enemy_Len < 100) {//Dodge a getup?
@@ -8251,7 +8266,7 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 			//our normal forward approach. Attacks and jumps are unaffected -- they're decided by
 			//NewBotAI_GetAttack and this block, respectively -- only the forward/back choice changes.
 			bs->combatAction = BOT_COMBAT_ACTION_RETREAT_DEFENSE;
-			trap->EA_MoveBack(bs->client);
+			NewBotAI_RetreatDiagonal(bs, qtrue);
 			if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE - 1)
 			{
 				trap->EA_Jump(bs->client);
@@ -8325,7 +8340,7 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 				if (bs->frame_Enemy_Len < 140)
 					trap->EA_MoveForward(bs->client);//Always move forward i guess	
 				else if (bs->frame_Enemy_Len < MAX_DRAIN_DISTANCE - 100)
-					trap->EA_MoveBack(bs->client);
+					NewBotAI_RetreatDiagonal(bs, qtrue);
 				else
 					trap->EA_MoveLeft(bs->client);
 			}
@@ -8333,7 +8348,7 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 				if (bs->frame_Enemy_Len < 140)
 					trap->EA_MoveForward(bs->client);//Always move forward i guess	
 				else if (bs->frame_Enemy_Len < MAX_DRAIN_DISTANCE - 100)
-					trap->EA_MoveBack(bs->client);
+					NewBotAI_RetreatDiagonal(bs, qfalse);
 				else
 					trap->EA_MoveRight(bs->client);
 			}
@@ -8574,6 +8589,12 @@ static qboolean BotTargetModePrefersHumansThenBots(int targetMode)
 
 static qboolean BotTargetModeAllowsBotDuelChallenges(int targetMode)
 {
+	return (targetMode == NEWBOTAI_TARGET_PREFER_HUMANS ||
+		targetMode == NEWBOTAI_TARGET_PREFER_HUMANS_DUEL);
+}
+
+static qboolean BotTargetModeIsForceDuelOnly(int targetMode)
+{
 	return (targetMode == NEWBOTAI_TARGET_PREFER_HUMANS_DUEL);
 }
 
@@ -8636,7 +8657,7 @@ static qboolean NewBotAI_ShouldIssueBotDuelChallenge(bot_state_t *bs, qboolean h
 	{
 		return qfalse;
 	}
-	if (!BotTargetModeAllowsBotDuelChallenges(targetMode) || humansActive)
+	if (!BotTargetModeAllowsBotDuelChallenges(targetMode))
 	{
 		return qfalse;
 	}
@@ -8645,10 +8666,6 @@ static qboolean NewBotAI_ShouldIssueBotDuelChallenge(bot_state_t *bs, qboolean h
 		return qfalse;
 	}
 	if (bs->cur_ps.duelInProgress || bs->currentEnemy->client->ps.duelInProgress || bs->botChallengingTime > level.time)
-	{
-		return qfalse;
-	}
-	if (!(g_entities[bs->client].r.svFlags & SVF_BOT) || !(bs->currentEnemy->r.svFlags & SVF_BOT))
 	{
 		return qfalse;
 	}
@@ -8688,7 +8705,9 @@ static qboolean NewBotAI_TryIssueBotDuelChallenge(bot_state_t *bs, qboolean huma
 	VectorCopy(toEnemy, g_entities[bs->client].client->ps.viewangles);
 	VectorCopy(toEnemy, bs->ideal_viewangles);
 
-	duelType = Q_irand(0, 1);
+	// NewBotAI target modes -3 and -4 only offer full-force duels. In
+	// particular, never randomly issue a saber duel from these modes.
+	duelType = 1;
 	Cmd_EngageDuel_f(&g_entities[bs->client], duelType);
 
 	VectorCopy(oldViewAngles, g_entities[bs->client].client->ps.viewangles);
@@ -10982,7 +11001,7 @@ int NewBotAI_ScanForEnemies(bot_state_t* bs) {
 
 #define _ADVANCEDBOTSHIT 1
 
-static qboolean BotTryAcceptAnyDuelChallenge(bot_state_t *bs)
+static qboolean BotTryAcceptAnyDuelChallenge(bot_state_t *bs, int targetMode)
 {
 	int i;
 
@@ -11007,6 +11026,10 @@ static qboolean BotTryAcceptAnyDuelChallenge(bot_state_t *bs)
 		}
 
 		duelType = dueltypes[challenger->client->ps.clientNum];
+		if (BotTargetModeAllowsBotDuelChallenges(targetMode) && duelType != 1)
+		{
+			continue;
+		}
 
 		if (duelType <= 1 && bs->cur_ps.weapon == WP_SABER && !bs->cur_ps.saberHolstered)
 		{
@@ -11026,6 +11049,22 @@ static qboolean BotTryAcceptAnyDuelChallenge(bot_state_t *bs)
 	}
 
 	return qfalse;
+}
+
+static void NewBotAI_RunForceDuelOnly(bot_state_t *bs)
+{
+	const int ourHealth = g_entities[bs->client].health;
+
+	bs->doAttack = 0;
+	bs->doAltAttack = 0;
+	if (ourHealth < 100 && (bs->cur_ps.fd.forcePowersKnown & (1 << FP_HEAL)) &&
+		!(g_forcePowerDisable.integer & (1 << FP_HEAL)) && bs->cur_ps.fd.forcePower >= 25)
+	{
+		level.clients[bs->client].ps.fd.forcePowerSelected = FP_HEAL;
+		trap->EA_ForcePower(bs->client);
+	}
+
+	NewBotAI_RetreatDiagonal(bs, (level.framenum & 1) ? qtrue : qfalse);
 }
 
 static qboolean NewBotAI_ShouldFallbackToWaypoints(bot_state_t *bs)
@@ -11170,6 +11209,8 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		bs->gripkickKickCount = 0;
 		bs->gripkickJerkDirection = 0;
 	}
+	if (!bs->cur_ps.saberInFlight)
+		bs->saberThrowStartTime = 0;
 
 	responseDelay = BotGetReflexScaledResponseDelayMs(bs);
 	if (responseDelay > 0 && bs->currentEnemy && bs->currentEnemy->client)
@@ -11188,12 +11229,17 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		}
 	}
 
-	if (BotTryAcceptAnyDuelChallenge(bs))
+	if (BotTryAcceptAnyDuelChallenge(bs, targetMode))
 	{
 		return;
 	}
 	if (NewBotAI_TryIssueBotDuelChallenge(bs, someonesHere, targetMode))
 	{
+		return;
+	}
+	if (BotTargetModeIsForceDuelOnly(targetMode))
+	{
+		NewBotAI_RunForceDuelOnly(bs);
 		return;
 	}
 	if (bs->botChallengingTime > level.time)
@@ -11838,7 +11884,7 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 		}
 	}
 
-	BotTryAcceptAnyDuelChallenge(bs);
+	BotTryAcceptAnyDuelChallenge(bs, BotGetNewBotAITargetMode());
 	//Apparently this "allows you to cheese" when fighting against bots. I'm not sure why you'd want to con bots
 	//into an easy kill, since they're bots and all. But whatever.
 
@@ -12336,6 +12382,8 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 
 	if (bs->cur_ps.saberInFlight)
 	{
+		if (bs->saberThrowStartTime <= 0)
+			bs->saberThrowStartTime = level.time;
 		bs->saberThrowTime = level.time + Q_irand(4000, 10000);
 	}
 
