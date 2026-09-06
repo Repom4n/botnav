@@ -9907,10 +9907,10 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 	if (bs->cur_ps.fd.saberAnimLevel == SS_STAFF)
 	{
 		//A staff cannot initiate saber throw. Select a throw-capable style
-		//directly instead of cycling through styles used by combat logic.
+		//through the normal saber transition logic.
 		if (bs->saberThrowTime < level.time)
 		{
-			g_entities[bs->client].client->ps.fd.saberAnimLevel = SS_MEDIUM;
+			Cmd_SaberAttackCycle_f(&g_entities[bs->client]);
 			bs->saberThrowTime = level.time + 350;
 		}
 		return 0;
