@@ -373,6 +373,10 @@ XCVAR_DEF( bot_duelcountmax,			"3",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_ffaexploretime,			"180000",		NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_antidrainbias,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_fanbias,					"0",			NULL,				CVAR_ARCHIVE,									qtrue )
+// How long (ms) a fan/fan-chain swing dwells between alternating left/right swings: the
+// bot may move freely for this whole window, then negates non-chosen-direction movement
+// for a 100ms strafe-only tap before committing attack+strafe in the opposite direction.
+XCVAR_DEF( bot_fandwell,				"250",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_drainbias,				"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_lightningbias,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_lightningdistance,		"400",		NULL,				CVAR_ARCHIVE,									qtrue )
