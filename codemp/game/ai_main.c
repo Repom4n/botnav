@@ -6743,6 +6743,14 @@ static qboolean NewBotAI_CanAttemptFlipkick(bot_state_t *bs)
 	return qtrue;
 }
 
+//A free flipkick always beats holding/charging a saber throw once the enemy has closed
+//into kick range - otherwise the two bots just collide while we sit on the charge.
+#define NEWBOTAI_FLIPKICK_PREFERRED_RANGE 180.0f
+static qboolean NewBotAI_ShouldPreferFlipkickOverThrow(bot_state_t *bs)
+{
+	return (NewBotAI_CanAttemptFlipkick(bs) && bs->frame_Enemy_Len <= NEWBOTAI_FLIPKICK_PREFERRED_RANGE) ? qtrue : qfalse;
+}
+
 // Executes the "drain + sidestep" escape used in place of a flipkick when our bot is too
 // low on health to risk the flipkick's vulnerability window (see NewBotAI_Flipkick).
 // Rolling away was a weakness - a rolling bot is committed to the roll animation and easy
@@ -8295,6 +8303,16 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 			if (bs->frame_Enemy_Len > 200) {
 				trace_t	trace;
 				vec3_t mins, maxs, traceto;
+				//"Barely moving" despite trying to retreat - roughly 30 units/sec (30*30).
+				#define NEWBOTAI_WALLAVOID_STUCK_SPEED_SQ 900.0f
+				const float horizontalSpeedSquared = bs->cur_ps.velocity[0] * bs->cur_ps.velocity[0] +
+					bs->cur_ps.velocity[1] * bs->cur_ps.velocity[1];
+				//Only treat this as a real wall block (and worth a 180+jump escape) when we
+				//are actually stuck - grounded and barely moving despite trying to retreat.
+				//A bare proximity trace alone fires constantly while merely running past or
+				//alongside a wall, turning every graze into a spinning jump spam.
+				const qboolean actuallyStuck = (bs->cur_ps.groundEntityNum != ENTITYNUM_NONE &&
+					horizontalSpeedSquared < NEWBOTAI_WALLAVOID_STUCK_SPEED_SQ) ? qtrue : qfalse;
 
 				//VectorCopy(bs->cur_ps.origin, tracefrom);
 				VectorCopy(bs->cur_ps.origin, traceto);
@@ -8311,9 +8329,10 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 			
 				JP_Trace(&trace, bs->cur_ps.origin, mins, maxs, traceto, bs->cur_ps.clientNum, CONTENTS_SOLID|CONTENTS_BODY, qfalse, 0, 0 );
 
-				if ( trace.fraction < 1.0f ) { //Touching wall ?
+				if ( trace.fraction < 1.0f && actuallyStuck && bs->wallAvoidNextTime <= level.time ) { //Touching wall and genuinely blocked?
 					float GroundDist = BS_GroundDistance(bs);
 					wallRun = qtrue;
+					bs->wallAvoidNextTime = level.time + 600; //withhold repeat jump/turn attempts for a bit
 
 					//Com_Printf("Touching Wall\n");
 					//180 somehow
@@ -9820,6 +9839,10 @@ int NewBotAI_GetWait(bot_state_t *bs) { //Sometimes the best attack is nothing, 
 */
 
 int NewBotAI_GetGrip(bot_state_t *bs) {
+	//Dominant-position thresholds: a bot this healthy with this much of a force lead
+	//should heavily favor gripkicking over trading swings.
+	#define NEWBOTAI_GRIPKICK_DOMINANT_HEALTH 80
+	#define NEWBOTAI_GRIPKICK_DOMINANT_FORCE_LEAD 50
 	const int ourHealth = g_entities[bs->client].health, hisHealth = bs->currentEnemy->health, ourForce = bs->cur_ps.fd.forcePower, hisForce = bs->currentEnemy->client->ps.fd.forcePower;
 	int weight = 100;
 	const float gripkickBias = BotGetChanceBiasPercent(bot_gripkickbias.value);
@@ -9852,7 +9875,20 @@ int NewBotAI_GetGrip(bot_state_t *bs) {
 	if ((bs->currentEnemy->client->ps.saberMove > 1) && (bs->currentEnemy->client->ps.fd.saberAnimLevel == SS_STRONG && !(bs->cur_ps.weaponstate == WEAPON_CHARGING_ALT)))
 		return (ourHealth - hisForce + aggressionBonus);
 
-	if (gripkickBias > 0.0f && ourForce > 65 && ourHealth > 55 && hisHealth < 80)
+	//A dominant bot (high health, big force lead) should heavily favor gripkicking
+	//rather than trading swings - this is our strongest, safest finisher when we can
+	//clearly afford it. Weighted independently of bot_gripkickbias being left at its
+	//default of 0 (that cvar only adds/removes a smaller aggression bonus on top).
+	if (ourHealth > NEWBOTAI_GRIPKICK_DOMINANT_HEALTH && ourForce > hisForce + NEWBOTAI_GRIPKICK_DOMINANT_FORCE_LEAD)
+		return 100 + aggressionBonus;
+
+	//Same dominant-health/force lead, but specifically against an enemy who is
+	//mid saberthrow - punish the whiffed/committed throw with a gripkick instead of
+	//letting them recover.
+	if (bs->currentEnemy->client->ps.saberInFlight && ourHealth > NEWBOTAI_GRIPKICK_DOMINANT_HEALTH && ourForce > hisForce)
+		return 90 + aggressionBonus;
+
+	if (ourForce > 65 && ourHealth > 55 && hisHealth < 80)
 		return 45 + aggressionBonus;
 
 	return 0;
@@ -9929,7 +9965,11 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 		}
 	}
 
-	if ((saberthrowBias > 0.0f || antiDrainWeight > 0) && ourForce > 20 && bs->frame_Enemy_Len > 120)
+	//Never charge/hold a throw once the enemy has closed into flipkick striking range -
+	//a free flipkick should always win out over sitting in an alt-attack charge that
+	//just gets the two bots colliding with each other.
+	if ((saberthrowBias > 0.0f || antiDrainWeight > 0) && ourForce > 20 && bs->frame_Enemy_Len > 120 &&
+		!NewBotAI_ShouldPreferFlipkickOverThrow(bs))
 	{
 		int aggressionBonus = BotGetAggressionWeightedBonus(bs, saberthrowBias, 45, qtrue);
 		int finishingBonus = 0;
@@ -10037,7 +10077,9 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 		useTheForce = qtrue;
 	}
 
-	if (NewBotAI_GetSaberthrow(bs) > minWeight) {
+	//A free flipkick always beats holding/charging a throw once the enemy has closed
+	//into kick range - otherwise the two bots just collide while we sit on the charge.
+	if (NewBotAI_GetSaberthrow(bs) > minWeight && !NewBotAI_ShouldPreferFlipkickOverThrow(bs)) {
 		trap->EA_Alt_Attack(bs->client);
 		//Pre-select pull or push so it fires as the saber approaches the target. Pull when
 		//aggressive (PTK setup), push when defensive (break their guard). This runs after the
@@ -10193,7 +10235,9 @@ void NewBotAI_GetLSForcepower(bot_state_t *bs)
 	}
 
 	//Check if we should saberthrow I guess.
-	if (NewBotAI_GetSaberthrow(bs) > minWeight) {
+	//A free flipkick always beats holding/charging a throw once the enemy has closed
+	//into kick range - otherwise the two bots just collide while we sit on the charge.
+	if (NewBotAI_GetSaberthrow(bs) > minWeight && !NewBotAI_ShouldPreferFlipkickOverThrow(bs)) {
 		trap->EA_Alt_Attack(bs->client);
 		//Pre-select pull or push so it fires as the saber approaches the target. Pull when
 		//aggressive (PTK setup), push when defensive (break their guard). This runs after the
@@ -11045,13 +11089,36 @@ static qboolean BotTryAcceptAnyDuelChallenge(bot_state_t *bs, int targetMode)
 static void NewBotAI_RunForceDuelOnly(bot_state_t *bs)
 {
 	const int ourHealth = g_entities[bs->client].health;
+	//Only briefly fall back to retreat/heal/drain right after actually taking damage -
+	//otherwise this mode should keep closing on and aiming at its target so it can get
+	//into force-duel challenge range, instead of perpetually running away from it.
+	const qboolean recentlyHurt = (bs->lastHurtTime > level.time - 2000) ? qtrue : qfalse;
 
 	bs->doAttack = 0;
 	bs->doAltAttack = 0;
+
+	NewBotAI_GetAim(bs);
+
+	if (!recentlyHurt)
+	{
+		if (bs->frame_Enemy_Vis && bs->frame_Enemy_Len > 96.0f)
+		{
+			trap->EA_MoveForward(bs->client);
+		}
+		return;
+	}
+
 	if (ourHealth < 100 && (bs->cur_ps.fd.forcePowersKnown & (1 << FP_HEAL)) &&
 		!(g_forcePowerDisable.integer & (1 << FP_HEAL)) && bs->cur_ps.fd.forcePower >= 25)
 	{
 		level.clients[bs->client].ps.fd.forcePowerSelected = FP_HEAL;
+		trap->EA_ForcePower(bs->client);
+	}
+	else if (bs->frame_Enemy_Vis && bs->frame_Enemy_Len <= MAX_DRAIN_DISTANCE &&
+		(bs->cur_ps.fd.forcePowersKnown & (1 << FP_DRAIN)) &&
+		!(g_forcePowerDisable.integer & (1 << FP_DRAIN)) && bs->cur_ps.fd.forcePower >= 21)
+	{
+		level.clients[bs->client].ps.fd.forcePowerSelected = FP_DRAIN;
 		trap->EA_ForcePower(bs->client);
 	}
 

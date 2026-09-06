@@ -389,6 +389,7 @@ typedef struct bot_state_s
 	int					navObstacleUntil; // stay in waypoint nav mode until this time when an obstacle blocks path to enemy
 	int					combatNavHoldUntil; // remain in combat for 1500ms before returning to waypoint navigation
 	int					lastHurtTime;     // level.time when this bot last took damage (set in BotDamageNotification)
+	int					wallAvoidNextTime; // gates repeat wall-avoidance jump/turn attempts so we don't spam them every think
 	//end rww
 } bot_state_t;
 
