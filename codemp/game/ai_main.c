@@ -7256,7 +7256,8 @@ void NewBotAI_SaberThrowing(bot_state_t* bs)
 {
 	const int ourHealth = g_entities[bs->client].health;
 	const int enemyHealth = bs->currentEnemy ? bs->currentEnemy->health : 0;
-	const int enemyForce = bs->currentEnemy ? bs->currentEnemy->client->ps.fd.forcePower : 0;
+	const int enemyForce = bs->currentEnemy && bs->currentEnemy->client ?
+		bs->currentEnemy->client->ps.fd.forcePower : 0;
 
 	if (bs->saberThrowStartTime <= 0)
 		bs->saberThrowStartTime = level.time;
