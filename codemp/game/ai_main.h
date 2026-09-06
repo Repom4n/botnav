@@ -386,6 +386,9 @@ typedef struct bot_state_s
 	int					gripkickJerkDirection;
 	qboolean			gripkickActive;
 
+	int					conserveUntil; // while > level.time, bot disengages (no force power use) to regen FP - see bot_conservation
+	int					conserveNextRollTime; // debounce between chances to start a new conservation window
+
 	int					navObstacleUntil; // stay in waypoint nav mode until this time when an obstacle blocks path to enemy
 	int					combatNavHoldUntil; // remain in combat for 1500ms before returning to waypoint navigation
 	int					lastHurtTime;     // level.time when this bot last took damage (set in BotDamageNotification)
