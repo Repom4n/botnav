@@ -390,6 +390,13 @@ XCVAR_DEF( bot_ptk_fpdifference,		"20",			NULL,				CVAR_ARCHIVE,									qtrue )
 // old absolute-threshold bot_ptk_enemyhpbias.
 XCVAR_DEF( bot_ptk_hpdifference,		"15",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_ptk_aggressionbias,		"0",			NULL,				CVAR_ARCHIVE,									qtrue )
+// 0-100: how often a bot takes a moment to disengage (wait/move randomly instead of
+// attacking or spending force) to let its force points regenerate. 0 disables the
+// behavior entirely (default, legacy behavior). The chance is weighted heavily by how
+// far behind the bot is on force points versus its current enemy - a bigger force
+// disadvantage makes the bot much more likely to back off and conserve at a given
+// bot_conservation value.
+XCVAR_DEF( bot_conservation,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_maxbots,					"0",			NULL,				CVAR_ARCHIVE,									qfalse )
 XCVAR_DEF( bot_team,					"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 

@@ -131,6 +131,7 @@ static void NewBotAI_AdjustSaberThrowLead(bot_state_t *bs);
 static void NewBotAI_TrySaberThrowDefenseBreak(bot_state_t *bs);
 static void NewBotAI_ApplyPullMistake(bot_state_t *bs);
 static qboolean BotNav_CheckFallingHazard(bot_state_t *bs, vec3_t moveDir, qboolean inCombat);
+static qboolean NewBotAI_ShouldConserveForce(bot_state_t *bs);
 qboolean NewBotAI_IsEnemyPullable(bot_state_t *bs);
 void Cmd_EngageDuel_f(gentity_t *ent, int dueltype);
 
@@ -8103,6 +8104,43 @@ static void NewBotAI_SaberDuelIndecisionFallback(bot_state_t *bs, qboolean horiz
 	}
 }
 
+// bot_conservation: 0-100 bias (see g_xcvar.h) controlling how often a bot disengages
+// to let its force points regenerate instead of pressing the attack. Weighted heavily
+// by our force disadvantage relative to the current enemy - a bigger deficit makes the
+// bot much likelier to take a moment and back off at a given bias value. Guarded so we
+// never idle into an unsafe moment (enemy mid-swing/throw, or already close and hitting us).
+static qboolean NewBotAI_ShouldConserveForce(bot_state_t *bs)
+{
+	const float conservationBias = BotGetChanceBiasPercent(bot_conservation.value);
+	const int ourForce = bs->cur_ps.fd.forcePower;
+	const int hisForce = (bs->currentEnemy && bs->currentEnemy->client) ? bs->currentEnemy->client->ps.fd.forcePower : 0;
+	const int forceDeficit = hisForce - ourForce;
+	float chance;
+
+	if (conservationBias <= 0.0f)
+		return qfalse;
+	if (!bs->currentEnemy || !bs->currentEnemy->client)
+		return qfalse;
+	if (ourForce >= 90) //already nearly full, nothing meaningful to regen
+		return qfalse;
+	//Never idle into an unsafe moment - only conserve when disengaging is actually safe.
+	if (bs->hitSpotted || bs->currentEnemy->client->ps.saberInFlight ||
+		BG_SaberInAttack(bs->currentEnemy->client->ps.saberMove) ||
+		bs->frame_Enemy_Len < 150)
+		return qfalse;
+
+	//Small baseline chance from the bias alone, heavily amplified by how far behind we
+	//are on force points.
+	chance = conservationBias * 0.1f;
+	if (forceDeficit > 0)
+		chance += (float)forceDeficit * (conservationBias / 100.0f) * 0.6f;
+
+	if (chance <= 0.0f)
+		return qfalse;
+
+	return (Q_flrand(0.0f, 100.0f) < chance) ? qtrue : qfalse;
+}
+
 void NewBotAI_GetMovement(bot_state_t *bs)
 {
 	const int hisWeapon = bs->currentEnemy->client->ps.weapon;
@@ -8113,6 +8151,36 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 	qboolean horizontalSwingStart = qfalse;
 
 	bs->combatAction = BOT_COMBAT_ACTION_AGGRESSION;
+
+	//Take a moment to disengage and let force points regenerate instead of pressing the
+	//attack - see bot_conservation. Continues an existing window, or rolls the chance to
+	//start a new one (debounced so we don't re-roll every think frame).
+	if (bs->conserveUntil > level.time)
+	{
+		bs->combatAction = BOT_COMBAT_ACTION_RETREAT_DEFENSE;
+		if (bs->randomStrafeEndTime <= level.time)
+		{
+			bs->randomStrafeDir = Q_irand(-1, 1);
+			bs->randomStrafeEndTime = level.time + Q_irand(200, 600);
+		}
+		if (bs->randomStrafeDir > 0)
+			trap->EA_MoveRight(bs->client);
+		else if (bs->randomStrafeDir < 0)
+			trap->EA_MoveLeft(bs->client);
+		NewBotAI_RetreatDiagonal(bs, bs->randomStrafeDir <= 0);
+		return;
+	}
+	else if (bs->conserveNextRollTime <= level.time)
+	{
+		bs->conserveNextRollTime = level.time + 1500; //debounce between chances to start a window
+		if (NewBotAI_ShouldConserveForce(bs))
+		{
+			bs->conserveUntil = level.time + Q_irand(800, 2000);
+			bs->combatAction = BOT_COMBAT_ACTION_RETREAT_DEFENSE;
+			NewBotAI_RetreatDiagonal(bs, (Q_irand(0, 1) == 0));
+			return;
+		}
+	}
 
 	aggressionBias = BotGetAggressionBias(bs);
 	NewBotAI_PrepareHorizontalSwingStart(bs);
@@ -10033,6 +10101,10 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 	int minWeight = 0;
 	const int ourHealth = g_entities[bs->client].health;
 
+	//Disengaged in a bot_conservation window - hold off on spending any force so it regens.
+	if (bs->conserveUntil > level.time)
+		return;
+
 	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, a_fo);
 	vectoangles(a_fo, a_fo);
 
@@ -10192,6 +10264,10 @@ void NewBotAI_GetLSForcepower(bot_state_t *bs)
 	int pullWeight, pushWeight, absorbWeight, protectWeight, healWeight;
 	int minWeight = 0;
 	const int ourHealth = g_entities[bs->client].health;
+
+	//Disengaged in a bot_conservation window - hold off on spending any force so it regens.
+	if (bs->conserveUntil > level.time)
+		return;
 
 	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, a_fo);
 	vectoangles(a_fo, a_fo);
