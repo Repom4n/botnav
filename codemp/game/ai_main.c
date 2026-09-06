@@ -7258,6 +7258,9 @@ void NewBotAI_SaberThrowing(bot_state_t* bs)
 	const int enemyHealth = bs->currentEnemy ? bs->currentEnemy->health : 0;
 	const int enemyForce = bs->currentEnemy ? bs->currentEnemy->client->ps.fd.forcePower : 0;
 
+	if (bs->saberThrowStartTime <= 0)
+		bs->saberThrowStartTime = level.time;
+
 	if ((enemyHealth > 30 && enemyForce >= bs->cur_ps.fd.forcePower + 50) ||
 		(ourHealth < 60 && ourHealth < enemyHealth &&
 		 bs->saberThrowStartTime > 0 &&
@@ -8649,10 +8652,8 @@ static qboolean BotHasActiveHumanPlayers(void)
 	return qfalse;
 }
 
-static qboolean NewBotAI_ShouldIssueBotDuelChallenge(bot_state_t *bs, qboolean humansActive, int targetMode)
+static qboolean NewBotAI_ShouldIssueBotDuelChallenge(bot_state_t *bs, int targetMode)
 {
-	bot_state_t *enemyBs;
-
 	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
 	{
 		return qfalse;
@@ -8674,27 +8675,16 @@ static qboolean NewBotAI_ShouldIssueBotDuelChallenge(bot_state_t *bs, qboolean h
 		return qfalse;
 	}
 
-	enemyBs = botstates[bs->currentEnemy->s.number];
-	if (!enemyBs)
-	{
-		return qfalse;
-	}
-
-	//Bots duel each other at random regardless of matching skill level - most servers run
-	//every bot at the same configured skill, and only allowing challenges across differing
-	//skill levels meant duels (and the ELO tracking that comes with them) almost never
-	//happened in practice.
-
 	return qtrue;
 }
 
-static qboolean NewBotAI_TryIssueBotDuelChallenge(bot_state_t *bs, qboolean humansActive, int targetMode)
+static qboolean NewBotAI_TryIssueBotDuelChallenge(bot_state_t *bs, int targetMode)
 {
 	vec3_t toEnemy;
 	vec3_t oldViewAngles;
 	int duelType;
 
-	if (!NewBotAI_ShouldIssueBotDuelChallenge(bs, humansActive, targetMode))
+	if (!NewBotAI_ShouldIssueBotDuelChallenge(bs, targetMode))
 	{
 		return qfalse;
 	}
@@ -11233,7 +11223,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	{
 		return;
 	}
-	if (NewBotAI_TryIssueBotDuelChallenge(bs, someonesHere, targetMode))
+	if (NewBotAI_TryIssueBotDuelChallenge(bs, targetMode))
 	{
 		return;
 	}
