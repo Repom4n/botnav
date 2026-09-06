@@ -7248,12 +7248,13 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 			NewBotAI_RetreatDiagonal(bs, bs->gripkickJerkDirection < 0);
 		}
 		else if (bs->gripkickDwellUntil > level.time) {
-			//bot_gripkickdwell-scaled hold: keep the target gripped and aimed slightly
-			//toward them (then down) while moving exclusively forward - no diagonal
-			//input - so the flipkick approach starts from a clean forward-only hold.
-			const float targetPitch = (a_fo[PITCH] > 20.0f) ? 20.0f : a_fo[PITCH];
+			//bot_gripkickdwell-scaled hold: keep the target gripped, yaw tracking them,
+			//while moving exclusively forward - no diagonal input - so the flipkick
+			//approach starts from a clean forward-only hold. Pitch stays straight down;
+			//aiming it back up toward the target here was breaking the follow-up
+			//flipkick approach.
 			bs->ideal_viewangles[YAW] = a_fo[YAW];
-			bs->ideal_viewangles[PITCH] = targetPitch;
+			bs->ideal_viewangles[PITCH] = 89;
 			trap->EA_Move(bs->client, vec3_origin, 0);
 			trap->EA_MoveForward(bs->client);
 		}
