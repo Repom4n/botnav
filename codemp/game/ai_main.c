@@ -7248,12 +7248,13 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 			NewBotAI_RetreatDiagonal(bs, bs->gripkickJerkDirection < 0);
 		}
 		else if (bs->gripkickDwellUntil > level.time) {
-			//bot_gripkickdwell-scaled hold: keep the target gripped and aimed slightly
-			//toward them (then down) while moving exclusively forward - no diagonal
-			//input - so the flipkick approach starts from a clean forward-only hold.
-			const float targetPitch = (a_fo[PITCH] > 20.0f) ? 20.0f : a_fo[PITCH];
+			//bot_gripkickdwell-scaled hold: keep the target gripped, yaw tracking them,
+			//while moving exclusively forward - no diagonal input - so the flipkick
+			//approach starts from a clean forward-only hold. Pitch stays straight down;
+			//aiming it back up toward the target here was breaking the follow-up
+			//flipkick approach.
 			bs->ideal_viewangles[YAW] = a_fo[YAW];
-			bs->ideal_viewangles[PITCH] = targetPitch;
+			bs->ideal_viewangles[PITCH] = 89;
 			trap->EA_Move(bs->client, vec3_origin, 0);
 			trap->EA_MoveForward(bs->client);
 		}
@@ -8085,6 +8086,19 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 
 			if (g_gunGame.integer && g_entities[bs->client].client->forcedFireMode == 2) {
 				trap->EA_Alt_Attack(bs->client);
+				return;
+			}
+
+			//A committed fan chain must keep the attack button held for its entire
+			//SWING window so the engine's saber combo actually chains into further
+			//swings instead of getting released mid-swing the instant saberMove
+			//leaves LS_NONE/LS_READY (which happens the frame the first swing of
+			//the chain starts). Check this ahead of, and independent from, the
+			//saberMove-gated single-swing case below.
+			if (bs->fanPhase == FAN_PHASE_SWING && g_entities[bs->client].health > 40)
+			{
+				NewBotAI_ApplyHorizontalSwingMove(bs);
+				trap->EA_Attack(bs->client);
 				return;
 			}
 
@@ -9467,6 +9481,33 @@ static void NewBotAI_ResetFanChain(bot_state_t *bs)
 	bs->fanChainStartTime = 0;
 }
 
+//Fanbias should weight heavily (effectively maxed out) whenever the bot is at full
+//health with under 40 force points to spend on anything else, and whenever the bot
+//is at a force point disadvantage against its target - in both cases fanning is the
+//best use of the bot's saber since force options are limited/losing.
+#define NEWBOTAI_FANBIAS_FULL_HEALTH 100
+#define NEWBOTAI_FANBIAS_LOW_FORCE_THRESHOLD 40
+#define NEWBOTAI_FANBIAS_MIN_WEIGHTED_PERCENT 90.0f
+static float NewBotAI_GetFanBiasPercent(bot_state_t *bs)
+{
+	float fanBias = BotGetChanceBiasPercent(bot_fanbias.value);
+	const int ourHealth = g_entities[bs->client].health;
+	const int ourForce = bs->cur_ps.fd.forcePower;
+	const qboolean hasForceDisadvantage = (bs->currentEnemy && bs->currentEnemy->client &&
+		ourForce < bs->currentEnemy->client->ps.fd.forcePower) ? qtrue : qfalse;
+
+	if ((ourHealth >= NEWBOTAI_FANBIAS_FULL_HEALTH && ourForce < NEWBOTAI_FANBIAS_LOW_FORCE_THRESHOLD) ||
+		hasForceDisadvantage)
+	{
+		if (fanBias < NEWBOTAI_FANBIAS_MIN_WEIGHTED_PERCENT)
+		{
+			fanBias = NEWBOTAI_FANBIAS_MIN_WEIGHTED_PERCENT;
+		}
+	}
+
+	return fanBias;
+}
+
 // Item 2: fan/fanning is a left-right (or right-left) alternating horizontal swing chain.
 // Each cycle is: DWELL (bot_fandwell ms, bot may move freely) -> TAP (100ms, strafe-only,
 // no forward/back/diagonal, still in the current direction) -> SWING (attack held while
@@ -9476,7 +9517,7 @@ static void NewBotAI_ResetFanChain(bot_state_t *bs)
 // second cap, whichever comes first - landing a hit no longer extends or ends it.
 static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 {
-	const float fanBias = BotGetChanceBiasPercent(bot_fanbias.value);
+	const float fanBias = NewBotAI_GetFanBiasPercent(bs);
 	const int dwellMs = Com_Clampi(10, 3000, bot_fandwell.integer);
 	const int swingHoldMs = 160 + (int)(fanBias * 5.0f) + Q_irand(0, 120);
 
@@ -11662,7 +11703,12 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	{
 		return;
 	}
-	if (BotTargetModeIsForceDuelOnly(targetMode) && !bs->cur_ps.duelInProgress)
+	//While in the post-duel-limit FFA explore window, -4 must not lock onto chasing
+	//its old target with RunForceDuelOnly (which never attacks and never navigates
+	//away) - fall through into normal combat/navigation so it actually fights and
+	//explores for a new opponent, same as -3 already does.
+	if (BotTargetModeIsForceDuelOnly(targetMode) && !bs->cur_ps.duelInProgress &&
+		!NewBotAI_InFFAExploreWindow(bs, targetMode))
 	{
 		NewBotAI_RunForceDuelOnly(bs);
 		return;
