@@ -9485,6 +9485,9 @@ static void NewBotAI_ResetFanChain(bot_state_t *bs)
 //health with under 40 force points to spend on anything else, and whenever the bot
 //is at a force point disadvantage against its target - in both cases fanning is the
 //best use of the bot's saber since force options are limited/losing.
+#define NEWBOTAI_FANBIAS_FULL_HEALTH 100
+#define NEWBOTAI_FANBIAS_LOW_FORCE_THRESHOLD 40
+#define NEWBOTAI_FANBIAS_MIN_WEIGHTED_PERCENT 90.0f
 static float NewBotAI_GetFanBiasPercent(bot_state_t *bs)
 {
 	float fanBias = BotGetChanceBiasPercent(bot_fanbias.value);
@@ -9493,11 +9496,12 @@ static float NewBotAI_GetFanBiasPercent(bot_state_t *bs)
 	const qboolean hasForceDisadvantage = (bs->currentEnemy && bs->currentEnemy->client &&
 		ourForce < bs->currentEnemy->client->ps.fd.forcePower) ? qtrue : qfalse;
 
-	if ((ourHealth >= 100 && ourForce < 40) || hasForceDisadvantage)
+	if ((ourHealth >= NEWBOTAI_FANBIAS_FULL_HEALTH && ourForce < NEWBOTAI_FANBIAS_LOW_FORCE_THRESHOLD) ||
+		hasForceDisadvantage)
 	{
-		if (fanBias < 90.0f)
+		if (fanBias < NEWBOTAI_FANBIAS_MIN_WEIGHTED_PERCENT)
 		{
-			fanBias = 90.0f;
+			fanBias = NEWBOTAI_FANBIAS_MIN_WEIGHTED_PERCENT;
 		}
 	}
 
