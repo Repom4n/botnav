@@ -14,7 +14,7 @@ This document describes all cvars added for the NewBotAI system and how they rel
 
 | Cvar | Default | Description |
 |------|---------|-------------|
-| `g_newBotAITarget` | `-1` | Target selection mode. `-1` = default (closest), `-2` = humans only, `-3` = prefer humans then bots, `-4` = same as -3 but also bots duel each other for ELO, `>=0` = force specific client index. |
+| `g_newBotAITarget` | `-1` | Target selection mode. `-1` = default (closest), `-2` = humans only, `-3` = prefer humans then bots and offer force duels to either while continuing combat, `-4` = prefer humans then bots but only offer force duels and retreat/heal instead of attacking, `>=0` = force specific client index. |
 | `bot_targetdistance` | `4096` | Max distance at which bots will engage targets. |
 | `g_newBotAITargetDistance` | `4096` | Declared but currently unused (superseded by `bot_targetdistance`). |
 | `bot_lowhangingfruitHP` | `40` | HP threshold below which a target is considered "low-hanging fruit" (easy kill). |

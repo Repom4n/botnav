@@ -345,6 +345,7 @@ typedef struct bot_state_s
 	int					saberBTime;
 	int					saberSTime;
 	int					saberThrowTime;
+	int					saberThrowStartTime;
 
 	qboolean			saberPower;
 	int					saberPowerTime;
@@ -382,6 +383,7 @@ typedef struct bot_state_s
 	int					gripkickJerkUntil;
 	int					gripkickJerkCount;
 	int					gripkickKickCount;
+	int					gripkickJerkDirection;
 	qboolean			gripkickActive;
 
 	int					navObstacleUntil; // stay in waypoint nav mode until this time when an obstacle blocks path to enemy
