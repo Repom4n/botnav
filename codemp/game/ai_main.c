@@ -147,6 +147,7 @@ static float NewBotAI_GetPullkickTimeToKickRange(bot_state_t *bs);
 static void NewBotAI_SchedulePullkickJump(bot_state_t *bs);
 static int NewBotAI_GetDrainTapTargetCost(bot_state_t *bs);
 static qboolean NewBotAI_IsPullkickDrainWindow(bot_state_t *bs);
+static qboolean NewBotAI_IsDrainlockAdvantage(bot_state_t *bs);
 static void NewBotAI_AdjustSaberThrowArcAim(bot_state_t *bs, vec3_t headlevel);
 static void NewBotAI_AdjustSaberThrowLead(bot_state_t *bs);
 static void NewBotAI_TrySaberThrowDefenseBreak(bot_state_t *bs);
@@ -7099,13 +7100,17 @@ void NewBotAI_Flipkick(bot_state_t *bs)
 
 	if (isGripSequence && bs->currentEnemy && bs->currentEnemy->client)
 	{
-		//During a gripkick the only attacks allowed are flipkicks into a target that is
-		//both close enough to kick and inside a 90 degree cone in front of us.
+		//Item 3: the engine's forward flipkick only actually triggers when the target is
+		//inside a tight ~32-unit forward trace while we're airborne and rising (see the
+		//comment on the gripkick's straight-forward-only movement below) - the old 160
+		//unit / 90 degree gate here was far more generous than that real trigger, so the
+		//bot was jumping well before a kick was actually going to land. Only allow the
+		//jump once the gripped target is genuinely close and centered in front.
 		vec3_t a_fo;
 
 		VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, a_fo);
 		vectoangles(a_fo, a_fo);
-		if (bs->frame_Enemy_Len > 160 || !InFieldOfVision(bs->viewangles, 90, a_fo))
+		if (bs->frame_Enemy_Len > 110 || !InFieldOfVision(bs->viewangles, 40, a_fo))
 		{
 			return;
 		}
@@ -7471,7 +7476,7 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 			bs->ideal_viewangles[PITCH] = 89;
 			trap->EA_Move(bs->client, vec3_origin, 0);
 			trap->EA_MoveForward(bs->client);
-			if (bs->frame_Enemy_Len <= 160)
+			if (bs->frame_Enemy_Len <= 110)
 			{
 				const int previousAttempt = bs->lastFlipkickAttemptTime;
 				NewBotAI_Flipkick(bs);
@@ -8539,10 +8544,23 @@ static float NewBotAI_GetPullkickTimeToKickRange(bot_state_t *bs)
 //Item 2: bots were jumping into flipkicks a touch early (and kept hopping afterward
 //landing), so the whole schedule is nudged 30ms later - both the "kick now" case and
 //the predicted-closing-time lead below.
+//Item 2 (incessant hopping): this is called every think while pull remains the top
+//weighted force power, so once a scheduled jump fires it would otherwise immediately
+//re-arm itself (frame_Enemy_Len <= 135.0f is still true right after landing next to the
+//enemy) and hop again a few ms later, forever, regardless of bot_hopfrequency. Reuse the
+//same post-attempt cooldown NewBotAI_Flipkick uses (lastFlipkickAttemptTime) to hold off
+//scheduling a fresh jump until that cooldown expires.
 #define NEWBOTAI_PULLKICK_JUMP_DELAY_MS 30
 static void NewBotAI_SchedulePullkickJump(bot_state_t *bs)
 {
 	const float timeToRange = NewBotAI_GetPullkickTimeToKickRange(bs);
+
+	if (bs->lastFlipkickAttemptTime > level.time)
+	{
+		//Still cooling down from the last kick attempt/jump - don't re-arm a new one yet.
+		bs->pullKickJumpTime = 0;
+		return;
+	}
 
 	if (bs->frame_Enemy_Len <= 135.0f || !NewBotAI_CanAttemptFlipkick(bs))
 	{
@@ -8619,6 +8637,10 @@ static qboolean NewBotAI_ShouldConserveForce(bot_state_t *bs)
 	if (!bs->currentEnemy || !bs->currentEnemy->client)
 		return qfalse;
 	if (ourForce >= 90) //already nearly full, nothing meaningful to regen
+		return qfalse;
+	//Item 5: never disengage to conserve while actively holding a drainlock advantage -
+	//pressing the chase/drain/pullkick loop takes priority over letting force regen.
+	if (NewBotAI_IsDrainlockAdvantage(bs))
 		return qfalse;
 	//Never idle into an unsafe moment - only conserve when disengaging is actually safe.
 	if (bs->hitSpotted || bs->currentEnemy->client->ps.saberInFlight ||
@@ -8893,7 +8915,10 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 				((g_entities[bs->client].health < softRetreatHealth)
 				&& (bs->cur_ps.fd.forcePower < 30)
 				&& !(bs->cur_ps.fd.forcePowersActive & (1 << FP_ABSORB))
-				&& (bs->frame_Enemy_Len < retreatDistance))) {
+				&& (bs->frame_Enemy_Len < retreatDistance)
+				//Item 5: don't let a soft-retreat break off an active drainlock chase - the
+				//critical hardRetreatHealth safety check above still applies regardless.
+				&& !NewBotAI_IsDrainlockAdvantage(bs))) {
 			qboolean wallRun = qfalse;
 			bs->combatAction = BOT_COMBAT_ACTION_RETREAT_DEFENSE;
 			//Running routine, we should add a wallrun search to this.
@@ -8998,6 +9023,10 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 				bs->flipkickInputTime = level.time + 500;
 				bs->flipkickJumpHeld = qtrue;
 				bs->pullKickJumpTime = 0;
+				//Same 300ms post-attempt cooldown NewBotAI_Flipkick applies to its own
+				//attempts - stops NewBotAI_SchedulePullkickJump from immediately re-arming
+				//another jump the instant we land next to the (still close) enemy.
+				bs->lastFlipkickAttemptTime = level.time + 300;
 			}
 		}
 		else if (bs->frame_Enemy_Len > 80) {
@@ -10485,6 +10514,14 @@ int NewBotAI_GetPull(bot_state_t *bs) {
 			//Com_Printf("pullable 2\n");
 			return 100;
 		}
+		//Item 5: drainlock finisher - the enemy's force is already below the free-pullkick
+		//threshold and they're in range, so land the free pullkick right now instead of
+		//tapping drain again or doing anything else. This is what lets the bot alternate
+		//drain (bring them back under 20) and pullkick (cash it in) until they're dead or
+		//the force advantage is lost.
+		if (bs->currentEnemy->client->ps.fd.forcePower < 20 && bs->frame_Enemy_Len < 250) {
+			return 100;
+		}
 		if (BG_InKnockDown(bs->currentEnemy->client->ps.legsAnim)) {
 			//Item 9: a knocked-down target about to drop (<19 HP) should be finished with a
 			//pullkick alone - no saber throw - but only once they are actually within
@@ -10609,6 +10646,35 @@ static qboolean NewBotAI_IsPullkickDrainWindow(bot_state_t *bs)
 	}
 
 	return qtrue;
+}
+
+// Item 5: true while the bot should be actively holding a drainlock on the current enemy -
+// chasing them down and keeping them tapped under 20 FP so every pull is a free pullkick,
+// alternating drain and pullkick (see NewBotAI_GetDrain/NewBotAI_GetPull) until the enemy is
+// defeated or the bot loses its force advantage. Covers both halves of that loop: the enemy
+// is already under the free-pullkick threshold (cash in the pullkick now), or we still hold
+// enough of a force/aggression edge to drain them back below it (NewBotAI_IsPullkickDrainWindow).
+static qboolean NewBotAI_IsDrainlockAdvantage(bot_state_t *bs)
+{
+	const int ourForce = bs->cur_ps.fd.forcePower;
+	const int hisForce = bs->currentEnemy->client->ps.fd.forcePower;
+
+	if (!bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return qfalse;
+	}
+
+	if (BotGetAggressionBias(bs) <= 0.0f)
+	{
+		return qfalse;
+	}
+
+	if (ourForce <= hisForce)
+	{
+		return qfalse;
+	}
+
+	return (hisForce < 20 || NewBotAI_IsPullkickDrainWindow(bs)) ? qtrue : qfalse;
 }
 
 int NewBotAI_GetDrain(bot_state_t *bs) {
@@ -10795,8 +10861,11 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 	if (ourHealth < 50 && (bs->currentEnemy->client->ps.fd.forcePower - ourForce) > 40)
 		return 0;
 	//Winning the force game: grip (and the gripkick it feeds into) takes priority over
-	//throwing the saber away.
-	if (ourForce > bs->currentEnemy->client->ps.fd.forcePower)
+	//throwing the saber away - except for the drainlock's actual finishing blow (enemy
+	//knocked down and already low enough to die to it), which is allowed to cut through
+	//this guard instead of being permanently unreachable while we hold the force lead.
+	if (ourForce > bs->currentEnemy->client->ps.fd.forcePower &&
+		!(BG_InKnockDown(bs->currentEnemy->client->ps.legsAnim) && enemyTotalHealth <= 30))
 		return 0;
 
 	//Item 1: while we're actively drain-locking the enemy below 19 FP for a free
@@ -10899,7 +10968,7 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 	gripWeight = NewBotAI_GetGrip(bs);
 	//doNothingWeight = NewBotAI_GetWait(bs);
 
-	if (ourHealth < 100 && ourHealth <= bs->currentEnemy->health + 40 && drainWeight > minWeight) {
+	if (ourHealth < 100 && ourHealth <= bs->currentEnemy->health + 40 && drainWeight > minWeight && drainWeight >= gripWeight) {
 		level.clients[bs->client].ps.fd.forcePowerSelected = FP_DRAIN;
 		useTheForce = qtrue;
 	}
