@@ -8598,6 +8598,12 @@ static void NewBotAI_SchedulePullkickJump(bot_state_t *bs)
 {
 	const float timeToRange = NewBotAI_GetPullkickTimeToKickRange(bs);
 
+	if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE)
+	{
+		bs->pullKickJumpTime = 0;
+		return;
+	}
+
 	if (bs->lastFlipkickAttemptTime > level.time)
 	{
 		//Still cooling down from the last kick attempt/jump - don't re-arm a new one yet.
@@ -8625,8 +8631,7 @@ static void NewBotAI_SchedulePullkickJump(bot_state_t *bs)
 
 // Saber-duel deadlock fix: when flipkick isn't available (g_flipkick disabled, or the duel type
 // disallows it), give the bot a real goal instead of standing indecisively -- lean on fan-chain
-// attacks, pick evenly between red/staff and yellow swing chains (no bias toward red), and add
-// a yaw/pitch aim wobble instead of any extra movement input.
+// attacks and pick evenly between red/staff and yellow swing chains (no bias toward red).
 static void NewBotAI_SaberDuelIndecisionFallback(bot_state_t *bs, qboolean horizontalSwingStart)
 {
 	const float fanBias = BotGetChanceBiasPercent(bot_fanbias.value);
@@ -8666,14 +8671,6 @@ static void NewBotAI_SaberDuelIndecisionFallback(bot_state_t *bs, qboolean horiz
 		return;
 	}
 
-	//Aim wobble instead of a movement change: reuse the same aim offset the bot's normal
-	//skill-based aim wobble already computes (see BotAimOffsetGoalAngles), unscaled by
-	//fanBias - fanBias only gates whether this fallback engages at all, not how strong the
-	//wobble is.
-	bs->goalAngles[YAW] += bs->aimOffsetAmtYaw;
-	bs->goalAngles[PITCH] += bs->aimOffsetAmtPitch;
-	bs->goalAngles[YAW] = AngleNormalize360(bs->goalAngles[YAW]);
-	bs->goalAngles[PITCH] = AngleNormalize360(bs->goalAngles[PITCH]);
 }
 
 // bot_conservation: 0-100 bias (see g_xcvar.h) controlling how often a bot disengages
@@ -10139,28 +10136,11 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 
 // Strafe-only movement for the fan chain's TAP_PRE_SWING/SWING/TAP_POST_SWING phases -
 // forward/back/diagonal input is negated so only the chosen strafe direction is issued.
-// DWELL is free movement for approach/positioning, so instead of doing nothing there
-// (leaving it entirely to normal steering) it now layers a yaw/pitch aim wobble on top -
-// Item 7: gated by bot_fanbias (only wobbles at all the more a bot leans into the
-// fan-chain attack style), but the wobble itself reuses the same aim offset the bot's
-// normal skill-based aim wobble already computes (see BotAimOffsetGoalAngles) rather than
-// scaling its intensity by fanBias. This doesn't touch movement input, so it doesn't
-// cancel whatever forward/back approach movement normal steering already issued this think.
+// DWELL is free movement for approach/positioning and leaves normal steering unchanged.
 static void NewBotAI_ApplyHorizontalSwingMove(bot_state_t *bs)
 {
 	if (bs->fanPhase == FAN_PHASE_DWELL)
 	{
-		const float fanBias = NewBotAI_GetFanBiasPercent(bs);
-
-		if (fanBias <= 0.0f)
-		{
-			return;
-		}
-
-		bs->goalAngles[YAW] += bs->aimOffsetAmtYaw;
-		bs->goalAngles[PITCH] += bs->aimOffsetAmtPitch;
-		bs->goalAngles[YAW] = AngleNormalize360(bs->goalAngles[YAW]);
-		bs->goalAngles[PITCH] = AngleNormalize360(bs->goalAngles[PITCH]);
 		return;
 	}
 
@@ -10317,7 +10297,9 @@ static void NewBotAI_TrySaberThrowDefenseBreak(bot_state_t *bs)
 		return;
 	}
 
-	if (!bs->frame_Enemy_Vis || bs->currentEnemy->client->ps.groundEntityNum == ENTITYNUM_NONE)
+	if (!bs->frame_Enemy_Vis ||
+		bs->cur_ps.groundEntityNum == ENTITYNUM_NONE ||
+		bs->currentEnemy->client->ps.groundEntityNum == ENTITYNUM_NONE)
 	{
 		return;
 	}
@@ -10531,6 +10513,8 @@ int NewBotAI_GetPull(bot_state_t *bs) {
 		return 0;
 	if (bs->frame_Enemy_Len < 50)
 		return 0; //dont need to pull, we are so close
+	if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE)
+		return 0; //pull-kicks must be initiated from the ground
 	if (!bs->frame_Enemy_Vis)
 		return 0;
 	if (bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB))
@@ -11094,6 +11078,7 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 			const qboolean ptkWeighted = (BotGetAggressionBias(bs) > 0.0f) ? qtrue : qfalse;
 			if (ptkWeighted && !(g_forcePowerDisable.integer & (1 << FP_PULL)) &&
 				(bs->cur_ps.fd.forcePowersKnown & (1 << FP_PULL)) &&
+				bs->cur_ps.groundEntityNum != ENTITYNUM_NONE &&
 				bs->cur_ps.fd.forcePower >= 40 &&
 				!(bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB)) &&
 				bs->frame_Enemy_Len >= 96 && bs->frame_Enemy_Len <= 640)
@@ -11262,6 +11247,7 @@ void NewBotAI_GetLSForcepower(bot_state_t *bs)
 			const qboolean ptkWeighted = (BotGetAggressionBias(bs) > 0.0f) ? qtrue : qfalse;
 			if (ptkWeighted && !(g_forcePowerDisable.integer & (1 << FP_PULL)) &&
 				(bs->cur_ps.fd.forcePowersKnown & (1 << FP_PULL)) &&
+				bs->cur_ps.groundEntityNum != ENTITYNUM_NONE &&
 				bs->cur_ps.fd.forcePower >= 40 &&
 				!(bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB)) &&
 				bs->frame_Enemy_Len >= 96 && bs->frame_Enemy_Len <= 640)
