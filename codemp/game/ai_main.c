@@ -142,6 +142,8 @@ enum {
 
 static qboolean NewBotAI_CanUseSaberThrowDefenseBreakForce(bot_state_t *bs, qboolean preferPull);
 static void NewBotAI_TryRandomHop(bot_state_t *bs);
+static float NewBotAI_GetPullkickTimeToKickRange(bot_state_t *bs);
+static void NewBotAI_SchedulePullkickJump(bot_state_t *bs);
 static int NewBotAI_GetDrainTapTargetCost(bot_state_t *bs);
 static qboolean NewBotAI_IsPullkickDrainWindow(bot_state_t *bs);
 static void NewBotAI_AdjustSaberThrowArcAim(bot_state_t *bs, vec3_t headlevel);
@@ -6909,8 +6911,10 @@ static qboolean NewBotAI_CanBackflip(bot_state_t *bs)
 
 // Optional random hop. Flipkicks only add jump input when a kick is truly possible, so any
 // ambient hopping is handled here instead: bot_hopfrequency scales how soon after each hop
-// the next one is scheduled (default 100 = a random 1-4 second interval, higher = more
-// frequent hops, lower = less frequent, 0 = disabled).
+// the next one is scheduled (default 100 = a random 0.5-8 second interval, higher = less
+// frequent hops, lower = more frequent, 0 = disabled). The interval is only re-rolled once
+// the bot is back on the ground after a hop, so a very short roll genuinely chains one hop
+// into the next while the bot otherwise stays on the ground.
 static void NewBotAI_TryRandomHop(bot_state_t *bs)
 {
 	const float hopFrequency = bot_hopfrequency.value;
@@ -6922,30 +6926,45 @@ static void NewBotAI_TryRandomHop(bot_state_t *bs)
 		return;
 	}
 
+	//Mid-hop (a hop fired, still airborne): hold off on re-rolling until we land again.
+	if (bs->nextHopTime == -1)
+	{
+		if (bs->cur_ps.groundEntityNum != ENTITYNUM_NONE)
+		{
+			//Just landed: roll the next interval now. The range is wide enough that most
+			//hops are singles (a multi-second wait) while an occasional short roll chains
+			//one hop straight into the next, keeping the bot unpredictable. Divide by the
+			//frequency so higher values spread hops further apart (100 = 0.5-8s).
+			bs->nextHopTime = level.time + (int)((float)Q_irand(500, 8000) * (100.0f / hopFrequency));
+		}
+		return;
+	}
+
 	if (bs->nextHopTime > level.time)
 	{
 		return;
 	}
 
-	// Schedule the next hop immediately (even if this one is vetoed below) so a brief
-	// airborne/wall-contact moment can't re-roll a hop on every think. At the default
-	// frequency the interval is a random 1-4 seconds; each hop re-rolls, so chained
-	// hops stay possible while the bot still spends most of its time on the ground.
-	bs->nextHopTime = level.time + (int)((float)Q_irand(1000, 4000) * (100.0f / hopFrequency));
-
 	if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE)
 	{
+		//Airborne for a non-hop reason (a flipkick, a knockdown, walking off a ledge):
+		//the scheduled hop time passed unused - push the next roll out a full wide
+		//interval instead of firing the moment we touch down.
+		bs->nextHopTime = level.time + (int)((float)Q_irand(500, 8000) * (100.0f / hopFrequency));
 		return;
 	}
 
 	//Item 2B: a hop into wall contact starts a vertical wallrun - skip it unless we
-	//are retreating for our life.
+	//are retreating for our life. The scheduled hop time passes unused (no re-roll,
+	//so we don't spam a fresh roll every think while hugging a wall).
 	if (NewBotAI_TouchingWallNotEnemy(bs) && !NewBotAI_ShouldWallrunAgainstWalls(bs))
 	{
 		return;
 	}
 
+	//Fire the hop and mark mid-hop: the next interval only rolls once we land again.
 	trap->EA_Jump(bs->client);
+	bs->nextHopTime = -1;
 }
 
 //True while a short player-sized trace from the bot hits a solid wall and whatever
@@ -7259,6 +7278,7 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 		bs->gripkickKickCount = 0;
 		bs->gripkickJerkDirection = 0;
 		bs->gripkickJerkYawOffset = 0.0f;
+		bs->gripkickJerkPitch = -70.0f;
 		bs->gripkickAttemptTime = 0;
 		bs->gripkickDwellUntil = 0;
 		//Item 1A: force grip is initiated with a very quick backward tap, then the bot
@@ -7303,6 +7323,8 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 		qboolean targetInFront;
 		qboolean attemptedKick = qfalse;
 		qboolean successfulKick = qfalse;
+
+		(void)gripkickBonus; //jerk pitch is fully randomized now (see the jerk phases below)
 
 		VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, a_fo);
 		vectoangles(a_fo, a_fo);
@@ -7370,7 +7392,7 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 			//grip's own facing check and auto-break the grip well before our
 			//intended hold duration.
 			bs->ideal_viewangles[YAW] = a_fo[YAW] + bs->gripkickJerkYawOffset;
-			bs->ideal_viewangles[PITCH] = -70 - (gripkickBonus / 7);
+			bs->ideal_viewangles[PITCH] = bs->gripkickJerkPitch;
 			trap->EA_Move(bs->client, vec3_origin, 0);
 			NewBotAI_RetreatDiagonal(bs, bs->gripkickJerkDirection < 0);
 		}
@@ -7391,17 +7413,20 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 			else if (newYawOffset < -NEWBOTAI_GRIPKICK_JERK_MAX_YAW)
 				newYawOffset = -NEWBOTAI_GRIPKICK_JERK_MAX_YAW;
 			bs->gripkickJerkYawOffset = newYawOffset;
+			//Each upward jerk rolls its own pitch in the 45-80 degree range so the swing
+			//height of the gripped target varies jerk to jerk.
+			bs->gripkickJerkPitch = -(float)Q_irand(45, 80);
 			bs->ideal_viewangles[YAW] = a_fo[YAW] + bs->gripkickJerkYawOffset;
-			bs->ideal_viewangles[PITCH] = -70 - (gripkickBonus / 7);
+			bs->ideal_viewangles[PITCH] = bs->gripkickJerkPitch;
 			trap->EA_Move(bs->client, vec3_origin, 0);
 			NewBotAI_RetreatDiagonal(bs, bs->gripkickJerkDirection < 0);
 		}
 		else if (bs->gripkickDwellUntil > level.time) {
-			//bot_gripkickdwell-scaled hold (twice the jerk scaling - aim-down dwells run
-			//double): keep the target gripped, yaw tracking them, while moving exclusively
-			//forward - no diagonal input - so the flipkick approach starts from a clean
-			//forward-only hold. Pitch stays straight down; aiming it back up toward the
-			//target here was breaking the follow-up flipkick approach.
+			//bot_gripkickdwell-scaled hold (aim-down dwells run 50% longer than the
+			//upward jerks): keep the target gripped, yaw tracking them, while moving
+			//exclusively forward - no diagonal input - so the flipkick approach starts
+			//from a clean forward-only hold. Pitch stays straight down; aiming it back
+			//up toward the target here was breaking the follow-up flipkick approach.
 			bs->ideal_viewangles[YAW] = a_fo[YAW];
 			bs->ideal_viewangles[PITCH] = 89;
 			trap->EA_Move(bs->client, vec3_origin, 0);
@@ -7433,10 +7458,10 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 
 					//An unconfirmed attempt dwells here (aim-down hold) before the next
 					//forward approach instead of immediately cycling into a jerk. Aim-down
-					//dwells run twice as long as the upward jerks for the same
+					//dwells run 50% longer than the upward jerks for the same
 					//bot_gripkickdwell setting.
 					bs->gripkickAttemptTime = level.time;
-					bs->gripkickDwellUntil = level.time + (600 * dwellPercent * 2) / 100;
+					bs->gripkickDwellUntil = level.time + (600 * dwellPercent * 3) / 200;
 				}
 			}
 		}
@@ -8263,6 +8288,18 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 				return;
 			}
 
+			//Mid-swing/transition with the enemy close and closing: keep the attack button
+			//held so the engine's saber combo chains straight into the next swing the
+			//moment weaponTime clears. The old LS_NONE/LS_READY-only gate below released
+			//attack for the entire tail of every swing, so the press usually landed during
+			//the recovery/return phase (no swing started) and the chain died after one hit.
+			if (BG_SaberInAttack(bs->cur_ps.saberMove) && bs->frame_Enemy_Len < 320 &&
+				NewBotAI_GetTimeToInRange(bs, 75, 800) < 800 && g_entities[bs->client].health > 40)
+			{
+				trap->EA_Attack(bs->client);
+				return;
+			}
+
 			if ((g_entities[bs->client].client->ps.saberMove == LS_NONE || g_entities[bs->client].client->ps.saberMove == LS_READY) && bs->frame_Enemy_Len < 256 && ((NewBotAI_GetTimeToInRange(bs, 75, 800) < 800) || bs->frame_Enemy_Len < 128)) {
 				if (g_entities[bs->client].health > 40) {
 					//See if they can't saberthrow?
@@ -8315,6 +8352,16 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 
 			if (g_gunGame.integer && g_entities[bs->client].client->forcedFireMode == 2) {
 				trap->EA_Alt_Attack(bs->client);
+				return;
+			}
+
+			//Mid-swing/transition: hold attack so the red-style combo chains into the next
+			//swing instead of releasing through every swing tail (same fix as the lightside
+			//path above - the press has to still be down when weaponTime clears).
+			if (BG_SaberInAttack(bs->cur_ps.saberMove) && NewBotAI_GetTimeToInRange(bs, 75, 600) < 600 &&
+				g_entities[bs->client].health > 70)
+			{
+				trap->EA_Attack(bs->client);
 				return;
 			}
 
@@ -8410,6 +8457,79 @@ static float NewBotAI_GetEnemyClosingSpeed(bot_state_t *bs)
 	VectorNormalize(toUs);
 
 	return DotProduct(bs->currentEnemy->client->ps.velocity, toUs);
+}
+
+// Predicts (in ms) when the enemy's horizontal distance to us will fall inside the
+// flipkick's forward trace range (~135 units of clearance for the 32-unit box trace).
+// Combines the enemy's own closing speed (a pull yanks them toward us) with our current
+// forward approach speed. Returns -1 when the enemy is already in range or isn't closing.
+static float NewBotAI_GetPullkickTimeToKickRange(bot_state_t *bs)
+{
+	const float pullKickRange = 135.0f;
+	float closing;
+	float ourForwardSpeed;
+	vec3_t fwd, toThem;
+
+	if (!bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return -1.0f;
+	}
+
+	if (bs->frame_Enemy_Len <= pullKickRange)
+	{
+		return -1.0f; //already in kick range - kick now, no wait
+	}
+
+	closing = NewBotAI_GetEnemyClosingSpeed(bs);
+
+	//Our own forward run also closes the gap - project our velocity onto the
+	//direction toward the enemy (only count actual approach, not backing off).
+	AngleVectors(bs->viewangles, fwd, NULL, NULL);
+	fwd[2] = 0.0f;
+	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->cur_ps.origin, toThem);
+	toThem[2] = 0.0f;
+	if (VectorNormalize(toThem) > 0.0f)
+	{
+		ourForwardSpeed = DotProduct(bs->cur_ps.velocity, toThem);
+		if (ourForwardSpeed > 0.0f)
+		{
+			closing += ourForwardSpeed;
+		}
+	}
+
+	if (closing <= 0.0f)
+	{
+		return -1.0f;
+	}
+
+	return ((bs->frame_Enemy_Len - pullKickRange) / closing) * 1000.0f;
+}
+
+// Schedules the pk/ptk flipkick jump so the bot leaps only once the enemy is actually
+// closing into kick range: immediately when a kick is already possible, after the
+// predicted closing time (plus a small 150ms lead so the ~50ms think tick can't make
+// us late) while they are on the way in, or held (-1) until the enemy gets within
+// 320 units when nobody is closing yet. Called the moment we pull (pk) or select pull
+// during a throw (ptk), replacing the old instant hop that fired while the target was
+// still far away.
+static void NewBotAI_SchedulePullkickJump(bot_state_t *bs)
+{
+	const float timeToRange = NewBotAI_GetPullkickTimeToKickRange(bs);
+
+	if (bs->frame_Enemy_Len <= 135.0f || !NewBotAI_CanAttemptFlipkick(bs))
+	{
+		bs->pullKickJumpTime = 0; //kick now, or kicking isn't available anyway
+		return;
+	}
+
+	if (timeToRange >= 0.0f)
+	{
+		bs->pullKickJumpTime = level.time + (int)timeToRange + 150;
+	}
+	else
+	{
+		bs->pullKickJumpTime = -1; //not closing - hold until they are within 320
+	}
 }
 
 // Saber-duel deadlock fix: when flipkick isn't available (g_flipkick disabled, or the duel type
@@ -8540,6 +8660,15 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 	}
 
 	aggressionBias = BotGetAggressionBias(bs);
+
+	//A scheduled pk/ptk jump is only meaningful while a kick could actually land. If
+	//flipkick stopped being possible (out of FP, no jump level, mid-swing ourselves,
+	//etc.) drop the pending/hold schedule so we don't sit on a stale timer.
+	if (bs->pullKickJumpTime != 0 && !NewBotAI_CanAttemptFlipkick(bs))
+	{
+		bs->pullKickJumpTime = 0;
+	}
+
 	NewBotAI_PrepareHorizontalSwingStart(bs);
 	horizontalSwingStart = (bs->fanPhase == FAN_PHASE_TAP_PRE_SWING || bs->fanPhase == FAN_PHASE_SWING ||
 		bs->fanPhase == FAN_PHASE_TAP_POST_SWING) ? qtrue : qfalse;
@@ -8576,8 +8705,13 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 	}
 
 	//Ambient hopping is a random, opt-in feature (bot_hopfrequency) now that flipkick no
-	//longer adds jump inputs when a kick isn't actually possible.
-	NewBotAI_TryRandomHop(bs);
+	//longer adds jump inputs when a kick isn't actually possible. Skip it while a pk/ptk
+	//flipkick jump is pending/held - a random ambient hop right before the scheduled kick
+	//jump is what made the bot hop too soon and miss the flipkick.
+	if (bs->pullKickJumpTime == 0)
+	{
+		NewBotAI_TryRandomHop(bs);
+	}
 
 	if ((bs->frame_Enemy_Len > 2000) && (bs->currentEnemy && bs->currentEnemy->client && (hisWeapon == WP_SABER))) { //Chase movement
 		const vec3_t xyVelocity = {bs->cur_ps.velocity[0], bs->cur_ps.velocity[1]};
@@ -8805,6 +8939,25 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 					NewBotAI_RetreatDiagonal(bs, qfalse);
 				else
 					trap->EA_MoveRight(bs->client);
+			}
+		}
+		//A scheduled pk/ptk flipkick jump: we pulled (or selected pull during a throw)
+		//and want to leap exactly once the enemy is closing into kick range - not the
+		//instant we pull, which hopped way too soon and missed the kick. A positive time
+		//fires when reached; -1 holds until the enemy is within 320 units (nobody was
+		//closing when we pulled, so don't commit to a timed leap). The kick attempt
+		//itself happens via NewBotAI_Flipkick in the normal combat path below.
+		else if (bs->pullKickJumpTime != 0)
+		{
+			trap->EA_MoveForward(bs->client);
+			if (bs->cur_ps.groundEntityNum != ENTITYNUM_NONE &&
+				((bs->pullKickJumpTime > 0 && bs->pullKickJumpTime <= level.time) ||
+				 (bs->pullKickJumpTime == -1 && bs->frame_Enemy_Len <= 320.0f)))
+			{
+				trap->EA_Jump(bs->client);
+				bs->flipkickInputTime = level.time + 500;
+				bs->flipkickJumpHeld = qtrue;
+				bs->pullKickJumpTime = 0;
 			}
 		}
 		else if (bs->frame_Enemy_Len > 80) {
@@ -10654,8 +10807,11 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 		useTheForce = qtrue;
 		//A pull that brings the enemy into flipkick range should always follow through with the
 		//kick (PTK combo) -- PTK weight only influences whether we chose to pull in the first
-		//place (see NewBotAI_GetPull), it should not gate the kick itself.
-		if (bs->frame_Enemy_Len < 220)
+		//place (see NewBotAI_GetPull), it should not gate the kick itself. Schedule the jump:
+		//already in range kicks right now, otherwise we wait for the enemy to actually close
+		//instead of hopping the instant we pull and sailing over them.
+		NewBotAI_SchedulePullkickJump(bs);
+		if (bs->pullKickJumpTime == 0 && bs->frame_Enemy_Len < 220)
 			NewBotAI_Flipkick(bs);
 
 		//trap->Print("Pulling -- Pull: %i, Push: %i, Drain: %i, Grip: %i\n", pullWeight, pushWeight, drainWeight, gripWeight);
@@ -10711,6 +10867,9 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 				level.clients[bs->client].ps.fd.forcePowerSelected = FP_PULL;
 				NewBotAI_ApplyPullMistake(bs);
 				useTheForce = qtrue;
+				//PTK: time the kick jump for when the pulled enemy will actually be in
+				//kick range instead of hopping the moment pull is selected.
+				NewBotAI_SchedulePullkickJump(bs);
 			}
 			else if (!ptkWeighted && !(g_forcePowerDisable.integer & (1 << FP_PUSH)) &&
 				(bs->cur_ps.fd.forcePowersKnown & (1 << FP_PUSH)) &&
@@ -10817,8 +10976,11 @@ void NewBotAI_GetLSForcepower(bot_state_t *bs)
 		useTheForce = qtrue;
 		//A pull that brings the enemy into flipkick range should always follow through with the
 		//kick (PTK combo) -- PTK weight only influences whether we chose to pull in the first
-		//place (see NewBotAI_GetPull), it should not gate the kick itself.
-		if (bs->frame_Enemy_Len < 220)
+		//place (see NewBotAI_GetPull), it should not gate the kick itself. Schedule the jump:
+		//already in range kicks right now, otherwise we wait for the enemy to actually close
+		//instead of hopping the instant we pull and sailing over them.
+		NewBotAI_SchedulePullkickJump(bs);
+		if (bs->pullKickJumpTime == 0 && bs->frame_Enemy_Len < 220)
 			NewBotAI_Flipkick(bs);
 		//trap->Print("Pull - Weights -- Pull: %i, Push: %i, Absorb: %i, Protect: %i, Heal %i\n", pullWeight, pushWeight, absorbWeight, protectWeight, healWeight);
 	}
@@ -10873,6 +11035,9 @@ void NewBotAI_GetLSForcepower(bot_state_t *bs)
 				level.clients[bs->client].ps.fd.forcePowerSelected = FP_PULL;
 				NewBotAI_ApplyPullMistake(bs);
 				useTheForce = qtrue;
+				//PTK: time the kick jump for when the pulled enemy will actually be in
+				//kick range instead of hopping the moment pull is selected.
+				NewBotAI_SchedulePullkickJump(bs);
 			}
 			else if (!ptkWeighted && !(g_forcePowerDisable.integer & (1 << FP_PUSH)) &&
 				(bs->cur_ps.fd.forcePowersKnown & (1 << FP_PUSH)) &&
@@ -11930,9 +12095,16 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		bs->gripkickJerkCount = 0;
 		bs->gripkickKickCount = 0;
 		bs->gripkickJerkDirection = 0;
+		bs->gripkickJerkPitch = 0.0f;
 		bs->gripkickAttemptTime = 0;
 		bs->gripkickDwellUntil = 0;
 		bs->gripkickOpenerTapUntil = 0;
+	}
+	//An enemy swap drops any pending pk/ptk kick jump - the schedule was computed for
+	//the old opponent's approach.
+	if (bs->currentEnemy != oldEnemy)
+	{
+		bs->pullKickJumpTime = 0;
 	}
 	if (!bs->cur_ps.saberInFlight)
 		bs->saberThrowStartTime = 0;
