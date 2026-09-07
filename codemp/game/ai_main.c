@@ -117,6 +117,7 @@ static float BotGetMistakeBiasChance(bot_state_t *bs);
 static int NewBotAI_GetGripEscapeDelayMs(bot_state_t *bs);
 static int NewBotAI_GetGripNeverEscapeChance(bot_state_t *bs);
 static int NewBotAI_GetGripPushInsteadChance(bot_state_t *bs);
+static int NewBotAI_GetGripSpeedMistakeChance(bot_state_t *bs);
 static int BotGetAggressionWeightedBonus(bot_state_t *bs, float biasPercent, int maxBonus, qboolean aggressiveOnly);
 static int BotGetDrainHoldBiasMs(bot_state_t *bs);
 static int NewBotAI_GetAntiDrainWeight(bot_state_t *bs);
@@ -6840,6 +6841,14 @@ static qboolean NewBotAI_CanAttemptFlipkick(bot_state_t *bs)
 //A free flipkick always beats holding/charging a saber throw once the enemy has closed
 //into kick range - otherwise the two bots just collide while we sit on the charge.
 #define NEWBOTAI_FLIPKICK_PREFERRED_RANGE 180.0f
+
+//How long (ms) a flipkick attempt keeps toggling fresh jump presses after the initial
+//jump. This was raised from the original 350 to 500, and that extra time outlived the
+//jump arc itself: the bot landed with jump input still live and immediately hopped
+//again, which is why bots hopped after every flipkick attempt. 350ms covers the ascent
+//to the engine's kick window (velocity[2]>200 near the ground) without outliving the
+//landing.
+#define NEWBOTAI_FLIPKICK_INPUT_WINDOW_MS 350
 static qboolean NewBotAI_ShouldPreferFlipkickOverThrow(bot_state_t *bs)
 {
 	return (NewBotAI_CanAttemptFlipkick(bs) && bs->frame_Enemy_Len <= NEWBOTAI_FLIPKICK_PREFERRED_RANGE) ? qtrue : qfalse;
@@ -7080,7 +7089,7 @@ void NewBotAI_Flipkick(bot_state_t *bs)
 		}
 		trap->EA_MoveForward(bs->client);
 		trap->EA_DelayedJump(bs->client);
-		bs->flipkickInputTime = level.time + 500;
+		bs->flipkickInputTime = level.time + NEWBOTAI_FLIPKICK_INPUT_WINDOW_MS;
 		return;
 	}
 
@@ -7108,15 +7117,19 @@ void NewBotAI_Flipkick(bot_state_t *bs)
 		//unit / 90 degree gate here was far more generous than that real trigger, so the
 		//bot was jumping well before a kick was actually going to land. Only allow the
 		//jump once the gripped target is genuinely close and centered in front.
-		//The facing cone is measured from a_fo (the true, live direction to the target)
-		//instead of the lagging simulated bs->viewangles: a target that comes straight
-		//into us (or gets jerked back in front mid-approach) must get the flipkick
-		//decision immediately on contact rather than waiting out slow low-skill aim.
+		//The facing check is YAW-ONLY: the engine's kick trace (bg_pmove.c) fires along
+		//fwdAngles = (0, viewangles[YAW], 0), so pitch never factors into whether the
+		//kick can land. A pitch-inclusive FOV test can never pass here - the gripkick
+		//aims straight down (pitch 89) while the target floats in front of us - which
+		//left bots holding enemies in place directly in front of them without ever
+		//flipkicking.
 		vec3_t a_fo;
+		float yawDiff;
 
 		VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, a_fo);
 		vectoangles(a_fo, a_fo);
-		if (bs->frame_Enemy_Len > 110 || !InFieldOfVision(a_fo, 40, bs->viewangles))
+		yawDiff = AngleDifference(a_fo[YAW], bs->viewangles[YAW]);
+		if (bs->frame_Enemy_Len > 110 || yawDiff > 20.0f || yawDiff < -20.0f)
 		{
 			return;
 		}
@@ -7146,7 +7159,7 @@ void NewBotAI_Flipkick(bot_state_t *bs)
 		bs->randomStrafeEndTime = 0;
 		trap->EA_MoveForward(bs->client);
 		trap->EA_Jump(bs->client);
-		bs->flipkickInputTime = level.time + 500;
+		bs->flipkickInputTime = level.time + NEWBOTAI_FLIPKICK_INPUT_WINDOW_MS;
 		bs->flipkickJumpHeld = qtrue;
 		return;
 	}
@@ -7159,7 +7172,7 @@ void NewBotAI_Flipkick(bot_state_t *bs)
 		bs->randomStrafeEndTime = 0;
 		trap->EA_MoveForward(bs->client);
 		trap->EA_Jump(bs->client);
-		bs->flipkickInputTime = level.time + 500;
+		bs->flipkickInputTime = level.time + NEWBOTAI_FLIPKICK_INPUT_WINDOW_MS;
 		bs->flipkickJumpHeld = qtrue;
 	}
 
@@ -7180,7 +7193,7 @@ void NewBotAI_Flipkick(bot_state_t *bs)
 	if (((bs->origin[2] - bs->cur_ps.fd.forceJumpZStart) > 24) && ((bs->origin[2] - bs->cur_ps.fd.forceJumpZStart) < 48))
 	{
 		trap->EA_DelayedJump(bs->client);
-		bs->flipkickInputTime = level.time + 350;
+		bs->flipkickInputTime = level.time + NEWBOTAI_FLIPKICK_INPUT_WINDOW_MS;
 	}
 }
 
@@ -7207,6 +7220,22 @@ void NewBotAI_ReactToBeingGripped(bot_state_t *bs) //Test this more, does it pus
 			(level.time + NewBotAI_GetGripEscapeDelayMs(bs));
 	}
 	bs->gripReactLastCallTime = level.time;
+
+	//Item 4 (speed-weighted): being whipped around fast mid-grip rattles the bot - a
+	//per-think speed roll can shove the escape timer back out, so the faster the
+	//gripper moves us the longer the escape takes on top of the rolled delay. The
+	//extension is small per think (50-150ms) and gated by the speed chance, so a slow
+	//grip barely notices it while a full-speed jerk chain can hold the escape off for
+	//most of the grip.
+	if (bs->gripMistakeNeverEscape <= 0 && bs->gripMistakeDelayUntil <= level.time + 1000)
+	{
+		const int speedMistakeChance = NewBotAI_GetGripSpeedMistakeChance(bs);
+		if (speedMistakeChance > 0 && Q_irand(1, 100) <= speedMistakeChance)
+		{
+			bs->gripMistakeDelayUntil = level.time + Q_irand(50, 150);
+		}
+	}
+
 	gripMistakeActive = (bs->gripMistakeDelayUntil > level.time) ? qtrue : qfalse;
 
 	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, a_fo);
@@ -7239,7 +7268,15 @@ void NewBotAI_ReactToBeingGripped(bot_state_t *bs) //Test this more, does it pus
 				}
 				if (bs->gripMistakeReverseUntil < level.time)
 				{
-					const int pushInsteadChance = NewBotAI_GetGripPushInsteadChance(bs);
+					//The fumble chance stacks the per-attempt mistakebias roll with the
+					//speed pressure of being moved fast mid-grip - a hard, fast jerk is
+					//what rattles the bot into shoving instead of pulling free.
+					int pushInsteadChance = NewBotAI_GetGripPushInsteadChance(bs) +
+						NewBotAI_GetGripSpeedMistakeChance(bs);
+					if (pushInsteadChance > 100)
+					{
+						pushInsteadChance = 100;
+					}
 					if (pushInsteadChance > 0 && Q_irand(1, 100) <= pushInsteadChance)
 					{
 						//Confused escape: shove the gripper away with push instead of
@@ -9132,7 +9169,7 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 				 (bs->pullKickJumpTime == -1 && bs->frame_Enemy_Len <= 320.0f)))
 			{
 				trap->EA_Jump(bs->client);
-				bs->flipkickInputTime = level.time + 500;
+				bs->flipkickInputTime = level.time + NEWBOTAI_FLIPKICK_INPUT_WINDOW_MS;
 				bs->flipkickJumpHeld = qtrue;
 				bs->pullKickJumpTime = 0;
 				//Same 300ms post-attempt cooldown NewBotAI_Flipkick applies to its own
@@ -9638,6 +9675,7 @@ static int NewBotAI_GetGripEscapeDelayMs(bot_state_t *bs)
 {
 	const float mistakeChance = BotGetMistakeBiasChance(bs);
 	int maxDelay;
+	int roll;
 
 	if (mistakeChance <= 0.0f)
 	{
@@ -9646,7 +9684,22 @@ static int NewBotAI_GetGripEscapeDelayMs(bot_state_t *bs)
 
 	maxDelay = 250 + (int)((mistakeChance / 100.0f) * (NEWBOTAI_GRIP_MISTAKE_MAX_DELAY_MS - 250));
 
-	return Q_irand(0, maxDelay);
+	//Every level sees both early and late escapes across grips: the base roll is uniform
+	//over the full range, but higher-skill bots take the better (smaller) of two draws
+	//more and more often, so their escapes skew early without ever losing the chance of
+	//a late one. Level 10 returned 0 above (no mistakes at all).
+	roll = Q_irand(0, maxDelay);
+	if (bs->settings.skill > 5.0f &&
+		Q_irand(1, 100) <= (int)((bs->settings.skill - 5.0f) * 20.0f))
+	{
+		const int secondRoll = Q_irand(0, maxDelay);
+		if (secondRoll < roll)
+		{
+			roll = secondRoll;
+		}
+	}
+
+	return roll;
 }
 
 // Item 4: per-session chance (0-100) that the bot never breaks this grip with a pull or
@@ -9665,6 +9718,34 @@ static int NewBotAI_GetGripNeverEscapeChance(bot_state_t *bs)
 static int NewBotAI_GetGripPushInsteadChance(bot_state_t *bs)
 {
 	return (int)(BotGetMistakeBiasChance(bs) * 0.5f);
+}
+
+// Item 4: mistakebias weights off gripkicks that achieve high speeds - the faster the
+// gripper is moving our bot around mid-grip (hard yaw jerks, throws), the more likely
+// the escape fails, so a skillful fast gripkick is genuinely harder to break out of
+// than a slow one. Returns a 0-100 chance scaled off how fast we are currently being
+// moved; at or above ~900 u/s even a perfect bot can be rattled into a failed attempt.
+#define NEWBOTAI_GRIP_SPEED_MISTAKE_MAX 900.0f
+static int NewBotAI_GetGripSpeedMistakeChance(bot_state_t *bs)
+{
+	const float speed = VectorLength(bs->cur_ps.velocity);
+	float chance;
+
+	if (speed <= 0.0f)
+	{
+		return 0;
+	}
+
+	chance = (speed / NEWBOTAI_GRIP_SPEED_MISTAKE_MAX) * 100.0f;
+	if (chance > 100.0f)
+	{
+		chance = 100.0f;
+	}
+
+	//Level 10 plays perfectly (see BotGetMistakeBiasChance) - but being whipped around
+	//at full grip speed rattles anyone, so speed applies its own independent pressure
+	//rather than going through the skill-zeroed base chance.
+	return (int)chance;
 }
 
 
