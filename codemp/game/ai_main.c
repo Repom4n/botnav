@@ -8564,16 +8564,25 @@ static void NewBotAI_SchedulePullkickJump(bot_state_t *bs)
 
 // Saber-duel deadlock fix: when flipkick isn't available (g_flipkick disabled, or the duel type
 // disallows it), give the bot a real goal instead of standing indecisively -- lean on fan-chain
-// attacks, bias saber style toward red (strong) swing chains, and add a more pronounced
-// side-to-side wiggle than the subtle fan-chain strafe.
+// attacks, pick evenly between red/staff and yellow swing chains (no bias toward red), and add
+// a yaw/pitch aim wobble instead of any extra movement input.
 static void NewBotAI_SaberDuelIndecisionFallback(bot_state_t *bs, qboolean horizontalSwingStart)
 {
 	const float fanBias = BotGetChanceBiasPercent(bot_fanbias.value);
 
-	if (g_entities[bs->client].client->ps.fd.saberAnimLevel != SS_STRONG &&
+	//Staff-wielders can't switch off staff (see the main style-cycle logic below, which
+	//excludes SS_STAFF/SS_DUAL entirely) - staff already represents the "red/staff" side
+	//for them, so only single-blade bots pick here, split 50/50 between red (SS_STRONG)
+	//and yellow (SS_MEDIUM) rather than always defaulting to red.
+	if (g_entities[bs->client].client->ps.fd.saberAnimLevel != SS_STAFF &&
 		fanBias > 0.0f && Q_irand(1, 100) <= (int)fanBias)
 	{
-		g_entities[bs->client].client->ps.fd.saberAnimLevel = SS_STRONG;
+		const int chosenStyle = Q_irand(0, 1) ? SS_STRONG : SS_MEDIUM;
+
+		if (g_entities[bs->client].client->ps.fd.saberAnimLevel != chosenStyle)
+		{
+			g_entities[bs->client].client->ps.fd.saberAnimLevel = chosenStyle;
+		}
 	}
 
 	if (horizontalSwingStart)
@@ -8582,15 +8591,14 @@ static void NewBotAI_SaberDuelIndecisionFallback(bot_state_t *bs, qboolean horiz
 		return;
 	}
 
-	//Pronounced wiggle: faster alternating strafe than the ~150ms fan-chain cadence.
-	if ((level.time / 80) % 2)
-	{
-		trap->EA_MoveRight(bs->client);
-	}
-	else
-	{
-		trap->EA_MoveLeft(bs->client);
-	}
+	//Aim wobble instead of a movement change: reuse the same aim offset the bot's normal
+	//skill-based aim wobble already computes (see BotAimOffsetGoalAngles), unscaled by
+	//fanBias - fanBias only gates whether this fallback engages at all, not how strong the
+	//wobble is.
+	bs->goalAngles[YAW] += bs->aimOffsetAmtYaw;
+	bs->goalAngles[PITCH] += bs->aimOffsetAmtPitch;
+	bs->goalAngles[YAW] = AngleNormalize360(bs->goalAngles[YAW]);
+	bs->goalAngles[PITCH] = AngleNormalize360(bs->goalAngles[PITCH]);
 }
 
 // bot_conservation: 0-100 bias (see g_xcvar.h) controlling how often a bot disengages
@@ -10046,11 +10054,12 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 // Strafe-only movement for the fan chain's TAP_PRE_SWING/SWING/TAP_POST_SWING phases -
 // forward/back/diagonal input is negated so only the chosen strafe direction is issued.
 // DWELL is free movement for approach/positioning, so instead of doing nothing there
-// (leaving it entirely to normal steering) it now layers a wiggle on top - Item 7: the
-// same faster alternating strafe used by NewBotAI_SaberDuelIndecisionFallback, scaled by
-// bot_fanbias so it shows up more the more a bot leans into the fan-chain attack style.
-// This only adds left/right strafe input (no EA_Move reset), so it doesn't cancel
-// whatever forward/back approach movement normal steering already issued this think.
+// (leaving it entirely to normal steering) it now layers a yaw/pitch aim wobble on top -
+// Item 7: gated by bot_fanbias (only wobbles at all the more a bot leans into the
+// fan-chain attack style), but the wobble itself reuses the same aim offset the bot's
+// normal skill-based aim wobble already computes (see BotAimOffsetGoalAngles) rather than
+// scaling its intensity by fanBias. This doesn't touch movement input, so it doesn't
+// cancel whatever forward/back approach movement normal steering already issued this think.
 static void NewBotAI_ApplyHorizontalSwingMove(bot_state_t *bs)
 {
 	if (bs->fanPhase == FAN_PHASE_DWELL)
@@ -10062,14 +10071,10 @@ static void NewBotAI_ApplyHorizontalSwingMove(bot_state_t *bs)
 			return;
 		}
 
-		if ((level.time / 150) % 2)
-		{
-			trap->EA_MoveRight(bs->client);
-		}
-		else
-		{
-			trap->EA_MoveLeft(bs->client);
-		}
+		bs->goalAngles[YAW] += bs->aimOffsetAmtYaw;
+		bs->goalAngles[PITCH] += bs->aimOffsetAmtPitch;
+		bs->goalAngles[YAW] = AngleNormalize360(bs->goalAngles[YAW]);
+		bs->goalAngles[PITCH] = AngleNormalize360(bs->goalAngles[PITCH]);
 		return;
 	}
 
