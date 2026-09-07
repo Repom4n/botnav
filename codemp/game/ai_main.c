@@ -6714,8 +6714,41 @@ int NewBotAI_GetProtect(bot_state_t* bs) {
 void NewBotAI_Getup(bot_state_t *bs)
 {
 	qboolean useTheForce = qfalse;
+	const int ourHealth = g_entities[bs->client].health;
+	qboolean enemyIncomingSaber = qfalse;
 
 	trap->EA_Jump(bs->client);
+
+	//Item 4: while knocked down with plenty of health, meeting an incoming saber attack
+	//with gripkick + a sideways roll beats lying there blocking - the roll dodges the
+	//swing line and the grip sets up the kick as we come up.
+	if (bs->currentEnemy && bs->currentEnemy->client &&
+		bs->currentEnemy->client->ps.weapon == WP_SABER &&
+		BG_SaberInAttack(bs->currentEnemy->client->ps.saberMove) &&
+		bs->frame_Enemy_Len < 250)
+	{
+		enemyIncomingSaber = qtrue;
+	}
+
+	if (ourHealth > 55 && enemyIncomingSaber)
+	{
+		//Sideways roll away from the incoming swing: hold a lateral input (alternating so
+		//we don't just run in a straight line) to trigger/steer the sideways getup roll.
+		if (level.framenum & 1)
+			trap->EA_MoveLeft(bs->client);
+		else
+			trap->EA_MoveRight(bs->client);
+
+		if (!(g_forcePowerDisable.integer & (1 << FP_GRIP)) &&
+			(bs->cur_ps.fd.forcePowersKnown & (1 << FP_GRIP)) &&
+			bs->cur_ps.fd.forcePower >= 20 &&
+			bs->frame_Enemy_Len <= MAX_GRIP_DISTANCE &&
+			!(bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB)))
+		{
+			level.clients[bs->client].ps.fd.forcePowerSelected = FP_GRIP;
+			useTheForce = qtrue;
+		}
+	}
 
 	if ((bs->cur_ps.fd.forceGripBeingGripped > level.time) && bs->cur_ps.velocity[2] < -100) { //in grip and going down, a splat?
 		if (bs->cur_ps.fd.forcePowersKnown & (1 << FP_PROTECT)) {
@@ -6732,6 +6765,42 @@ void NewBotAI_Getup(bot_state_t *bs)
 	if (!useTheForce && NewBotAI_GetProtect(bs)) {
 		level.clients[bs->client].ps.fd.forcePowerSelected = FP_PROTECT;
 		useTheForce = qtrue;
+	}
+
+	//Item 7: when we combine the sideways roll with Drain, yaw 90 degrees away from the
+	//opponent (blended over 200ms) so the roll carries us out of their attack line
+	//instead of alongside them.
+	if (!useTheForce && enemyIncomingSaber &&
+		!(g_forcePowerDisable.integer & (1 << FP_DRAIN)) &&
+		(bs->cur_ps.fd.forcePowersKnown & (1 << FP_DRAIN)) &&
+		bs->cur_ps.fd.forcePower >= 21)
+	{
+		vec3_t a_fo;
+		vec3_t yawTarget;
+		float yawBlend;
+
+		level.clients[bs->client].ps.fd.forcePowerSelected = FP_DRAIN;
+		useTheForce = qtrue;
+
+		if (bs->drainRollYawStart <= 0 || bs->drainRollYawStart > level.time)
+		{
+			bs->drainRollYawStart = level.time;
+		}
+
+		VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, a_fo);
+		vectoangles(a_fo, a_fo);
+		//90 degrees to the side, away from the enemy, blended over 200ms.
+		yawBlend = (float)(level.time - bs->drainRollYawStart) / 200.0f;
+		if (yawBlend > 1.0f)
+			yawBlend = 1.0f;
+		VectorCopy(bs->ideal_viewangles, yawTarget);
+		yawTarget[YAW] = AngleNormalize360(a_fo[YAW] + 90.0f * yawBlend);
+		bs->ideal_viewangles[YAW] = yawTarget[YAW];
+		bs->goalAngles[YAW] = yawTarget[YAW];
+	}
+	else
+	{
+		bs->drainRollYawStart = 0;
 	}
 
 	if ((!useTheForce && ((bs->frame_Enemy_Len < 200) || (bs->cur_ps.fd.forceGripBeingGripped > level.time)))) {
@@ -6844,9 +6913,11 @@ static qboolean NewBotAI_CanBackflip(bot_state_t *bs)
 // frequent hops, lower = less frequent, 0 = disabled).
 static void NewBotAI_TryRandomHop(bot_state_t *bs)
 {
-	const int hopFrequency = bot_hopfrequency.integer;
+	const float hopFrequency = bot_hopfrequency.value;
 
-	if (hopFrequency <= 0)
+	//Item 12: read the float value (not the truncated integer) so sub-1 frequencies like
+	//0.1 actually throttle hopping instead of rounding to 0/off or 1.
+	if (hopFrequency <= 0.0f)
 	{
 		return;
 	}
@@ -6860,7 +6931,7 @@ static void NewBotAI_TryRandomHop(bot_state_t *bs)
 	// airborne/wall-contact moment can't re-roll a hop on every think. At the default
 	// frequency the interval is a random 1-4 seconds; each hop re-rolls, so chained
 	// hops stay possible while the bot still spends most of its time on the ground.
-	bs->nextHopTime = level.time + (Q_irand(1000, 4000) * 100) / hopFrequency;
+	bs->nextHopTime = level.time + (int)((float)Q_irand(1000, 4000) * (100.0f / hopFrequency));
 
 	if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE)
 	{
@@ -7521,6 +7592,13 @@ void NewBotAI_SaberThrowing(bot_state_t* bs)
 		return;
 	}
 
+	//Lost the health advantage mid-throw: stop feeding alt-attack so the saber starts
+	//its normal return instead of staying out while we're suddenly the vulnerable one.
+	if (ourHealth < enemyHealth)
+	{
+		return;
+	}
+
 	//Release alt-attack as soon as the bot's aggression turns defensive so the
 	//saber can begin its normal return instead of extending the throw.
 	if (BotGetAggressionBias(bs) <= 0.0f)
@@ -8169,13 +8247,13 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 			}
 
 			//A committed fan chain keeps the attack button held for its entire duration
-			//(dwell, tap, and swing windows, up to the 3.5s chain cap) so the engine's
+			//(dwell, tap, and swing windows, up to the 3s chain cap) so the engine's
 			//saber combo keeps chaining across the dwell between direction taps instead
 			//of getting released mid-chain. Movement negation stays strafe-only during
 			//the tap/swing phases via NewBotAI_ApplyHorizontalSwingMove; DWELL moves
-			//freely. Chain-ending conditions (time cap, any damage taken) are handled by
-			//NewBotAI_PrepareHorizontalSwingStart, so no separate health gate is needed
-			//here - it would otherwise end the hold early even without taking damage.
+			//freely. Chain-ending conditions (time cap, dropping below 70 HP) are handled
+			//by NewBotAI_PrepareHorizontalSwingStart, so no separate health gate is needed
+			//here - it would otherwise end the hold early even without dropping low.
 			//Check this ahead of, and independent from, the saberMove-gated
 			//single-swing case below.
 			if (bs->fanPhase != FAN_PHASE_INACTIVE)
@@ -8389,6 +8467,24 @@ static qboolean NewBotAI_ShouldConserveForce(bot_state_t *bs)
 		BG_SaberInAttack(bs->currentEnemy->client->ps.saberMove) ||
 		bs->frame_Enemy_Len < 150)
 		return qfalse;
+
+	//Item 1: if the bot wants to force drain but simply cannot reach its opponent with
+	//it, stop pressing and take the conservation window to regain force instead.
+	if (!(g_forcePowerDisable.integer & (1 << FP_DRAIN)) &&
+		(bs->cur_ps.fd.forcePowersKnown & (1 << FP_DRAIN)) &&
+		ourForce < 90 &&
+		(bs->frame_Enemy_Len > MAX_DRAIN_DISTANCE || !bs->frame_Enemy_Vis))
+	{
+		return qtrue;
+	}
+
+	//Item 6: with the opponent knocked down and not enough force banked for the 40-FP
+	//PTK (pull-throw-kick), wait/conserve until we regenerate the points for it.
+	if (BG_InKnockDown(bs->currentEnemy->client->ps.legsAnim) &&
+		ourForce >= 15 && ourForce < 40)
+	{
+		return qtrue;
+	}
 
 	//Small baseline chance from the bias alone, heavily amplified by how far behind we
 	//are on force points.
@@ -9159,6 +9255,11 @@ static float BotGetMistakeBiasChance(bot_state_t *bs)
 		return 0.0f;
 	}
 
+	//Item 5: lower-skill bots should almost never break out of an opponent's grip. The
+	//old linear (6 - skill) / 5 scale still gave level 1 bots a full 100% and level 2
+	//bots 80% of the bias, which is why they kept pulling out. The squared falloff below
+	//drops level 1 to ~25%, level 2 to ~13% and level 3 to ~6% of the bias (and it is
+	//additionally clamped below) while leaving higher-skill bots mostly unaffected.
 	skillScale = (6.0f - bs->settings.skill) / 5.0f;
 	if (skillScale < 0.0f)
 	{
@@ -9168,8 +9269,22 @@ static float BotGetMistakeBiasChance(bot_state_t *bs)
 	{
 		skillScale = 1.0f;
 	}
+	skillScale *= skillScale;
 
-	return chance * skillScale;
+	chance *= skillScale;
+
+	//Hard per-level ceilings so even a maxed-out bot_mistakebias can't make low-level
+	//bots reliable: level 1 never breaks free of a grip, level 2 only very rarely.
+	if (bs->settings.skill <= 1)
+	{
+		return 0.0f;
+	}
+	if (bs->settings.skill <= 2 && chance > 5.0f)
+	{
+		chance = 5.0f;
+	}
+
+	return chance;
 }
 
 static void NewBotAI_ApplyPullMistake(bot_state_t *bs)
@@ -9401,10 +9516,6 @@ static int NewBotAI_GetLightningWeight(bot_state_t *bs)
 	}
 
 	aggressionBias = BotGetAggressionBias(bs);
-	if (aggressionBias >= 0.0f)
-	{
-		return 0;
-	}
 
 	startDistance = BotGetLightningStartDistance();
 	if (bs->frame_Enemy_Len < startDistance || bs->frame_Enemy_Len > FORCE_LIGHTNING_RADIUS)
@@ -9436,8 +9547,15 @@ static int NewBotAI_GetLightningWeight(bot_state_t *bs)
 		}
 	}
 
-	defensiveFactor = -aggressionBias;
-	return (int)(defensiveFactor * distanceFactor * (lightningBias / 100.0f) * 85.0f);
+	//Item 11: the overall weight of lightningbias is increased immensely so it comes out
+	//frequently once we are past bot_lightningdistance - aggression no longer gates it
+	//off, and a defensive lean only makes it stronger.
+	defensiveFactor = 1.0f;
+	if (aggressionBias < 0.0f)
+	{
+		defensiveFactor += -aggressionBias;
+	}
+	return (int)(defensiveFactor * distanceFactor * (lightningBias / 100.0f) * 255.0f);
 }
 
 static int NewBotAI_GetPTKWeight(bot_state_t *bs)
@@ -9459,6 +9577,20 @@ static int NewBotAI_GetPTKWeight(bot_state_t *bs)
 	if (bs->cur_ps.weapon != WP_SABER && bs->cur_ps.weapon != WP_MELEE)
 	{
 		return 0;
+	}
+
+	//Item 10: PTK spends ~40 FP (20 pull + 20 throw), so it is never the right call until
+	//we actually have that banked - no PTK weight at all at or under 38 force points.
+	if (ourForce <= 38)
+	{
+		return 0;
+	}
+
+	//Item 6: a knocked-down opponent is the prime PTK window (they cannot defend the pull
+	//or the kick while getting up), so weight it heavily.
+	if (BG_InKnockDown(bs->currentEnemy->client->ps.legsAnim))
+	{
+		weight += 50;
 	}
 
 	if (hisForce < 20)
@@ -9547,10 +9679,13 @@ static qboolean NewBotAI_IsSaberSwingStartWindow(bot_state_t *bs)
 
 // Fan-chain phases (see NewBotAI_PrepareHorizontalSwingStart): DWELL is a free-movement
 // hold, TAP_PRE_SWING/TAP_POST_SWING are brief strafe-only commit pulses bookending the
-// dwell, SWING holds attack+strafe to actually throw the horizontal swing. The whole chain
-// holds attack continually for up to 3.5 seconds, or until the bot takes any damage.
+// dwell, SWING holds attack+strafe to actually throw the horizontal swing. The chain
+// keeps the attack/swing input held continuously for a flat 3 seconds (regardless of
+// bot_fandwell, which only paces the direction taps within it), ending early only if the
+// bot drops below 70 HP.
 #define NEWBOTAI_FAN_TAP_MS 100
-#define NEWBOTAI_FAN_CHAIN_MAX_MS 3500
+#define NEWBOTAI_FAN_CHAIN_MAX_MS 3000
+#define NEWBOTAI_FAN_CHAIN_MIN_HEALTH 70
 
 static void NewBotAI_ResetFanChain(bot_state_t *bs)
 {
@@ -9596,8 +9731,8 @@ static float NewBotAI_GetFanBiasPercent(bot_state_t *bs)
 // The two 100ms strafe-only taps bookend the free-movement dwell on either side, bridging
 // the movement space between the horizontal swing-inducing strafes. Attack stays held for
 // the entire chain so the engine's combo keeps chaining even across the dwell between
-// swings, and the chain only ends after a flat 3.5 second cap or as soon as the bot has
-// taken any damage during it, whichever comes first.
+// swings, and the chain only ends after a flat 3 second cap or as soon as the bot drops
+// below 70 HP during it, whichever comes first.
 static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 {
 	const float fanBias = NewBotAI_GetFanBiasPercent(bs);
@@ -9616,9 +9751,10 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 	}
 
 	if (bs->fanPhase != FAN_PHASE_INACTIVE &&
-		g_entities[bs->client].health < bs->fanChainStartHealth)
+		g_entities[bs->client].health < NEWBOTAI_FAN_CHAIN_MIN_HEALTH)
 	{
-		//Taking any damage during the chain breaks it.
+		//Item 13: the chain only breaks early once the bot drops below 70 HP - chip damage
+		//at high health no longer interrupts the held attack/swing input.
 		NewBotAI_ResetFanChain(bs);
 		return;
 	}
@@ -10116,6 +10252,12 @@ int NewBotAI_GetPull(bot_state_t *bs) {
 			return 100;
 		}
 		if (BG_InKnockDown(bs->currentEnemy->client->ps.legsAnim)) {
+			//Item 9: a knocked-down target about to drop (<19 HP) should be finished with a
+			//pullkick alone - no saber throw - but only once they are actually within
+			//pullkick range (pull range is 640).
+			if (hisHealth < 19 && bs->frame_Enemy_Len < 640) {
+				return 100;
+			}
 			//Com_Printf("pullable 3\n");
 			return (int)(weight * 2) + ptkWeight;
 		}
@@ -10397,6 +10539,11 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 	//priority over spending force on a throw.
 	if (ourForce < 50)
 		return 0;
+	//Too hurt to risk going saberless while the enemy holds a big force lead: even when
+	//we still hold the health advantage, a throw here gives them the opening their force
+	//edge needs to flip the fight. Hold the saber instead.
+	if (ourHealth < 50 && (bs->currentEnemy->client->ps.fd.forcePower - ourForce) > 40)
+		return 0;
 	//Winning the force game: grip (and the gripkick it feeds into) takes priority over
 	//throwing the saber away.
 	if (ourForce > bs->currentEnemy->client->ps.fd.forcePower)
@@ -10417,7 +10564,12 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 	g_entities[bs->client].client->ps.fd.forcePowersKnown |= (1 << FP_SABERTHROW);
 
 	if (BG_InKnockDown(bs->currentEnemy->client->ps.legsAnim)) {
-		if (ourForce > 40 && enemyTotalHealth <= 50) {
+		//Item 8: a knocked-down opponent in the 18-30 HP band should be finished with the
+		//saber throw first; PTK chains in on top of it once we have the force for it.
+		if (enemyTotalHealth >= 18 && enemyTotalHealth <= 30) {
+			weight = 100;
+		}
+		else if (ourForce > 40 && enemyTotalHealth <= 50) {
 			weight = 100;
 		}
 		else if (ourForce > 30) {
@@ -12182,7 +12334,11 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 		vectoangles(a_fo, a_fo);
 
 		//do this above all things
-		if ((bs->cur_ps.fd.forcePowersKnown & (1 << FP_PUSH)) && (bs->doForcePush > level.time || bs->cur_ps.fd.forceGripBeingGripped > level.time) && level.clients[bs->client].ps.fd.forcePower > forcePowerNeeded[level.clients[bs->client].ps.fd.forcePowerLevel[FP_PUSH]][FP_PUSH] /*&& InFieldOfVision(bs->viewangles, 50, a_fo)*/)
+		//Item 5: no instant push-out while gripped here - that path fired regardless of the
+		//bot's (slow) low-skill aim and let level 1-2 bots break free immediately. Escaping
+		//an opponent's grip is now left to NewBotAI_ReactToBeingGripped, which is gated by
+		//bot_mistakebias. A scripted force push (doForcePush) is still honored.
+		if ((bs->cur_ps.fd.forcePowersKnown & (1 << FP_PUSH)) && bs->doForcePush > level.time && level.clients[bs->client].ps.fd.forcePower > forcePowerNeeded[level.clients[bs->client].ps.fd.forcePowerLevel[FP_PUSH]][FP_PUSH] /*&& InFieldOfVision(bs->viewangles, 50, a_fo)*/)
 		{
 			level.clients[bs->client].ps.fd.forcePowerSelected = FP_PUSH;
 			useTheForce = 1;
@@ -12260,13 +12416,11 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 
 		if (!useTheForce)
 		{ //try neutral powers
-			if ((bs->cur_ps.fd.forcePowersKnown & (1 << FP_PUSH)) && bs->cur_ps.fd.forceGripBeingGripped > level.time && level.clients[bs->client].ps.fd.forcePower > forcePowerNeeded[level.clients[bs->client].ps.fd.forcePowerLevel[FP_PUSH]][FP_PUSH] && InFieldOfVision(bs->viewangles, 50, a_fo))
-			{
-				level.clients[bs->client].ps.fd.forcePowerSelected = FP_PUSH;
-				useTheForce = 1;
-				forceHostile = 1;
-			}
-			else if ((bs->cur_ps.fd.forcePowersKnown & (1 << FP_SPEED)) && g_entities[bs->client].health < 25 && level.clients[bs->client].ps.fd.forcePower > forcePowerNeeded[level.clients[bs->client].ps.fd.forcePowerLevel[FP_SPEED]][FP_SPEED])
+			//Item 5: the gripped->push escape here also bypassed the low-skill slow aim
+			//(and bot_mistakebias) to instantly break the opponent's grip - removed so
+			//level 1-2 bots actually stay gripped unless the NewBotAI grip-escape lets
+			//them out.
+			if ((bs->cur_ps.fd.forcePowersKnown & (1 << FP_SPEED)) && g_entities[bs->client].health < 25 && level.clients[bs->client].ps.fd.forcePower > forcePowerNeeded[level.clients[bs->client].ps.fd.forcePowerLevel[FP_SPEED]][FP_SPEED])
 			{
 				level.clients[bs->client].ps.fd.forcePowerSelected = FP_SPEED;
 				useTheForce = 1;
@@ -13431,8 +13585,10 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 
 	if (bs->doAttack && bs->cur_ps.weapon == WP_SABER &&
 		bs->saberDefending && bs->currentEnemy && bs->currentEnemy->client &&
-		BotWeaponBlockable(bs->currentEnemy->client->ps.weapon) )
-	{
+		BotWeaponBlockable(bs->currentEnemy->client->ps.weapon) &&
+		!(bs->cur_ps.saberInFlight && !bs->cur_ps.saberEntityNum))
+	{ //never suppress the recall toggle below just because we were blocking - without the
+	  //saber in hand there is nothing to defend with anyway
 		bs->doAttack = 0;
 	}
 
@@ -13451,9 +13607,23 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 	if (bs->cur_ps.weapon == WP_SABER &&
 		bs->cur_ps.saberInFlight &&
 		!bs->cur_ps.saberEntityNum)
-	{ //saber knocked away, keep trying to get it back
-		bs->doAttack = 1;
+	{ //saber knocked away: the engine only recalls the saber on a fresh +attack edge, and
+	  //a held button counts as one press forever. Toggle the press on a ~100ms cadence so
+	  //repeated attack inputs keep firing until the saber returns.
 		bs->doAltAttack = 0;
+		if (bs->saberRetrieveSpamTime <= level.time)
+		{
+			bs->saberRetrieveSpamHeld = !bs->saberRetrieveSpamHeld;
+			bs->saberRetrieveSpamTime = level.time + 100;
+		}
+		bs->doAttack = bs->saberRetrieveSpamHeld ? 1 : 0;
+	}
+	else
+	{
+		//Saber is back (or not ours to recall): reset the toggle so the next knock-away
+		//starts with a fresh press.
+		bs->saberRetrieveSpamTime = 0;
+		bs->saberRetrieveSpamHeld = qfalse;
 	}
 
 	if (bs->doAttack)

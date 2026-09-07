@@ -399,6 +399,10 @@ typedef struct bot_state_s
 	int					conserveUntil; // while > level.time, bot disengages (no force power use) to regen FP - see bot_conservation
 	int					conserveNextRollTime; // debounce between chances to start a new conservation window
 
+	int					saberRetrieveSpamTime; // level.time through which the next attack-toggle press is held while recalling a knocked-away saber
+	qboolean			saberRetrieveSpamHeld; // whether the current attack-toggle press is the held or released half
+	int					drainRollYawStart; // level.time when the knocked-down drain+sideways-roll 90-degree yaw-away blend began (0 = not blending)
+
 	int					navObstacleUntil; // stay in waypoint nav mode until this time when an obstacle blocks path to enemy
 	int					combatNavHoldUntil; // remain in combat for 1500ms before returning to waypoint navigation
 	int					lastHurtTime;     // level.time when this bot last took damage (set in BotDamageNotification)
