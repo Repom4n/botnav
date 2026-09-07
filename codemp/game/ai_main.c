@@ -147,6 +147,7 @@ static float NewBotAI_GetPullkickTimeToKickRange(bot_state_t *bs);
 static void NewBotAI_SchedulePullkickJump(bot_state_t *bs);
 static int NewBotAI_GetDrainTapTargetCost(bot_state_t *bs);
 static qboolean NewBotAI_IsPullkickDrainWindow(bot_state_t *bs);
+static qboolean NewBotAI_IsDrainlockAdvantage(bot_state_t *bs);
 static void NewBotAI_AdjustSaberThrowArcAim(bot_state_t *bs, vec3_t headlevel);
 static void NewBotAI_AdjustSaberThrowLead(bot_state_t *bs);
 static void NewBotAI_TrySaberThrowDefenseBreak(bot_state_t *bs);
@@ -7099,13 +7100,17 @@ void NewBotAI_Flipkick(bot_state_t *bs)
 
 	if (isGripSequence && bs->currentEnemy && bs->currentEnemy->client)
 	{
-		//During a gripkick the only attacks allowed are flipkicks into a target that is
-		//both close enough to kick and inside a 90 degree cone in front of us.
+		//Item 3: the engine's forward flipkick only actually triggers when the target is
+		//inside a tight ~32-unit forward trace while we're airborne and rising (see the
+		//comment on the gripkick's straight-forward-only movement below) - the old 160
+		//unit / 90 degree gate here was far more generous than that real trigger, so the
+		//bot was jumping well before a kick was actually going to land. Only allow the
+		//jump once the gripped target is genuinely close and centered in front.
 		vec3_t a_fo;
 
 		VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, a_fo);
 		vectoangles(a_fo, a_fo);
-		if (bs->frame_Enemy_Len > 160 || !InFieldOfVision(bs->viewangles, 90, a_fo))
+		if (bs->frame_Enemy_Len > 110 || !InFieldOfVision(bs->viewangles, 40, a_fo))
 		{
 			return;
 		}
@@ -7471,7 +7476,7 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 			bs->ideal_viewangles[PITCH] = 89;
 			trap->EA_Move(bs->client, vec3_origin, 0);
 			trap->EA_MoveForward(bs->client);
-			if (bs->frame_Enemy_Len <= 160)
+			if (bs->frame_Enemy_Len <= 110)
 			{
 				const int previousAttempt = bs->lastFlipkickAttemptTime;
 				NewBotAI_Flipkick(bs);
@@ -8539,10 +8544,23 @@ static float NewBotAI_GetPullkickTimeToKickRange(bot_state_t *bs)
 //Item 2: bots were jumping into flipkicks a touch early (and kept hopping afterward
 //landing), so the whole schedule is nudged 30ms later - both the "kick now" case and
 //the predicted-closing-time lead below.
+//Item 2 (incessant hopping): this is called every think while pull remains the top
+//weighted force power, so once a scheduled jump fires it would otherwise immediately
+//re-arm itself (frame_Enemy_Len <= 135.0f is still true right after landing next to the
+//enemy) and hop again a few ms later, forever, regardless of bot_hopfrequency. Reuse the
+//same post-attempt cooldown NewBotAI_Flipkick uses (lastFlipkickAttemptTime) to hold off
+//scheduling a fresh jump until that cooldown expires.
 #define NEWBOTAI_PULLKICK_JUMP_DELAY_MS 30
 static void NewBotAI_SchedulePullkickJump(bot_state_t *bs)
 {
 	const float timeToRange = NewBotAI_GetPullkickTimeToKickRange(bs);
+
+	if (bs->lastFlipkickAttemptTime > level.time)
+	{
+		//Still cooling down from the last kick attempt/jump - don't re-arm a new one yet.
+		bs->pullKickJumpTime = 0;
+		return;
+	}
 
 	if (bs->frame_Enemy_Len <= 135.0f || !NewBotAI_CanAttemptFlipkick(bs))
 	{
@@ -8564,16 +8582,25 @@ static void NewBotAI_SchedulePullkickJump(bot_state_t *bs)
 
 // Saber-duel deadlock fix: when flipkick isn't available (g_flipkick disabled, or the duel type
 // disallows it), give the bot a real goal instead of standing indecisively -- lean on fan-chain
-// attacks, bias saber style toward red (strong) swing chains, and add a more pronounced
-// side-to-side wiggle than the subtle fan-chain strafe.
+// attacks, pick evenly between red/staff and yellow swing chains (no bias toward red), and add
+// a yaw/pitch aim wobble instead of any extra movement input.
 static void NewBotAI_SaberDuelIndecisionFallback(bot_state_t *bs, qboolean horizontalSwingStart)
 {
 	const float fanBias = BotGetChanceBiasPercent(bot_fanbias.value);
 
-	if (g_entities[bs->client].client->ps.fd.saberAnimLevel != SS_STRONG &&
+	//Staff-wielders can't switch off staff (see the main style-cycle logic below, which
+	//excludes SS_STAFF/SS_DUAL entirely) - staff already represents the "red/staff" side
+	//for them, so only single-blade bots pick here, split 50/50 between red (SS_STRONG)
+	//and yellow (SS_MEDIUM) rather than always defaulting to red.
+	if (g_entities[bs->client].client->ps.fd.saberAnimLevel != SS_STAFF &&
 		fanBias > 0.0f && Q_irand(1, 100) <= (int)fanBias)
 	{
-		g_entities[bs->client].client->ps.fd.saberAnimLevel = SS_STRONG;
+		const int chosenStyle = Q_irand(0, 1) ? SS_STRONG : SS_MEDIUM;
+
+		if (g_entities[bs->client].client->ps.fd.saberAnimLevel != chosenStyle)
+		{
+			g_entities[bs->client].client->ps.fd.saberAnimLevel = chosenStyle;
+		}
 	}
 
 	if (horizontalSwingStart)
@@ -8582,15 +8609,14 @@ static void NewBotAI_SaberDuelIndecisionFallback(bot_state_t *bs, qboolean horiz
 		return;
 	}
 
-	//Pronounced wiggle: faster alternating strafe than the ~150ms fan-chain cadence.
-	if ((level.time / 80) % 2)
-	{
-		trap->EA_MoveRight(bs->client);
-	}
-	else
-	{
-		trap->EA_MoveLeft(bs->client);
-	}
+	//Aim wobble instead of a movement change: reuse the same aim offset the bot's normal
+	//skill-based aim wobble already computes (see BotAimOffsetGoalAngles), unscaled by
+	//fanBias - fanBias only gates whether this fallback engages at all, not how strong the
+	//wobble is.
+	bs->goalAngles[YAW] += bs->aimOffsetAmtYaw;
+	bs->goalAngles[PITCH] += bs->aimOffsetAmtPitch;
+	bs->goalAngles[YAW] = AngleNormalize360(bs->goalAngles[YAW]);
+	bs->goalAngles[PITCH] = AngleNormalize360(bs->goalAngles[PITCH]);
 }
 
 // bot_conservation: 0-100 bias (see g_xcvar.h) controlling how often a bot disengages
@@ -8611,6 +8637,10 @@ static qboolean NewBotAI_ShouldConserveForce(bot_state_t *bs)
 	if (!bs->currentEnemy || !bs->currentEnemy->client)
 		return qfalse;
 	if (ourForce >= 90) //already nearly full, nothing meaningful to regen
+		return qfalse;
+	//Item 5: never disengage to conserve while actively holding a drainlock advantage -
+	//pressing the chase/drain/pullkick loop takes priority over letting force regen.
+	if (NewBotAI_IsDrainlockAdvantage(bs))
 		return qfalse;
 	//Never idle into an unsafe moment - only conserve when disengaging is actually safe.
 	if (bs->hitSpotted || bs->currentEnemy->client->ps.saberInFlight ||
@@ -8885,7 +8915,10 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 				((g_entities[bs->client].health < softRetreatHealth)
 				&& (bs->cur_ps.fd.forcePower < 30)
 				&& !(bs->cur_ps.fd.forcePowersActive & (1 << FP_ABSORB))
-				&& (bs->frame_Enemy_Len < retreatDistance))) {
+				&& (bs->frame_Enemy_Len < retreatDistance)
+				//Item 5: don't let a soft-retreat break off an active drainlock chase - the
+				//critical hardRetreatHealth safety check above still applies regardless.
+				&& !NewBotAI_IsDrainlockAdvantage(bs))) {
 			qboolean wallRun = qfalse;
 			bs->combatAction = BOT_COMBAT_ACTION_RETREAT_DEFENSE;
 			//Running routine, we should add a wallrun search to this.
@@ -8990,6 +9023,10 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 				bs->flipkickInputTime = level.time + 500;
 				bs->flipkickJumpHeld = qtrue;
 				bs->pullKickJumpTime = 0;
+				//Same 300ms post-attempt cooldown NewBotAI_Flipkick applies to its own
+				//attempts - stops NewBotAI_SchedulePullkickJump from immediately re-arming
+				//another jump the instant we land next to the (still close) enemy.
+				bs->lastFlipkickAttemptTime = level.time + 300;
 			}
 		}
 		else if (bs->frame_Enemy_Len > 80) {
@@ -10046,11 +10083,12 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 // Strafe-only movement for the fan chain's TAP_PRE_SWING/SWING/TAP_POST_SWING phases -
 // forward/back/diagonal input is negated so only the chosen strafe direction is issued.
 // DWELL is free movement for approach/positioning, so instead of doing nothing there
-// (leaving it entirely to normal steering) it now layers a wiggle on top - Item 7: the
-// same faster alternating strafe used by NewBotAI_SaberDuelIndecisionFallback, scaled by
-// bot_fanbias so it shows up more the more a bot leans into the fan-chain attack style.
-// This only adds left/right strafe input (no EA_Move reset), so it doesn't cancel
-// whatever forward/back approach movement normal steering already issued this think.
+// (leaving it entirely to normal steering) it now layers a yaw/pitch aim wobble on top -
+// Item 7: gated by bot_fanbias (only wobbles at all the more a bot leans into the
+// fan-chain attack style), but the wobble itself reuses the same aim offset the bot's
+// normal skill-based aim wobble already computes (see BotAimOffsetGoalAngles) rather than
+// scaling its intensity by fanBias. This doesn't touch movement input, so it doesn't
+// cancel whatever forward/back approach movement normal steering already issued this think.
 static void NewBotAI_ApplyHorizontalSwingMove(bot_state_t *bs)
 {
 	if (bs->fanPhase == FAN_PHASE_DWELL)
@@ -10062,14 +10100,10 @@ static void NewBotAI_ApplyHorizontalSwingMove(bot_state_t *bs)
 			return;
 		}
 
-		if ((level.time / 150) % 2)
-		{
-			trap->EA_MoveRight(bs->client);
-		}
-		else
-		{
-			trap->EA_MoveLeft(bs->client);
-		}
+		bs->goalAngles[YAW] += bs->aimOffsetAmtYaw;
+		bs->goalAngles[PITCH] += bs->aimOffsetAmtPitch;
+		bs->goalAngles[YAW] = AngleNormalize360(bs->goalAngles[YAW]);
+		bs->goalAngles[PITCH] = AngleNormalize360(bs->goalAngles[PITCH]);
 		return;
 	}
 
@@ -10480,6 +10514,14 @@ int NewBotAI_GetPull(bot_state_t *bs) {
 			//Com_Printf("pullable 2\n");
 			return 100;
 		}
+		//Item 5: drainlock finisher - the enemy's force is already below the free-pullkick
+		//threshold and they're in range, so land the free pullkick right now instead of
+		//tapping drain again or doing anything else. This is what lets the bot alternate
+		//drain (bring them back under 20) and pullkick (cash it in) until they're dead or
+		//the force advantage is lost.
+		if (bs->currentEnemy->client->ps.fd.forcePower < 20 && bs->frame_Enemy_Len < 250) {
+			return 100;
+		}
 		if (BG_InKnockDown(bs->currentEnemy->client->ps.legsAnim)) {
 			//Item 9: a knocked-down target about to drop (<19 HP) should be finished with a
 			//pullkick alone - no saber throw - but only once they are actually within
@@ -10604,6 +10646,35 @@ static qboolean NewBotAI_IsPullkickDrainWindow(bot_state_t *bs)
 	}
 
 	return qtrue;
+}
+
+// Item 5: true while the bot should be actively holding a drainlock on the current enemy -
+// chasing them down and keeping them tapped under 20 FP so every pull is a free pullkick,
+// alternating drain and pullkick (see NewBotAI_GetDrain/NewBotAI_GetPull) until the enemy is
+// defeated or the bot loses its force advantage. Covers both halves of that loop: the enemy
+// is already under the free-pullkick threshold (cash in the pullkick now), or we still hold
+// enough of a force/aggression edge to drain them back below it (NewBotAI_IsPullkickDrainWindow).
+static qboolean NewBotAI_IsDrainlockAdvantage(bot_state_t *bs)
+{
+	const int ourForce = bs->cur_ps.fd.forcePower;
+	const int hisForce = bs->currentEnemy->client->ps.fd.forcePower;
+
+	if (!bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return qfalse;
+	}
+
+	if (BotGetAggressionBias(bs) <= 0.0f)
+	{
+		return qfalse;
+	}
+
+	if (ourForce <= hisForce)
+	{
+		return qfalse;
+	}
+
+	return (hisForce < 20 || NewBotAI_IsPullkickDrainWindow(bs)) ? qtrue : qfalse;
 }
 
 int NewBotAI_GetDrain(bot_state_t *bs) {
@@ -10790,8 +10861,11 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 	if (ourHealth < 50 && (bs->currentEnemy->client->ps.fd.forcePower - ourForce) > 40)
 		return 0;
 	//Winning the force game: grip (and the gripkick it feeds into) takes priority over
-	//throwing the saber away.
-	if (ourForce > bs->currentEnemy->client->ps.fd.forcePower)
+	//throwing the saber away - except for the drainlock's actual finishing blow (enemy
+	//knocked down and already low enough to die to it), which is allowed to cut through
+	//this guard instead of being permanently unreachable while we hold the force lead.
+	if (ourForce > bs->currentEnemy->client->ps.fd.forcePower &&
+		!(BG_InKnockDown(bs->currentEnemy->client->ps.legsAnim) && enemyTotalHealth <= 30))
 		return 0;
 
 	//Item 1: while we're actively drain-locking the enemy below 19 FP for a free
@@ -10894,7 +10968,7 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 	gripWeight = NewBotAI_GetGrip(bs);
 	//doNothingWeight = NewBotAI_GetWait(bs);
 
-	if (ourHealth < 100 && ourHealth <= bs->currentEnemy->health + 40 && drainWeight > minWeight) {
+	if (ourHealth < 100 && ourHealth <= bs->currentEnemy->health + 40 && drainWeight > minWeight && drainWeight >= gripWeight) {
 		level.clients[bs->client].ps.fd.forcePowerSelected = FP_DRAIN;
 		useTheForce = qtrue;
 	}
