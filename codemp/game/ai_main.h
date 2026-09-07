@@ -391,7 +391,6 @@ typedef struct bot_state_s
 	qboolean			gripkickActive;
 	int					gripkickAttemptTime; // level.time of the most recent gripkick flipkick attempt (success window is measured from this)
 	int					gripkickDwellUntil; // while > level.time, gripkick holds the target with aim-down/forward-only movement before the next kick approach
-	int					gripkickOpenerTapUntil; // while > level.time, gripkick holds a brief backward tap before the first forward flipkick approach
 
 	qboolean			wasDuelInProgress; // previous-think duelInProgress, used to count completed duels
 	int					duelCompletedCount; // duels finished since the last explore window - see bot_duelcountmax

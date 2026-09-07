@@ -7281,21 +7281,11 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 		bs->gripkickJerkPitch = -70.0f;
 		bs->gripkickAttemptTime = 0;
 		bs->gripkickDwellUntil = 0;
-		//Item 1A: force grip is initiated with a very quick backward tap, then the bot
-		//moves forward until it lands its first grip flipkick. Backward movement is
-		//otherwise reserved for after a successful flipkick (the jerk phases below).
-		bs->gripkickOpenerTapUntil = level.time + 50;
 	}
 
-	if (bs->gripkickOpenerTapUntil > level.time)
-	{
-		bs->ideal_viewangles[PITCH] = 89;
-		trap->EA_Move(bs->client, vec3_origin, 0);
-		trap->EA_MoveBack(bs->client);
-		trap->EA_ForcePower(bs->client); //Always hold grip key during grip
-		return;
-	}
-
+	//Grip initiation moves straight forward from the very first think - no backward
+	//opener tap. Backward movement is reserved for after a successful flipkick (the
+	//jerk phases below).
 	if (BG_InKnockDown(bs->currentEnemy->client->ps.legsAnim)) { //Splat and enough time? - how to see if they are splattable and were not gripped during midair. forcejumpzheight ?
 		float heightdiff = bs->currentEnemy->client->ps.origin[2] - bs->eye[2]; //Them minus ours,  they are 500, we are 300. height diff is 200.
 
@@ -12098,7 +12088,6 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		bs->gripkickJerkPitch = 0.0f;
 		bs->gripkickAttemptTime = 0;
 		bs->gripkickDwellUntil = 0;
-		bs->gripkickOpenerTapUntil = 0;
 	}
 	//An enemy swap drops any pending pk/ptk kick jump - the schedule was computed for
 	//the old opponent's approach.
