@@ -7349,12 +7349,25 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 		qboolean targetInFront;
 		qboolean attemptedKick = qfalse;
 		qboolean successfulKick = qfalse;
+		qboolean enemyOnTopOfUs;
+		qboolean weAreOnTopOfEnemy;
 
 		(void)gripkickBonus; //jerk pitch is fully randomized now (see the jerk phases below)
 
 		VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, a_fo);
 		vectoangles(a_fo, a_fo);
 		targetInFront = InFieldOfVision(bs->viewangles, 90, a_fo);
+
+		//The approach below moves forward until the target is basically touching us, so
+		//one of us can easily end up stacked on the other. Track both stackings - the
+		//target landed on us (we must step out from under them before they can be in
+		//front for the flipkick), and us landed on them (the next flipkick attempt is
+		//skipped straight to the jerk phase, since kicking while standing on their head
+		//just whiffs off the top).
+		enemyOnTopOfUs = (qboolean)(bs->frame_Enemy_Len < 70.0f &&
+			bs->cur_ps.groundEntityNum == bs->currentEnemy->s.number);
+		weAreOnTopOfEnemy = (qboolean)(bs->frame_Enemy_Len < 70.0f &&
+			bs->currentEnemy->client->ps.groundEntityNum == bs->client);
 
 		//Only a confirmed kick counts - our own kick/flip animation playing, or the
 		//gripped target knocked down right after our attempt. Counting mere attempts
@@ -7392,7 +7405,17 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 			bs->gripkickAttemptTime = 0;
 			bs->gripkickDwellUntil = 0;
 			bs->gripkickKickCount++;
-			bs->gripkickJerkCount = (bs->gripkickKickCount == 1) ? Q_irand(1, 3) : Q_irand(1, 2);
+			if (weAreOnTopOfEnemy)
+			{
+				//Landed on the opponent: skipping the next flipkick attempt means
+				//kicking again from on top of them just whiffs - begin the next jerk
+				//phase immediately instead.
+				bs->gripkickJerkCount = Q_irand(1, 2);
+			}
+			else
+			{
+				bs->gripkickJerkCount = (bs->gripkickKickCount == 1) ? Q_irand(1, 3) : Q_irand(1, 2);
+			}
 			bs->gripkickJerkUntil = 0;
 			bs->gripkickJerkYawOffset = 0.0f;
 		}
@@ -7471,12 +7494,16 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 		}
 		else if (targetInFront) {
 			//Every kick approach starts by looking straight down and moving
-			//only forward while holding grip.
+			//only forward while holding grip. The kick is offered from 130 units -
+			//slightly wider than NewBotAI_Flipkick's own 110-unit grip gate - because
+			//the forward move above means we are 15-20 units closer by the next think;
+			//only offering it at 110 let the approach overshoot past the gate and fall
+			//into the not-in-front branch below without the first flipkick ever firing.
 			VectorCopy(a_fo, bs->ideal_viewangles);
 			bs->ideal_viewangles[PITCH] = 89;
 			trap->EA_Move(bs->client, vec3_origin, 0);
 			trap->EA_MoveForward(bs->client);
-			if (bs->frame_Enemy_Len <= 110)
+			if (bs->frame_Enemy_Len <= 130)
 			{
 				const int previousAttempt = bs->lastFlipkickAttemptTime;
 				NewBotAI_Flipkick(bs);
@@ -7495,12 +7522,28 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 			}
 		}
 		else {
-			//Slowly yaw toward the target while backing away until it is
-			//inside the forward kick cone again.
+			//The target drifted outside the forward kick cone (or landed on top of us):
+			//yaw toward them while stepping sideways until they are in front for the
+			//flipkick again. Never backpedal here - the only backward movement in the
+			//gripkick belongs to the jerk phases; backing out from under a stacked
+			//target (or out of a drift) was costing us the kick window entirely.
 			bs->ideal_viewangles[PITCH] = 89;
-			bs->ideal_viewangles[YAW] += (a_fo[YAW] > bs->viewangles[YAW]) ? 12.0f : -12.0f;
+			if (enemyOnTopOfUs)
+			{
+				//They are stacked on us - face the target's true direction so the
+				//sidestep resolves to a clean lateral exit instead of wandering off
+				//the accumulating yaw correction below.
+				bs->ideal_viewangles[YAW] = a_fo[YAW];
+			}
+			else
+			{
+				bs->ideal_viewangles[YAW] += (a_fo[YAW] > bs->viewangles[YAW]) ? 12.0f : -12.0f;
+			}
 			trap->EA_Move(bs->client, vec3_origin, 0);
-			NewBotAI_RetreatDiagonal(bs, a_fo[YAW] < bs->viewangles[YAW]);
+			if (a_fo[YAW] < bs->viewangles[YAW])
+				trap->EA_MoveLeft(bs->client);
+			else
+				trap->EA_MoveRight(bs->client);
 		}
 	}
 
@@ -8588,18 +8631,32 @@ static void NewBotAI_SaberDuelIndecisionFallback(bot_state_t *bs, qboolean horiz
 {
 	const float fanBias = BotGetChanceBiasPercent(bot_fanbias.value);
 
-	//Staff-wielders can't switch off staff (see the main style-cycle logic below, which
-	//excludes SS_STAFF/SS_DUAL entirely) - staff already represents the "red/staff" side
-	//for them, so only single-blade bots pick here, split 50/50 between red (SS_STRONG)
-	//and yellow (SS_MEDIUM) rather than always defaulting to red.
-	if (g_entities[bs->client].client->ps.fd.saberAnimLevel != SS_STAFF &&
-		fanBias > 0.0f && Q_irand(1, 100) <= (int)fanBias)
+	//Single-blade bots pick split 50/50 between red (SS_STRONG) and yellow (SS_MEDIUM)
+	//rather than always defaulting to red. Staff-wielders can't switch to another style
+	//(see the main style-cycle logic below, which excludes SS_STAFF/SS_DUAL entirely) -
+	//so for them the same 50/50 roll instead randomly toggles the staff's second blade
+	//mid swing: on (SS_STAFF) or off (the saber's single-blade style), which is all
+	//Cmd_SaberAttackCycle_f does for a staff.
+	if (fanBias > 0.0f && Q_irand(1, 100) <= (int)fanBias)
 	{
-		const int chosenStyle = Q_irand(0, 1) ? SS_STRONG : SS_MEDIUM;
-
-		if (g_entities[bs->client].client->ps.fd.saberAnimLevel != chosenStyle)
+		if (g_entities[bs->client].client->ps.fd.saberAnimLevel == SS_STAFF)
 		{
-			g_entities[bs->client].client->ps.fd.saberAnimLevel = chosenStyle;
+			if (Q_irand(0, 1) && BG_SaberInAttack(bs->cur_ps.saberMove) &&
+				g_entities[bs->client].client->ps.weaponTime <= 0)
+			{
+				//Mid swing is good - the cycle queues into saberCycleQueue if the
+				//weapon is still busy.
+				Cmd_SaberAttackCycle_f(&g_entities[bs->client]);
+			}
+		}
+		else
+		{
+			const int chosenStyle = Q_irand(0, 1) ? SS_STRONG : SS_MEDIUM;
+
+			if (g_entities[bs->client].client->ps.fd.saberAnimLevel != chosenStyle)
+			{
+				g_entities[bs->client].client->ps.fd.saberAnimLevel = chosenStyle;
+			}
 		}
 	}
 
