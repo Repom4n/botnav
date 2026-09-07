@@ -84,13 +84,13 @@ These are all percentage-based (0-100) chance weights that gate specific behavio
 | `bot_strafefrequency` | `0` | Percentage chance (0-100) per think tick to enter a random strafe. 0 = disabled. |
 | `bot_strafeduration` | `50` | Duration scale (0-100) for random strafes. 50 = 80-2500ms range. |
 | `bot_strafeOffset` | `0` | Legacy strafe offset. |
-| `bot_hopfrequency` | `0` | Scales how often the bot schedules its next random ambient hop while close to a saber enemy. After each hop the next one is scheduled at a random 1-4 second interval scaled inversely by this value (default 100 = 1-4s; higher = shorter interval, lower = longer, 0 = disabled). Each hop re-rolls its own interval, so short rolls can chain hops together while the bot otherwise stays on the ground. |
+| `bot_hopfrequency` | `0` | Scales how often the bot schedules its next random ambient hop while close to a saber enemy. The interval is only re-rolled once the bot lands from its previous hop, and is a random 0.5-8 second wait divided by this value as a percentage (100 = 0.5-8s; higher = longer/less frequent hops, lower = shorter/more frequent, 0 = disabled). The wide range makes most hops occasional singles while an occasional short roll chains one hop straight into the next, keeping the bot unpredictable. |
 
 ## Gripkick Tuning
 
 | Cvar | Default | Description |
 |------|---------|-------------|
-| `bot_gripkickdwell` | `100` | Percent scaling of grip phase durations: the aim-down/hold phases (holding the target gripped with forward-only movement before the flipkick approach, and the dwell after a failed kick attempt) run at 2x this scaling, while the upward jerk phases run at 1x. 100 = default timings. Higher = longer dwell per phase, lower = faster cycling. |
+| `bot_gripkickdwell` | `100` | Percent scaling of grip phase durations: the aim-down/hold phases (holding the target gripped with forward-only movement before the flipkick approach, and the dwell after a failed kick attempt) run at 1.5x this scaling, while the upward jerk phases run at 1x. 100 = default timings. Higher = longer dwell per phase, lower = faster cycling. Each upward jerk also rolls its own random pitch between 45 and 80 degrees so the swing height of the gripped target varies jerk to jerk. |
 | `bot_bully` | `0` | 1 = bully mode: while gripping a knocked-down target that is falling fast enough to splat, release grip early to let them splat; and when the bot's back is to lava or a lethal fall, release grip after the first jerk phase begins so the jerk hurls the target off the edge. 0 (default) = keep holding the grip instead of releasing for the splat/hazard. |
 
 ## Duel & FFA Exploration (`g_newBotAITarget` -3 / -4)

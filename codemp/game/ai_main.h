@@ -387,10 +387,10 @@ typedef struct bot_state_s
 	int					gripkickKickCount;
 	int					gripkickJerkDirection;
 	float				gripkickJerkYawOffset; // yaw offset (relative to facing the gripped target directly) applied by the jerk - clamped so it never pushes us outside the force-grip's own InFront cone and auto-breaks the grip early
+	float				gripkickJerkPitch; // pitch (negative = up) of the current upward jerk, rolled per jerk in the -45 to -80 range
 	qboolean			gripkickActive;
 	int					gripkickAttemptTime; // level.time of the most recent gripkick flipkick attempt (success window is measured from this)
 	int					gripkickDwellUntil; // while > level.time, gripkick holds the target with aim-down/forward-only movement before the next kick approach
-	int					gripkickOpenerTapUntil; // while > level.time, gripkick holds a brief backward tap before the first forward flipkick approach
 
 	qboolean			wasDuelInProgress; // previous-think duelInProgress, used to count completed duels
 	int					duelCompletedCount; // duels finished since the last explore window - see bot_duelcountmax
@@ -406,7 +406,8 @@ typedef struct bot_state_s
 	int					navObstacleUntil; // stay in waypoint nav mode until this time when an obstacle blocks path to enemy
 	int					combatNavHoldUntil; // remain in combat for 1500ms before returning to waypoint navigation
 	int					lastHurtTime;     // level.time when this bot last took damage (set in BotDamageNotification)
-	int					nextHopTime;      // level.time the next scheduled random ambient hop may fire (bot_hopfrequency)
+	int					nextHopTime;      // level.time the next scheduled random ambient hop may fire (bot_hopfrequency) - set to -1 after firing so the interval re-rolls only once we land again
+	int					pullKickJumpTime; // level.time a scheduled pk/ptk flipkick jump should fire (0 = none pending, -1 = hold until the enemy closes)
 	int					wallAvoidNextTime; // gates repeat wall-avoidance jump/turn attempts so we don't spam them every think
 	//end rww
 } bot_state_t;
