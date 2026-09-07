@@ -54,6 +54,7 @@ These are all percentage-based (0-100) chance weights that gate specific behavio
 | `bot_antidrainbias` | `0` | Weight bonus for attacking drain-users. When enemy can drain and is low HP, bots prioritize killing them. Feeds `NewBotAI_GetAntiDrainWeight()`. |
 | `bot_lightningbias` | `0` | Chance weight for using lightning. Only fires on defensive aggression bias. |
 | `bot_lightningdistance` | `400` | Minimum range for lightning usage. Bot must be at least this far from the enemy. |
+| `bot_mistakebias` | `0` | Chance weight (0-100) for grip-escape mistakes when the *bot* is being gripped (never limits a player's own push/pull out of a grip). Lower-skill bots miss more: level 10 is unaffected, levels below it scale up to ~1.4x/ down to ~0.6x of the bias. Per grip session the bot rolls a wide range of failures: a random escape delay (0 up to ~3.6s) before it may pull free, missed pulls (aim offset), a fumbled push-instead-of-pull that shoves the gripper away, and occasionally never escaping the grip at all (kick-struggles until the grip ends). |
 
 ## PTK (Pull-Throw-Kick) System
 
@@ -103,6 +104,7 @@ These are all percentage-based (0-100) chance weights that gate specific behavio
 Notes:
 - `-4` bots fight normally once a duel actually starts (`duelInProgress`); the force-duel-only approach only applies while finding/challenging.
 - `-3` bots target the true nearest enemy (no health weighting), like `-1`, while still issuing/accepting duels.
+- Bots throttle their own duel requests to one every 7 seconds, so a declined/expired challenge is not immediately re-issued.
 
 ## Miscellaneous
 

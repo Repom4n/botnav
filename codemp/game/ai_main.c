@@ -115,6 +115,8 @@ static int BotGetReflexScaledResponseDelayMs(bot_state_t *bs);
 static float BotGetChanceBiasPercent(float value);
 static float BotGetMistakeBiasChance(bot_state_t *bs);
 static int NewBotAI_GetGripEscapeDelayMs(bot_state_t *bs);
+static int NewBotAI_GetGripNeverEscapeChance(bot_state_t *bs);
+static int NewBotAI_GetGripPushInsteadChance(bot_state_t *bs);
 static int BotGetAggressionWeightedBonus(bot_state_t *bs, float biasPercent, int maxBonus, qboolean aggressiveOnly);
 static int BotGetDrainHoldBiasMs(bot_state_t *bs);
 static int NewBotAI_GetAntiDrainWeight(bot_state_t *bs);
@@ -7106,11 +7108,15 @@ void NewBotAI_Flipkick(bot_state_t *bs)
 		//unit / 90 degree gate here was far more generous than that real trigger, so the
 		//bot was jumping well before a kick was actually going to land. Only allow the
 		//jump once the gripped target is genuinely close and centered in front.
+		//The facing cone is measured from a_fo (the true, live direction to the target)
+		//instead of the lagging simulated bs->viewangles: a target that comes straight
+		//into us (or gets jerked back in front mid-approach) must get the flipkick
+		//decision immediately on contact rather than waiting out slow low-skill aim.
 		vec3_t a_fo;
 
 		VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, a_fo);
 		vectoangles(a_fo, a_fo);
-		if (bs->frame_Enemy_Len > 110 || !InFieldOfVision(bs->viewangles, 40, a_fo))
+		if (bs->frame_Enemy_Len > 110 || !InFieldOfVision(a_fo, 40, bs->viewangles))
 		{
 			return;
 		}
@@ -7188,10 +7194,17 @@ void NewBotAI_ReactToBeingGripped(bot_state_t *bs) //Test this more, does it pus
 	//reacting to being gripped (a continuous grip calls this every think). Roll the
 	//escape delay once per session instead of re-rolling a chance every think - a
 	//per-think chance converges to breaking free within a couple of thinks no matter
-	//how high bot_mistakebias is set, which is why it never felt effective.
+	//how high bot_mistakebias is set, which is why it never felt effective. Each fresh
+	//session also rolls its own failure package: whether this grip is ever escaped by
+	//a pull/push at all (low levels occasionally fail entirely), and the escape delay.
 	if (bs->gripReactLastCallTime < level.time - 300)
 	{
-		bs->gripMistakeDelayUntil = level.time + NewBotAI_GetGripEscapeDelayMs(bs);
+		const int neverEscapeChance = NewBotAI_GetGripNeverEscapeChance(bs);
+
+		bs->gripMistakeNeverEscape = (neverEscapeChance > 0 && Q_irand(1, 100) <= neverEscapeChance) ?
+			(level.time + 10000) : -1;
+		bs->gripMistakeDelayUntil = (bs->gripMistakeNeverEscape > 0) ? 0 :
+			(level.time + NewBotAI_GetGripEscapeDelayMs(bs));
 	}
 	bs->gripReactLastCallTime = level.time;
 	gripMistakeActive = (bs->gripMistakeDelayUntil > level.time) ? qtrue : qfalse;
@@ -7207,29 +7220,63 @@ void NewBotAI_ReactToBeingGripped(bot_state_t *bs) //Test this more, does it pus
 	}
 	else if (!(g_forcePowerDisable.integer & (1 << FP_PULL)) && !(g_forcePowerDisable.integer & (1 << FP_PUSH)) && (bs->cur_ps.fd.forcePowersKnown & (1 << FP_PULL)) && (bs->cur_ps.fd.forcePowersKnown & (1 << FP_PUSH))) {//Can push or pull
 		if (bs->cur_ps.fd.forcePower >= 20 && InFieldOfVision(bs->viewangles, 50, a_fo)) {
-			if (g_entities[bs->client].health < 30) {
+			if (g_entities[bs->client].health < 30 && bs->gripMistakeNeverEscape <= 0) {
 				level.clients[bs->client].ps.fd.forcePowerSelected = FP_PUSH;
 				useTheForce = qtrue;
 			}
 			else {
+				if (bs->gripMistakeNeverEscape > 0)
+				{
+					//bot_mistakebias rolled a total escape failure for this grip: keep
+					//kick-struggling and just wait the grip out - no pull, no push.
+					NewBotAI_Flipkick(bs);
+					return;
+				}
 				if (gripMistakeActive)
 				{
 					NewBotAI_Flipkick(bs);
 					return;
 				}
-				level.clients[bs->client].ps.fd.forcePowerSelected = FP_PULL;
+				if (bs->gripMistakeReverseUntil < level.time)
+				{
+					const int pushInsteadChance = NewBotAI_GetGripPushInsteadChance(bs);
+					if (pushInsteadChance > 0 && Q_irand(1, 100) <= pushInsteadChance)
+					{
+						//Confused escape: shove the gripper away with push instead of
+						//pulling free. Only one fumbled direction per window - no
+						//instant re-roll back to the correct pull next think.
+						bs->gripMistakeReverseUntil = level.time + Q_irand(250, 500);
+					}
+				}
+				if (bs->gripMistakeReverseUntil > level.time)
+				{
+					level.clients[bs->client].ps.fd.forcePowerSelected = FP_PUSH;
+				}
+				else
+				{
+					level.clients[bs->client].ps.fd.forcePowerSelected = FP_PULL;
+					NewBotAI_ApplyPullMistake(bs);
+				}
 				useTheForce = qtrue;
 			}
 		}
 	}
 	else if (!(g_forcePowerDisable.integer & (1 << FP_PULL)) && bs->cur_ps.fd.forcePowersKnown & (1 << FP_PULL)) {//Can pull and not push
 		if (bs->cur_ps.fd.forcePower >= 20 && InFieldOfVision(bs->viewangles, 50, a_fo)) {
+			if (bs->gripMistakeNeverEscape > 0)
+			{
+				//bot_mistakebias rolled a total escape failure for this grip: keep
+				//kick-struggling and just wait the grip out - no pull.
+				NewBotAI_Flipkick(bs);
+				return;
+			}
 			if (gripMistakeActive)
 			{
 				NewBotAI_Flipkick(bs);
 				return;
 			}
 			level.clients[bs->client].ps.fd.forcePowerSelected = FP_PULL;
+			NewBotAI_ApplyPullMistake(bs);
 			useTheForce = qtrue;
 		}
 	}
@@ -7505,9 +7552,20 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 			trap->EA_MoveForward(bs->client);
 			if (bs->frame_Enemy_Len <= 130)
 			{
+				//NewBotAI_Flipkick skips its own post-attempt cooldown for grip
+				//sequences, so enforce it here - otherwise the kick is re-offered
+				//every think while out of range and each offer resets the 300ms
+				//dwell below, and a target making contact never gets a fresh jump.
 				const int previousAttempt = bs->lastFlipkickAttemptTime;
-				NewBotAI_Flipkick(bs);
-				attemptedKick = (bs->lastFlipkickAttemptTime != previousAttempt) ? qtrue : qfalse;
+				if (previousAttempt <= level.time)
+				{
+					NewBotAI_Flipkick(bs);
+					attemptedKick = (bs->lastFlipkickAttemptTime != previousAttempt) ? qtrue : qfalse;
+				}
+				else
+				{
+					attemptedKick = qfalse;
+				}
 				if (attemptedKick)
 				{
 					const int dwellPercent = Com_Clampi(10, 300, bot_gripkickdwell.integer);
@@ -9399,6 +9457,11 @@ static qboolean NewBotAI_InFFAExploreWindow(bot_state_t *bs, int targetMode)
 	return (bs->duelCompletedCount >= bot_duelcountmax.integer) ? qtrue : qfalse;
 }
 
+//Bots may only request a duel once every 7 seconds - without a hard throttle a bot
+//repeatedly re-issues its challenge as soon as the old one expires, spamming duel
+//requests at the target.
+#define NEWBOTAI_DUEL_REQUEST_COOLDOWN_MS 7000
+
 static qboolean NewBotAI_ShouldIssueBotDuelChallenge(bot_state_t *bs, int targetMode)
 {
 	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
@@ -9452,7 +9515,7 @@ static qboolean NewBotAI_TryIssueBotDuelChallenge(bot_state_t *bs, int targetMod
 	Cmd_EngageDuel_f(&g_entities[bs->client], duelType);
 
 	VectorCopy(oldViewAngles, g_entities[bs->client].client->ps.viewangles);
-	bs->botChallengingTime = level.time + 2500;
+	bs->botChallengingTime = level.time + NEWBOTAI_DUEL_REQUEST_COOLDOWN_MS;
 	bs->beStill = level.time + 250;
 	bs->doAttack = 0;
 	bs->doAltAttack = 0;
@@ -9534,18 +9597,24 @@ static float BotGetMistakeBiasChance(bot_state_t *bs)
 	//Item 4: mistakebias needs to stay meaningful across the whole skill range - the old
 	//squared skill falloff zeroed it out entirely for skill 6+ (so even a maxed-out bias
 	//gave high-skill bots zero delay pulling out of a grip) and hard-capped skill 1-2 at
-	//a token 5%. Skill now only mildly nudges the bias (lower skill leans a little
-	//further into it, higher skill a little less), so even a level 9 bot can still reach
-	//close to the full ~2 second grip-escape delay (see NewBotAI_GetGripEscapeDelayMs)
-	//at a high bias, instead of pulling out of the grip right away.
-	skillScale = 1.0f + ((6.0f - bs->settings.skill) * 0.05f);
-	if (skillScale < 0.8f)
+	//a token 5%. Level 10 bots are the one exception and play perfectly (no mistakes at
+	//all); below that, lower skill leans further into the bias and higher skill leans
+	//less, so lower levels miss all or most of their grip-escape pulls while higher
+	//levels still miss some. The per-session failures this feeds into are rolled in
+	//NewBotAI_ReactToBeingGripped (see the NewBotAI_GetGrip*Chance helpers below).
+	if (bs->settings.skill >= 10.0f)
 	{
-		skillScale = 0.8f;
+		return 0.0f;
 	}
-	else if (skillScale > 1.3f)
+
+	skillScale = 1.0f + ((5.0f - bs->settings.skill) * 0.08f);
+	if (skillScale < 0.6f)
 	{
-		skillScale = 1.3f;
+		skillScale = 0.6f;
+	}
+	else if (skillScale > 1.4f)
+	{
+		skillScale = 1.4f;
 	}
 
 	chance *= skillScale;
@@ -9561,8 +9630,10 @@ static float BotGetMistakeBiasChance(bot_state_t *bs)
 // breaking out of an opponent's grip once the grip starts - rolled fresh per grip
 // session (see NewBotAI_ReactToBeingGripped) rather than re-rolled every think, since a
 // per-think chance converges to a near-instant escape within a couple of thinks
-// regardless of how high the bias is. Capped at a flat 2 seconds.
-#define NEWBOTAI_GRIP_MISTAKE_MAX_DELAY_MS 2000
+// regardless of how high the bias is. The roll is a wide range from a token split-second
+// of hesitation up to most of a grip's full duration, so one mistake may barely register
+// while the next eats nearly the whole grip.
+#define NEWBOTAI_GRIP_MISTAKE_MAX_DELAY_MS 3600
 static int NewBotAI_GetGripEscapeDelayMs(bot_state_t *bs)
 {
 	const float mistakeChance = BotGetMistakeBiasChance(bs);
@@ -9573,13 +9644,27 @@ static int NewBotAI_GetGripEscapeDelayMs(bot_state_t *bs)
 		return 0;
 	}
 
-	maxDelay = (int)((mistakeChance / 100.0f) * NEWBOTAI_GRIP_MISTAKE_MAX_DELAY_MS);
-	if (maxDelay <= 0)
-	{
-		return 0;
-	}
+	maxDelay = 250 + (int)((mistakeChance / 100.0f) * (NEWBOTAI_GRIP_MISTAKE_MAX_DELAY_MS - 250));
 
 	return Q_irand(0, maxDelay);
+}
+
+// Item 4: per-session chance (0-100) that the bot never breaks this grip with a pull or
+// push at all - it just kick-struggles and waits the grip out. One wide roll across the
+// whole skill range is what makes low-level bots occasionally fail to break free
+// entirely while higher levels (and always level 10, via BotGetMistakeBiasChance) still
+// escape nearly every grip.
+static int NewBotAI_GetGripNeverEscapeChance(bot_state_t *bs)
+{
+	return (int)(BotGetMistakeBiasChance(bs) * 0.45f);
+}
+
+// Item 4: per-attempt chance (0-100) that a grip-escape pull is fumbled into a push -
+// the bot still fires force power at the gripper (so the attempt shows), it just chose
+// the wrong direction and shoves them away instead of pulling free of the grip.
+static int NewBotAI_GetGripPushInsteadChance(bot_state_t *bs)
+{
+	return (int)(BotGetMistakeBiasChance(bs) * 0.5f);
 }
 
 
@@ -10909,13 +10994,13 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 		!(BG_InKnockDown(bs->currentEnemy->client->ps.legsAnim) && enemyTotalHealth <= 30))
 		return 0;
 
-	//Item 1: while we're actively drain-locking the enemy below 19 FP for a free
-	//pullkick, a saber throw just gives up the drainlock's guaranteed-hit setup for a
-	//throw they can dodge/block - hold the saber and keep pullkicking unless we
-	//actually expect the throw+kick to land a killing blow (a knocked-down enemy
-	//already low enough to finish).
-	if (NewBotAI_IsPullkickDrainWindow(bs) &&
-		!(BG_InKnockDown(bs->currentEnemy->client->ps.legsAnim) && enemyTotalHealth <= 30))
+	//Item 1: while the opponent is drainlocked (actively tapped below 19 FP for a free
+	//pullkick, or already under the free-pullkick threshold), weight the pullkick over
+	//the saber throw - throwing the saber away just gives up the drainlock's
+	//guaranteed-hit setup for a throw they can dodge/block. The only exception is the
+	//throw that will kill: an opponent with less than 30 total health dies to it, so
+	//take the kill instead of dragging the pullkick loop out.
+	if (NewBotAI_IsDrainlockAdvantage(bs) && enemyTotalHealth >= 30)
 	{
 		return 0;
 	}
@@ -12094,7 +12179,7 @@ static qboolean BotTryAcceptAnyDuelChallenge(bot_state_t *bs, int targetMode)
 		bs->currentEnemy = challenger;
 		bs->doAttack = 0;
 		bs->doAltAttack = 0;
-		bs->botChallengingTime = level.time + 2500;
+		bs->botChallengingTime = level.time + NEWBOTAI_DUEL_REQUEST_COOLDOWN_MS;
 		bs->beStill = level.time + 2500;
 		return qtrue;
 	}
