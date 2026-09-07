@@ -114,6 +114,7 @@ static float BotGetAimSpeedMaxChange(bot_state_t *bs, float legacyMaxChange);
 static int BotGetReflexScaledResponseDelayMs(bot_state_t *bs);
 static float BotGetChanceBiasPercent(float value);
 static float BotGetMistakeBiasChance(bot_state_t *bs);
+static int NewBotAI_GetGripEscapeDelayMs(bot_state_t *bs);
 static int BotGetAggressionWeightedBonus(bot_state_t *bs, float biasPercent, int maxBonus, qboolean aggressiveOnly);
 static int BotGetDrainHoldBiasMs(bot_state_t *bs);
 static int NewBotAI_GetAntiDrainWeight(bot_state_t *bs);
@@ -6918,18 +6919,20 @@ static qboolean NewBotAI_CanBackflip(bot_state_t *bs)
 static void NewBotAI_TryRandomHop(bot_state_t *bs)
 {
 	const float hopFrequency = bot_hopfrequency.value;
+	const qboolean isGrounded = (bs->cur_ps.groundEntityNum != ENTITYNUM_NONE) ? qtrue : qfalse;
 
 	//Item 12: read the float value (not the truncated integer) so sub-1 frequencies like
 	//0.1 actually throttle hopping instead of rounding to 0/off or 1.
 	if (hopFrequency <= 0.0f)
 	{
+		bs->hopWasGrounded = isGrounded;
 		return;
 	}
 
 	//Mid-hop (a hop fired, still airborne): hold off on re-rolling until we land again.
 	if (bs->nextHopTime == -1)
 	{
-		if (bs->cur_ps.groundEntityNum != ENTITYNUM_NONE)
+		if (isGrounded)
 		{
 			//Just landed: roll the next interval now. The range is wide enough that most
 			//hops are singles (a multi-second wait) while an occasional short roll chains
@@ -6937,20 +6940,35 @@ static void NewBotAI_TryRandomHop(bot_state_t *bs)
 			//frequency so higher values spread hops further apart (100 = 0.5-8s).
 			bs->nextHopTime = level.time + (int)((float)Q_irand(500, 8000) * (100.0f / hopFrequency));
 		}
+		bs->hopWasGrounded = isGrounded;
+		return;
+	}
+
+	//Item 2: landing from airborne time that wasn't our own tracked hop (a flipkick, a
+	//knockdown, walking off a ledge) used to fall straight through to the "grounded,
+	//time's up" check below and fire an unrelated hop the instant we touched down -
+	//this was the bot "wanting to keep hopping" right out of a jump/flipkick landing.
+	//Re-roll a fresh wide interval on that landing transition instead of firing.
+	if (isGrounded && !bs->hopWasGrounded)
+	{
+		bs->nextHopTime = level.time + (int)((float)Q_irand(500, 8000) * (100.0f / hopFrequency));
+		bs->hopWasGrounded = isGrounded;
 		return;
 	}
 
 	if (bs->nextHopTime > level.time)
 	{
+		bs->hopWasGrounded = isGrounded;
 		return;
 	}
 
-	if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE)
+	if (!isGrounded)
 	{
 		//Airborne for a non-hop reason (a flipkick, a knockdown, walking off a ledge):
 		//the scheduled hop time passed unused - push the next roll out a full wide
 		//interval instead of firing the moment we touch down.
 		bs->nextHopTime = level.time + (int)((float)Q_irand(500, 8000) * (100.0f / hopFrequency));
+		bs->hopWasGrounded = isGrounded;
 		return;
 	}
 
@@ -6959,12 +6977,14 @@ static void NewBotAI_TryRandomHop(bot_state_t *bs)
 	//so we don't spam a fresh roll every think while hugging a wall).
 	if (NewBotAI_TouchingWallNotEnemy(bs) && !NewBotAI_ShouldWallrunAgainstWalls(bs))
 	{
+		bs->hopWasGrounded = isGrounded;
 		return;
 	}
 
 	//Fire the hop and mark mid-hop: the next interval only rolls once we land again.
 	trap->EA_Jump(bs->client);
 	bs->nextHopTime = -1;
+	bs->hopWasGrounded = isGrounded;
 }
 
 //True while a short player-sized trace from the bot hits a solid wall and whatever
@@ -7157,6 +7177,19 @@ void NewBotAI_ReactToBeingGripped(bot_state_t *bs) //Test this more, does it pus
 {
 	vec3_t a_fo;
 	qboolean useTheForce = qfalse;
+	qboolean gripMistakeActive;
+
+	//Item 4: a fresh grip session is detected by a gap since the last think we were
+	//reacting to being gripped (a continuous grip calls this every think). Roll the
+	//escape delay once per session instead of re-rolling a chance every think - a
+	//per-think chance converges to breaking free within a couple of thinks no matter
+	//how high bot_mistakebias is set, which is why it never felt effective.
+	if (bs->gripReactLastCallTime < level.time - 300)
+	{
+		bs->gripMistakeDelayUntil = level.time + NewBotAI_GetGripEscapeDelayMs(bs);
+	}
+	bs->gripReactLastCallTime = level.time;
+	gripMistakeActive = (bs->gripMistakeDelayUntil > level.time) ? qtrue : qfalse;
 
 	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, a_fo);
 	vectoangles(a_fo, a_fo);
@@ -7169,13 +7202,12 @@ void NewBotAI_ReactToBeingGripped(bot_state_t *bs) //Test this more, does it pus
 	}
 	else if (!(g_forcePowerDisable.integer & (1 << FP_PULL)) && !(g_forcePowerDisable.integer & (1 << FP_PUSH)) && (bs->cur_ps.fd.forcePowersKnown & (1 << FP_PULL)) && (bs->cur_ps.fd.forcePowersKnown & (1 << FP_PUSH))) {//Can push or pull
 		if (bs->cur_ps.fd.forcePower >= 20 && InFieldOfVision(bs->viewangles, 50, a_fo)) {
-			const float mistakeChance = BotGetMistakeBiasChance(bs);
 			if (g_entities[bs->client].health < 30) {
 				level.clients[bs->client].ps.fd.forcePowerSelected = FP_PUSH;
 				useTheForce = qtrue;
 			}
 			else {
-				if (mistakeChance > 0.0f && Q_irand(1, 100) <= (int)mistakeChance)
+				if (gripMistakeActive)
 				{
 					NewBotAI_Flipkick(bs);
 					return;
@@ -7187,8 +7219,7 @@ void NewBotAI_ReactToBeingGripped(bot_state_t *bs) //Test this more, does it pus
 	}
 	else if (!(g_forcePowerDisable.integer & (1 << FP_PULL)) && bs->cur_ps.fd.forcePowersKnown & (1 << FP_PULL)) {//Can pull and not push
 		if (bs->cur_ps.fd.forcePower >= 20 && InFieldOfVision(bs->viewangles, 50, a_fo)) {
-			const float mistakeChance = BotGetMistakeBiasChance(bs);
-			if (mistakeChance > 0.0f && Q_irand(1, 100) <= (int)mistakeChance)
+			if (gripMistakeActive)
 			{
 				NewBotAI_Flipkick(bs);
 				return;
@@ -7260,11 +7291,11 @@ static qboolean NewBotAI_GripHazardBehind(bot_state_t *bs)
 	return qfalse;
 }
 
-//Cap the jerk yaw swing so it can never push us outside the force grip's own
-//~26 degree facing cone (see w_force.c's InFront gate on FORCE_LEVEL_1/2 grip)
-//- exceeding that cone ends the grip immediately regardless of us still
-//holding the grip key.
-#define NEWBOTAI_GRIPKICK_JERK_MAX_YAW 20.0f
+//Item 3: at FORCE_LEVEL_3 grip the target's own facing check (InFront in w_force.c) is
+//not enforced, so jerks there can use the full dramatic 145-200 degree yaw swing. Below
+//that level the same facing check still applies (see w_force.c's InFront gate on
+//FORCE_LEVEL_1/2 grip) - exceeding its ~26 degree cone ends the grip immediately
+//regardless of us still holding the grip key - so those levels keep a small, safe offset.
 void NewBotAI_Gripkick(bot_state_t *bs)
 {
 	//float heightDiff = bs->cur_ps.origin[2] - bs->currentEnemy->client->ps.origin[2]; //We are above them by this much
@@ -7388,7 +7419,13 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 		}
 		else if (bs->gripkickJerkCount > 0) {
 			const int dwellPercent = Com_Clampi(10, 300, bot_gripkickdwell.integer);
-			float newYawOffset;
+			const int gripLevel = bs->cur_ps.fd.forcePowerLevel[FP_GRIP];
+			//Item 3: the force grip's own facing check (see ForceGrip in w_force.c) is only
+			//enforced below FORCE_LEVEL_3 - at max grip level the target can be jerked hard
+			//without auto-breaking the grip, so give it the full dramatic 145-200 degree yaw
+			//swing there. Lower grip levels still need to stay inside the ~25 degree facing
+			//cone or the grip breaks early, so they keep the old small, safe offset.
+			const int yawMagnitude = (gripLevel >= FORCE_LEVEL_3) ? Q_irand(145, 200) : Q_irand(15, 20);
 
 			//Complete one randomized jerk at a time so bot_gripkickdwell controls
 			//each upward hold rather than collapsing the whole sequence into one
@@ -7397,12 +7434,9 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 			bs->gripkickJerkDirection = (Q_irand(0, 1) * 2) - 1;
 			bs->gripkickJerkUntil = level.time +
 				(Q_irand(700, 1100) * dwellPercent) / 100;
-			newYawOffset = bs->gripkickJerkYawOffset + (bs->gripkickJerkDirection * 18.0f);
-			if (newYawOffset > NEWBOTAI_GRIPKICK_JERK_MAX_YAW)
-				newYawOffset = NEWBOTAI_GRIPKICK_JERK_MAX_YAW;
-			else if (newYawOffset < -NEWBOTAI_GRIPKICK_JERK_MAX_YAW)
-				newYawOffset = -NEWBOTAI_GRIPKICK_JERK_MAX_YAW;
-			bs->gripkickJerkYawOffset = newYawOffset;
+			//Each jerk independently rolls its own random yaw direction/magnitude - no
+			//accumulation across jerks within the same phase.
+			bs->gripkickJerkYawOffset = (float)(bs->gripkickJerkDirection * yawMagnitude);
 			//Each upward jerk rolls its own pitch in the 45-80 degree range so the swing
 			//height of the gripped target varies jerk to jerk.
 			bs->gripkickJerkPitch = -(float)Q_irand(45, 80);
@@ -7485,7 +7519,7 @@ void NewBotAI_Draining(bot_state_t *bs)
 	{
 		//Health-biased bots just want minimal drain taps to top their own health off, so they
 		//release the drain key almost immediately (one think) instead of holding it down.
-		//Force-biased bots going for the below-18 pullkick setup hold exactly long enough for
+		//Force-biased bots going for the below-19 pullkick setup hold exactly long enough for
 		//the tap to pay for the computed FP removal, not a moment longer.
 		if (drainTapTargetCost > 0 && NewBotAI_IsPullkickDrainWindow(bs))
 		{
@@ -8502,19 +8536,25 @@ static float NewBotAI_GetPullkickTimeToKickRange(bot_state_t *bs)
 // 320 units when nobody is closing yet. Called the moment we pull (pk) or select pull
 // during a throw (ptk), replacing the old instant hop that fired while the target was
 // still far away.
+//Item 2: bots were jumping into flipkicks a touch early (and kept hopping afterward
+//landing), so the whole schedule is nudged 30ms later - both the "kick now" case and
+//the predicted-closing-time lead below.
+#define NEWBOTAI_PULLKICK_JUMP_DELAY_MS 30
 static void NewBotAI_SchedulePullkickJump(bot_state_t *bs)
 {
 	const float timeToRange = NewBotAI_GetPullkickTimeToKickRange(bs);
 
 	if (bs->frame_Enemy_Len <= 135.0f || !NewBotAI_CanAttemptFlipkick(bs))
 	{
-		bs->pullKickJumpTime = 0; //kick now, or kicking isn't available anyway
+		//Kick is already possible (or unavailable) - still hold the jump for the extra
+		//30ms delay instead of firing this same think.
+		bs->pullKickJumpTime = level.time + NEWBOTAI_PULLKICK_JUMP_DELAY_MS;
 		return;
 	}
 
 	if (timeToRange >= 0.0f)
 	{
-		bs->pullKickJumpTime = level.time + (int)timeToRange + 150;
+		bs->pullKickJumpTime = level.time + (int)timeToRange + 150 + NEWBOTAI_PULLKICK_JUMP_DELAY_MS;
 	}
 	else
 	{
@@ -8642,7 +8682,9 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 		bs->conserveNextRollTime = level.time + 1500; //debounce between chances to start a window
 		if (NewBotAI_ShouldConserveForce(bs))
 		{
-			bs->conserveUntil = level.time + Q_irand(800, 2000);
+			//Item 6: widen the conservation window to 0.5-4 seconds (was 0.8-2s) so a
+			//conservation pause actually gives meaningful force regen time.
+			bs->conserveUntil = level.time + Q_irand(500, 4000);
 			bs->combatAction = BOT_COMBAT_ACTION_RETREAT_DEFENSE;
 			NewBotAI_RetreatDiagonal(bs, (Q_irand(0, 1) == 0));
 			return;
@@ -9398,37 +9440,57 @@ static float BotGetMistakeBiasChance(bot_state_t *bs)
 		return 0.0f;
 	}
 
-	//Item 5: lower-skill bots should almost never break out of an opponent's grip. The
-	//old linear (6 - skill) / 5 scale still gave level 1 bots a full 100% and level 2
-	//bots 80% of the bias, which is why they kept pulling out. The squared falloff below
-	//drops level 1 to ~25%, level 2 to ~13% and level 3 to ~6% of the bias (and it is
-	//additionally clamped below) while leaving higher-skill bots mostly unaffected.
-	skillScale = (6.0f - bs->settings.skill) / 5.0f;
-	if (skillScale < 0.0f)
+	//Item 4: mistakebias needs to stay meaningful across the whole skill range - the old
+	//squared skill falloff zeroed it out entirely for skill 6+ (so even a maxed-out bias
+	//gave high-skill bots zero delay pulling out of a grip) and hard-capped skill 1-2 at
+	//a token 5%. Skill now only mildly nudges the bias (lower skill leans a little
+	//further into it, higher skill a little less), so even a level 9 bot can still reach
+	//close to the full ~2 second grip-escape delay (see NewBotAI_GetGripEscapeDelayMs)
+	//at a high bias, instead of pulling out of the grip right away.
+	skillScale = 1.0f + ((6.0f - bs->settings.skill) * 0.05f);
+	if (skillScale < 0.8f)
 	{
-		skillScale = 0.0f;
+		skillScale = 0.8f;
 	}
-	else if (skillScale > 1.0f)
+	else if (skillScale > 1.3f)
 	{
-		skillScale = 1.0f;
+		skillScale = 1.3f;
 	}
-	skillScale *= skillScale;
 
 	chance *= skillScale;
-
-	//Hard per-level ceilings so even a maxed-out bot_mistakebias can't make low-level
-	//bots reliable: level 1 never breaks free of a grip, level 2 only very rarely.
-	if (bs->settings.skill <= 1)
+	if (chance > 100.0f)
 	{
-		return 0.0f;
-	}
-	if (bs->settings.skill <= 2 && chance > 5.0f)
-	{
-		chance = 5.0f;
+		chance = 100.0f;
 	}
 
 	return chance;
 }
+
+// Item 4: the amount of time (ms) mistakebias should keep this bot from correctly
+// breaking out of an opponent's grip once the grip starts - rolled fresh per grip
+// session (see NewBotAI_ReactToBeingGripped) rather than re-rolled every think, since a
+// per-think chance converges to a near-instant escape within a couple of thinks
+// regardless of how high the bias is. Capped at a flat 2 seconds.
+#define NEWBOTAI_GRIP_MISTAKE_MAX_DELAY_MS 2000
+static int NewBotAI_GetGripEscapeDelayMs(bot_state_t *bs)
+{
+	const float mistakeChance = BotGetMistakeBiasChance(bs);
+	int maxDelay;
+
+	if (mistakeChance <= 0.0f)
+	{
+		return 0;
+	}
+
+	maxDelay = (int)((mistakeChance / 100.0f) * NEWBOTAI_GRIP_MISTAKE_MAX_DELAY_MS);
+	if (maxDelay <= 0)
+	{
+		return 0;
+	}
+
+	return Q_irand(0, maxDelay);
+}
+
 
 static void NewBotAI_ApplyPullMistake(bot_state_t *bs)
 {
@@ -9983,10 +10045,34 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 
 // Strafe-only movement for the fan chain's TAP_PRE_SWING/SWING/TAP_POST_SWING phases -
 // forward/back/diagonal input is negated so only the chosen strafe direction is issued.
-// DWELL is free movement and is left entirely to the bot's normal steering (this function
-// does nothing then).
+// DWELL is free movement for approach/positioning, so instead of doing nothing there
+// (leaving it entirely to normal steering) it now layers a wiggle on top - Item 7: the
+// same faster alternating strafe used by NewBotAI_SaberDuelIndecisionFallback, scaled by
+// bot_fanbias so it shows up more the more a bot leans into the fan-chain attack style.
+// This only adds left/right strafe input (no EA_Move reset), so it doesn't cancel
+// whatever forward/back approach movement normal steering already issued this think.
 static void NewBotAI_ApplyHorizontalSwingMove(bot_state_t *bs)
 {
+	if (bs->fanPhase == FAN_PHASE_DWELL)
+	{
+		const float fanBias = NewBotAI_GetFanBiasPercent(bs);
+
+		if (fanBias <= 0.0f)
+		{
+			return;
+		}
+
+		if ((level.time / 150) % 2)
+		{
+			trap->EA_MoveRight(bs->client);
+		}
+		else
+		{
+			trap->EA_MoveLeft(bs->client);
+		}
+		return;
+	}
+
 	if ((bs->fanPhase != FAN_PHASE_TAP_PRE_SWING && bs->fanPhase != FAN_PHASE_SWING &&
 		bs->fanPhase != FAN_PHASE_TAP_POST_SWING) || !bs->fanAttackDir)
 	{
@@ -10455,7 +10541,8 @@ int NewBotAI_GetPush(bot_state_t *bs) {
 }
 
 // Computes exactly how many of our own force points a drain must spend to bring the enemy
-// below 18 FP (the free-pullkick threshold). Each 5 FP we spend draining removes 4 enemy FP
+// below 19 FP (the free-pullkick threshold, with a 1 FP margin to account for their force
+// regen ticking in slightly later than ours). Each 5 FP we spend draining removes 4 enemy FP
 // (3 with FT_DRAINDMGNERF), so e.g. 15 FP spent removes 12, 20 removes 16, and so on. Returns
 // 0 when the enemy is already below the threshold or the values can't be determined.
 static int NewBotAI_GetDrainTapTargetCost(bot_state_t *bs)
@@ -10465,21 +10552,23 @@ static int NewBotAI_GetDrainTapTargetCost(bot_state_t *bs)
 	int fpToRemove;
 	int ticks;
 
-	if (hisForce < 18)
+	if (hisForce < 19)
 	{
 		return 0;
 	}
 
-	fpToRemove = hisForce - 17; //land them at 17, safely below 18
+	fpToRemove = hisForce - 18; //land them at 18, safely below 19 to survive their regen tick
 	ticks = (fpToRemove + fpPerTick - 1) / fpPerTick;
 
 	return ticks * 5; //drain self-cost is 5 FP per tick
 }
 
 // True when this bot is in "force bias with pullkick weights" mode: aggressive, PTK-weighted,
-// knows pull, and has enough FP to pay the drain tap needed to bring the enemy below 18 while
+// knows pull, and has enough FP to pay the drain tap needed to bring the enemy below 19 while
 // keeping the 20 FP required for the pull follow-up. In that window draining is the efficient
-// setup for a free pullkick.
+// setup for a free pullkick, and the bot should keep re-tapping drain to hold the enemy in
+// this "drainlocked" state (see NewBotAI_GetSaberthrow's suppression of throws in this window)
+// for as long as it retains its aggression bias/force advantage.
 static qboolean NewBotAI_IsPullkickDrainWindow(bot_state_t *bs)
 {
 	const int drainTapTargetCost = NewBotAI_GetDrainTapTargetCost(bs);
@@ -10542,7 +10631,7 @@ int NewBotAI_GetDrain(bot_state_t *bs) {
 
 	if (NewBotAI_IsPullkickDrainWindow(bs)) {
 		//Force-biased, PTK-weighted bot with enough FP: drain exactly enough to put them
-		//below 18 so the follow-up pullkick is free. Strong weight so this beats other powers.
+		//below 19 so the follow-up pullkick is free. Strong weight so this beats other powers.
 		return 90;
 	}
 
@@ -10622,6 +10711,19 @@ int NewBotAI_GetGrip(bot_state_t *bs) {
 	if (ourForce > 65 && ourHealth > 55 && hisHealth < 80)
 		return 45 + aggressionBonus;
 
+	//Item 5: outside all of the specific rules above, still let a high bot_gripkickbias
+	//show up more often as a purely random pick whenever we hold both a health and
+	//force advantage - the specific rules remain the strongest/most reliable triggers,
+	//this just gives bias itself real weight instead of only ever tacking on a small
+	//aggression bonus to those rules.
+	if (gripkickBias > 0.0f && ourHealth > hisHealth && ourForce > hisForce)
+	{
+		if (Q_irand(1, 100) <= (int)gripkickBias)
+		{
+			return (int)(gripkickBias * 0.6f) + aggressionBonus;
+		}
+	}
+
 	return 0;
 }
 
@@ -10691,6 +10793,17 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 	//throwing the saber away.
 	if (ourForce > bs->currentEnemy->client->ps.fd.forcePower)
 		return 0;
+
+	//Item 1: while we're actively drain-locking the enemy below 19 FP for a free
+	//pullkick, a saber throw just gives up the drainlock's guaranteed-hit setup for a
+	//throw they can dodge/block - hold the saber and keep pullkicking unless we
+	//actually expect the throw+kick to land a killing blow (a knocked-down enemy
+	//already low enough to finish).
+	if (NewBotAI_IsPullkickDrainWindow(bs) &&
+		!(BG_InKnockDown(bs->currentEnemy->client->ps.legsAnim) && enemyTotalHealth <= 30))
+	{
+		return 0;
+	}
 	if (bs->cur_ps.fd.saberAnimLevel == SS_STAFF)
 	{
 		//A staff cannot initiate saber throw. Select a throw-capable style

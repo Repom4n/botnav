@@ -407,8 +407,12 @@ typedef struct bot_state_s
 	int					combatNavHoldUntil; // remain in combat for 1500ms before returning to waypoint navigation
 	int					lastHurtTime;     // level.time when this bot last took damage (set in BotDamageNotification)
 	int					nextHopTime;      // level.time the next scheduled random ambient hop may fire (bot_hopfrequency) - set to -1 after firing so the interval re-rolls only once we land again
+	qboolean			hopWasGrounded;   // groundEntityNum state as of the last NewBotAI_TryRandomHop call - used to detect a fresh landing (from a flipkick/knockdown/etc, not our own hop) so we re-roll instead of firing immediately
 	int					pullKickJumpTime; // level.time a scheduled pk/ptk flipkick jump should fire (0 = none pending, -1 = hold until the enemy closes)
 	int					wallAvoidNextTime; // gates repeat wall-avoidance jump/turn attempts so we don't spam them every think
+
+	int					gripMistakeDelayUntil; // level.time until which bot_mistakebias holds us from correctly breaking an opponent's grip (see NewBotAI_GetGripEscapeDelayMs) - rolled once per grip session
+	int					gripReactLastCallTime; // level.time of the last NewBotAI_ReactToBeingGripped call, used to detect a fresh grip session (a gap since the last call) so the escape delay above is only rolled once per grip
 	//end rww
 } bot_state_t;
 
