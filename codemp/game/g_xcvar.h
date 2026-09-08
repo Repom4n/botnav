@@ -389,6 +389,11 @@ XCVAR_DEF( bot_lightningdistance,		"400",		NULL,				CVAR_ARCHIVE,									qtrue 
 // intentionally random/opt-in instead of being spammed by the flipkick code so bots don't
 // bounce incessantly when a flipkick isn't actually possible.
 XCVAR_DEF( bot_hopfrequency,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
+// How long (ms) a flipkick attempt keeps re-arming fresh jump presses after the initial
+// jump. Shorter windows mean fewer leftover jump inputs when the kick never fires and the
+// bot lands, but too short and the engine's own kick timing (velocity[2]>200 near the
+// ground) never sees a fresh jump press. 300 is 50ms shorter than the old default of 350.
+XCVAR_DEF( bot_fkduration,				"300",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_delayresponsetime,		"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_responseTimeDelay,		"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 // 0: disabled, use each bot's .jkb turnspeed_combat/reflex unmodified (legacy behavior).
