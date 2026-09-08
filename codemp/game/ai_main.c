@@ -158,7 +158,6 @@ static void NewBotAI_ApplyPullMistake(bot_state_t *bs);
 static qboolean BotNav_CheckFallingHazard(bot_state_t *bs, vec3_t moveDir, qboolean inCombat);
 static qboolean NewBotAI_ShouldConserveForce(bot_state_t *bs);
 static qboolean NewBotAI_TryNoWaypointYawEscape(bot_state_t *bs, vec3_t goalOrigin);
-float BS_GroundDistance(bot_state_t *bs);
 qboolean NewBotAI_IsEnemyPullable(bot_state_t *bs);
 void Cmd_EngageDuel_f(gentity_t *ent, int dueltype);
 
@@ -7074,6 +7073,49 @@ static qboolean NewBotAI_ShouldAvoidDiagonalWallrun(bot_state_t *bs)
 	return (!escapingWithHealth && NewBotAI_TouchingWallNotEnemy(bs)) ? qtrue : qfalse;
 }
 
+//Estimated milliseconds until the airborne bot reaches the ground directly below it,
+//based on actual traced ground distance and current vertical velocity. Used to cut a
+//flipkick short before touchdown so the leftover jump input doesn't register as a hop.
+//Returns FLT_MAX while rising with no ground in trace range (we are nowhere near
+//landing), 0 once we are already at/past the traced ground.
+static float NewBotAI_FlipkickMsToGround(bot_state_t *bs)
+{
+	trace_t tr;
+	vec3_t end;
+	float groundDistance;
+
+	VectorCopy(bs->cur_ps.origin, end);
+	end[2] -= 256.0f;
+	JP_Trace(&tr, bs->cur_ps.origin, NULL, NULL, end, bs->client, MASK_PLAYERSOLID, qfalse, 0, 0);
+
+	groundDistance = (bs->cur_ps.origin[2] - tr.endpos[2]);
+	if (groundDistance < 0.0f)
+	{
+		groundDistance = 0.0f;
+	}
+
+	if (bs->cur_ps.velocity[2] <= 0.0f)
+	{
+		//Falling (or at apex): time until we drop the traced distance. Gravity is
+		//g_gravity (default 800 u/s^2); approximate with constant current fall speed,
+		//which slightly overestimates the time - safe, it only makes us cut earlier.
+		if (bs->cur_ps.velocity[2] < 0.0f)
+		{
+			return (groundDistance / -bs->cur_ps.velocity[2]) * 1000.0f;
+		}
+		return FLT_MAX;
+	}
+
+	//Rising: time to apex plus fall back to the traced ground.
+	{
+		const float gravity = (g_gravity.value > 0.0f) ? g_gravity.value : 800.0f;
+		const float timeToApex = bs->cur_ps.velocity[2] / gravity; //seconds
+		const float apexHeight = groundDistance + (bs->cur_ps.velocity[2] * timeToApex * 0.5f);
+		const float fallTime = sqrtf(2.0f * apexHeight / gravity);
+		return (timeToApex + fallTime) * 1000.0f;
+	}
+}
+
 void NewBotAI_Flipkick(bot_state_t *bs)
 {
 	qboolean enemySwing = qfalse;
@@ -7115,18 +7157,14 @@ void NewBotAI_Flipkick(bot_state_t *bs)
 		//just leaves jump input latched when we touch down and registers as another
 		//hop. Bail at least 30ms before touchdown instead (with an extra 2-think
 		//margin so slow think ticks don't slip a fresh press in under the wire).
+		//Trace for the actual ground distance below us so landing on higher/lower
+		//ground than the jump start still times out correctly.
+		if (NewBotAI_FlipkickMsToGround(bs) < 30.0f + (2.0f * FRAMETIME))
 		{
-			const float verticalSpeed = bs->cur_ps.velocity[2];
-			const float msToGround = (verticalSpeed > 0.0f) ?
-				((BS_GroundDistance(bs) / verticalSpeed) * 1000.0f) : 0.0f;
-
-			if (msToGround < 30.0f + (2.0f * FRAMETIME))
-			{
-				trap->EA_MoveForward(bs->client);
-				bs->flipkickInputTime = 0;
-				bs->flipkickJumpHeld = qfalse;
-				return;
-			}
+			trap->EA_MoveForward(bs->client);
+			bs->flipkickInputTime = 0;
+			bs->flipkickJumpHeld = qfalse;
+			return;
 		}
 		trap->EA_MoveForward(bs->client);
 		trap->EA_DelayedJump(bs->client);
