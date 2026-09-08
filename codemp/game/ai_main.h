@@ -415,6 +415,7 @@ typedef struct bot_state_s
 	int					gripReactLastCallTime; // level.time of the last NewBotAI_ReactToBeingGripped call, used to detect a fresh grip session (a gap since the last call) so the escape delay above is only rolled once per grip
 	int					gripMistakeNeverEscape; // nonzero (expiry time) when bot_mistakebias rolled that this grip session is never escaped by a pull/push - the bot just kicks and waits the grip out; -1 = rolled, not never-escape (see NewBotAI_GetGripNeverEscapeChance)
 	int					gripMistakeReverseUntil; // level.time until which a confused bot flips its grip escape to push instead of pull, shoving the opponent away instead of pulling free (see NewBotAI_GetGripPushInsteadChance)
+	int					gripSessionStartTime; // level.time this grip session began (set once per fresh session alongside the rolls above) - used by NEWBOTAI_GRIP_NO_ESCAPE_WINDOW_MS to give a human player's grip time to build speed before mistakebias weighting applies
 	//end rww
 } bot_state_t;
 
