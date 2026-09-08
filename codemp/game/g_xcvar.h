@@ -381,6 +381,12 @@ XCVAR_DEF( bot_fanbias,					"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 // for a 100ms strafe-only tap before committing attack+strafe in the opposite direction.
 XCVAR_DEF( bot_fandwell,				"250",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_drainbias,				"0",			NULL,				CVAR_ARCHIVE,									qtrue )
+// Percent chance-style bias (see BotGetChanceBiasPercent) that weights how readily a bot
+// commits to a long-held, deep drain (toward 0 FP rather than the normal safe-below-19
+// tap) once it holds a >=40 FP advantage over its enemy. Higher values lean the bot more
+// defensively aggressive into this drainlock-deepening play. See
+// NewBotAI_ShouldDrainlockDeep / NewBotAI_GetDrainTapTargetCost.
+XCVAR_DEF( bot_drainlockbias,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_lightningbias,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_lightningdistance,		"400",		NULL,				CVAR_ARCHIVE,									qtrue )
 // Scales how often the bot schedules its next random ambient hop while close to a saber
@@ -388,6 +394,17 @@ XCVAR_DEF( bot_lightningdistance,		"400",		NULL,				CVAR_ARCHIVE,									qtrue 
 // values shorten the interval, lower values lengthen it, 0 = disabled. Hopping is
 // intentionally random/opt-in instead of being spammed by the flipkick code so bots don't
 // bounce incessantly when a flipkick isn't actually possible.
+// Item 6: higher-skill bots hop noticeably more than lower-skill ones, but this cvar is
+// not the cause - it has no skill scaling of its own. The extra hopping comes from
+// higher-skill bots simply satisfying the *real* flipkick/pullkick attempt gating (see
+// NewBotAI_Flipkick, NewBotAI_GetPull) far more consistently in normal combat, which
+// itself looks like frequent hopping even with this ambient hop fully disabled. This
+// ambient hop is scaled down automatically per skill on top of the value below (see
+// NewBotAI_GetNextHopIntervalMs, up to ~2.5x longer waits at skill 10) so it doesn't
+// stack on top of that and make it worse. To reduce hopping further: lower this value
+// (e.g. 25-50 noticeably lengthens the ambient-hop interval) or set it to 0 to disable
+// ambient hopping outright - either leaves the skill-driven real kick attempts as the
+// only source of jumping.
 XCVAR_DEF( bot_hopfrequency,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 // How long (ms) a flipkick attempt keeps re-arming fresh jump presses after the initial
 // jump. Shorter windows mean fewer leftover jump inputs when the kick never fires and the

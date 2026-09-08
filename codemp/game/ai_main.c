@@ -146,11 +146,15 @@ enum {
 
 static qboolean NewBotAI_CanUseSaberThrowDefenseBreakForce(bot_state_t *bs, qboolean preferPull);
 static void NewBotAI_TryRandomHop(bot_state_t *bs);
+static int NewBotAI_GetNextHopIntervalMs(bot_state_t *bs, float hopFrequency);
 static float NewBotAI_GetPullkickTimeToKickRange(bot_state_t *bs);
 static void NewBotAI_SchedulePullkickJump(bot_state_t *bs);
 static int NewBotAI_GetDrainTapTargetCost(bot_state_t *bs);
 static qboolean NewBotAI_IsPullkickDrainWindow(bot_state_t *bs);
 static qboolean NewBotAI_IsDrainlockAdvantage(bot_state_t *bs);
+static qboolean NewBotAI_ShouldDrainlockDeep(bot_state_t *bs);
+static qboolean NewBotAI_IsEnemySaberReturning(bot_state_t *bs);
+static qboolean NewBotAI_IsBetweenOwnSaberAndEnemy(bot_state_t *bs);
 static void NewBotAI_AdjustSaberThrowArcAim(bot_state_t *bs, vec3_t headlevel);
 static void NewBotAI_AdjustSaberThrowLead(bot_state_t *bs);
 static void NewBotAI_TrySaberThrowDefenseBreak(bot_state_t *bs);
@@ -6843,6 +6847,12 @@ static qboolean NewBotAI_CanAttemptFlipkick(bot_state_t *bs)
 //into kick range - otherwise the two bots just collide while we sit on the charge.
 #define NEWBOTAI_FLIPKICK_PREFERRED_RANGE 180.0f
 
+// Item 4: for this long after a fresh grip session begins, levels 1-9 never successfully
+// pull/push free of the grip (see NewBotAI_ReactToBeingGripped) - giving a human player's
+// grip a short, human-like window to build up speed before any bot mistake-bias escape
+// weighting applies.
+#define NEWBOTAI_GRIP_NO_ESCAPE_WINDOW_MS 100
+
 //How long (ms) a flipkick attempt keeps toggling fresh jump presses after the initial
 //jump. This was raised from the original 350 to 500, and that extra time outlived the
 //jump arc itself: the bot landed with jump input still live and immediately hopped
@@ -6931,12 +6941,28 @@ static qboolean NewBotAI_CanBackflip(bot_state_t *bs)
 		bs->frame_Enemy_Len > MAX_GRIP_DISTANCE * 2) ? qtrue : qfalse;
 }
 
+// Item 6: higher-skill bots satisfy the real flipkick/pullkick gating (see
+// NewBotAI_Flipkick, NewBotAI_GetPull) far more often in normal combat than lower-skill
+// bots do, so their genuine kick attempts alone already read as frequent hopping - the
+// ambient hop below then stacks right on top of that and makes it worse the higher the
+// skill gets. Scale the wait interval longer as skill rises so bot_hopfrequency is the
+// one dial that actually reduces the *ambient* hop rate without touching real kick
+// gating; skillDampen ranges 1.0x at skill 0 up to 2.5x at skill 10, so a level 10 bot's
+// ambient hops are spread roughly 2.5x further apart than a level 0 bot's for the same
+// bot_hopfrequency value.
+static int NewBotAI_GetNextHopIntervalMs(bot_state_t *bs, float hopFrequency)
+{
+	const float skillDampen = 1.0f + (bs->settings.skill * 0.15f);
+	return (int)((float)Q_irand(500, 8000) * (100.0f / hopFrequency) * skillDampen);
+}
+
 // Optional random hop. Flipkicks only add jump input when a kick is truly possible, so any
 // ambient hopping is handled here instead: bot_hopfrequency scales how soon after each hop
 // the next one is scheduled (default 100 = a random 0.5-8 second interval, higher = less
 // frequent hops, lower = more frequent, 0 = disabled). The interval is only re-rolled once
 // the bot is back on the ground after a hop, so a very short roll genuinely chains one hop
-// into the next while the bot otherwise stays on the ground.
+// into the next while the bot otherwise stays on the ground. See
+// NewBotAI_GetNextHopIntervalMs for the additional per-skill dampening applied on top.
 static void NewBotAI_TryRandomHop(bot_state_t *bs)
 {
 	const float hopFrequency = bot_hopfrequency.value;
@@ -6959,7 +6985,7 @@ static void NewBotAI_TryRandomHop(bot_state_t *bs)
 			//hops are singles (a multi-second wait) while an occasional short roll chains
 			//one hop straight into the next, keeping the bot unpredictable. Divide by the
 			//frequency so higher values spread hops further apart (100 = 0.5-8s).
-			bs->nextHopTime = level.time + (int)((float)Q_irand(500, 8000) * (100.0f / hopFrequency));
+			bs->nextHopTime = level.time + NewBotAI_GetNextHopIntervalMs(bs, hopFrequency);
 		}
 		bs->hopWasGrounded = isGrounded;
 		return;
@@ -6972,7 +6998,7 @@ static void NewBotAI_TryRandomHop(bot_state_t *bs)
 	//Re-roll a fresh wide interval on that landing transition instead of firing.
 	if (isGrounded && !bs->hopWasGrounded)
 	{
-		bs->nextHopTime = level.time + (int)((float)Q_irand(500, 8000) * (100.0f / hopFrequency));
+		bs->nextHopTime = level.time + NewBotAI_GetNextHopIntervalMs(bs, hopFrequency);
 		bs->hopWasGrounded = isGrounded;
 		return;
 	}
@@ -6988,7 +7014,7 @@ static void NewBotAI_TryRandomHop(bot_state_t *bs)
 		//Airborne for a non-hop reason (a flipkick, a knockdown, walking off a ledge):
 		//the scheduled hop time passed unused - push the next roll out a full wide
 		//interval instead of firing the moment we touch down.
-		bs->nextHopTime = level.time + (int)((float)Q_irand(500, 8000) * (100.0f / hopFrequency));
+		bs->nextHopTime = level.time + NewBotAI_GetNextHopIntervalMs(bs, hopFrequency);
 		bs->hopWasGrounded = isGrounded;
 		return;
 	}
@@ -6999,7 +7025,7 @@ static void NewBotAI_TryRandomHop(bot_state_t *bs)
 	//instead of letting the bot bounce again the moment the leftover input clears.
 	if (bs->flipkickInputTime > level.time && bs->flipkickJumpHeld)
 	{
-		bs->nextHopTime = level.time + (int)((float)Q_irand(500, 8000) * (100.0f / hopFrequency));
+		bs->nextHopTime = level.time + NewBotAI_GetNextHopIntervalMs(bs, hopFrequency);
 		bs->hopWasGrounded = isGrounded;
 		return;
 	}
@@ -7293,6 +7319,7 @@ void NewBotAI_ReactToBeingGripped(bot_state_t *bs) //Test this more, does it pus
 	{
 		const int neverEscapeChance = NewBotAI_GetGripNeverEscapeChance(bs);
 
+		bs->gripSessionStartTime = level.time;
 		bs->gripMistakeNeverEscape = (neverEscapeChance > 0 && Q_irand(1, 100) <= neverEscapeChance) ?
 			(level.time + 10000) : -1;
 		bs->gripMistakeDelayUntil = (bs->gripMistakeNeverEscape > 0) ? 0 :
@@ -7300,18 +7327,30 @@ void NewBotAI_ReactToBeingGripped(bot_state_t *bs) //Test this more, does it pus
 	}
 	bs->gripReactLastCallTime = level.time;
 
+	//Item 4: give a human player's grip a short window to actually build up speed before
+	//any escape can land - levels 1-9 (not the perfect level 10, see
+	//BotGetMistakeBiasChance) never successfully pull free within the first 100ms of a
+	//fresh grip session, no matter how the mistake rolls above landed. This keeps the
+	//bot's escape timing window more human-like instead of reacting to the very first
+	//think of the grip.
+	if (bs->settings.skill < 10.0f && level.time < bs->gripSessionStartTime + NEWBOTAI_GRIP_NO_ESCAPE_WINDOW_MS)
+	{
+		NewBotAI_Flipkick(bs);
+		return;
+	}
+
 	//Item 4 (speed-weighted): being whipped around fast mid-grip rattles the bot - a
 	//per-think speed roll can shove the escape timer back out, so the faster the
 	//gripper moves us the longer the escape takes on top of the rolled delay. The
-	//extension is small per think (50-150ms) and gated by the speed chance, so a slow
-	//grip barely notices it while a full-speed jerk chain can hold the escape off for
-	//most of the grip.
+	//extension window (75-225ms) is gated by the speed chance and now weighted a
+	//little heavier than before so a genuinely fast gripkick jerk chain holds the
+	//escape off noticeably longer than chance alone would.
 	if (bs->gripMistakeNeverEscape <= 0 && bs->gripMistakeDelayUntil <= level.time + 1000)
 	{
 		const int speedMistakeChance = NewBotAI_GetGripSpeedMistakeChance(bs);
 		if (speedMistakeChance > 0 && Q_irand(1, 100) <= speedMistakeChance)
 		{
-			bs->gripMistakeDelayUntil = level.time + Q_irand(50, 150);
+			bs->gripMistakeDelayUntil = level.time + Q_irand(75, 225);
 		}
 	}
 
@@ -7349,9 +7388,12 @@ void NewBotAI_ReactToBeingGripped(bot_state_t *bs) //Test this more, does it pus
 				{
 					//The fumble chance stacks the per-attempt mistakebias roll with the
 					//speed pressure of being moved fast mid-grip - a hard, fast jerk is
-					//what rattles the bot into shoving instead of pulling free.
+					//what rattles the bot into shoving instead of pulling free. Item 4:
+					//weight the speed-driven pressure more heavily than the flat random
+					//mistakebias roll, so a genuinely fast gripkick jerk is the dominant
+					//reason for a fumble rather than chance alone.
 					int pushInsteadChance = NewBotAI_GetGripPushInsteadChance(bs) +
-						NewBotAI_GetGripSpeedMistakeChance(bs);
+						(int)(NewBotAI_GetGripSpeedMistakeChance(bs) * 1.5f);
 					if (pushInsteadChance > 100)
 					{
 						pushInsteadChance = 100;
@@ -10050,7 +10092,7 @@ static int NewBotAI_GetLightningWeight(bot_state_t *bs)
 	{
 		return 0;
 	}
-	if (bs->cur_ps.fd.forcePower <= 50)
+	if (bs->cur_ps.fd.forcePower <= 40)
 	{
 		return 0;
 	}
@@ -10093,15 +10135,17 @@ static int NewBotAI_GetLightningWeight(bot_state_t *bs)
 		}
 	}
 
-	//Item 11: the overall weight of lightningbias is increased immensely so it comes out
-	//frequently once we are past bot_lightningdistance - aggression no longer gates it
-	//off, and a defensive lean only makes it stronger.
+	//Item 11/12: the overall weight of lightningbias is increased immensely so it comes
+	//out frequently once we are past bot_lightningdistance - aggression no longer gates
+	//it off, and a defensive lean only makes it stronger. The scalar is raised again
+	//(255 -> 400) since bots were still rarely winning the force-power comparison
+	//against pull/drain/grip even with a bias set.
 	defensiveFactor = 1.0f;
 	if (aggressionBias < 0.0f)
 	{
 		defensiveFactor += -aggressionBias;
 	}
-	return (int)(defensiveFactor * distanceFactor * (lightningBias / 100.0f) * 255.0f);
+	return (int)(defensiveFactor * distanceFactor * (lightningBias / 100.0f) * 400.0f);
 }
 
 static int NewBotAI_GetPTKWeight(bot_state_t *bs)
@@ -10193,6 +10237,25 @@ static int NewBotAI_GetPTKWeight(bot_state_t *bs)
 		else
 		{
 			weight += 50;
+		}
+		//The enemy stays vulnerable to the pullkick/PTK combo across the saber's whole
+		//return trip, not just at the initial throw - weight it further once it's on
+		//the way back to their hand.
+		if (NewBotAI_IsEnemySaberReturning(bs))
+		{
+			weight += 30;
+		}
+	}
+
+	//Pressed forward past our own thrown saber and now the closer, saberless one -
+	//lean on the pullkick/PTK combo, and especially on antidrain if the enemy still
+	//has force to drain us with while we're exposed.
+	if (NewBotAI_IsBetweenOwnSaberAndEnemy(bs))
+	{
+		weight += 25;
+		if (bs->currentEnemy->client->ps.fd.forcePower > 20)
+		{
+			weight += NewBotAI_GetAntiDrainWeight(bs);
 		}
 	}
 
@@ -10546,6 +10609,60 @@ static void NewBotAI_AdjustSaberThrowLead(bot_state_t *bs)
 	bs->goalAngles[YAW] = AngleNormalize360(bs->goalAngles[YAW] + ((yawDelta < 0.0f) ? -leadDeg : leadDeg));
 }
 
+// True once the enemy's own thrown saber has started heading back toward their hand
+// rather than still flying out towards us - a positive dot between the saber's current
+// flight direction and the vector from the saber to its owner means the saber is closing
+// that distance (returning) rather than opening it (still outbound).
+static qboolean NewBotAI_IsEnemySaberReturning(bot_state_t *bs)
+{
+	gentity_t *saberEnt;
+	vec3_t saberToEnemy;
+
+	if (!bs->currentEnemy || !bs->currentEnemy->client ||
+		!bs->currentEnemy->client->ps.saberInFlight ||
+		!bs->currentEnemy->client->ps.saberEntityNum)
+	{
+		return qfalse;
+	}
+
+	saberEnt = &g_entities[bs->currentEnemy->client->ps.saberEntityNum];
+	VectorSubtract(bs->currentEnemy->client->ps.origin, saberEnt->s.pos.trBase, saberToEnemy);
+
+	return (DotProduct(saberEnt->s.pos.trDelta, saberToEnemy) > 0.0f) ? qtrue : qfalse;
+}
+
+// True when our own thrown saber is still out (in flight, not knocked away) and we are
+// positioned between it and the enemy while also being closer to the enemy than the
+// saber currently is - i.e. we've pressed forward past our own saber's flight path and
+// are now the exposed, saberless one closing on the opponent. See NewBotAI_GetPull and
+// NewBotAI_GetAntiDrainWeight for how this weights the pullkick/antidrain response.
+static qboolean NewBotAI_IsBetweenOwnSaberAndEnemy(bot_state_t *bs)
+{
+	gentity_t *saberEnt;
+	vec3_t saberToEnemy, saberToUs, usToEnemy;
+
+	if (!bs->currentEnemy || !bs->currentEnemy->client ||
+		!bs->cur_ps.saberInFlight || !bs->cur_ps.saberEntityNum)
+	{
+		return qfalse;
+	}
+
+	saberEnt = &g_entities[bs->cur_ps.saberEntityNum];
+
+	VectorSubtract(bs->currentEnemy->client->ps.origin, saberEnt->s.pos.trBase, saberToEnemy);
+	VectorSubtract(bs->cur_ps.origin, saberEnt->s.pos.trBase, saberToUs);
+
+	//Only "between" if we sit on the same side of the saber as the enemy does.
+	if (DotProduct(saberToEnemy, saberToUs) <= 0.0f)
+	{
+		return qfalse;
+	}
+
+	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->cur_ps.origin, usToEnemy);
+
+	return (VectorLengthSquared(usToEnemy) < VectorLengthSquared(saberToEnemy)) ? qtrue : qfalse;
+}
+
 static void NewBotAI_TrySaberThrowDefenseBreak(bot_state_t *bs)
 {
 	vec3_t a_fo;
@@ -10796,6 +10913,25 @@ int NewBotAI_GetPull(bot_state_t *bs) {
 			return 100;
 		}
 		weight = 80.0f;
+		//The enemy is genuinely vulnerable across their saber's whole return trip home,
+		//not just at the moment of the throw - weight the pullkick even more heavily
+		//once it's on the way back so we don't let up before it lands in their hand.
+		if (NewBotAI_IsEnemySaberReturning(bs)) {
+			weight = 100.0f;
+		}
+	}
+
+	//We've pressed forward past our own thrown saber and are now the closer, saberless
+	//one on the approach to the enemy - lean into pullkick (and antidrain, see
+	//NewBotAI_GetAntiDrainWeight) especially if the enemy still has force to drain us
+	//with, otherwise still favor the pullkick if they're not at full health.
+	if (NewBotAI_IsBetweenOwnSaberAndEnemy(bs)) {
+		if (bs->currentEnemy->client->ps.fd.forcePower > 20) {
+			weight += 40.0f;
+		}
+		else if (hisHealth < 70) {
+			weight += 25.0f;
+		}
 	}
 
 	if ((bs->currentEnemy->client->ps.saberMove > 1) && bs->currentEnemy->client->ps.fd.saberAnimLevel != SS_STRONG)
@@ -10887,17 +11023,62 @@ int NewBotAI_GetPush(bot_state_t *bs) {
 	return 0;
 }
 
-// Computes exactly how many of our own force points a drain must spend to bring the enemy
-// below 19 FP (the free-pullkick threshold, with a 1 FP margin to account for their force
-// regen ticking in slightly later than ours). Each 5 FP we spend draining removes 4 enemy FP
-// (3 with FT_DRAINDMGNERF), so e.g. 15 FP spent removes 12, 20 removes 16, and so on. Returns
-// 0 when the enemy is already below the threshold or the values can't be determined.
+// True once this bot holds a big enough force lead (>=40 FP over the enemy) that,
+// instead of the normal safe-below-19 tap, it should commit to a long-held, deep drain
+// that pushes the enemy's force as close to 0 as efficiently possible (see
+// NewBotAI_GetDrainTapTargetCost) to set up a repeated drainlock+pullkick sequence.
+// bot_drainlockbias only weights how defensively-aggressive that choice reads (it does
+// not need drain to already know pull - IsPullkickDrainWindow/IsDrainlockAdvantage still
+// gate the follow-up pullkick separately).
+static qboolean NewBotAI_ShouldDrainlockDeep(bot_state_t *bs)
+{
+	const float drainlockBias = BotGetChanceBiasPercent(bot_drainlockbias.value);
+	const int ourForce = bs->cur_ps.fd.forcePower;
+	const int hisForce = bs->currentEnemy->client->ps.fd.forcePower;
+
+	if (drainlockBias <= 0.0f)
+	{
+		return qfalse;
+	}
+
+	if (!(bs->cur_ps.fd.forcePowersKnown & (1 << FP_DRAIN)))
+	{
+		return qfalse;
+	}
+
+	return ((ourForce - hisForce) >= 40) ? qtrue : qfalse;
+}
+
+// Computes exactly how many of our own force points a drain tap must spend against the
+// current enemy. Normally this targets landing them safely under the free-pullkick
+// threshold (19 FP, with a 1 FP margin for their regen tick ticking in slightly later
+// than ours) - the "20, 19, 18..." thresholds. Each 5 FP we spend draining removes 4
+// enemy FP (3 with FT_DRAINDMGNERF), so e.g. 15 FP spent removes 12, 20 removes 16, and
+// so on. When we hold a big enough force lead instead (see NewBotAI_ShouldDrainlockDeep /
+// bot_drainlockbias), the bot commits to a long, deep drain that pushes the enemy as
+// close to 0 FP as it can in whole ticks - without wasting any of a tick's removal by
+// stopping short at a fixed target - landing anywhere from 0 up to (fpPerTick-1) FP left
+// (e.g. as low as 3 with the standard 4 FP/tick rate) rather than always 18. Returns 0
+// when the enemy is already below the relevant threshold or the values can't be
+// determined.
 static int NewBotAI_GetDrainTapTargetCost(bot_state_t *bs)
 {
 	const int hisForce = bs->currentEnemy->client->ps.fd.forcePower;
 	const int fpPerTick = (g_tweakForce.integer & FT_DRAINDMGNERF) ? 3 : 4;
 	int fpToRemove;
 	int ticks;
+
+	if (NewBotAI_ShouldDrainlockDeep(bs))
+	{
+		if (hisForce <= 0)
+		{
+			return 0;
+		}
+
+		ticks = (hisForce + fpPerTick - 1) / fpPerTick;
+
+		return ticks * 5; //drain self-cost is 5 FP per tick
+	}
 
 	if (hisForce < 19)
 	{
@@ -11012,11 +11193,21 @@ int NewBotAI_GetDrain(bot_state_t *bs) {
 	}
 
 	if (bs->currentEnemy->client->ps.saberInFlight) { //They are saberthrowing
-		if (ourHealth > 40) {//We can take the hit
-			if (hisForce > 10)
+		if (NewBotAI_IsEnemySaberReturning(bs)) {
+			//Saber is already heading back to their hand - no incoming throw left to
+			//dodge or parry, so it's safe to drain as long as we're not critically low.
+			if (ourHealth > 21 && hisForce > 10)
 				return (weight - 30);
+			return 0;
 		}
-		else return 0;
+		//Still outbound: never commit to a drain while we're under 90 HP and could still
+		//be hit by the throw - wait and parry it first (see NewBotAI_GetSaberthrow /
+		//normal block handling), then look to drain once the throw is defended.
+		if (ourHealth < 90)
+			return 0;
+		if (hisForce > 10)
+			return (weight - 30);
+		return 0;
 	}
 
 	if (ourHealth < 100)
@@ -14335,13 +14526,14 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 		bs->cur_ps.saberInFlight &&
 		!bs->cur_ps.saberEntityNum)
 	{ //saber knocked away: the engine only recalls the saber on a fresh +attack edge, and
-	  //a held button counts as one press forever. Toggle the press on a ~100ms cadence so
-	  //repeated attack inputs keep firing until the saber returns.
+	  //a held button counts as one press forever. Toggle a genuine press/release edge -
+	  //held 20ms, released 5ms - so repeated +attack inputs keep firing until the saber
+	  //returns, instead of a single held button that only counts once.
 		bs->doAltAttack = 0;
 		if (bs->saberRetrieveSpamTime <= level.time)
 		{
 			bs->saberRetrieveSpamHeld = !bs->saberRetrieveSpamHeld;
-			bs->saberRetrieveSpamTime = level.time + 100;
+			bs->saberRetrieveSpamTime = level.time + (bs->saberRetrieveSpamHeld ? 20 : 5);
 		}
 		bs->doAttack = bs->saberRetrieveSpamHeld ? 1 : 0;
 	}
