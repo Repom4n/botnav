@@ -157,6 +157,7 @@ static void NewBotAI_TrySaberThrowDefenseBreak(bot_state_t *bs);
 static void NewBotAI_ApplyPullMistake(bot_state_t *bs);
 static qboolean BotNav_CheckFallingHazard(bot_state_t *bs, vec3_t moveDir, qboolean inCombat);
 static qboolean NewBotAI_ShouldConserveForce(bot_state_t *bs);
+static qboolean NewBotAI_TryNoWaypointYawEscape(bot_state_t *bs, vec3_t goalOrigin);
 qboolean NewBotAI_IsEnemyPullable(bot_state_t *bs);
 void Cmd_EngageDuel_f(gentity_t *ent, int dueltype);
 
@@ -6845,10 +6846,18 @@ static qboolean NewBotAI_CanAttemptFlipkick(bot_state_t *bs)
 //How long (ms) a flipkick attempt keeps toggling fresh jump presses after the initial
 //jump. This was raised from the original 350 to 500, and that extra time outlived the
 //jump arc itself: the bot landed with jump input still live and immediately hopped
-//again, which is why bots hopped after every flipkick attempt. 350ms covers the ascent
-//to the engine's kick window (velocity[2]>200 near the ground) without outliving the
-//landing.
-#define NEWBOTAI_FLIPKICK_INPUT_WINDOW_MS 350
+//again, which is why bots hopped after every flipkick attempt. The bot_fkduration cvar
+//(default 300 - 50ms shorter than the old 350) now tunes this window in-game: a window
+//that outlives the jump arc leaves jump input latched at landing, so it should cover
+//just the ascent to the engine's kick window (velocity[2]>200 near the ground).
+static int NewBotAI_GetFlipkickInputWindowMs(void)
+{
+	return Com_Clampi(50, 1000, bot_fkduration.integer);
+}
+
+//"Barely moving" despite trying to move - roughly 30 units/sec (30*30). Shared by the
+//retreat wall-avoid jump and the no-waypoint yaw escape to detect a genuinely stuck bot.
+#define NEWBOTAI_WALLAVOID_STUCK_SPEED_SQ 900.0f
 static qboolean NewBotAI_ShouldPreferFlipkickOverThrow(bot_state_t *bs)
 {
 	return (NewBotAI_CanAttemptFlipkick(bs) && bs->frame_Enemy_Len <= NEWBOTAI_FLIPKICK_PREFERRED_RANGE) ? qtrue : qfalse;
@@ -6984,6 +6993,17 @@ static void NewBotAI_TryRandomHop(bot_state_t *bs)
 		return;
 	}
 
+	//A flipkick attempt just aborted while we are grounded: the kick never left the
+	//ground but the attempt still holds post-attempt jump input. Treat it like a
+	//missed hop - re-roll the next interval so bot_hopfrequency gates the retry
+	//instead of letting the bot bounce again the moment the leftover input clears.
+	if (bs->flipkickInputTime > level.time && bs->flipkickJumpHeld)
+	{
+		bs->nextHopTime = level.time + (int)((float)Q_irand(500, 8000) * (100.0f / hopFrequency));
+		bs->hopWasGrounded = isGrounded;
+		return;
+	}
+
 	//Item 2B: a hop into wall contact starts a vertical wallrun - skip it unless we
 	//are retreating for our life. The scheduled hop time passes unused (no re-roll,
 	//so we don't spam a fresh roll every think while hugging a wall).
@@ -7043,12 +7063,57 @@ static qboolean NewBotAI_ShouldWallrunAgainstWalls(bot_state_t *bs)
 }
 
 //Diagonal wallruns start from lateral+forward inputs followed by a jump while already
-//touching a wall - always avoided unless we are critically low (<20 health) and
-//desperately escaping.
+//touching a wall - only wanted as an escape tool while retreating with over 50 health;
+//everywhere else they just look like accidental wall-hugging, so strip the lateral input.
 static qboolean NewBotAI_ShouldAvoidDiagonalWallrun(bot_state_t *bs)
 {
-	return (g_entities[bs->client].health >= 20 &&
-		NewBotAI_TouchingWallNotEnemy(bs)) ? qtrue : qfalse;
+	const qboolean escapingWithHealth = (g_entities[bs->client].health > 50 &&
+		bs->combatAction == BOT_COMBAT_ACTION_RETREAT_DEFENSE) ? qtrue : qfalse;
+
+	return (!escapingWithHealth && NewBotAI_TouchingWallNotEnemy(bs)) ? qtrue : qfalse;
+}
+
+//Estimated milliseconds until the airborne bot reaches the ground directly below it,
+//based on actual traced ground distance and current vertical velocity. Used to cut a
+//flipkick short before touchdown so the leftover jump input doesn't register as a hop.
+//Returns FLT_MAX while rising with no ground in trace range (we are nowhere near
+//landing), 0 once we are already at/past the traced ground.
+static float NewBotAI_FlipkickMsToGround(bot_state_t *bs)
+{
+	trace_t tr;
+	vec3_t end;
+	float groundDistance;
+
+	VectorCopy(bs->cur_ps.origin, end);
+	end[2] -= 256.0f;
+	JP_Trace(&tr, bs->cur_ps.origin, NULL, NULL, end, bs->client, MASK_PLAYERSOLID, qfalse, 0, 0);
+
+	groundDistance = (bs->cur_ps.origin[2] - tr.endpos[2]);
+	if (groundDistance < 0.0f)
+	{
+		groundDistance = 0.0f;
+	}
+
+	if (bs->cur_ps.velocity[2] <= 0.0f)
+	{
+		//Falling (or at apex): time until we drop the traced distance. Gravity is
+		//g_gravity (default 800 u/s^2); approximate with constant current fall speed,
+		//which slightly overestimates the time - safe, it only makes us cut earlier.
+		if (bs->cur_ps.velocity[2] < 0.0f)
+		{
+			return (groundDistance / -bs->cur_ps.velocity[2]) * 1000.0f;
+		}
+		return FLT_MAX;
+	}
+
+	//Rising: time to apex plus fall back to the traced ground.
+	{
+		const float gravity = (g_gravity.value > 0.0f) ? g_gravity.value : 800.0f;
+		const float timeToApex = bs->cur_ps.velocity[2] / gravity; //seconds
+		const float apexHeight = groundDistance + (bs->cur_ps.velocity[2] * timeToApex * 0.5f);
+		const float fallTime = sqrtf(2.0f * apexHeight / gravity);
+		return (timeToApex + fallTime) * 1000.0f;
+	}
 }
 
 void NewBotAI_Flipkick(bot_state_t *bs)
@@ -7087,9 +7152,23 @@ void NewBotAI_Flipkick(bot_state_t *bs)
 			bs->flipkickInputTime = 0;
 			return;
 		}
+		//Cut the kick short when we are about to land: the kick can only fire while
+		//airborne and rising, so re-arming jump inside the last stretch of the arc
+		//just leaves jump input latched when we touch down and registers as another
+		//hop. Bail at least 30ms before touchdown instead (with an extra 2-think
+		//margin so slow think ticks don't slip a fresh press in under the wire).
+		//Trace for the actual ground distance below us so landing on higher/lower
+		//ground than the jump start still times out correctly.
+		if (NewBotAI_FlipkickMsToGround(bs) < 30.0f + (2.0f * FRAMETIME))
+		{
+			trap->EA_MoveForward(bs->client);
+			bs->flipkickInputTime = 0;
+			bs->flipkickJumpHeld = qfalse;
+			return;
+		}
 		trap->EA_MoveForward(bs->client);
 		trap->EA_DelayedJump(bs->client);
-		bs->flipkickInputTime = level.time + NEWBOTAI_FLIPKICK_INPUT_WINDOW_MS;
+		bs->flipkickInputTime = level.time + NewBotAI_GetFlipkickInputWindowMs();
 		return;
 	}
 
@@ -7159,7 +7238,7 @@ void NewBotAI_Flipkick(bot_state_t *bs)
 		bs->randomStrafeEndTime = 0;
 		trap->EA_MoveForward(bs->client);
 		trap->EA_Jump(bs->client);
-		bs->flipkickInputTime = level.time + NEWBOTAI_FLIPKICK_INPUT_WINDOW_MS;
+		bs->flipkickInputTime = level.time + NewBotAI_GetFlipkickInputWindowMs();
 		bs->flipkickJumpHeld = qtrue;
 		return;
 	}
@@ -7172,7 +7251,7 @@ void NewBotAI_Flipkick(bot_state_t *bs)
 		bs->randomStrafeEndTime = 0;
 		trap->EA_MoveForward(bs->client);
 		trap->EA_Jump(bs->client);
-		bs->flipkickInputTime = level.time + NEWBOTAI_FLIPKICK_INPUT_WINDOW_MS;
+		bs->flipkickInputTime = level.time + NewBotAI_GetFlipkickInputWindowMs();
 		bs->flipkickJumpHeld = qtrue;
 	}
 
@@ -7193,7 +7272,7 @@ void NewBotAI_Flipkick(bot_state_t *bs)
 	if (((bs->origin[2] - bs->cur_ps.fd.forceJumpZStart) > 24) && ((bs->origin[2] - bs->cur_ps.fd.forceJumpZStart) < 48))
 	{
 		trap->EA_DelayedJump(bs->client);
-		bs->flipkickInputTime = level.time + NEWBOTAI_FLIPKICK_INPUT_WINDOW_MS;
+		bs->flipkickInputTime = level.time + NewBotAI_GetFlipkickInputWindowMs();
 	}
 }
 
@@ -7558,7 +7637,7 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 			NewBotAI_RetreatDiagonal(bs, bs->gripkickJerkDirection < 0);
 		}
 		else if (bs->gripkickDwellUntil > level.time) {
-			//bot_gripkickdwell-scaled hold (aim-down dwells run 50% longer than the
+			//bot_gripkickdwell-scaled hold (aim-down dwells run the same length as the
 			//upward jerks): keep the target gripped, yaw tracking them, while moving
 			//exclusively forward - no diagonal input - so the flipkick approach starts
 			//from a clean forward-only hold. Pitch stays straight down; aiming it back
@@ -7609,10 +7688,10 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 
 					//An unconfirmed attempt dwells here (aim-down hold) before the next
 					//forward approach instead of immediately cycling into a jerk. Aim-down
-					//dwells run 50% longer than the upward jerks for the same
+					//dwells run the same length as the upward jerks for the same
 					//bot_gripkickdwell setting.
 					bs->gripkickAttemptTime = level.time;
-					bs->gripkickDwellUntil = level.time + (600 * dwellPercent * 3) / 200;
+					bs->gripkickDwellUntil = level.time + (Q_irand(700, 1100) * dwellPercent) / 100;
 				}
 			}
 		}
@@ -9082,8 +9161,6 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 			if (bs->frame_Enemy_Len > 200) {
 				trace_t	trace;
 				vec3_t mins, maxs, traceto;
-				//"Barely moving" despite trying to retreat - roughly 30 units/sec (30*30).
-				#define NEWBOTAI_WALLAVOID_STUCK_SPEED_SQ 900.0f
 				const float horizontalSpeedSquared = bs->cur_ps.velocity[0] * bs->cur_ps.velocity[0] +
 					bs->cur_ps.velocity[1] * bs->cur_ps.velocity[1];
 				//Only treat this as a real wall block (and worth a 180+jump escape) when we
@@ -9169,7 +9246,7 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 				 (bs->pullKickJumpTime == -1 && bs->frame_Enemy_Len <= 320.0f)))
 			{
 				trap->EA_Jump(bs->client);
-				bs->flipkickInputTime = level.time + NEWBOTAI_FLIPKICK_INPUT_WINDOW_MS;
+				bs->flipkickInputTime = level.time + NewBotAI_GetFlipkickInputWindowMs();
 				bs->flipkickJumpHeld = qtrue;
 				bs->pullKickJumpTime = 0;
 				//Same 300ms post-attempt cooldown NewBotAI_Flipkick applies to its own
@@ -9273,6 +9350,13 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 			VectorLengthSquared(bs->cur_ps.velocity) < 100.0f &&
 			bs->flipkickInputTime <= level.time)
 		{
+			//Item 5: on a map with no waypoint trail, prioritize closing on the target
+			//over lateral wall avoidance - a stuck bot swings its yaw off the wall and
+			//keeps driving forward instead of pacing around the obstacle forever.
+			if (NewBotAI_TryNoWaypointYawEscape(bs, bs->currentEnemy->client->ps.origin))
+			{
+				return;
+			}
 			//Break two-wall stalls with a small yaw drift and forward input
 			//instead of lateral obstacle avoidance during combat.
 			bs->ideal_viewangles[YAW] += (level.framenum & 1) ? 5.0f : -5.0f;
@@ -10099,8 +10183,17 @@ static int NewBotAI_GetPTKWeight(bot_state_t *bs)
 		//The enemy has already committed their saber to a throw - punish the opening
 		//with a pullkick (pull + flipkick) rather than trading throws of our own, and
 		//keep this window strongly favored so drain taps between pullkicks (see
-		//NewBotAI_IsPullkickDrainWindow) also engage more readily.
-		weight += 50;
+		//NewBotAI_IsPullkickDrainWindow) also engage more readily. When we hold a
+		//drainlock (force advantage) and enough health to eat the saber, this is our
+		//best option outright, so weight it far heavier than the base opening.
+		if (ourHealth > 30 && ourForce > hisForce)
+		{
+			weight += 100;
+		}
+		else
+		{
+			weight += 50;
+		}
 	}
 
 	if (fpDifference >= bot_ptk_fpdifference.integer)
@@ -10695,8 +10788,13 @@ int NewBotAI_GetPull(bot_state_t *bs) {
 
 	if (bs->currentEnemy->client->ps.saberInFlight) {
 		//They've committed to a saber throw and have no blade in hand to defend a pull -
-		//this is the ideal pullkick (pull + flipkick, no throw of our own) window, so
-		//weight this heavily instead of the old near-zero suppression.
+		//this is the ideal pullkick (pull + flipkick, no throw of our own) window. While
+		//we hold a drainlock (force advantage) and enough health to eat the incoming
+		//saber, the pullkick wins outright - return the max weight. Otherwise still
+		//weight it heavily instead of the old near-zero suppression.
+		if (ourHealth > 30 && ourForce > bs->currentEnemy->client->ps.fd.forcePower) {
+			return 100;
+		}
 		weight = 80.0f;
 	}
 
@@ -12008,6 +12106,13 @@ void NewBotAI_DoAloneStuff(bot_state_t *bs, float thinktime) {
 		return;
 	}
 
+	//No waypoint trail to route around walls: if we're stuck on geometry between us
+	//and this item, swing the yaw off the wall instead of grinding into it.
+	if (NewBotAI_TryNoWaypointYawEscape(bs, waypoint))
+	{
+		return;
+	}
+
 	VectorSubtract(waypoint, bs->origin, temp);
 	vectoangles(temp, temp);
 	VectorCopy(temp, bs->ideal_viewangles);
@@ -12033,6 +12138,71 @@ void NewBotAI_DoAloneStuff(bot_state_t *bs, float thinktime) {
 	//Entities in box.. for each..
 	//Check if we have it..
 	//Run to it..
+}
+
+// Item 5 (no-waypoint pursuit): on maps with no waypoint trail there is nothing to
+// route around walls with, so a bot driving at its target just runs face-first into
+// geometry between them forever. Waypoint maps solve this by routing through the
+// trail; here the next best thing is bot_yawswitch - while we are grounded, making
+// almost no horizontal progress despite pushing toward the target, and a wall blocks
+// the direct line, swing the yaw away from the wall so we slide around it and keep
+// closing on the target rather than stalling in place.
+static qboolean NewBotAI_TryNoWaypointYawEscape(bot_state_t *bs, vec3_t goalOrigin)
+{
+	vec3_t toGoal, trTo, mins, maxs;
+	trace_t tr;
+	float horizontalSpeedSquared;
+
+	if (gWPNum > 0)
+	{
+		return qfalse; //maps with waypoints route around walls through the trail
+	}
+
+	if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE)
+	{
+		return qfalse; //airborne - yaw escape is a grounded un-stick tool
+	}
+
+	horizontalSpeedSquared = bs->cur_ps.velocity[0] * bs->cur_ps.velocity[0] +
+		bs->cur_ps.velocity[1] * bs->cur_ps.velocity[1];
+	if (horizontalSpeedSquared >= NEWBOTAI_WALLAVOID_STUCK_SPEED_SQ)
+	{
+		return qfalse; //actually moving - not stuck
+	}
+
+	VectorSubtract(goalOrigin, bs->origin, toGoal);
+	if (VectorNormalize(toGoal) < 96.0f)
+	{
+		return qfalse; //already on top of the goal
+	}
+
+	trTo[0] = bs->origin[0] + toGoal[0] * 64.0f;
+	trTo[1] = bs->origin[1] + toGoal[1] * 64.0f;
+	trTo[2] = bs->origin[2] + toGoal[2] * 64.0f;
+
+	mins[0] = -15;
+	mins[1] = -15;
+	mins[2] = 0;
+	maxs[0] = 15;
+	maxs[1] = 15;
+	maxs[2] = 32;
+
+	JP_Trace(&tr, bs->origin, mins, maxs, trTo, bs->client, MASK_PLAYERSOLID, qfalse, 0, 0);
+
+	if (tr.fraction >= 1.0f)
+	{
+		return qfalse; //path is clear - keep driving straight at the goal
+	}
+	if (bs->currentEnemy && tr.entityNum == bs->currentEnemy->s.number)
+	{
+		return qfalse; //we hit our target, not a wall
+	}
+
+	//Stuck on a wall with no waypoint trail to route around: swing the yaw off the
+	//wall so we slide around it and keep closing on the target.
+	bs->ideal_viewangles[YAW] = AngleNormalize360(bs->ideal_viewangles[YAW] + bot_yawswitch.value);
+	trap->EA_MoveForward(bs->client);
+	return qtrue;
 }
 
 static void NewBotAI_RunNavigationOrAlone(bot_state_t *bs, float thinktime)
