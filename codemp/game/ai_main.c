@@ -10115,7 +10115,7 @@ static qboolean NewBotAI_HasDroppedOwnSaber(bot_state_t *bs)
 	recallWeaponTransition = (!liveWeaponOwnsSaber &&
 		(bs->cur_ps.weapon == WP_SABER || bs->cur_ps.weapon == WP_MELEE) &&
 		actualPs->saberInFlight &&
-		actualPs->saberEntityNum <= 0) ? qtrue : qfalse;
+		actualPs->saberEntityNum == 0) ? qtrue : qfalse;
 	if (!liveWeaponOwnsSaber && !recallWeaponTransition)
 	{
 		return qfalse;
