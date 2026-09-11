@@ -8523,8 +8523,6 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 	if (hasDroppedOwnSaber)
 	{
 		weapon = WP_SABER;
-		BotSelectWeapon(bs->client, weapon);
-		return;
 	}
 
 	if (bs->saberThrowQueued && bs->doAltAttack)
@@ -8553,6 +8551,9 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 	if (bs->currentEnemy->client->invulnerableTimer && (bs->currentEnemy->client->invulnerableTimer > level.time)) {//don't attack them if they can't take dmg
 		return;
 	}
+
+	if (hasDroppedOwnSaber)
+		return;
 
 	if (bs->cur_ps.weapon == WP_SABER) {//Fullforce saber attacks
 		const qboolean preferDrainlockFan = (NewBotAI_IsDrainlockAdvantage(bs) &&
