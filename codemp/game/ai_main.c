@@ -10105,7 +10105,7 @@ static qboolean NewBotAI_HasDroppedOwnSaber(bot_state_t *bs)
 		return qfalse;
 	}
 
-	if (!actualPs->saberInFlight || actualPs->saberEntityNum)
+	if (!actualPs->saberInFlight)
 	{
 		return qfalse;
 	}
