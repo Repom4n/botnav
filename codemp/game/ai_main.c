@@ -126,6 +126,7 @@ static int NewBotAI_GetAntiDrainWeight(bot_state_t *bs);
 static float BotGetLightningStartDistance(void);
 static int NewBotAI_GetLightningWeight(bot_state_t *bs);
 static int NewBotAI_GetPTKWeight(bot_state_t *bs);
+static qboolean NewBotAI_IsKnockdownRecoveryRoll(int anim);
 static qboolean NewBotAI_IsSaberSwingStartWindow(bot_state_t *bs);
 static qboolean NewBotAI_CanAttemptFlipkick(bot_state_t *bs);
 static float NewBotAI_GetEnemyClosingSpeed(bot_state_t *bs);
@@ -9466,6 +9467,24 @@ qboolean BG_InRoll3(int anim)
 	return qfalse;
 }
 
+static qboolean NewBotAI_IsKnockdownRecoveryRoll(int anim)
+{
+	switch (anim)
+	{
+	case BOTH_GETUP_BROLL_B:
+	case BOTH_GETUP_BROLL_F:
+	case BOTH_GETUP_BROLL_L:
+	case BOTH_GETUP_BROLL_R:
+	case BOTH_GETUP_FROLL_B:
+	case BOTH_GETUP_FROLL_F:
+	case BOTH_GETUP_FROLL_L:
+	case BOTH_GETUP_FROLL_R:
+		return qtrue;
+	}
+
+	return qfalse;
+}
+
 static int BotGetResponseDelayMs(void)
 {
 	int delay = bot_delay.integer;
@@ -11682,7 +11701,7 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 	int minWeight = 0;
 	const int ourHealth = g_entities[bs->client].health;
 	const qboolean pressAdvantage = NewBotAI_ShouldPressAdvantage(bs);
-	const qboolean inRecoveryRoll = BG_InRoll3(bs->cur_ps.legsAnim);
+	const qboolean inRecoveryRoll = NewBotAI_IsKnockdownRecoveryRoll(bs->cur_ps.legsAnim);
 
 	//Disengaged in a bot_conservation window - hold off on spending any force so it regens.
 	if (bs->conserveUntil > level.time)
@@ -11879,7 +11898,7 @@ void NewBotAI_GetLSForcepower(bot_state_t *bs)
 	//Disengaged in a bot_conservation window - hold off on spending any force so it regens.
 	if (bs->conserveUntil > level.time)
 		return;
-	if (NewBotAI_IsEnemySaberThreatImminent(bs) || BG_InRoll3(bs->cur_ps.legsAnim))
+	if (NewBotAI_IsEnemySaberThreatImminent(bs) || NewBotAI_IsKnockdownRecoveryRoll(bs->cur_ps.legsAnim))
 		return;
 
 	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, a_fo);
