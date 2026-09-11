@@ -10817,7 +10817,7 @@ static qboolean NewBotAI_IsEnemySaberThreatImminent(bot_state_t *bs)
 	float lateralDistSq;
 	float threatRadius;
 	int saberEntNum;
-	const qboolean isReturning = NewBotAI_IsEnemySaberReturning(bs);
+	qboolean isReturning;
 
 	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client ||
 		!bs->currentEnemy->client->ps.saberInFlight)
@@ -10825,6 +10825,7 @@ static qboolean NewBotAI_IsEnemySaberThreatImminent(bot_state_t *bs)
 		return qfalse;
 	}
 
+	isReturning = NewBotAI_IsEnemySaberReturning(bs);
 	saberEntNum = bs->currentEnemy->client->ps.saberEntityNum;
 	if (saberEntNum == 0)
 	{
