@@ -8525,7 +8525,9 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 		weapon = WP_SABER;
 	}
 
-	if (bs->saberThrowQueued && bs->doAltAttack)
+	if (bs->cur_ps.weapon == WP_SABER &&
+		bs->saberThrowQueued &&
+		bs->doAltAttack)
 	{
 		bs->saberThrowQueued = qfalse;
 		return;
