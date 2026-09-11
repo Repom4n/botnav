@@ -10857,7 +10857,7 @@ static qboolean NewBotAI_IsEnemySaberThreatImminent(bot_state_t *bs)
 	}
 
 	forwardDist = DotProduct(saberToUs, saberDir);
-	if (forwardDist <= 0.0f)
+	if (forwardDist <= 0.0f || forwardDist > 96.0f)
 	{
 		return qfalse;
 	}
