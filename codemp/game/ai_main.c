@@ -97,6 +97,8 @@ vmCvar_t bot_wp_visconnect;
 //end rww
 
 static int BotGetNewBotAITargetMode(void);
+qboolean PM_SaberInStart( int move );
+qboolean PM_SaberInTransition( int move );
 static qboolean BotTargetModeAllowsBotEnemies(int targetMode);
 static qboolean BotTargetModePassesScanFilter(int targetMode, gentity_t *ent, qboolean preferredHumansOnly);
 static qboolean BotTargetModeIsForceDuelOnly(int targetMode);
@@ -153,6 +155,10 @@ static int NewBotAI_GetDrainTapTargetCost(bot_state_t *bs);
 static qboolean NewBotAI_IsPullkickDrainWindow(bot_state_t *bs);
 static qboolean NewBotAI_IsDrainlockAdvantage(bot_state_t *bs);
 static qboolean NewBotAI_ShouldDrainlockDeep(bot_state_t *bs);
+static qboolean NewBotAI_HasClearAdvantage(bot_state_t *bs);
+static qboolean NewBotAI_ShouldPressAdvantage(bot_state_t *bs);
+static qboolean NewBotAI_IsRecallingKnockedSaber(bot_state_t *bs);
+static qboolean NewBotAI_IsCombatProgressStalled(bot_state_t *bs);
 static qboolean NewBotAI_IsEnemySaberReturning(bot_state_t *bs);
 static qboolean NewBotAI_IsBetweenOwnSaberAndEnemy(bot_state_t *bs);
 static void NewBotAI_AdjustSaberThrowArcAim(bot_state_t *bs, vec3_t headlevel);
@@ -6868,6 +6874,9 @@ static int NewBotAI_GetFlipkickInputWindowMs(void)
 //"Barely moving" despite trying to move - roughly 30 units/sec (30*30). Shared by the
 //retreat wall-avoid jump and the no-waypoint yaw escape to detect a genuinely stuck bot.
 #define NEWBOTAI_WALLAVOID_STUCK_SPEED_SQ 900.0f
+#define NEWBOTAI_COMBAT_STUCK_DISTANCE_SQ (96.0f * 96.0f)
+#define NEWBOTAI_COMBAT_STUCK_TIME_MS 5000
+#define NEWBOTAI_DUEL_TARGET_BLACKLIST_MS 15000
 static qboolean NewBotAI_ShouldPreferFlipkickOverThrow(bot_state_t *bs)
 {
 	return (NewBotAI_CanAttemptFlipkick(bs) && bs->frame_Enemy_Len <= NEWBOTAI_FLIPKICK_PREFERRED_RANGE) ? qtrue : qfalse;
@@ -7522,6 +7531,10 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 		bs->gripkickJerkPitch = -70.0f;
 		bs->gripkickAttemptTime = 0;
 		bs->gripkickDwellUntil = 0;
+		if (BG_InKnockDown(bs->currentEnemy->client->ps.legsAnim))
+		{
+			bs->gripkickJerkCount = Q_irand(1, 2);
+		}
 	}
 
 	//Grip initiation moves straight forward from the very first think - no backward
@@ -7610,6 +7623,7 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 			bs->gripkickAttemptTime = 0;
 			bs->gripkickDwellUntil = 0;
 			bs->gripkickKickCount++;
+			bs->lastGripkickSuccessTime = level.time;
 			if (weAreOnTopOfEnemy)
 			{
 				//Landed on the opponent: skipping the next flipkick attempt means
@@ -7679,12 +7693,10 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 			NewBotAI_RetreatDiagonal(bs, bs->gripkickJerkDirection < 0);
 		}
 		else if (bs->gripkickDwellUntil > level.time) {
-			//bot_gripkickdwell-scaled hold (aim-down dwells run the same length as the
-			//upward jerks): keep the target gripped, yaw tracking them, while moving
-			//exclusively forward - no diagonal input - so the flipkick approach starts
-			//from a clean forward-only hold. Pitch stays straight down; aiming it back
-			//up toward the target here was breaking the follow-up flipkick approach.
-			bs->ideal_viewangles[YAW] = a_fo[YAW];
+			//Hold the target straight down while moving forward, but do not yaw back
+			//toward them until the actual flipkick attempt window. Pre-rotating here was
+			//pushing the target away before the kick landed.
+			bs->ideal_viewangles[YAW] = bs->viewangles[YAW];
 			bs->ideal_viewangles[PITCH] = 89;
 			trap->EA_Move(bs->client, vec3_origin, 0);
 			trap->EA_MoveForward(bs->client);
@@ -7733,7 +7745,7 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 					//dwells run the same length as the upward jerks for the same
 					//bot_gripkickdwell setting.
 					bs->gripkickAttemptTime = level.time;
-					bs->gripkickDwellUntil = level.time + (Q_irand(700, 1100) * dwellPercent) / 100;
+					bs->gripkickDwellUntil = level.time + (Q_irand(350, 550) * dwellPercent) / 100;
 				}
 			}
 		}
@@ -8537,7 +8549,14 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 	}
 
 	if (bs->cur_ps.weapon == WP_SABER) {//Fullforce saber attacks
-		if (bs->cur_ps.fd.forceSide == FORCE_LIGHTSIDE) { //Yellow sweep
+		const qboolean preferDrainlockFan = (NewBotAI_IsDrainlockAdvantage(bs) &&
+			bs->cur_ps.fd.saberAnimLevel != SS_STAFF &&
+			bs->cur_ps.fd.saberAnimLevel != SS_DUAL) ? qtrue : qfalse;
+		if (bs->cur_ps.fd.forceSide == FORCE_LIGHTSIDE || preferDrainlockFan) { //Yellow sweep
+			if (preferDrainlockFan)
+			{
+				g_entities[bs->client].client->ps.fd.saberAnimLevel = SS_MEDIUM;
+			}
 
 			if (BG_SaberInAttack(bs->cur_ps.saberMove)) {
 				if (g_entities[bs->client].client->ps.fd.saberAnimLevel == SS_MEDIUM)
@@ -8908,6 +8927,8 @@ static qboolean NewBotAI_ShouldConserveForce(bot_state_t *bs)
 		return qfalse;
 	if (ourForce >= 90) //already nearly full, nothing meaningful to regen
 		return qfalse;
+	if (NewBotAI_ShouldPressAdvantage(bs))
+		return qfalse;
 	//Item 5: never disengage to conserve while actively holding a drainlock advantage -
 	//pressing the chase/drain/pullkick loop takes priority over letting force regen.
 	if (NewBotAI_IsDrainlockAdvantage(bs))
@@ -8956,6 +8977,7 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 	int softRetreatHealth;
 	float retreatDistance;
 	qboolean horizontalSwingStart = qfalse;
+	const qboolean pressAdvantage = NewBotAI_ShouldPressAdvantage(bs);
 
 	bs->combatAction = BOT_COMBAT_ACTION_AGGRESSION;
 
@@ -8964,6 +8986,12 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 	//start a new one (debounced so we don't re-roll every think frame).
 	if (bs->conserveUntil > level.time)
 	{
+		if (pressAdvantage)
+		{
+			bs->conserveUntil = 0;
+		}
+		else
+		{
 		bs->combatAction = BOT_COMBAT_ACTION_RETREAT_DEFENSE;
 		if (bs->randomStrafeEndTime <= level.time)
 		{
@@ -8976,6 +9004,7 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 			trap->EA_MoveLeft(bs->client);
 		NewBotAI_RetreatDiagonal(bs, bs->randomStrafeDir <= 0);
 		return;
+		}
 	}
 	else if (bs->conserveNextRollTime <= level.time)
 	{
@@ -9149,12 +9178,23 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 
 		saber = &g_entities[bs->currentEnemy->client->ps.saberEntityNum];
 
-		if (bs->cur_ps.weapon == WP_SABER && bs->cur_ps.saberInFlight && !bs->cur_ps.saberEntityNum)
+		if (NewBotAI_IsRecallingKnockedSaber(bs))
 		{
-			//The thrown saber has been knocked away. Retreat while the normal
-			//attack-finalization path keeps pressing attack to call it back.
-			bs->combatAction = BOT_COMBAT_ACTION_RETREAT_DEFENSE;
-			NewBotAI_RetreatDiagonal(bs, qfalse);
+			//Keep pressuring/repositioning while the saber recall toggle runs; a knocked-away
+			//saber is vulnerable, but stalling or hard retreating was worse than continuing
+			//to close and fight with movement/force.
+			bs->combatAction = BOT_COMBAT_ACTION_AGGRESSION;
+			if (!NewBotAI_TryNoWaypointYawEscape(bs, bs->currentEnemy->client->ps.origin))
+			{
+				if (bs->frame_Enemy_Len > 96.0f)
+				{
+					trap->EA_MoveForward(bs->client);
+				}
+				else
+				{
+					NewBotAI_GetGroundDodge(bs);
+				}
+			}
 		}
 
 		else if (bs->currentEnemy->client->ps.legsAnim == BOTH_GETUP_BROLL_B && bs->frame_Enemy_Len < 100) {//Dodge a getup?
@@ -9169,7 +9209,7 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 				trap->EA_MoveForward(bs->client);
 			crouch = qtrue;
 		}
-		else if (!NewBotAI_CanAttemptFlipkick(bs) && NewBotAI_GetEnemyClosingSpeed(bs) > 420.0f) {
+		else if (!pressAdvantage && !NewBotAI_CanAttemptFlipkick(bs) && NewBotAI_GetEnemyClosingSpeed(bs) > 420.0f) {
 			//Item 2B: retreat from a fast incoming enemy (saber duel / flipkick disabled) instead of
 			//our normal forward approach. Attacks and jumps are unaffected -- they're decided by
 			//NewBotAI_GetAttack and this block, respectively -- only the forward/back choice changes.
@@ -9181,14 +9221,14 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 				trap->EA_Jump(bs->client);
 			}
 		}
-		else if ((g_entities[bs->client].health < hardRetreatHealth) ||
+		else if (!pressAdvantage && ((g_entities[bs->client].health < hardRetreatHealth) ||
 				((g_entities[bs->client].health < softRetreatHealth)
 				&& (bs->cur_ps.fd.forcePower < 30)
 				&& !(bs->cur_ps.fd.forcePowersActive & (1 << FP_ABSORB))
 				&& (bs->frame_Enemy_Len < retreatDistance)
 				//Item 5: don't let a soft-retreat break off an active drainlock chase - the
 				//critical hardRetreatHealth safety check above still applies regardless.
-				&& !NewBotAI_IsDrainlockAdvantage(bs))) {
+				&& !NewBotAI_IsDrainlockAdvantage(bs)))) {
 			qboolean wallRun = qfalse;
 			bs->combatAction = BOT_COMBAT_ACTION_RETREAT_DEFENSE;
 			//Running routine, we should add a wallrun search to this.
@@ -9430,7 +9470,16 @@ qboolean BG_InRoll3(int anim)
 
 static int BotGetResponseDelayMs(void)
 {
-	int delay = bot_delayresponsetime.integer;
+	int delay = bot_delay.integer;
+
+	if (delay == 0)
+	{
+		delay = bot_delayresponsetime.integer;
+	}
+	if (delay == 0)
+	{
+		delay = bot_responseTimeDelay.integer;
+	}
 
 	if (delay < 0)
 	{
@@ -9924,6 +9973,90 @@ static int BotGetAggressionWeightedBonus(bot_state_t *bs, float biasPercent, int
 	return (int)(normalized * (biasPercent / 100.0f) * (float)maxBonus);
 }
 
+static qboolean NewBotAI_HasClearAdvantage(bot_state_t *bs)
+{
+	int ourHealth;
+	int ourForce;
+	int hisHealth;
+	int hisForce;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return qfalse;
+	}
+
+	ourHealth = g_entities[bs->client].health;
+	ourForce = bs->cur_ps.fd.forcePower;
+	hisHealth = bs->currentEnemy->health;
+	hisForce = bs->currentEnemy->client->ps.fd.forcePower;
+
+	return ((ourHealth - hisHealth) >= 40 || (ourForce - hisForce) >= 40) ? qtrue : qfalse;
+}
+
+static qboolean NewBotAI_ShouldPressAdvantage(bot_state_t *bs)
+{
+	float aggressionBias;
+	int ourHealth;
+	int ourForce;
+	int hisHealth;
+	int hisForce;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return qfalse;
+	}
+
+	ourHealth = g_entities[bs->client].health;
+	ourForce = bs->cur_ps.fd.forcePower;
+	hisHealth = bs->currentEnemy->health;
+	hisForce = bs->currentEnemy->client->ps.fd.forcePower;
+
+	aggressionBias = BotGetAggressionBias(bs);
+
+	if (aggressionBias <= -0.6f)
+	{
+		return qfalse;
+	}
+
+	if (NewBotAI_IsDrainlockAdvantage(bs))
+	{
+		return qtrue;
+	}
+
+	if (NewBotAI_HasClearAdvantage(bs))
+	{
+		return qtrue;
+	}
+
+	if ((BG_InKnockDown(bs->currentEnemy->client->ps.legsAnim) ||
+		bs->currentEnemy->client->ps.groundEntityNum == ENTITYNUM_NONE) &&
+		ourForce > hisForce && ourHealth >= hisHealth)
+	{
+		return qtrue;
+	}
+
+	if (bs->currentEnemy->client->ps.saberInFlight &&
+		ourHealth > 30 &&
+		ourForce >= hisForce)
+	{
+		return qtrue;
+	}
+
+	return (aggressionBias > 0.2f && ourHealth > hisHealth && ourForce > hisForce) ? qtrue : qfalse;
+}
+
+static qboolean NewBotAI_IsRecallingKnockedSaber(bot_state_t *bs)
+{
+	if (!bs)
+	{
+		return qfalse;
+	}
+
+	return (bs->cur_ps.weapon == WP_SABER &&
+		bs->cur_ps.saberInFlight &&
+		!bs->cur_ps.saberEntityNum) ? qtrue : qfalse;
+}
+
 static int BotGetDrainHoldBiasMs(bot_state_t *bs)
 {
 	float biasPercent;
@@ -10157,6 +10290,9 @@ static int NewBotAI_GetPTKWeight(bot_state_t *bs)
 	const int fpDifference = ourForce - hisForce;
 	const int hpDifference = ourHealth - hisHealth;
 	const int aggressionWeight = BotGetChanceBiasPercent(bot_ptk_aggressionbias.value);
+	const qboolean enemySwinging = (BG_SaberInAttack(bs->currentEnemy->client->ps.saberMove) ||
+		PM_SaberInStart(bs->currentEnemy->client->ps.saberMove) ||
+		PM_SaberInTransition(bs->currentEnemy->client->ps.saberMove)) ? qtrue : qfalse;
 	int weight = 0;
 
 	if (!NewBotAI_IsEnemyPullable(bs) || !g_flipKick.integer)
@@ -10180,7 +10316,12 @@ static int NewBotAI_GetPTKWeight(bot_state_t *bs)
 	//or the kick while getting up), so weight it heavily.
 	if (BG_InKnockDown(bs->currentEnemy->client->ps.legsAnim))
 	{
-		weight += 50;
+		weight += 80;
+	}
+
+	if (enemySwinging && bs->frame_Enemy_Len < 256)
+	{
+		weight += 45;
 	}
 
 	if (hisForce < 20)
@@ -10195,6 +10336,10 @@ static int NewBotAI_GetPTKWeight(bot_state_t *bs)
 		//Low-health targets are prime PTK finishers: add a strong bias when the enemy is
 		//close to dropping so the bot chases the finish with a pullkick sequence.
 		weight += 35;
+	}
+	else if (hisHealth < 70)
+	{
+		weight += 15;
 	}
 
 	if (ourHealth > 70)
@@ -10271,6 +10416,10 @@ static int NewBotAI_GetPTKWeight(bot_state_t *bs)
 
 	weight += BotGetAggressionWeightedBonus(bs, aggressionWeight, 35, qtrue);
 	weight += NewBotAI_GetAntiDrainWeight(bs);
+	if (bs->lastGripkickSuccessTime > level.time - 3000)
+	{
+		weight += 25;
+	}
 
 	return weight;
 }
@@ -10336,6 +10485,11 @@ static float NewBotAI_GetFanBiasPercent(bot_state_t *bs)
 		{
 			fanBias = NEWBOTAI_FANBIAS_MIN_WEIGHTED_PERCENT;
 		}
+	}
+
+	if (NewBotAI_IsDrainlockAdvantage(bs) && fanBias < 80.0f)
+	{
+		fanBias = 80.0f;
 	}
 
 	return fanBias;
@@ -10878,6 +11032,8 @@ qboolean NewBotAI_IsEnemyPullable(bot_state_t *bs) {
 
 int NewBotAI_GetPull(bot_state_t *bs) {
 	const int ourHealth = g_entities[bs->client].health, hisHealth = bs->currentEnemy->health, ourForce = bs->cur_ps.fd.forcePower;
+	const int hisForce = bs->currentEnemy->client->ps.fd.forcePower;
+	const float drainlockBias = BotGetChanceBiasPercent(bot_drainlockbias.value);
 	int healthDiff = ourHealth - hisHealth;
 	float weight = (float)healthDiff;
 	int ptkWeight = 0;
@@ -10944,6 +11100,25 @@ int NewBotAI_GetPull(bot_state_t *bs) {
 		weight *= 0.5f;
 	if (bs->cur_ps.fd.forcePowersActive & (1 << FP_PROTECT))
 		weight *= 0.5f;
+
+	if (bs->currentEnemy->client->ps.groundEntityNum == ENTITYNUM_NONE)
+	{
+		weight += 35.0f;
+		if (ourForce > hisForce)
+		{
+			weight += 25.0f;
+		}
+	}
+
+	if (bs->lastGripkickSuccessTime > level.time - 3000)
+	{
+		weight += 35.0f;
+	}
+
+	if ((hisForce < 20 || NewBotAI_IsPullkickDrainWindow(bs)) && ourForce > hisForce)
+	{
+		weight += 20.0f + (drainlockBias * 0.35f);
+	}
 
 	if (bs->frame_Enemy_Len < 200 && ourForce >= 20) { //Pulling their weapon should be top priority always
 		if (bs->currentEnemy->client->ps.weapon >= WP_BLASTER)
@@ -11035,6 +11210,7 @@ static qboolean NewBotAI_ShouldDrainlockDeep(bot_state_t *bs)
 	const float drainlockBias = BotGetChanceBiasPercent(bot_drainlockbias.value);
 	const int ourForce = bs->cur_ps.fd.forcePower;
 	const int hisForce = bs->currentEnemy->client->ps.fd.forcePower;
+	int requiredLead;
 
 	if (drainlockBias <= 0.0f)
 	{
@@ -11046,7 +11222,13 @@ static qboolean NewBotAI_ShouldDrainlockDeep(bot_state_t *bs)
 		return qfalse;
 	}
 
-	return ((ourForce - hisForce) >= 40) ? qtrue : qfalse;
+	requiredLead = 80 - (int)(drainlockBias * 0.4f);
+	if (requiredLead < 40)
+	{
+		requiredLead = 40;
+	}
+
+	return ((ourForce - hisForce) >= requiredLead) ? qtrue : qfalse;
 }
 
 // Computes exactly how many of our own force points a drain tap must spend against the
@@ -11106,7 +11288,7 @@ static qboolean NewBotAI_IsPullkickDrainWindow(bot_state_t *bs)
 		return qfalse;
 	}
 
-	if (BotGetAggressionBias(bs) <= 0.0f)
+	if (BotGetAggressionBias(bs) <= -0.35f)
 	{
 		return qfalse;
 	}
@@ -11150,7 +11332,7 @@ static qboolean NewBotAI_IsDrainlockAdvantage(bot_state_t *bs)
 		return qfalse;
 	}
 
-	if (BotGetAggressionBias(bs) <= 0.0f)
+	if (BotGetAggressionBias(bs) <= -0.35f)
 	{
 		return qfalse;
 	}
@@ -11211,7 +11393,18 @@ int NewBotAI_GetDrain(bot_state_t *bs) {
 	}
 
 	if (ourHealth < 100)
-		return ((weight - ourHealth) + 20); //Eeee  //100 - 25 + 20 = 95
+	{
+		weight = ((weight - ourHealth) + 20); //Eeee  //100 - 25 + 20 = 95
+		if (NewBotAI_ShouldPressAdvantage(bs))
+		{
+			weight -= 45;
+			if (weight < 0)
+			{
+				weight = 0;
+			}
+		}
+		return weight;
+	}
 
 	return 0;
 }
@@ -11449,6 +11642,7 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 	int pushWeight, pullWeight, lightningWeight, drainWeight, gripWeight;//, doNothingWeight;
 	int minWeight = 0;
 	const int ourHealth = g_entities[bs->client].health;
+	const qboolean pressAdvantage = NewBotAI_ShouldPressAdvantage(bs);
 
 	//Disengaged in a bot_conservation window - hold off on spending any force so it regens.
 	if (bs->conserveUntil > level.time)
@@ -11464,7 +11658,7 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 	gripWeight = NewBotAI_GetGrip(bs);
 	//doNothingWeight = NewBotAI_GetWait(bs);
 
-	if (ourHealth < 100 && ourHealth <= bs->currentEnemy->health + 40 && drainWeight > minWeight && drainWeight >= gripWeight) {
+	if (!pressAdvantage && ourHealth < 100 && ourHealth <= bs->currentEnemy->health + 40 && drainWeight > minWeight && drainWeight >= gripWeight) {
 		level.clients[bs->client].ps.fd.forcePowerSelected = FP_DRAIN;
 		useTheForce = qtrue;
 	}
@@ -11575,6 +11769,8 @@ int NewBotAI_GetHeal(bot_state_t* bs) {
 		return 0;
 	if (ourForce < 50)
 		return 0;
+	if (NewBotAI_ShouldPressAdvantage(bs))
+		return 0;
 	return diff;
 }
 
@@ -11620,6 +11816,7 @@ void NewBotAI_GetLSForcepower(bot_state_t *bs)
 	int pullWeight, pushWeight, absorbWeight, protectWeight, healWeight;
 	int minWeight = 0;
 	const int ourHealth = g_entities[bs->client].health;
+	const qboolean pressAdvantage = NewBotAI_ShouldPressAdvantage(bs);
 
 	//Disengaged in a bot_conservation window - hold off on spending any force so it regens.
 	if (bs->conserveUntil > level.time)
@@ -11635,7 +11832,7 @@ void NewBotAI_GetLSForcepower(bot_state_t *bs)
 	healWeight = NewBotAI_GetHeal(bs);
 	//get weights
 
-	if (ourHealth < 100 && ourHealth <= bs->currentEnemy->health + 40 && healWeight > minWeight) {
+	if (!pressAdvantage && ourHealth < 100 && ourHealth <= bs->currentEnemy->health + 40 && healWeight > minWeight) {
 		level.clients[bs->client].ps.fd.forcePowerSelected = FP_HEAL;
 		useTheForce = qtrue;
 	}
@@ -12343,6 +12540,7 @@ static qboolean NewBotAI_TryNoWaypointYawEscape(bot_state_t *bs, vec3_t goalOrig
 	vec3_t toGoal, trTo, mins, maxs;
 	trace_t tr;
 	float horizontalSpeedSquared;
+	float yawTurn;
 
 	if (gWPNum > 0)
 	{
@@ -12391,9 +12589,45 @@ static qboolean NewBotAI_TryNoWaypointYawEscape(bot_state_t *bs, vec3_t goalOrig
 
 	//Stuck on a wall with no waypoint trail to route around: swing the yaw off the
 	//wall so we slide around it and keep closing on the target.
-	bs->ideal_viewangles[YAW] = AngleNormalize360(bs->ideal_viewangles[YAW] + bot_yawswitch.value);
+	yawTurn = bot_yawswitch.value;
+	if (yawTurn < 45.0f)
+	{
+		yawTurn = 120.0f;
+	}
+	bs->ideal_viewangles[YAW] = AngleNormalize360(bs->ideal_viewangles[YAW] + yawTurn);
 	trap->EA_MoveForward(bs->client);
 	return qtrue;
+}
+
+static qboolean NewBotAI_IsCombatProgressStalled(bot_state_t *bs)
+{
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return qfalse;
+	}
+
+	if (bs->frame_Enemy_Len < 128.0f || bs->cur_ps.groundEntityNum == ENTITYNUM_NONE)
+	{
+		VectorCopy(bs->origin, bs->combatStuckOrigin);
+		bs->combatStuckSince = level.time;
+		return qfalse;
+	}
+
+	if (!bs->combatStuckSince)
+	{
+		VectorCopy(bs->origin, bs->combatStuckOrigin);
+		bs->combatStuckSince = level.time;
+		return qfalse;
+	}
+
+	if (DistanceSquared(bs->origin, bs->combatStuckOrigin) > NEWBOTAI_COMBAT_STUCK_DISTANCE_SQ)
+	{
+		VectorCopy(bs->origin, bs->combatStuckOrigin);
+		bs->combatStuckSince = level.time;
+		return qfalse;
+	}
+
+	return (bs->combatStuckSince <= level.time - NEWBOTAI_COMBAT_STUCK_TIME_MS) ? qtrue : qfalse;
 }
 
 static void NewBotAI_RunNavigationOrAlone(bot_state_t *bs, float thinktime)
@@ -12471,6 +12705,11 @@ int NewBotAI_ScanForEnemies(bot_state_t* bs) {
 		for (i = 0; i < MAX_CLIENTS; i++) { //Go through each client, see if they are "afk", if everyone is afk, fuck this then.
 			//gentity_t* ent = &g_entities[level.sortedClients[i]];
 			gentity_t* ent = &g_entities[i];
+
+			if (bs->duelBlacklistUntil > level.time && i == bs->duelBlacklistIndex)
+			{
+				continue;
+			}
 
 			if (ent && ent->inuse && PassStandardEnemyChecks(bs, ent) && BotPVSCheck(ent->client->ps.origin, bs->eye) && PassLovedOneCheck(bs, ent)) {
 				float normalizedHealth = 0.25 + (ent->health - 1) * (1 - 0.25) / (100 - 1); //Range .25 to 1
@@ -12651,7 +12890,7 @@ static void NewBotAI_RunForceDuelOnly(bot_state_t *bs)
 		return;
 	}
 
-	if (ourHealth < 100 && (bs->cur_ps.fd.forcePowersKnown & (1 << FP_HEAL)) &&
+	if (!NewBotAI_ShouldPressAdvantage(bs) && ourHealth < 100 && (bs->cur_ps.fd.forcePowersKnown & (1 << FP_HEAL)) &&
 		!(g_forcePowerDisable.integer & (1 << FP_HEAL)) && bs->cur_ps.fd.forcePower >= 25)
 	{
 		level.clients[bs->client].ps.fd.forcePowerSelected = FP_HEAL;
@@ -12673,9 +12912,11 @@ static qboolean NewBotAI_ShouldFallbackToWaypoints(bot_state_t *bs)
 	vec3_t toEnemy, trTo, mins, maxs;
 	trace_t tr;
 	const float targetDistanceLimit = BotGetTargetDistanceLimit();
+	const qboolean progressStalled = NewBotAI_IsCombatProgressStalled(bs);
 
 	if (!bs->currentEnemy || !bs->currentEnemy->client)
 	{
+		bs->combatStuckSince = 0;
 		return qtrue;
 	}
 
@@ -12708,7 +12949,12 @@ static qboolean NewBotAI_ShouldFallbackToWaypoints(bot_state_t *bs)
 
 	JP_Trace(&tr, bs->origin, mins, maxs, trTo, bs->client, MASK_PLAYERSOLID, qfalse, 0, 0);
 
-	return (tr.fraction < 1.0f && tr.entityNum != bs->currentEnemy->s.number);
+	if (tr.fraction < 1.0f && tr.entityNum != bs->currentEnemy->s.number)
+	{
+		return qtrue;
+	}
+
+	return progressStalled;
 }
 
 void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
@@ -12745,6 +12991,11 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		bs->duelCompletedCount++;
 		if (bs->duelCompletedCount >= bot_duelcountmax.integer)
 		{
+			if (bs->currentEnemy && bs->currentEnemy->client)
+			{
+				bs->duelBlacklistIndex = bs->currentEnemy->s.number;
+				bs->duelBlacklistUntil = level.time + NEWBOTAI_DUEL_TARGET_BLACKLIST_MS;
+			}
 			if (targetMode == NEWBOTAI_TARGET_PREFER_HUMANS_DUEL)
 			{
 				bs->ffaExploreUntil = level.time + bot_ffaexploretime.integer;
@@ -12912,7 +13163,8 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	{
 		// If the bot is actively being attacked, don't divert to waypoint nav —
 		// keep full combat logic running so it can defend, dodge, and fight back.
-		if (bs->combatNavHoldUntil > level.time || bs->lastHurtTime > level.time - 1500)
+		if ((bs->combatNavHoldUntil > level.time || bs->lastHurtTime > level.time - 1500) &&
+			!NewBotAI_IsCombatProgressStalled(bs))
 		{
 			bs->navObstacleUntil = 0; // clear any pending hysteresis too
 		}
@@ -12936,7 +13188,8 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		// hysteresis: obstacle was recently blocking; keep following waypoints
 		// while StandardBotAI's enemy-aiming code keeps targeting the enemy.
 		// But if we're being actively attacked, override and run combat AI instead.
-		if (bs->combatNavHoldUntil > level.time || bs->lastHurtTime > level.time - 1500)
+		if ((bs->combatNavHoldUntil > level.time || bs->lastHurtTime > level.time - 1500) &&
+			!NewBotAI_IsCombatProgressStalled(bs))
 		{
 			bs->navObstacleUntil = 0;
 		}

@@ -5642,7 +5642,33 @@ void ClientThink_real( gentity_t *ent ) {
 					{
 
 						if (BG_KnockDownable(&faceKicked->client->ps)) {
-							if (g_nonRandomKnockdown.integer < 1) { //Default, random knockdowns
+							qboolean staffKick = qfalse;
+							switch (ent->client->ps.legsAnim)
+							{
+							case BOTH_A7_KICK_F:
+							case BOTH_A7_KICK_B:
+							case BOTH_A7_KICK_R:
+							case BOTH_A7_KICK_L:
+							case BOTH_A7_KICK_S:
+							case BOTH_A7_KICK_BF:
+							case BOTH_A7_KICK_RL:
+							case BOTH_A7_KICK_F_AIR:
+							case BOTH_A7_KICK_B_AIR:
+							case BOTH_A7_KICK_R_AIR:
+							case BOTH_A7_KICK_L_AIR:
+								staffKick = qtrue;
+								break;
+							default:
+								break;
+							}
+
+							if (staffKick) {
+								faceKicked->client->ps.forceHandExtend = HANDEXTEND_KNOCKDOWN;
+								faceKicked->client->ps.forceHandExtendTime = level.time + 1100;
+								faceKicked->client->ps.forceDodgeAnim = 0;
+								faceKicked->client->noKnockdownStreak = 0;
+							}
+							else if (g_nonRandomKnockdown.integer < 1) { //Default, random knockdowns
 								if (Q_irand(1, 10) <= 3) {
 									faceKicked->client->ps.forceHandExtend = HANDEXTEND_KNOCKDOWN;
 									faceKicked->client->ps.forceHandExtendTime = level.time + 1100;

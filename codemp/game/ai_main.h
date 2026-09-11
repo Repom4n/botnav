@@ -395,6 +395,8 @@ typedef struct bot_state_s
 	qboolean			wasDuelInProgress; // previous-think duelInProgress, used to count completed duels
 	int					duelCompletedCount; // duels finished since the last explore window - see bot_duelcountmax
 	int					ffaExploreUntil; // while > level.time, -3/-4 bots skip duel issue/accept and explore for a new opponent - see bot_ffaexploretime
+	int					duelBlacklistIndex; // recently-finished duel target to avoid reacquiring immediately during post-duel exploration
+	int					duelBlacklistUntil; // cooldown expiry for duelBlacklistIndex
 
 	int					conserveUntil; // while > level.time, bot disengages (no force power use) to regen FP - see bot_conservation
 	int					conserveNextRollTime; // debounce between chances to start a new conservation window
@@ -402,10 +404,13 @@ typedef struct bot_state_s
 	int					saberRetrieveSpamTime; // level.time through which the next attack-toggle press is held while recalling a knocked-away saber
 	qboolean			saberRetrieveSpamHeld; // whether the current attack-toggle press is the held or released half
 	int					drainRollYawStart; // level.time when the knocked-down drain+sideways-roll 90-degree yaw-away blend began (0 = not blending)
+	int					lastGripkickSuccessTime; // level.time of the most recent confirmed gripkick hit/knockdown, used to weight pullkick follow-ups
 
 	int					navObstacleUntil; // stay in waypoint nav mode until this time when an obstacle blocks path to enemy
 	int					combatNavHoldUntil; // remain in combat for 1500ms before returning to waypoint navigation
 	int					lastHurtTime;     // level.time when this bot last took damage (set in BotDamageNotification)
+	vec3_t				combatStuckOrigin; // sampled combat position used to detect failing to make meaningful progress toward a target
+	int					combatStuckSince; // when combatStuckOrigin was sampled/reset
 	int					nextHopTime;      // level.time the next scheduled random ambient hop may fire (bot_hopfrequency) - set to -1 after firing so the interval re-rolls only once we land again
 	qboolean			hopWasGrounded;   // groundEntityNum state as of the last NewBotAI_TryRandomHop call - used to detect a fresh landing (from a flipkick/knockdown/etc, not our own hop) so we re-roll instead of firing immediately
 	int					pullKickJumpTime; // level.time a scheduled pk/ptk flipkick jump should fire (0 = none pending, -1 = hold until the enemy closes)
