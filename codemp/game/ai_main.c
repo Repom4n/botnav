@@ -11707,7 +11707,7 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 			level.clients[bs->client].ps.fd.forcePowerSelected = FP_GRIP;
 			useTheForce = qtrue;
 		}
-		if (useTheForce && (level.framenum % 2) && (!bs->currentEnemy->client->invulnerableTimer || (bs->currentEnemy->client->invulnerableTimer <= level.time)))
+		if (useTheForce)
 			trap->EA_ForcePower(bs->client);
 		return;
 	}
