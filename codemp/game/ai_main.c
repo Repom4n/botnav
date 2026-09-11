@@ -8521,15 +8521,16 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 	if (!bs->client || !bs->currentEnemy || !bs->currentEnemy->client)
 		return;
 
-	if (bs->saberThrowQueued)
-		return;
-
 	if (hasDroppedOwnSaber)
 	{
 		weapon = WP_SABER;
 		BotSelectWeapon(bs->client, weapon);
 		return;
 	}
+
+	if (bs->saberThrowQueued)
+		return;
+
 	else if (g_tweakWeapons.integer & WT_TRIBES)
 		weapon = NewBotAI_GetTribesWeapon(bs);
 	else
