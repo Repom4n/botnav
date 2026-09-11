@@ -8521,7 +8521,7 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 	else
 		weapon = NewBotAI_GetWeapon(bs);
 	BotSelectWeapon(bs->client, weapon);
-	if (!hasDroppedOwnSaber && NewBotAI_IsEnemySaberThreatImminent(bs))
+	if (!hasDroppedOwnSaber && NewBotAI_IsEnemySaberThreatImminent(bs) && !NewBotAI_IsEnemySaberReturning(bs))
 		return;
 
 	if (bs->runningLikeASissy) //Dont attack when chasing them with strafe i guess
@@ -9182,7 +9182,7 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 				}
 			}
 		}
-		else if (NewBotAI_IsEnemySaberThreatImminent(bs))
+		else if (NewBotAI_IsEnemySaberThreatImminent(bs) && !NewBotAI_IsEnemySaberReturning(bs))
 		{
 			if (pressAdvantage)
 			{
@@ -10088,14 +10088,22 @@ static qboolean NewBotAI_HasDroppedOwnSaber(bot_state_t *bs)
 		return qfalse;
 	}
 
-	saberEntNum = g_entities[bs->client].client->saberStoredIndex;
+	saberEntNum = g_entities[bs->client].client->ps.saberEntityNum;
+	if (saberEntNum <= 0 || saberEntNum >= ENTITYNUM_WORLD)
+	{
+		saberEntNum = g_entities[bs->client].client->saberStoredIndex;
+	}
 	if (saberEntNum <= 0 || saberEntNum >= ENTITYNUM_WORLD)
 	{
 		return qfalse;
 	}
 
 	saberEnt = &g_entities[saberEntNum];
-	if (!saberEnt->inuse || saberEnt->parent != &g_entities[bs->client])
+	if (!saberEnt->inuse)
+	{
+		return qfalse;
+	}
+	if (saberEnt->r.ownerNum != bs->client && saberEnt->parent != &g_entities[bs->client])
 	{
 		return qfalse;
 	}
@@ -11798,7 +11806,7 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 
 	drainWeight = NewBotAI_GetDrain(bs);
 	gripWeight = NewBotAI_GetGrip(bs);
-	if (NewBotAI_IsEnemySaberThreatImminent(bs))
+	if (NewBotAI_IsEnemySaberThreatImminent(bs) && !NewBotAI_IsEnemySaberReturning(bs))
 		return;
 	pullWeight = NewBotAI_GetPull(bs);
 	pushWeight = NewBotAI_GetPush(bs);
@@ -11970,7 +11978,7 @@ void NewBotAI_GetLSForcepower(bot_state_t *bs)
 		return;
 	if (NewBotAI_HandleRecoveryRollForcepower(bs))
 		return;
-	if (NewBotAI_IsEnemySaberThreatImminent(bs))
+	if (NewBotAI_IsEnemySaberThreatImminent(bs) && !NewBotAI_IsEnemySaberReturning(bs))
 		return;
 
 	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, a_fo);
