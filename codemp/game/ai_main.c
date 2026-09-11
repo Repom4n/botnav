@@ -7919,7 +7919,6 @@ void NewBotAI_SaberThrowing(bot_state_t* bs)
 
 	bs->doAttack = 0;
 	bs->doAltAttack = 1;
-	bs->saberThrowQueued = qtrue;
 	NewBotAI_TrySaberThrowDefenseBreak(bs);
 }
 
@@ -8528,8 +8527,14 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 		return;
 	}
 
-	if (bs->saberThrowQueued)
+	if (bs->cur_ps.saberInFlight)
 		return;
+
+	if (bs->saberThrowQueued && bs->doAltAttack)
+	{
+		bs->saberThrowQueued = qfalse;
+		return;
+	}
 
 	else if (g_tweakWeapons.integer & WT_TRIBES)
 		weapon = NewBotAI_GetTribesWeapon(bs);
