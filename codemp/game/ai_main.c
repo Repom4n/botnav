@@ -14941,7 +14941,6 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 
 	{
 		const qboolean hasDroppedOwnSaber = NewBotAI_HasDroppedOwnSaber(bs);
-		const qboolean holdForEnemySaberThreat = (!hasDroppedOwnSaber && NewBotAI_IsEnemySaberThreatImminent(bs)) ? qtrue : qfalse;
 
 		if (hasDroppedOwnSaber)
 		{
@@ -14963,13 +14962,6 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 			//starts with a fresh press.
 			bs->saberRetrieveSpamTime = 0;
 			bs->saberRetrieveSpamHeld = qfalse;
-		}
-
-		if (holdForEnemySaberThreat)
-		{
-			bs->doAttack = 0;
-			bs->doAltAttack = 0;
-			useTheForce = qfalse;
 		}
 	}
 
