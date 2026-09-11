@@ -157,7 +157,7 @@ static qboolean NewBotAI_IsDrainlockAdvantage(bot_state_t *bs);
 static qboolean NewBotAI_ShouldDrainlockDeep(bot_state_t *bs);
 static qboolean NewBotAI_HasClearAdvantage(bot_state_t *bs);
 static qboolean NewBotAI_ShouldPressAdvantage(bot_state_t *bs);
-static qboolean NewBotAI_IsRecallingKnockedSaber(bot_state_t *bs);
+static qboolean NewBotAI_HasDroppedOwnSaber(bot_state_t *bs);
 static qboolean NewBotAI_IsCombatProgressStalled(bot_state_t *bs);
 static qboolean NewBotAI_IsEnemySaberReturning(bot_state_t *bs);
 static qboolean NewBotAI_IsEnemySaberThreatImminent(bot_state_t *bs);
@@ -8508,7 +8508,7 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 
 	if (!bs->client || !bs->currentEnemy || !bs->currentEnemy->client)
 		return;
-	if (NewBotAI_IsRecallingKnockedSaber(bs))
+	if (NewBotAI_HasDroppedOwnSaber(bs))
 	{
 		BotSelectWeapon(bs->client, WP_SABER);
 		return;
@@ -9162,7 +9162,7 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 
 		saber = &g_entities[bs->currentEnemy->client->ps.saberEntityNum];
 
-		if (NewBotAI_IsRecallingKnockedSaber(bs))
+		if (NewBotAI_HasDroppedOwnSaber(bs))
 		{
 			//Keep pressuring/repositioning while the saber recall toggle runs; a knocked-away
 			//saber is vulnerable, but stalling or hard retreating was worse than continuing
@@ -10043,15 +10043,24 @@ static qboolean NewBotAI_ShouldPressAdvantage(bot_state_t *bs)
 	return (aggressionBias > 0.2f && ourHealth > hisHealth && ourForce > hisForce) ? qtrue : qfalse;
 }
 
-static qboolean NewBotAI_IsRecallingKnockedSaber(bot_state_t *bs)
+static qboolean NewBotAI_HasDroppedOwnSaber(bot_state_t *bs)
 {
 	if (!bs)
 	{
 		return qfalse;
 	}
 
-	return ((bs->cur_ps.stats[STAT_WEAPONS] & (1 << WP_SABER)) &&
-		bs->cur_ps.saberInFlight &&
+	if (!(bs->cur_ps.stats[STAT_WEAPONS] & (1 << WP_SABER)))
+	{
+		return qfalse;
+	}
+
+	if (bs->cur_ps.weapon != WP_SABER && bs->cur_ps.weapon != WP_MELEE)
+	{
+		return qfalse;
+	}
+
+	return (bs->cur_ps.saberInFlight &&
 		!bs->cur_ps.saberEntityNum) ? qtrue : qfalse;
 }
 
@@ -14826,7 +14835,7 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 		}
 	}
 
-	if (NewBotAI_IsRecallingKnockedSaber(bs))
+	if (NewBotAI_HasDroppedOwnSaber(bs))
 	{ //saber knocked away: the engine only recalls the saber on a fresh +attack edge, and
 	  //a held button counts as one press forever. Toggle a genuine press/release edge -
 	  //held 20ms, released 5ms - so repeated +attack inputs keep firing until the saber
