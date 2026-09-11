@@ -8531,7 +8531,9 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 		return;
 	}
 
-	if (g_entities[bs->client].client->ps.saberInFlight && bs->doAltAttack)
+	if (bs->cur_ps.weapon == WP_SABER &&
+		g_entities[bs->client].client->ps.saberInFlight &&
+		bs->doAltAttack)
 		return;
 
 	else if (g_tweakWeapons.integer & WT_TRIBES)
