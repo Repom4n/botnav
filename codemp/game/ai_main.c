@@ -10817,6 +10817,7 @@ static qboolean NewBotAI_IsEnemySaberThreatImminent(bot_state_t *bs)
 	vec3_t saberToUs, saberDir, closestPoint;
 	float forwardDist;
 	float lateralDistSq;
+	int saberEntNum;
 
 	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client ||
 		!bs->currentEnemy->client->ps.saberInFlight ||
@@ -10830,7 +10831,13 @@ static qboolean NewBotAI_IsEnemySaberThreatImminent(bot_state_t *bs)
 		return qfalse;
 	}
 
-	saberEnt = &g_entities[bs->currentEnemy->client->ps.saberEntityNum];
+	saberEntNum = bs->currentEnemy->client->ps.saberEntityNum;
+	if (saberEntNum < 0 || saberEntNum >= ENTITYNUM_WORLD)
+	{
+		return qfalse;
+	}
+
+	saberEnt = &g_entities[saberEntNum];
 	if (!saberEnt->s.pos.trTime)
 	{
 		return qfalse;
