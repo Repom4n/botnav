@@ -10824,11 +10824,6 @@ static qboolean NewBotAI_IsEnemySaberThreatImminent(bot_state_t *bs)
 		return qfalse;
 	}
 
-	if (NewBotAI_IsEnemySaberReturning(bs))
-	{
-		return qfalse;
-	}
-
 	saberEntNum = bs->currentEnemy->client->ps.saberEntityNum;
 	if (saberEntNum < 0 || saberEntNum >= ENTITYNUM_WORLD)
 	{
