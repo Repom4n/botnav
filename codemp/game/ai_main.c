@@ -8513,14 +8513,14 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 		BotSelectWeapon(bs->client, WP_SABER);
 		return;
 	}
-	if (NewBotAI_IsEnemySaberThreatImminent(bs))
-		return;
 
 	if (g_tweakWeapons.integer & WT_TRIBES)
 		weapon = NewBotAI_GetTribesWeapon(bs);
 	else
 		weapon = NewBotAI_GetWeapon(bs);
 	BotSelectWeapon(bs->client, weapon);
+	if (NewBotAI_IsEnemySaberThreatImminent(bs))
+		return;
 
 	if (bs->runningLikeASissy) //Dont attack when chasing them with strafe i guess
 		return;
