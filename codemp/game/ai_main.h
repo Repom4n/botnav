@@ -295,6 +295,7 @@ typedef struct bot_state_s
 
 	int					doAttack;
 	int					doAltAttack;
+	qboolean			saberThrowQueued;
 
 	int					forceWeaponSelect;
 	int					virtualWeapon;

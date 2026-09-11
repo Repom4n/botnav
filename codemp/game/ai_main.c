@@ -7919,6 +7919,7 @@ void NewBotAI_SaberThrowing(bot_state_t* bs)
 
 	bs->doAttack = 0;
 	bs->doAltAttack = 1;
+	bs->saberThrowQueued = qtrue;
 	NewBotAI_TrySaberThrowDefenseBreak(bs);
 }
 
@@ -8520,7 +8521,7 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 	if (!bs->client || !bs->currentEnemy || !bs->currentEnemy->client)
 		return;
 
-	if (bs->doAltAttack && bs->cur_ps.weapon == WP_SABER)
+	if (bs->saberThrowQueued)
 		return;
 
 	if (hasDroppedOwnSaber)
@@ -9762,6 +9763,7 @@ static qboolean NewBotAI_TryIssueBotDuelChallenge(bot_state_t *bs, int targetMod
 	bs->beStill = level.time + 250;
 	bs->doAttack = 0;
 	bs->doAltAttack = 0;
+	bs->saberThrowQueued = qfalse;
 	return qtrue;
 }
 
@@ -11898,6 +11900,7 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 	if (NewBotAI_GetSaberthrow(bs) > minWeight && !NewBotAI_ShouldPreferFlipkickOverThrow(bs)) {
 		bs->doAttack = 0;
 		bs->doAltAttack = 1;
+		bs->saberThrowQueued = qtrue;
 		//Pre-select pull or push so it fires as the saber approaches the target. Pull when
 		//aggressive (PTK setup), push when defensive (break their guard). This runs after the
 		//normal force-power selection above so it can override a less useful pick.
@@ -12075,6 +12078,7 @@ void NewBotAI_GetLSForcepower(bot_state_t *bs)
 	if (NewBotAI_GetSaberthrow(bs) > minWeight && !NewBotAI_ShouldPreferFlipkickOverThrow(bs)) {
 		bs->doAttack = 0;
 		bs->doAltAttack = 1;
+		bs->saberThrowQueued = qtrue;
 		//Pre-select pull or push so it fires as the saber approaches the target. Pull when
 		//aggressive (PTK setup), push when defensive (break their guard). This runs after the
 		//normal force-power selection above so it can override a less useful pick.
@@ -13301,6 +13305,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		{
 			bs->doAttack = 0;
 			bs->doAltAttack = 0;
+			bs->saberThrowQueued = qfalse;
 			bs->beStill = level.time + 50;
 			return;
 		}
@@ -13641,6 +13646,7 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 
 	bs->doAttack = 0;
 	bs->doAltAttack = 0;
+	bs->saberThrowQueued = qfalse;
 	//reset the attack states
 
 	if (bs->isSquadLeader)
