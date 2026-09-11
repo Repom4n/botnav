@@ -10831,11 +10831,6 @@ static qboolean NewBotAI_IsEnemySaberThreatImminent(bot_state_t *bs)
 	}
 
 	saberEnt = &g_entities[saberEntNum];
-	if (!saberEnt->s.pos.trTime)
-	{
-		return qfalse;
-	}
-
 	BG_EvaluateTrajectory(&saberEnt->s.pos, level.time, saberOrigin);
 	BG_EvaluateTrajectoryDelta(&saberEnt->s.pos, level.time, saberVelocity);
 
