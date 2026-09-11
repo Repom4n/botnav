@@ -156,12 +156,15 @@ static int NewBotAI_GetDrainTapTargetCost(bot_state_t *bs);
 static qboolean NewBotAI_IsPullkickDrainWindow(bot_state_t *bs);
 static qboolean NewBotAI_IsDrainlockAdvantage(bot_state_t *bs);
 static qboolean NewBotAI_ShouldDrainlockDeep(bot_state_t *bs);
+int NewBotAI_GetDrain(bot_state_t *bs);
+int NewBotAI_GetGrip(bot_state_t *bs);
 static qboolean NewBotAI_HasClearAdvantage(bot_state_t *bs);
 static qboolean NewBotAI_ShouldPressAdvantage(bot_state_t *bs);
 static qboolean NewBotAI_HasDroppedOwnSaber(bot_state_t *bs);
 static qboolean NewBotAI_IsCombatProgressStalled(bot_state_t *bs);
 static qboolean NewBotAI_IsEnemySaberReturning(bot_state_t *bs);
 static qboolean NewBotAI_IsEnemySaberThreatImminent(bot_state_t *bs);
+static qboolean NewBotAI_HandleRecoveryRollForcepower(bot_state_t *bs);
 static qboolean NewBotAI_IsBetweenOwnSaberAndEnemy(bot_state_t *bs);
 static void NewBotAI_AdjustSaberThrowArcAim(bot_state_t *bs, vec3_t headlevel);
 static void NewBotAI_AdjustSaberThrowLead(bot_state_t *bs);
@@ -10815,6 +10818,7 @@ static qboolean NewBotAI_IsEnemySaberThreatImminent(bot_state_t *bs)
 	vec3_t saberOrigin, saberVelocity, saberToUs, saberDir, closestPoint;
 	float forwardDist;
 	float lateralDistSq;
+	float saberSpeed;
 	float threatRadius;
 	int saberEntNum;
 	qboolean isReturning;
@@ -10847,7 +10851,8 @@ static qboolean NewBotAI_IsEnemySaberThreatImminent(bot_state_t *bs)
 	}
 
 	VectorCopy(saberVelocity, saberDir);
-	if (VectorNormalize(saberDir) <= 0.0f)
+	saberSpeed = VectorNormalize(saberDir);
+	if (saberSpeed < 64.0f)
 	{
 		return qfalse;
 	}
@@ -10864,6 +10869,44 @@ static qboolean NewBotAI_IsEnemySaberThreatImminent(bot_state_t *bs)
 	threatRadius = RadiusFromBounds(g_entities[bs->client].r.mins, g_entities[bs->client].r.maxs) + 16.0f;
 
 	return (lateralDistSq <= (threatRadius * threatRadius)) ? qtrue : qfalse;
+}
+
+static qboolean NewBotAI_HandleRecoveryRollForcepower(bot_state_t *bs)
+{
+	int drainWeight;
+	int gripWeight;
+	int minWeight = 0;
+	qboolean useTheForce = qfalse;
+
+	if (!NewBotAI_IsKnockdownRecoveryRoll(bs->cur_ps.legsAnim))
+	{
+		return qfalse;
+	}
+
+	if (bs->cur_ps.fd.forceSide == FORCE_DARKSIDE)
+	{
+		drainWeight = NewBotAI_GetDrain(bs);
+		gripWeight = NewBotAI_GetGrip(bs);
+		if (drainWeight > minWeight && drainWeight >= gripWeight)
+		{
+			level.clients[bs->client].ps.fd.forcePowerSelected = FP_DRAIN;
+			useTheForce = qtrue;
+		}
+		else if (gripWeight > minWeight)
+		{
+			level.clients[bs->client].ps.fd.forcePowerSelected = FP_GRIP;
+			useTheForce = qtrue;
+		}
+		if (useTheForce)
+		{
+			trap->EA_ForcePower(bs->client);
+		}
+	}
+
+	//Recovery rolls are intentionally restricted to drain or grip only. If neither
+	//dark-side option is currently viable, or this bot is lightside and cannot use them,
+	//do not fall through to the normal force choosers.
+	return qtrue;
 }
 
 // True when our own thrown saber is still out (in flight, not knocked away) and we are
@@ -11724,10 +11767,11 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 	int minWeight = 0;
 	const int ourHealth = g_entities[bs->client].health;
 	const qboolean pressAdvantage = NewBotAI_ShouldPressAdvantage(bs);
-	const qboolean inRecoveryRoll = NewBotAI_IsKnockdownRecoveryRoll(bs->cur_ps.legsAnim);
 
 	//Disengaged in a bot_conservation window - hold off on spending any force so it regens.
 	if (bs->conserveUntil > level.time)
+		return;
+	if (NewBotAI_HandleRecoveryRollForcepower(bs))
 		return;
 
 	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, a_fo);
@@ -11735,24 +11779,6 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 
 	drainWeight = NewBotAI_GetDrain(bs);
 	gripWeight = NewBotAI_GetGrip(bs);
-	if (inRecoveryRoll)
-	{
-		if (drainWeight > minWeight && drainWeight >= gripWeight)
-		{
-			level.clients[bs->client].ps.fd.forcePowerSelected = FP_DRAIN;
-			useTheForce = qtrue;
-		}
-		else if (gripWeight > minWeight)
-		{
-			level.clients[bs->client].ps.fd.forcePowerSelected = FP_GRIP;
-			useTheForce = qtrue;
-		}
-		if (useTheForce)
-			trap->EA_ForcePower(bs->client);
-		//Recovery rolls are intentionally restricted to drain or grip only. If neither is
-		//currently viable, do not fall through to the normal DS force chooser.
-		return;
-	}
 	if (NewBotAI_IsEnemySaberThreatImminent(bs))
 		return;
 	pullWeight = NewBotAI_GetPull(bs);
@@ -11923,12 +11949,8 @@ void NewBotAI_GetLSForcepower(bot_state_t *bs)
 	//Disengaged in a bot_conservation window - hold off on spending any force so it regens.
 	if (bs->conserveUntil > level.time)
 		return;
-	if (NewBotAI_IsKnockdownRecoveryRoll(bs->cur_ps.legsAnim))
-	{
-		//Recovery rolls are intentionally restricted to powers the lightside bot cannot use,
-		//so suppress the normal LS force chooser entirely while this state lasts.
+	if (NewBotAI_HandleRecoveryRollForcepower(bs))
 		return;
-	}
 	if (NewBotAI_IsEnemySaberThreatImminent(bs))
 		return;
 
