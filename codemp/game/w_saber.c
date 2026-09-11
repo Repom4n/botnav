@@ -7789,7 +7789,7 @@ static qboolean G_KickDownable(gentity_t *ent)
 	return qtrue;
 }
 
-static void G_TossTheMofo(gentity_t *ent, vec3_t tossDir, float tossStr)
+static void G_TossTheMofo(gentity_t *ent, vec3_t tossDir, float tossStr, qboolean forceKnockdown)
 {
 	if (!ent->inuse || !ent->client)
 	{ //no good
@@ -7805,7 +7805,7 @@ static void G_TossTheMofo(gentity_t *ent, vec3_t tossDir, float tossStr)
 	ent->client->ps.velocity[2] = 200;
 	if (ent->health > 0 && ent->client->ps.forceHandExtend != HANDEXTEND_KNOCKDOWN &&
 		BG_KnockDownable(&ent->client->ps) &&
-		G_KickDownable(ent))
+		(forceKnockdown || G_KickDownable(ent)))
 	{ //if they are alive, knock them down I suppose
 		ent->client->ps.forceHandExtend = HANDEXTEND_KNOCKDOWN;
 		ent->client->ps.forceHandExtendTime = level.time + 700;
@@ -7819,6 +7819,11 @@ static gentity_t *G_KickTrace( gentity_t *ent, vec3_t kickDir, float kickDist, v
 	vec3_t	traceOrg, traceEnd, kickMins, kickMaxs;
 	trace_t	trace;
 	gentity_t	*hitEnt = NULL;
+	const qboolean forceKickKnockdown =
+		(ent->client->ps.torsoAnim == BOTH_A7_HILT ||
+		 ent->client->ps.legsAnim == BOTH_A7_HILT ||
+		 ent->client->ps.torsoAnim == BOTH_JUMPATTACK7 ||
+		 ent->client->ps.legsAnim == BOTH_JUMPATTACK7) ? qtrue : qfalse;
 	VectorSet(kickMins, -2.0f, -2.0f, -2.0f);
 	VectorSet(kickMaxs, 2.0f, 2.0f, 2.0f);
 	//FIXME: variable kick height?
@@ -7902,7 +7907,7 @@ static gentity_t *G_KickTrace( gentity_t *ent, vec3_t kickDir, float kickDist, v
 				//	G_Throw( hitEnt, kickDir, kickPush*4 );
 					//see if we should play a better looking death on them
 				//	G_ThrownDeathAnimForDeathAnim( hitEnt, trace.endpos );
-					G_TossTheMofo(hitEnt, kickDir, kickPush*4.0f);
+					G_TossTheMofo(hitEnt, kickDir, kickPush*4.0f, forceKickKnockdown);
 				}
 				else
 				{
@@ -7919,11 +7924,11 @@ static gentity_t *G_KickTrace( gentity_t *ent, vec3_t kickDir, float kickDist, v
 					*/
 					if ( kickPush >= 75.0f && !Q_irand( 0, 2 ) )
 					{
-						G_TossTheMofo(hitEnt, kickDir, 300.0f);
+						G_TossTheMofo(hitEnt, kickDir, 300.0f, forceKickKnockdown);
 					}
 					else
 					{
-						G_TossTheMofo(hitEnt, kickDir, kickPush);
+						G_TossTheMofo(hitEnt, kickDir, kickPush, forceKickKnockdown);
 					}
 				}
 			}
