@@ -11727,8 +11727,6 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 	//Disengaged in a bot_conservation window - hold off on spending any force so it regens.
 	if (bs->conserveUntil > level.time)
 		return;
-	if (NewBotAI_IsEnemySaberThreatImminent(bs))
-		return;
 
 	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, a_fo);
 	vectoangles(a_fo, a_fo);
@@ -11751,6 +11749,8 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 			trap->EA_ForcePower(bs->client);
 		return;
 	}
+	if (NewBotAI_IsEnemySaberThreatImminent(bs))
+		return;
 	pullWeight = NewBotAI_GetPull(bs);
 	pushWeight = NewBotAI_GetPush(bs);
 	lightningWeight = NewBotAI_GetLightningWeight(bs);
@@ -11919,8 +11919,6 @@ void NewBotAI_GetLSForcepower(bot_state_t *bs)
 	//Disengaged in a bot_conservation window - hold off on spending any force so it regens.
 	if (bs->conserveUntil > level.time)
 		return;
-	if (NewBotAI_IsEnemySaberThreatImminent(bs))
-		return;
 	if (NewBotAI_IsKnockdownRecoveryRoll(bs->cur_ps.legsAnim))
 	{
 		drainWeight = NewBotAI_GetDrain(bs);
@@ -11939,6 +11937,8 @@ void NewBotAI_GetLSForcepower(bot_state_t *bs)
 			trap->EA_ForcePower(bs->client);
 		return;
 	}
+	if (NewBotAI_IsEnemySaberThreatImminent(bs))
+		return;
 
 	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, a_fo);
 	vectoangles(a_fo, a_fo);
