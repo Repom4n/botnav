@@ -10090,6 +10090,8 @@ static qboolean NewBotAI_HasDroppedOwnSaber(bot_state_t *bs)
 	playerState_t *actualPs;
 	gentity_t *saberEnt;
 	int saberEntNum;
+	qboolean liveWeaponOwnsSaber;
+	qboolean recallWeaponTransition;
 
 	if (!bs)
 	{
@@ -10108,8 +10110,12 @@ static qboolean NewBotAI_HasDroppedOwnSaber(bot_state_t *bs)
 		return qfalse;
 	}
 
-	if (actualPs->weapon != WP_SABER && actualPs->weapon != WP_MELEE &&
-		bs->cur_ps.weapon != WP_SABER && bs->cur_ps.weapon != WP_MELEE)
+	liveWeaponOwnsSaber = (actualPs->weapon == WP_SABER || actualPs->weapon == WP_MELEE) ? qtrue : qfalse;
+	recallWeaponTransition = (!liveWeaponOwnsSaber &&
+		(bs->cur_ps.weapon == WP_SABER || bs->cur_ps.weapon == WP_MELEE) &&
+		actualPs->saberInFlight &&
+		actualPs->saberEntityNum <= 0) ? qtrue : qfalse;
+	if (!liveWeaponOwnsSaber && !recallWeaponTransition)
 	{
 		return qfalse;
 	}
