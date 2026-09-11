@@ -10815,6 +10815,7 @@ static qboolean NewBotAI_IsEnemySaberThreatImminent(bot_state_t *bs)
 	vec3_t saberOrigin, saberVelocity, saberToUs, saberDir, closestPoint;
 	float forwardDist;
 	float lateralDistSq;
+	float threatRadius;
 	int saberEntNum;
 	const qboolean isReturning = NewBotAI_IsEnemySaberReturning(bs);
 
@@ -10859,8 +10860,9 @@ static qboolean NewBotAI_IsEnemySaberThreatImminent(bot_state_t *bs)
 	VectorMA(saberOrigin, forwardDist, saberDir, closestPoint);
 	VectorSubtract(bs->cur_ps.origin, closestPoint, closestPoint);
 	lateralDistSq = VectorLengthSquared(closestPoint);
+	threatRadius = RadiusFromBounds(g_entities[bs->client].r.mins, g_entities[bs->client].r.maxs) + 16.0f;
 
-	return (lateralDistSq <= (72.0f * 72.0f)) ? qtrue : qfalse;
+	return (lateralDistSq <= (threatRadius * threatRadius)) ? qtrue : qfalse;
 }
 
 // True when our own thrown saber is still out (in flight, not knocked away) and we are
@@ -11912,7 +11914,7 @@ void NewBotAI_GetLSForcepower(bot_state_t *bs)
 {
 	vec3_t a_fo;
 	qboolean useTheForce = qfalse;
-	int pullWeight, pushWeight, absorbWeight, protectWeight, healWeight, drainWeight, gripWeight;
+	int pullWeight, pushWeight, absorbWeight, protectWeight, healWeight;
 	int minWeight = 0;
 	const int ourHealth = g_entities[bs->client].health;
 	const qboolean pressAdvantage = NewBotAI_ShouldPressAdvantage(bs);
@@ -11922,22 +11924,8 @@ void NewBotAI_GetLSForcepower(bot_state_t *bs)
 		return;
 	if (NewBotAI_IsKnockdownRecoveryRoll(bs->cur_ps.legsAnim))
 	{
-		drainWeight = NewBotAI_GetDrain(bs);
-		gripWeight = NewBotAI_GetGrip(bs);
-		if (drainWeight > minWeight && drainWeight >= gripWeight)
-		{
-			level.clients[bs->client].ps.fd.forcePowerSelected = FP_DRAIN;
-			useTheForce = qtrue;
-		}
-		else if (gripWeight > minWeight)
-		{
-			level.clients[bs->client].ps.fd.forcePowerSelected = FP_GRIP;
-			useTheForce = qtrue;
-		}
-		if (useTheForce)
-			trap->EA_ForcePower(bs->client);
-		//Recovery rolls are intentionally restricted to drain or grip only. If neither is
-		//currently viable, do not fall through to the normal LS force chooser.
+		//Recovery rolls are intentionally restricted to powers the lightside bot cannot use,
+		//so suppress the normal LS force chooser entirely while this state lasts.
 		return;
 	}
 	if (NewBotAI_IsEnemySaberThreatImminent(bs))
