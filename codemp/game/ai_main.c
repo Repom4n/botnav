@@ -11745,6 +11745,8 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 		}
 		if (useTheForce)
 			trap->EA_ForcePower(bs->client);
+		//Recovery rolls are intentionally restricted to drain or grip only. If neither is
+		//currently viable, do not fall through to the normal DS force chooser.
 		return;
 	}
 	if (NewBotAI_IsEnemySaberThreatImminent(bs))
@@ -11933,6 +11935,8 @@ void NewBotAI_GetLSForcepower(bot_state_t *bs)
 		}
 		if (useTheForce)
 			trap->EA_ForcePower(bs->client);
+		//Recovery rolls are intentionally restricted to drain or grip only. If neither is
+		//currently viable, do not fall through to the normal LS force chooser.
 		return;
 	}
 	if (NewBotAI_IsEnemySaberThreatImminent(bs))
