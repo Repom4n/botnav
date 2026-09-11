@@ -7887,6 +7887,11 @@ void NewBotAI_SaberThrowing(bot_state_t* bs)
 	const int enemyForce = bs->currentEnemy && bs->currentEnemy->client ?
 		bs->currentEnemy->client->ps.fd.forcePower : 0;
 
+	if (NewBotAI_HasDroppedOwnSaber(bs))
+	{
+		return;
+	}
+
 	if (bs->saberThrowStartTime <= 0)
 		bs->saberThrowStartTime = level.time;
 
@@ -7912,7 +7917,8 @@ void NewBotAI_SaberThrowing(bot_state_t* bs)
 		return;
 	}
 
-	trap->EA_Alt_Attack(bs->client);
+	bs->doAttack = 0;
+	bs->doAltAttack = 1;
 	NewBotAI_TrySaberThrowDefenseBreak(bs);
 }
 
@@ -8514,8 +8520,15 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 	if (!bs->client || !bs->currentEnemy || !bs->currentEnemy->client)
 		return;
 
+	if (bs->doAltAttack && bs->cur_ps.weapon == WP_SABER)
+		return;
+
 	if (hasDroppedOwnSaber)
+	{
 		weapon = WP_SABER;
+		BotSelectWeapon(bs->client, weapon);
+		return;
+	}
 	else if (g_tweakWeapons.integer & WT_TRIBES)
 		weapon = NewBotAI_GetTribesWeapon(bs);
 	else
@@ -11879,7 +11892,8 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 	//A free flipkick always beats holding/charging a throw once the enemy has closed
 	//into kick range - otherwise the two bots just collide while we sit on the charge.
 	if (NewBotAI_GetSaberthrow(bs) > minWeight && !NewBotAI_ShouldPreferFlipkickOverThrow(bs)) {
-		trap->EA_Alt_Attack(bs->client);
+		bs->doAttack = 0;
+		bs->doAltAttack = 1;
 		//Pre-select pull or push so it fires as the saber approaches the target. Pull when
 		//aggressive (PTK setup), push when defensive (break their guard). This runs after the
 		//normal force-power selection above so it can override a less useful pick.
@@ -12055,7 +12069,8 @@ void NewBotAI_GetLSForcepower(bot_state_t *bs)
 	//A free flipkick always beats holding/charging a throw once the enemy has closed
 	//into kick range - otherwise the two bots just collide while we sit on the charge.
 	if (NewBotAI_GetSaberthrow(bs) > minWeight && !NewBotAI_ShouldPreferFlipkickOverThrow(bs)) {
-		trap->EA_Alt_Attack(bs->client);
+		bs->doAttack = 0;
+		bs->doAltAttack = 1;
 		//Pre-select pull or push so it fires as the saber approaches the target. Pull when
 		//aggressive (PTK setup), push when defensive (break their guard). This runs after the
 		//normal force-power selection above so it can override a less useful pick.
