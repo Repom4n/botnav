@@ -10078,6 +10078,8 @@ static qboolean NewBotAI_ShouldPressAdvantage(bot_state_t *bs)
 
 static qboolean NewBotAI_HasDroppedOwnSaber(bot_state_t *bs)
 {
+	gclient_t *client;
+	playerState_t *actualPs;
 	gentity_t *saberEnt;
 	int saberEntNum;
 
@@ -10086,25 +10088,32 @@ static qboolean NewBotAI_HasDroppedOwnSaber(bot_state_t *bs)
 		return qfalse;
 	}
 
-	if (!(bs->cur_ps.stats[STAT_WEAPONS] & (1 << WP_SABER)))
+	client = g_entities[bs->client].client;
+	if (!client)
+	{
+		return qfalse;
+	}
+	actualPs = &client->ps;
+
+	if (!(actualPs->stats[STAT_WEAPONS] & (1 << WP_SABER)))
 	{
 		return qfalse;
 	}
 
-	if (bs->cur_ps.weapon != WP_SABER && bs->cur_ps.weapon != WP_MELEE)
+	if (actualPs->weapon != WP_SABER && actualPs->weapon != WP_MELEE)
 	{
 		return qfalse;
 	}
 
-	if (!bs->cur_ps.saberInFlight || bs->cur_ps.saberEntityNum)
+	if (!actualPs->saberInFlight || actualPs->saberEntityNum)
 	{
 		return qfalse;
 	}
 
-	saberEntNum = g_entities[bs->client].client->ps.saberEntityNum;
+	saberEntNum = actualPs->saberEntityNum;
 	if (saberEntNum <= 0 || saberEntNum >= ENTITYNUM_WORLD)
 	{
-		saberEntNum = g_entities[bs->client].client->saberStoredIndex;
+		saberEntNum = client->saberStoredIndex;
 	}
 	if (saberEntNum <= 0 || saberEntNum >= ENTITYNUM_WORLD)
 	{
