@@ -97,6 +97,8 @@ vmCvar_t bot_wp_visconnect;
 //end rww
 
 static int BotGetNewBotAITargetMode(void);
+qboolean PM_SaberInStart( int move );
+qboolean PM_SaberInTransition( int move );
 static qboolean BotTargetModeAllowsBotEnemies(int targetMode);
 static qboolean BotTargetModePassesScanFilter(int targetMode, gentity_t *ent, qboolean preferredHumansOnly);
 static qboolean BotTargetModeIsForceDuelOnly(int targetMode);
