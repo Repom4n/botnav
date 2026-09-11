@@ -10108,7 +10108,12 @@ static qboolean NewBotAI_HasDroppedOwnSaber(bot_state_t *bs)
 		return qfalse;
 	}
 
-	return (saberEnt->s.pos.trType == TR_GRAVITY || saberEnt->s.eType == ET_MISSILE) ? qtrue : qfalse;
+	if (saberEnt->s.eType != ET_MISSILE)
+	{
+		return qfalse;
+	}
+
+	return (saberEnt->s.pos.trType == TR_GRAVITY || saberEnt->s.pos.trType == TR_STATIONARY) ? qtrue : qfalse;
 }
 
 static int BotGetDrainHoldBiasMs(bot_state_t *bs)
