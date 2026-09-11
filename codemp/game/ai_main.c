@@ -10103,6 +10103,11 @@ static qboolean NewBotAI_HasDroppedOwnSaber(bot_state_t *bs)
 		return qfalse;
 	}
 
+	if (bs->cur_ps.weapon != WP_SABER && bs->cur_ps.weapon != WP_MELEE)
+	{
+		return qfalse;
+	}
+
 	if (!actualPs->saberInFlight)
 	{
 		return qfalse;
