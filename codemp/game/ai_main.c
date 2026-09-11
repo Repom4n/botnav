@@ -10065,6 +10065,9 @@ static qboolean NewBotAI_ShouldPressAdvantage(bot_state_t *bs)
 
 static qboolean NewBotAI_HasDroppedOwnSaber(bot_state_t *bs)
 {
+	gentity_t *saberEnt;
+	int saberEntNum;
+
 	if (!bs)
 	{
 		return qfalse;
@@ -10080,8 +10083,24 @@ static qboolean NewBotAI_HasDroppedOwnSaber(bot_state_t *bs)
 		return qfalse;
 	}
 
-	return (bs->cur_ps.saberInFlight &&
-		!bs->cur_ps.saberEntityNum) ? qtrue : qfalse;
+	if (!bs->cur_ps.saberInFlight || bs->cur_ps.saberEntityNum)
+	{
+		return qfalse;
+	}
+
+	saberEntNum = g_entities[bs->client].client->saberStoredIndex;
+	if (saberEntNum <= 0 || saberEntNum >= ENTITYNUM_WORLD)
+	{
+		return qfalse;
+	}
+
+	saberEnt = &g_entities[saberEntNum];
+	if (!saberEnt->inuse || saberEnt->parent != &g_entities[bs->client])
+	{
+		return qfalse;
+	}
+
+	return (saberEnt->s.pos.trType == TR_GRAVITY || saberEnt->s.eType == ET_MISSILE) ? qtrue : qfalse;
 }
 
 static int BotGetDrainHoldBiasMs(bot_state_t *bs)
