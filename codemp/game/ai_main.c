@@ -8521,7 +8521,7 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 	else
 		weapon = NewBotAI_GetWeapon(bs);
 	BotSelectWeapon(bs->client, weapon);
-	if (!hasDroppedOwnSaber && NewBotAI_IsEnemySaberThreatImminent(bs) && !NewBotAI_IsEnemySaberReturning(bs))
+	if (!hasDroppedOwnSaber && NewBotAI_IsEnemySaberThreatImminent(bs))
 		return;
 
 	if (bs->runningLikeASissy) //Dont attack when chasing them with strafe i guess
@@ -9182,7 +9182,7 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 				}
 			}
 		}
-		else if (NewBotAI_IsEnemySaberThreatImminent(bs) && !NewBotAI_IsEnemySaberReturning(bs))
+		else if (NewBotAI_IsEnemySaberThreatImminent(bs))
 		{
 			if (pressAdvantage)
 			{
@@ -11811,7 +11811,7 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 
 	drainWeight = NewBotAI_GetDrain(bs);
 	gripWeight = NewBotAI_GetGrip(bs);
-	if (NewBotAI_IsEnemySaberThreatImminent(bs) && !NewBotAI_IsEnemySaberReturning(bs))
+	if (NewBotAI_IsEnemySaberThreatImminent(bs))
 		return;
 	pullWeight = NewBotAI_GetPull(bs);
 	pushWeight = NewBotAI_GetPush(bs);
@@ -11983,7 +11983,7 @@ void NewBotAI_GetLSForcepower(bot_state_t *bs)
 		return;
 	if (NewBotAI_HandleRecoveryRollForcepower(bs))
 		return;
-	if (NewBotAI_IsEnemySaberThreatImminent(bs) && !NewBotAI_IsEnemySaberReturning(bs))
+	if (NewBotAI_IsEnemySaberThreatImminent(bs))
 		return;
 
 	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, a_fo);
@@ -14939,25 +14939,38 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 		}
 	}
 
-	if (NewBotAI_HasDroppedOwnSaber(bs))
-	{ //saber knocked away: the engine only recalls the saber on a fresh +attack edge, and
-	  //a held button counts as one press forever. Toggle a genuine press/release edge -
-	  //held 20ms, released 5ms - so repeated +attack inputs keep firing until the saber
-	  //returns, instead of a single held button that only counts once.
-		bs->doAltAttack = 0;
-		if (bs->saberRetrieveSpamTime <= level.time)
-		{
-			bs->saberRetrieveSpamHeld = !bs->saberRetrieveSpamHeld;
-			bs->saberRetrieveSpamTime = level.time + (bs->saberRetrieveSpamHeld ? 20 : 5);
-		}
-		bs->doAttack = bs->saberRetrieveSpamHeld ? 1 : 0;
-	}
-	else
 	{
-		//Saber is back (or not ours to recall): reset the toggle so the next knock-away
-		//starts with a fresh press.
-		bs->saberRetrieveSpamTime = 0;
-		bs->saberRetrieveSpamHeld = qfalse;
+		const qboolean hasDroppedOwnSaber = NewBotAI_HasDroppedOwnSaber(bs);
+		const qboolean holdForEnemySaberThreat = (!hasDroppedOwnSaber && NewBotAI_IsEnemySaberThreatImminent(bs)) ? qtrue : qfalse;
+
+		if (hasDroppedOwnSaber)
+		{
+			//saber knocked away: the engine only recalls the saber on a fresh +attack edge, and
+			//a held button counts as one press forever. Toggle a genuine press/release edge -
+			//held 20ms, released 5ms - so repeated +attack inputs keep firing until the saber
+			//returns, instead of a single held button that only counts once.
+			bs->doAltAttack = 0;
+			if (bs->saberRetrieveSpamTime <= level.time)
+			{
+				bs->saberRetrieveSpamHeld = !bs->saberRetrieveSpamHeld;
+				bs->saberRetrieveSpamTime = level.time + (bs->saberRetrieveSpamHeld ? 20 : 5);
+			}
+			bs->doAttack = bs->saberRetrieveSpamHeld ? 1 : 0;
+		}
+		else
+		{
+			//Saber is back (or not ours to recall): reset the toggle so the next knock-away
+			//starts with a fresh press.
+			bs->saberRetrieveSpamTime = 0;
+			bs->saberRetrieveSpamHeld = qfalse;
+		}
+
+		if (holdForEnemySaberThreat)
+		{
+			bs->doAttack = 0;
+			bs->doAltAttack = 0;
+			useTheForce = qfalse;
+		}
 	}
 
 	if (bs->doAttack)
