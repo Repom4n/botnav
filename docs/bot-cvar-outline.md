@@ -75,8 +75,9 @@ These are all percentage-based (0-100) chance weights that gate specific behavio
 | Cvar | Default | Description |
 |------|---------|-------------|
 | `bot_aimspeed` | `0` | 0 = use per-bot `.jkb` turnspeed_combat/reflex. 1-10 = server-selected aim quality blended with bot personality. 9-10 = near-perfect aim. |
-| `bot_delayresponsetime` | `0` | Additional response delay in ms before reacting to a new enemy. 0 = use `.jkb` reflex only. |
-| `bot_responseTimeDelay` | `0` | Alias for `bot_delayresponsetime`. |
+| `bot_delay` | `0` | Preferred name for additional response delay in ms before reacting to a new enemy. 0 = use `.jkb` reflex only. |
+| `bot_delayresponsetime` | `0` | Legacy alias for `bot_delay`. |
+| `bot_responseTimeDelay` | `0` | Legacy alias for `bot_delay`. |
 
 ## Movement & Strafe
 
@@ -163,7 +164,7 @@ g_newBotAI (master switch)
   |
   +-- Aim & Response
   |     +-- bot_aimspeed
-  |     +-- bot_delayresponsetime / bot_responseTimeDelay
+  |     +-- bot_delay / bot_delayresponsetime / bot_responseTimeDelay
   |
   +-- Movement
   |     +-- bot_strafefrequency / bot_strafeduration
