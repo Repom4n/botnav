@@ -10814,7 +10814,9 @@ static qboolean NewBotAI_IsEnemySaberReturning(bot_state_t *bs)
 static qboolean NewBotAI_IsEnemySaberThreatImminent(bot_state_t *bs)
 {
 	gentity_t *saberEnt;
-	vec3_t saberToUs;
+	vec3_t saberToUs, saberDir, closestPoint;
+	float forwardDist;
+	float lateralDistSq;
 
 	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client ||
 		!bs->currentEnemy->client->ps.saberInFlight ||
@@ -10840,7 +10842,23 @@ static qboolean NewBotAI_IsEnemySaberThreatImminent(bot_state_t *bs)
 		return qfalse;
 	}
 
-	return (DotProduct(saberEnt->s.pos.trDelta, saberToUs) > 0.0f) ? qtrue : qfalse;
+	VectorCopy(saberEnt->s.pos.trDelta, saberDir);
+	if (VectorNormalize(saberDir) <= 0.0f)
+	{
+		return qfalse;
+	}
+
+	forwardDist = DotProduct(saberToUs, saberDir);
+	if (forwardDist <= 0.0f)
+	{
+		return qfalse;
+	}
+
+	VectorMA(saberEnt->r.currentOrigin, forwardDist, saberDir, closestPoint);
+	VectorSubtract(bs->cur_ps.origin, closestPoint, closestPoint);
+	lateralDistSq = VectorLengthSquared(closestPoint);
+
+	return (lateralDistSq <= (72.0f * 72.0f)) ? qtrue : qfalse;
 }
 
 // True when our own thrown saber is still out (in flight, not knocked away) and we are
