@@ -8505,22 +8505,20 @@ int NewBotAI_GetCharge(bot_state_t* bs)
 void NewBotAI_GetAttack(bot_state_t *bs)
 {
 	int weapon;
+	const qboolean hasDroppedOwnSaber = NewBotAI_HasDroppedOwnSaber(bs);
 	// const float speed = NewBotAI_GetSpeedTowardsEnemy(bs);
 
 	if (!bs->client || !bs->currentEnemy || !bs->currentEnemy->client)
 		return;
-	if (NewBotAI_HasDroppedOwnSaber(bs))
-	{
-		BotSelectWeapon(bs->client, WP_SABER);
-		return;
-	}
 
-	if (g_tweakWeapons.integer & WT_TRIBES)
+	if (hasDroppedOwnSaber)
+		weapon = WP_SABER;
+	else if (g_tweakWeapons.integer & WT_TRIBES)
 		weapon = NewBotAI_GetTribesWeapon(bs);
 	else
 		weapon = NewBotAI_GetWeapon(bs);
 	BotSelectWeapon(bs->client, weapon);
-	if (NewBotAI_IsEnemySaberThreatImminent(bs))
+	if (!hasDroppedOwnSaber && NewBotAI_IsEnemySaberThreatImminent(bs))
 		return;
 
 	if (bs->runningLikeASissy) //Dont attack when chasing them with strafe i guess
@@ -10814,7 +10812,7 @@ static qboolean NewBotAI_IsEnemySaberReturning(bot_state_t *bs)
 static qboolean NewBotAI_IsEnemySaberThreatImminent(bot_state_t *bs)
 {
 	gentity_t *saberEnt;
-	vec3_t saberToUs, saberDir, closestPoint;
+	vec3_t saberOrigin, saberVelocity, saberToUs, saberDir, closestPoint;
 	float forwardDist;
 	float lateralDistSq;
 	int saberEntNum;
@@ -10843,13 +10841,16 @@ static qboolean NewBotAI_IsEnemySaberThreatImminent(bot_state_t *bs)
 		return qfalse;
 	}
 
-	VectorSubtract(bs->cur_ps.origin, saberEnt->r.currentOrigin, saberToUs);
+	BG_EvaluateTrajectory(&saberEnt->s.pos, level.time, saberOrigin);
+	BG_EvaluateTrajectoryDelta(&saberEnt->s.pos, level.time, saberVelocity);
+
+	VectorSubtract(bs->cur_ps.origin, saberOrigin, saberToUs);
 	if (VectorLengthSquared(saberToUs) > (200.0f * 200.0f))
 	{
 		return qfalse;
 	}
 
-	VectorCopy(saberEnt->s.pos.trDelta, saberDir);
+	VectorCopy(saberVelocity, saberDir);
 	if (VectorNormalize(saberDir) <= 0.0f)
 	{
 		return qfalse;
@@ -10861,7 +10862,7 @@ static qboolean NewBotAI_IsEnemySaberThreatImminent(bot_state_t *bs)
 		return qfalse;
 	}
 
-	VectorMA(saberEnt->r.currentOrigin, forwardDist, saberDir, closestPoint);
+	VectorMA(saberOrigin, forwardDist, saberDir, closestPoint);
 	VectorSubtract(bs->cur_ps.origin, closestPoint, closestPoint);
 	lateralDistSq = VectorLengthSquared(closestPoint);
 
@@ -11915,7 +11916,7 @@ void NewBotAI_GetLSForcepower(bot_state_t *bs)
 {
 	vec3_t a_fo;
 	qboolean useTheForce = qfalse;
-	int pullWeight, pushWeight, absorbWeight, protectWeight, healWeight;
+	int pullWeight, pushWeight, absorbWeight, protectWeight, healWeight, drainWeight, gripWeight;
 	int minWeight = 0;
 	const int ourHealth = g_entities[bs->client].health;
 	const qboolean pressAdvantage = NewBotAI_ShouldPressAdvantage(bs);
@@ -11923,8 +11924,26 @@ void NewBotAI_GetLSForcepower(bot_state_t *bs)
 	//Disengaged in a bot_conservation window - hold off on spending any force so it regens.
 	if (bs->conserveUntil > level.time)
 		return;
-	if (NewBotAI_IsEnemySaberThreatImminent(bs) || NewBotAI_IsKnockdownRecoveryRoll(bs->cur_ps.legsAnim))
+	if (NewBotAI_IsEnemySaberThreatImminent(bs))
 		return;
+	if (NewBotAI_IsKnockdownRecoveryRoll(bs->cur_ps.legsAnim))
+	{
+		drainWeight = NewBotAI_GetDrain(bs);
+		gripWeight = NewBotAI_GetGrip(bs);
+		if (drainWeight > minWeight && drainWeight >= gripWeight)
+		{
+			level.clients[bs->client].ps.fd.forcePowerSelected = FP_DRAIN;
+			useTheForce = qtrue;
+		}
+		else if (gripWeight > minWeight)
+		{
+			level.clients[bs->client].ps.fd.forcePowerSelected = FP_GRIP;
+			useTheForce = qtrue;
+		}
+		if (useTheForce)
+			trap->EA_ForcePower(bs->client);
+		return;
+	}
 
 	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, a_fo);
 	vectoangles(a_fo, a_fo);
