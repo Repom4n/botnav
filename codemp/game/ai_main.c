@@ -126,6 +126,7 @@ static int NewBotAI_GetAntiDrainWeight(bot_state_t *bs);
 static float BotGetLightningStartDistance(void);
 static int NewBotAI_GetLightningWeight(bot_state_t *bs);
 static int NewBotAI_GetPTKWeight(bot_state_t *bs);
+static qboolean NewBotAI_IsKnockdownRecoveryRoll(int anim);
 static qboolean NewBotAI_IsSaberSwingStartWindow(bot_state_t *bs);
 static qboolean NewBotAI_CanAttemptFlipkick(bot_state_t *bs);
 static float NewBotAI_GetEnemyClosingSpeed(bot_state_t *bs);
@@ -155,11 +156,15 @@ static int NewBotAI_GetDrainTapTargetCost(bot_state_t *bs);
 static qboolean NewBotAI_IsPullkickDrainWindow(bot_state_t *bs);
 static qboolean NewBotAI_IsDrainlockAdvantage(bot_state_t *bs);
 static qboolean NewBotAI_ShouldDrainlockDeep(bot_state_t *bs);
+int NewBotAI_GetDrain(bot_state_t *bs);
+int NewBotAI_GetGrip(bot_state_t *bs);
 static qboolean NewBotAI_HasClearAdvantage(bot_state_t *bs);
 static qboolean NewBotAI_ShouldPressAdvantage(bot_state_t *bs);
-static qboolean NewBotAI_IsRecallingKnockedSaber(bot_state_t *bs);
+static qboolean NewBotAI_HasDroppedOwnSaber(bot_state_t *bs);
 static qboolean NewBotAI_IsCombatProgressStalled(bot_state_t *bs);
 static qboolean NewBotAI_IsEnemySaberReturning(bot_state_t *bs);
+static qboolean NewBotAI_IsEnemySaberThreatImminent(bot_state_t *bs);
+static qboolean NewBotAI_HandleRecoveryRollForcepower(bot_state_t *bs);
 static qboolean NewBotAI_IsBetweenOwnSaberAndEnemy(bot_state_t *bs);
 static void NewBotAI_AdjustSaberThrowArcAim(bot_state_t *bs, vec3_t headlevel);
 static void NewBotAI_AdjustSaberThrowLead(bot_state_t *bs);
@@ -6768,23 +6773,6 @@ void NewBotAI_Getup(bot_state_t *bs)
 		}
 	}
 
-	if ((bs->cur_ps.fd.forceGripBeingGripped > level.time) && bs->cur_ps.velocity[2] < -100) { //in grip and going down, a splat?
-		if (bs->cur_ps.fd.forcePowersKnown & (1 << FP_PROTECT)) {
-			level.clients[bs->client].ps.fd.forcePowerSelected = FP_PROTECT;
-			useTheForce = qtrue;
-		}
-		//Never rage - bots don't use force rage at all anymore.
-	}
-
-	if (!useTheForce && NewBotAI_GetAbsorb(bs)) {
-		level.clients[bs->client].ps.fd.forcePowerSelected = FP_ABSORB;
-		useTheForce = qtrue;
-	}
-	if (!useTheForce && NewBotAI_GetProtect(bs)) {
-		level.clients[bs->client].ps.fd.forcePowerSelected = FP_PROTECT;
-		useTheForce = qtrue;
-	}
-
 	//Item 7: when we combine the sideways roll with Drain, yaw 90 degrees away from the
 	//opponent (blended over 200ms) so the roll carries us out of their attack line
 	//instead of alongside them.
@@ -6819,13 +6807,6 @@ void NewBotAI_Getup(bot_state_t *bs)
 	else
 	{
 		bs->drainRollYawStart = 0;
-	}
-
-	if ((!useTheForce && ((bs->frame_Enemy_Len < 200) || (bs->cur_ps.fd.forceGripBeingGripped > level.time)))) {
-		if (!(g_forcePowerDisable.integer & (1 << FP_PUSH)) && bs->cur_ps.fd.forcePowersKnown & (1 << FP_PUSH)) {
-			level.clients[bs->client].ps.fd.forcePowerSelected = FP_PUSH;
-			useTheForce = qtrue;
-		}
 	}
 
 	if (useTheForce) {
@@ -8527,16 +8508,21 @@ int NewBotAI_GetCharge(bot_state_t* bs)
 void NewBotAI_GetAttack(bot_state_t *bs)
 {
 	int weapon;
+	const qboolean hasDroppedOwnSaber = NewBotAI_HasDroppedOwnSaber(bs);
 	// const float speed = NewBotAI_GetSpeedTowardsEnemy(bs);
 
 	if (!bs->client || !bs->currentEnemy || !bs->currentEnemy->client)
 		return;
 
-	if (g_tweakWeapons.integer & WT_TRIBES)
+	if (hasDroppedOwnSaber)
+		weapon = WP_SABER;
+	else if (g_tweakWeapons.integer & WT_TRIBES)
 		weapon = NewBotAI_GetTribesWeapon(bs);
 	else
 		weapon = NewBotAI_GetWeapon(bs);
 	BotSelectWeapon(bs->client, weapon);
+	if (!hasDroppedOwnSaber && NewBotAI_IsEnemySaberThreatImminent(bs) && !NewBotAI_IsEnemySaberReturning(bs))
+		return;
 
 	if (bs->runningLikeASissy) //Dont attack when chasing them with strafe i guess
 		return;
@@ -9178,7 +9164,7 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 
 		saber = &g_entities[bs->currentEnemy->client->ps.saberEntityNum];
 
-		if (NewBotAI_IsRecallingKnockedSaber(bs))
+		if (NewBotAI_HasDroppedOwnSaber(bs))
 		{
 			//Keep pressuring/repositioning while the saber recall toggle runs; a knocked-away
 			//saber is vulnerable, but stalling or hard retreating was worse than continuing
@@ -9195,6 +9181,20 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 					NewBotAI_GetGroundDodge(bs);
 				}
 			}
+		}
+		else if (NewBotAI_IsEnemySaberThreatImminent(bs) && !NewBotAI_IsEnemySaberReturning(bs))
+		{
+			if (pressAdvantage)
+			{
+				bs->combatAction = BOT_COMBAT_ACTION_AGGRESSION;
+				trap->EA_MoveForward(bs->client);
+			}
+			else
+			{
+				bs->combatAction = BOT_COMBAT_ACTION_RETREAT_DEFENSE;
+				NewBotAI_RetreatDiagonal(bs, (level.framenum & 1) ? qtrue : qfalse);
+			}
+			return;
 		}
 
 		else if (bs->currentEnemy->client->ps.legsAnim == BOTH_GETUP_BROLL_B && bs->frame_Enemy_Len < 100) {//Dodge a getup?
@@ -9465,6 +9465,24 @@ qboolean BG_InRoll3(int anim)
 	case BOTH_ROLL_L:
 		return qtrue;
 	}
+	return qfalse;
+}
+
+static qboolean NewBotAI_IsKnockdownRecoveryRoll(int anim)
+{
+	switch (anim)
+	{
+	case BOTH_GETUP_BROLL_B:
+	case BOTH_GETUP_BROLL_F:
+	case BOTH_GETUP_BROLL_L:
+	case BOTH_GETUP_BROLL_R:
+	case BOTH_GETUP_FROLL_B:
+	case BOTH_GETUP_FROLL_F:
+	case BOTH_GETUP_FROLL_L:
+	case BOTH_GETUP_FROLL_R:
+		return qtrue;
+	}
+
 	return qfalse;
 }
 
@@ -10045,16 +10063,52 @@ static qboolean NewBotAI_ShouldPressAdvantage(bot_state_t *bs)
 	return (aggressionBias > 0.2f && ourHealth > hisHealth && ourForce > hisForce) ? qtrue : qfalse;
 }
 
-static qboolean NewBotAI_IsRecallingKnockedSaber(bot_state_t *bs)
+static qboolean NewBotAI_HasDroppedOwnSaber(bot_state_t *bs)
 {
+	gentity_t *saberEnt;
+	int saberEntNum;
+
 	if (!bs)
 	{
 		return qfalse;
 	}
 
-	return (bs->cur_ps.weapon == WP_SABER &&
-		bs->cur_ps.saberInFlight &&
-		!bs->cur_ps.saberEntityNum) ? qtrue : qfalse;
+	if (!(bs->cur_ps.stats[STAT_WEAPONS] & (1 << WP_SABER)))
+	{
+		return qfalse;
+	}
+
+	if (bs->cur_ps.weapon != WP_SABER && bs->cur_ps.weapon != WP_MELEE)
+	{
+		return qfalse;
+	}
+
+	if (!bs->cur_ps.saberInFlight || bs->cur_ps.saberEntityNum)
+	{
+		return qfalse;
+	}
+
+	saberEntNum = g_entities[bs->client].client->ps.saberEntityNum;
+	if (saberEntNum <= 0 || saberEntNum >= ENTITYNUM_WORLD)
+	{
+		saberEntNum = g_entities[bs->client].client->saberStoredIndex;
+	}
+	if (saberEntNum <= 0 || saberEntNum >= ENTITYNUM_WORLD)
+	{
+		return qfalse;
+	}
+
+	saberEnt = &g_entities[saberEntNum];
+	if (!saberEnt->inuse)
+	{
+		return qfalse;
+	}
+	if (saberEnt->r.ownerNum != bs->client && saberEnt->parent != &g_entities[bs->client])
+	{
+		return qfalse;
+	}
+
+	return (saberEnt->s.pos.trType == TR_GRAVITY || saberEnt->s.eType == ET_MISSILE) ? qtrue : qfalse;
 }
 
 static int BotGetDrainHoldBiasMs(bot_state_t *bs)
@@ -10783,6 +10837,103 @@ static qboolean NewBotAI_IsEnemySaberReturning(bot_state_t *bs)
 	VectorSubtract(bs->currentEnemy->client->ps.origin, saberEnt->s.pos.trBase, saberToEnemy);
 
 	return (DotProduct(saberEnt->s.pos.trDelta, saberToEnemy) > 0.0f) ? qtrue : qfalse;
+}
+
+static qboolean NewBotAI_IsEnemySaberThreatImminent(bot_state_t *bs)
+{
+	gentity_t *saberEnt;
+	vec3_t saberOrigin, saberVelocity, saberToUs, saberDir, closestPoint;
+	float forwardDist;
+	float lateralDistSq;
+	float saberSpeed;
+	float threatRadius;
+	int saberEntNum;
+	qboolean isReturning;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client ||
+		!bs->currentEnemy->client->ps.saberInFlight)
+	{
+		return qfalse;
+	}
+
+	isReturning = NewBotAI_IsEnemySaberReturning(bs);
+	saberEntNum = bs->currentEnemy->client->ps.saberEntityNum;
+	if (saberEntNum == 0)
+	{
+		return qfalse;
+	}
+	if (saberEntNum < 0 || saberEntNum >= ENTITYNUM_WORLD)
+	{
+		return qfalse;
+	}
+
+	saberEnt = &g_entities[saberEntNum];
+	BG_EvaluateTrajectory(&saberEnt->s.pos, level.time, saberOrigin);
+	BG_EvaluateTrajectoryDelta(&saberEnt->s.pos, level.time, saberVelocity);
+
+	VectorSubtract(bs->cur_ps.origin, saberOrigin, saberToUs);
+	if (VectorLengthSquared(saberToUs) > (200.0f * 200.0f))
+	{
+		return qfalse;
+	}
+
+	VectorCopy(saberVelocity, saberDir);
+	saberSpeed = VectorNormalize(saberDir);
+	if (saberSpeed < 64.0f)
+	{
+		return qfalse;
+	}
+
+	forwardDist = DotProduct(saberToUs, saberDir);
+	if (forwardDist <= 0.0f || forwardDist > (isReturning ? 48.0f : 96.0f))
+	{
+		return qfalse;
+	}
+
+	VectorMA(saberOrigin, forwardDist, saberDir, closestPoint);
+	VectorSubtract(bs->cur_ps.origin, closestPoint, closestPoint);
+	lateralDistSq = VectorLengthSquared(closestPoint);
+	threatRadius = RadiusFromBounds(g_entities[bs->client].r.mins, g_entities[bs->client].r.maxs) + 16.0f;
+
+	return (lateralDistSq <= (threatRadius * threatRadius)) ? qtrue : qfalse;
+}
+
+static qboolean NewBotAI_HandleRecoveryRollForcepower(bot_state_t *bs)
+{
+	int drainWeight;
+	int gripWeight;
+	int minWeight = 0;
+	qboolean useTheForce = qfalse;
+
+	if (!NewBotAI_IsKnockdownRecoveryRoll(bs->cur_ps.legsAnim))
+	{
+		return qfalse;
+	}
+
+	if (bs->cur_ps.fd.forceSide == FORCE_DARKSIDE)
+	{
+		drainWeight = NewBotAI_GetDrain(bs);
+		gripWeight = NewBotAI_GetGrip(bs);
+		if (drainWeight > minWeight && drainWeight >= gripWeight)
+		{
+			level.clients[bs->client].ps.fd.forcePowerSelected = FP_DRAIN;
+			useTheForce = qtrue;
+		}
+		else if (gripWeight > minWeight)
+		{
+			level.clients[bs->client].ps.fd.forcePowerSelected = FP_GRIP;
+			useTheForce = qtrue;
+		}
+		if (useTheForce)
+		{
+			trap->EA_ForcePower(bs->client);
+		}
+	}
+
+	//Recovery rolls are intentionally restricted to drain or grip only. If neither
+	//dark-side option is currently viable, or this bot is lightside and cannot use them,
+	//do not fall through to the normal force choosers.
+	return qtrue;
 }
 
 // True when our own thrown saber is still out (in flight, not knocked away) and we are
@@ -11647,15 +11798,19 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 	//Disengaged in a bot_conservation window - hold off on spending any force so it regens.
 	if (bs->conserveUntil > level.time)
 		return;
+	if (NewBotAI_HandleRecoveryRollForcepower(bs))
+		return;
 
 	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, a_fo);
 	vectoangles(a_fo, a_fo);
 
+	drainWeight = NewBotAI_GetDrain(bs);
+	gripWeight = NewBotAI_GetGrip(bs);
+	if (NewBotAI_IsEnemySaberThreatImminent(bs) && !NewBotAI_IsEnemySaberReturning(bs))
+		return;
 	pullWeight = NewBotAI_GetPull(bs);
 	pushWeight = NewBotAI_GetPush(bs);
 	lightningWeight = NewBotAI_GetLightningWeight(bs);
-	drainWeight = NewBotAI_GetDrain(bs);
-	gripWeight = NewBotAI_GetGrip(bs);
 	//doNothingWeight = NewBotAI_GetWait(bs);
 
 	if (!pressAdvantage && ourHealth < 100 && ourHealth <= bs->currentEnemy->health + 40 && drainWeight > minWeight && drainWeight >= gripWeight) {
@@ -11820,6 +11975,10 @@ void NewBotAI_GetLSForcepower(bot_state_t *bs)
 
 	//Disengaged in a bot_conservation window - hold off on spending any force so it regens.
 	if (bs->conserveUntil > level.time)
+		return;
+	if (NewBotAI_HandleRecoveryRollForcepower(bs))
+		return;
+	if (NewBotAI_IsEnemySaberThreatImminent(bs) && !NewBotAI_IsEnemySaberReturning(bs))
 		return;
 
 	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, a_fo);
@@ -14775,9 +14934,7 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 		}
 	}
 
-	if (bs->cur_ps.weapon == WP_SABER &&
-		bs->cur_ps.saberInFlight &&
-		!bs->cur_ps.saberEntityNum)
+	if (NewBotAI_HasDroppedOwnSaber(bs))
 	{ //saber knocked away: the engine only recalls the saber on a fresh +attack edge, and
 	  //a held button counts as one press forever. Toggle a genuine press/release edge -
 	  //held 20ms, released 5ms - so repeated +attack inputs keep firing until the saber
