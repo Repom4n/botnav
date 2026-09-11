@@ -10815,7 +10815,7 @@ static qboolean NewBotAI_IsEnemySaberThreatImminent(bot_state_t *bs)
 		return qfalse;
 	}
 
-	VectorSubtract(bs->cur_ps.origin, saberEnt->s.pos.trBase, saberToUs);
+	VectorSubtract(bs->cur_ps.origin, saberEnt->r.currentOrigin, saberToUs);
 	if (VectorLengthSquared(saberToUs) > (200.0f * 200.0f))
 	{
 		return qfalse;
