@@ -729,7 +729,7 @@ static int BotScaleThresholdByRangeWeight(int threshold, int weightPercent)
 {
 	if (weightPercent <= 0)
 	{
-		return 999999;
+		return threshold;
 	}
 
 	if (weightPercent == 100)
@@ -8843,20 +8843,28 @@ int NewBotAI_GetCharge(bot_state_t* bs)
 void NewBotAI_GetAttack(bot_state_t *bs)
 {
 	int weapon;
-	const int totalHealthDelta = NewBotAI_GetTotalHealthDelta(bs);
-	const qboolean hasDroppedOwnSaber = NewBotAI_HasDroppedOwnSaber(bs);
-	const qboolean hasHealthDisadvantage = (totalHealthDelta < 0) ? qtrue : qfalse;
-	const qboolean suppressSaberAttack = (hasHealthDisadvantage && !hasDroppedOwnSaber) ? qtrue : qfalse;
-	const int saberAttackRangeWeightPercent = BotGetRangeWeightPercentForDistance(bs->frame_Enemy_Len,
-		bot_saberattackweight_short.integer,
-		bot_saberattackweight_medium.integer,
-		bot_saberattackweight_long.integer);
-	const int lightSaberHealthThreshold = BotScaleThresholdByRangeWeight(40, saberAttackRangeWeightPercent);
-	const int strongSaberHealthThreshold = BotScaleThresholdByRangeWeight(70, saberAttackRangeWeightPercent);
+	int totalHealthDelta;
+	qboolean hasDroppedOwnSaber;
+	qboolean hasHealthDisadvantage;
+	qboolean suppressSaberAttack;
+	int saberAttackRangeWeightPercent;
+	int lightSaberHealthThreshold;
+	int strongSaberHealthThreshold;
 	// const float speed = NewBotAI_GetSpeedTowardsEnemy(bs);
 
 	if (!bs->client || !bs->currentEnemy || !bs->currentEnemy->client)
 		return;
+
+	totalHealthDelta = NewBotAI_GetTotalHealthDelta(bs);
+	hasDroppedOwnSaber = NewBotAI_HasDroppedOwnSaber(bs);
+	hasHealthDisadvantage = (totalHealthDelta < 0) ? qtrue : qfalse;
+	suppressSaberAttack = (hasHealthDisadvantage && !hasDroppedOwnSaber) ? qtrue : qfalse;
+	saberAttackRangeWeightPercent = BotGetRangeWeightPercentForDistance(bs->frame_Enemy_Len,
+		bot_saberattackweight_short.integer,
+		bot_saberattackweight_medium.integer,
+		bot_saberattackweight_long.integer);
+	lightSaberHealthThreshold = BotScaleThresholdByRangeWeight(40, saberAttackRangeWeightPercent);
+	strongSaberHealthThreshold = BotScaleThresholdByRangeWeight(70, saberAttackRangeWeightPercent);
 
 	if (hasDroppedOwnSaber)
 		weapon = WP_SABER;
