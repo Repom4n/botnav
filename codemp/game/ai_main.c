@@ -7694,6 +7694,7 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 {
 	//float heightDiff = bs->cur_ps.origin[2] - bs->currentEnemy->client->ps.origin[2]; //We are above them by this much
 	const int gripkickBonus = BotGetAggressionWeightedBonus(bs, BotGetChanceBiasPercent(bot_gripkickbias.value), 30, qtrue);
+	const float gripkickYawStep = 6.0f;
 
 	if (!bs->gripkickActive)
 	{
@@ -7891,7 +7892,7 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 			//the forward move above means we are 15-20 units closer by the next think;
 			//only offering it at 110 let the approach overshoot past the gate and fall
 			//into the not-in-front branch below without the first flipkick ever firing.
-			VectorCopy(a_fo, bs->ideal_viewangles);
+			bs->ideal_viewangles[YAW] = BotChangeViewAngle(bs->viewangles[YAW], a_fo[YAW], gripkickYawStep);
 			bs->ideal_viewangles[PITCH] = 89;
 			trap->EA_Move(bs->client, vec3_origin, 0);
 			trap->EA_MoveForward(bs->client);
@@ -7938,7 +7939,7 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 			}
 			else
 			{
-				bs->ideal_viewangles[YAW] += (a_fo[YAW] > bs->viewangles[YAW]) ? 12.0f : -12.0f;
+				bs->ideal_viewangles[YAW] = BotChangeViewAngle(bs->viewangles[YAW], a_fo[YAW], gripkickYawStep);
 			}
 			trap->EA_Move(bs->client, vec3_origin, 0);
 			if (enemyOnTopOfUs)
@@ -12473,9 +12474,25 @@ int NewBotAI_GetTeamEnergize(bot_state_t* bs) {
 }
 
 int NewBotAI_GetSaberthrow(bot_state_t* bs) {
+	const int knockdownFinishMinHealth = 18;
+	const int knockdownFinishMaxHealth = 30;
+	const int knockdownBaseForceThreshold = 30;
+	const int knockdownHeavyForceThreshold = 40;
+	const int knockdownHeavyHealthThreshold = 50;
+	const int knockdownHeavyWeight = 100;
+	const int knockdownPressureWeight = 90;
+	const int knockdownBaseWeight = 85;
+	const int armorForceBonusBase = 20;
+	const int armorForceBonusStrongLead = 25;
+	const int armorForceBonusHeavyArmor = 50;
+	const int armorForceBonusStep = 10;
 	const int ourHealth = g_entities[bs->client].health;
 	const int ourForce = bs->cur_ps.fd.forcePower;
-	const int enemyTotalHealth = bs->currentEnemy->health + bs->currentEnemy->client->ps.stats[STAT_ARMOR];
+	const int hisForce = bs->currentEnemy->client->ps.fd.forcePower;
+	const int enemyArmor = bs->currentEnemy->client->ps.stats[STAT_ARMOR];
+	const int enemyTotalHealth = bs->currentEnemy->health + enemyArmor;
+	const int forceLead = ourForce - hisForce;
+	const qboolean enemyKnockedDown = BG_InKnockDown(bs->currentEnemy->client->ps.legsAnim) ? qtrue : qfalse;
 	const float saberthrowBias = BotGetChanceBiasPercent(bot_saberthrowbias.value);
 	const int antiDrainWeight = NewBotAI_GetAntiDrainWeight(bs);
 	int weight = 0;
@@ -12498,16 +12515,8 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 	//Too hurt to risk going saberless while the enemy holds a big force lead: even when
 	//we still hold the health advantage, a throw here gives them the opening their force
 	//edge needs to flip the fight. Hold the saber instead.
-	if (ourHealth < 50 && (bs->currentEnemy->client->ps.fd.forcePower - ourForce) > 40)
+	if (ourHealth < 50 && (hisForce - ourForce) > 40)
 		return 0;
-	//Winning the force game: grip (and the gripkick it feeds into) takes priority over
-	//throwing the saber away - except for the drainlock's actual finishing blow (enemy
-	//knocked down and already low enough to die to it), which is allowed to cut through
-	//this guard instead of being permanently unreachable while we hold the force lead.
-	if (ourForce > bs->currentEnemy->client->ps.fd.forcePower &&
-		!(BG_InKnockDown(bs->currentEnemy->client->ps.legsAnim) && enemyTotalHealth <= 30))
-		return 0;
-
 	//Item 1: while the opponent is drainlocked (actively tapped below 19 FP for a free
 	//pullkick, or already under the free-pullkick threshold), weight the pullkick over
 	//the saber throw - throwing the saber away just gives up the drainlock's
@@ -12533,28 +12542,35 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 	g_entities[bs->client].client->ps.fd.forcePowerLevel[FP_SABERTHROW] = 3;
 	g_entities[bs->client].client->ps.fd.forcePowersKnown |= (1 << FP_SABERTHROW);
 
-	if (BG_InKnockDown(bs->currentEnemy->client->ps.legsAnim)) {
-		//Item 8: a knocked-down opponent in the 18-30 HP band should be finished with the
-		//saber throw first; PTK chains in on top of it once we have the force for it.
-		if (enemyTotalHealth >= 18 && enemyTotalHealth <= 30) {
-			weight = 100;
+	if (enemyKnockedDown) {
+		//A knocked-down opponent is the best saber-throw punish; bias heavily toward it,
+		//especially when our force lead or their armor means the throw cashes in pressure.
+		if (enemyTotalHealth >= knockdownFinishMinHealth && enemyTotalHealth <= knockdownFinishMaxHealth) {
+			weight = knockdownHeavyWeight;
 		}
-		else if (ourForce > 40 && enemyTotalHealth <= 50) {
-			weight = 100;
+		else if (ourForce >= knockdownHeavyForceThreshold &&
+			enemyTotalHealth <= knockdownHeavyHealthThreshold &&
+			(forceLead > 0 || enemyArmor > 0)) {
+			weight = knockdownHeavyWeight;
 		}
-		else if (ourForce > 30) {
-			weight = 60;
+		else if (ourForce >= knockdownHeavyForceThreshold && (forceLead > 0 || enemyArmor > 0)) {
+			weight = knockdownPressureWeight;
+		}
+		else if (ourForce >= knockdownBaseForceThreshold) {
+			weight = knockdownBaseWeight;
 		}
 	}
 
 	//Never charge/hold a throw once the enemy has closed into flipkick striking range -
 	//a free flipkick should always win out over sitting in an alt-attack charge that
 	//just gets the two bots colliding with each other.
-	if ((saberthrowBias > 0.0f || antiDrainWeight > 0) && ourForce > 20 && bs->frame_Enemy_Len > 120 &&
+	if ((saberthrowBias > 0.0f || antiDrainWeight > 0) &&
+		ourForce > 20 && bs->frame_Enemy_Len > 120 &&
 		!NewBotAI_ShouldPreferFlipkickOverThrow(bs))
 	{
 		int aggressionBonus = BotGetAggressionWeightedBonus(bs, saberthrowBias, 45, qtrue);
 		int finishingBonus = 0;
+		int armorForceBonus = 0;
 		const qboolean flipkickUnavailable = (!NewBotAI_CanAttemptFlipkick(bs)) ? qtrue : qfalse;
 		const qboolean enemyAttacking = BG_SaberInAttack(bs->currentEnemy->client->ps.saberMove) ? qtrue : qfalse;
 
@@ -12576,10 +12592,22 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 		{
 			finishingBonus += 15;
 		}
-
-		if (aggressionBonus + finishingBonus + antiDrainWeight > weight)
+		if (forceLead > 0 && enemyArmor > 0)
 		{
-			weight = aggressionBonus + finishingBonus + antiDrainWeight;
+			armorForceBonus = armorForceBonusBase;
+			if (forceLead >= armorForceBonusStrongLead)
+			{
+				armorForceBonus += armorForceBonusStep;
+			}
+			if (enemyArmor >= armorForceBonusHeavyArmor)
+			{
+				armorForceBonus += armorForceBonusStep;
+			}
+		}
+
+		if (aggressionBonus + finishingBonus + antiDrainWeight + armorForceBonus > weight)
+		{
+			weight = aggressionBonus + finishingBonus + antiDrainWeight + armorForceBonus;
 		}
 	}
 
