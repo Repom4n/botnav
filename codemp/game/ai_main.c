@@ -7741,21 +7741,23 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 		//Move exclusively straight forward while bringing the gripped target in close for
 		//the flipkick. After a confirmed kick (or during the jerk windows below) move
 		//exclusively backward while the yaw jerk swings them, until the jerk brings them
-		//back in front of us inside the 90 degree cone - then move forward and flipkick
-		//again. NewBotAI_Flipkick gates its own grip-sequence attempts on that same 90
-		//degree cone and on kick range, so simply offer it the kick every think.
+		//back into a reasonably centered forward yaw lane - then look down, move forward,
+		//and let NewBotAI_Flipkick take the actual jump once the tighter engine trigger is
+		//ready.
 		vec3_t a_fo;
 		qboolean targetInFront;
 		qboolean attemptedKick = qfalse;
 		qboolean successfulKick = qfalse;
 		qboolean enemyOnTopOfUs;
 		qboolean weAreOnTopOfEnemy;
+		float targetYawDiff;
 
 		(void)gripkickBonus; //jerk pitch is fully randomized now (see the jerk phases below)
 
 		VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, a_fo);
 		vectoangles(a_fo, a_fo);
-		targetInFront = InFieldOfVision(bs->viewangles, 90, a_fo);
+		targetYawDiff = AngleDifference(a_fo[YAW], bs->viewangles[YAW]);
+		targetInFront = (targetYawDiff <= 35.0f && targetYawDiff >= -35.0f) ? qtrue : qfalse;
 
 		//The approach below moves forward until the target is basically touching us, so
 		//one of us can easily end up stacked on the other. Track both stackings - the
@@ -7891,13 +7893,12 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 			trap->EA_Move(bs->client, vec3_origin, 0);
 		}
 		else if (targetInFront) {
-			//Every kick approach starts by looking straight down and moving
-			//only forward while holding grip. The kick is offered from 130 units -
-			//slightly wider than NewBotAI_Flipkick's own 110-unit grip gate - because
-			//the forward move above means we are 15-20 units closer by the next think;
-			//only offering it at 110 let the approach overshoot past the gate and fall
-			//into the not-in-front branch below without the first flipkick ever firing.
-			bs->ideal_viewangles[YAW] = BotChangeViewAngle(bs->viewangles[YAW], a_fo[YAW], gripkickYawStep);
+			//Once the target is centered in front, stop re-yawing and just hold the
+			//working gripkick sweet spot: look straight down, keep moving forward,
+			//and let the gripped target drift into the engine's forward flipkick box.
+			//Continuing to chase their live yaw here was making the bot perpetually
+			//late and missing the kick window.
+			bs->ideal_viewangles[YAW] = bs->viewangles[YAW];
 			bs->ideal_viewangles[PITCH] = 89;
 			trap->EA_Move(bs->client, vec3_origin, 0);
 			trap->EA_MoveForward(bs->client);
