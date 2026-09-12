@@ -6746,13 +6746,20 @@ void NewBotAI_Getup(bot_state_t *bs)
 {
 	qboolean useTheForce = qfalse;
 	qboolean rollingEscape = qfalse;
+	qboolean drainRollingEscape = qfalse;
 	const int ourHealth = g_entities[bs->client].health;
 	qboolean enemyIncomingSaber = qfalse;
 	const qboolean enemyIncomingThrow = (bs->currentEnemy && bs->currentEnemy->client &&
 		bs->currentEnemy->client->ps.saberInFlight) ? qtrue : qfalse;
+	const qboolean enemyTooClose = (bs->currentEnemy && bs->currentEnemy->client &&
+		bs->frame_Enemy_Len < 250) ? qtrue : qfalse;
+	const qboolean canPushGetup = (enemyTooClose &&
+		!(g_forcePowerDisable.integer & (1 << FP_PUSH)) &&
+		(bs->cur_ps.fd.forcePowersKnown & (1 << FP_PUSH)) &&
+		bs->cur_ps.fd.forcePower >= 20 &&
+		!enemyIncomingThrow &&
+		!(bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB))) ? qtrue : qfalse;
 	const qboolean emergencyRollEscape = (ourHealth <= 22 && bs->frame_Enemy_Len < 160 && Q_irand(1, 100) <= 20) ? qtrue : qfalse;
-
-	trap->EA_Jump(bs->client);
 
 	//Getup rolls are a rare last-ditch escape only; default defense is jump+push.
 	if (bs->currentEnemy && bs->currentEnemy->client &&
@@ -6767,6 +6774,22 @@ void NewBotAI_Getup(bot_state_t *bs)
 	{
 		NewBotAI_ApplySidewaysDrainRoll(bs, qfalse);
 		rollingEscape = qtrue;
+		drainRollingEscape = qtrue;
+	}
+	else if (enemyTooClose && !canPushGetup)
+	{
+		if (bs->drainRollYawStart <= 0 || bs->drainRollYawStart > level.time)
+		{
+			bs->drainRollDir = Q_irand(0, 1) ? 1 : -1;
+		}
+
+		if (bs->drainRollDir < 0)
+			trap->EA_MoveLeft(bs->client);
+		else
+			trap->EA_MoveRight(bs->client);
+		rollingEscape = qtrue;
+		if (enemyIncomingSaber && emergencyRollEscape)
+			drainRollingEscape = qtrue;
 	}
 	else if (enemyIncomingSaber && emergencyRollEscape)
 	{
@@ -6782,9 +6805,15 @@ void NewBotAI_Getup(bot_state_t *bs)
 		else
 			trap->EA_MoveRight(bs->client);
 		rollingEscape = qtrue;
+		drainRollingEscape = qtrue;
 	}
 
-	if (!useTheForce && rollingEscape &&
+	if (!rollingEscape)
+	{
+		trap->EA_Jump(bs->client);
+	}
+
+	if (!useTheForce && drainRollingEscape &&
 		!(g_forcePowerDisable.integer & (1 << FP_DRAIN)) &&
 		(bs->cur_ps.fd.forcePowersKnown & (1 << FP_DRAIN)) &&
 		bs->cur_ps.fd.forcePower >= 25)
@@ -6815,13 +6844,7 @@ void NewBotAI_Getup(bot_state_t *bs)
 		bs->ideal_viewangles[YAW] = yawTarget[YAW];
 		bs->goalAngles[YAW] = yawTarget[YAW];
 	}
-	else if (!useTheForce && enemyIncomingSaber &&
-		!(g_forcePowerDisable.integer & (1 << FP_PUSH)) &&
-		(bs->cur_ps.fd.forcePowersKnown & (1 << FP_PUSH)) &&
-		bs->cur_ps.fd.forcePower >= 20 &&
-		bs->frame_Enemy_Len <= 640 &&
-		!enemyIncomingThrow &&
-		!(bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB)))
+	else if (!useTheForce && canPushGetup)
 	{
 		level.clients[bs->client].ps.fd.forcePowerSelected = FP_PUSH;
 		useTheForce = qtrue;
