@@ -11223,6 +11223,9 @@ static qboolean NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bot_state_t *bs)
 	return InFieldOfVision(bs->viewangles, 60, a_fo) ? qtrue : qfalse;
 }
 
+// Panic escape used only while an enemy saber throw is already threatening us and the
+// bot is actively being yanked by force pull. That pull state is what creates the
+// "about to die with no stable footing" window where the sideways drain roll is allowed.
 static qboolean NewBotAI_ShouldEmergencyDrainRollSaberThrow(bot_state_t *bs)
 {
 	if (!NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bs))
@@ -11238,6 +11241,7 @@ static qboolean NewBotAI_ShouldEmergencyDrainRollSaberThrow(bot_state_t *bs)
 	if (bs->cur_ps.forceHandExtend != HANDEXTEND_FORCEPULL &&
 		bs->cur_ps.powerups[PW_PULL] <= level.time)
 	{
+		//Only use this escape while the pull physics are currently active.
 		return qfalse;
 	}
 
@@ -11599,6 +11603,7 @@ int NewBotAI_GetPull(bot_state_t *bs) {
 	if (ourForce < 21)
 		return 0;
 	if (NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bs) &&
+		bs->frame_Enemy_Len > 250 &&
 		hisForce >= 20 &&
 		!NewBotAI_IsDrainlockAdvantage(bs) &&
 		!NewBotAI_ShouldPreferFlipkickOverThrow(bs))
@@ -11928,11 +11933,6 @@ int NewBotAI_GetDrain(bot_state_t *bs) {
 		return 90;
 	}
 
-	if (bs->frame_Enemy_Len < 120 &&
-		(BG_SaberInAttack(bs->currentEnemy->client->ps.saberMove) ||
-		 NewBotAI_IsEnemySaberThreatImminent(bs) ||
-		 bs->currentEnemy->client->ps.saberInFlight))
-		return 0;
 	if (safeDrainVsThrow)
 	{
 		if (hisForce < 20 && !NewBotAI_ShouldPreferFlipkickOverThrow(bs))
@@ -11944,6 +11944,11 @@ int NewBotAI_GetDrain(bot_state_t *bs) {
 			weight += 10;
 		return weight;
 	}
+	if (bs->frame_Enemy_Len < 120 &&
+		(BG_SaberInAttack(bs->currentEnemy->client->ps.saberMove) ||
+		 NewBotAI_IsEnemySaberThreatImminent(bs) ||
+		 bs->currentEnemy->client->ps.saberInFlight))
+		return 0;
 	if (!bs->frame_Enemy_Vis)
 		return 0;
 	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, a_fo);
@@ -12237,8 +12242,12 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 		if (NewBotAI_ShouldEmergencyDrainRollSaberThrow(bs))
 		{
 			NewBotAI_ApplySidewaysDrainRoll(bs, qtrue);
+			return;
 		}
-		return;
+		if (!NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bs))
+		{
+			return;
+		}
 	}
 	pullWeight = NewBotAI_GetPull(bs);
 	pushWeight = NewBotAI_GetPush(bs);
