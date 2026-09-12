@@ -12134,12 +12134,11 @@ static qboolean NewBotAI_ShouldHealDrainlock(bot_state_t *bs)
 	return qtrue;
 }
 
-// instead of the normal safe-below-19 tap, it should commit to a long-held, deep drain
-// that pushes the enemy's force as close to 0 as efficiently possible (see
-// NewBotAI_GetDrainTapTargetCost) to set up a repeated drainlock+pullkick sequence.
-// bot_drainlockbias only weights how defensively-aggressive that choice reads (it does
-// not need drain to already know pull - IsPullkickDrainWindow/IsDrainlockAdvantage still
-// gate the follow-up pullkick separately).
+// True when either a heal-driven drainlock should commit to a deep drain regardless of
+// cvar bias, or a big enough force lead (>=40 FP over the enemy) plus bot_drainlockbias
+// should push the bot into the same long-held, efficient deep-drain targeting. See
+// NewBotAI_GetDrainTapTargetCost; IsPullkickDrainWindow/IsDrainlockAdvantage still gate
+// the follow-up pullkick separately.
 static qboolean NewBotAI_ShouldDrainlockDeep(bot_state_t *bs)
 {
 	const float drainlockBias = BotGetChanceBiasPercent(bot_drainlockbias.value);
