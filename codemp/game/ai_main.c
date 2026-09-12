@@ -7983,7 +7983,8 @@ void NewBotAI_Draining(bot_state_t *bs)
 		if (drainTapTargetCost > 0 &&
 			(healDrainlock || NewBotAI_IsPullkickDrainWindow(bs)))
 		{
-			holdMs = drainTapTargetCost * 20; //5 FP per 100ms drain tick -> 20ms per FP
+			const int drainTapTicks = drainTapTargetCost / 5;
+			holdMs = (drainTapTicks * 100) + 1; //hold through the last full 100ms drain tick
 		}
 		else
 		{
