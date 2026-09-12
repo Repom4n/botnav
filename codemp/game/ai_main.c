@@ -135,6 +135,9 @@ static void NewBotAI_SaberDuelIndecisionFallback(bot_state_t *bs, qboolean horiz
 static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs);
 static void NewBotAI_ApplyHorizontalSwingMove(bot_state_t *bs);
 static void NewBotAI_ResetFanChain(bot_state_t *bs);
+static void NewBotAI_UpdateRecentSaberContact(bot_state_t *bs);
+static qboolean NewBotAI_HasRecentSaberContact(bot_state_t *bs);
+static qboolean NewBotAI_CanInitiateFlipkickUnderFanPressure(bot_state_t *bs);
 
 // Fan-chain phases (see NewBotAI_PrepareHorizontalSwingStart): DWELL is a free-movement
 // hold (bot_fandwell ms), TAP_PRE_SWING/TAP_POST_SWING are the 100ms strafe-only commit
@@ -7155,6 +7158,13 @@ void NewBotAI_Flipkick(bot_state_t *bs)
 		return;
 	}
 
+	if (!NewBotAI_CanInitiateFlipkickUnderFanPressure(bs))
+	{
+		//During active fan pressure, only commit the flipkick once we just confirmed a
+		//saber hit so the combo is saber-contact -> flipkick.
+		return;
+	}
+
 	if (bs->cur_ps.saberInFlight)
 	{
 		//Never kick empty-handed mid-throw.
@@ -7670,7 +7680,7 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 			bs->gripkickJerkCount--;
 			bs->gripkickJerkDirection = (Q_irand(0, 1) * 2) - 1;
 			bs->gripkickJerkUntil = level.time +
-				(Q_irand(700, 1100) * dwellPercent) / 100;
+				(Q_irand(550, 900) * dwellPercent) / 100;
 			//Each jerk independently rolls its own random yaw direction/magnitude - no
 			//accumulation across jerks within the same phase.
 			bs->gripkickJerkYawOffset = (float)(bs->gripkickJerkDirection * yawMagnitude);
@@ -7735,7 +7745,7 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 					//dwells run the same length as the upward jerks for the same
 					//bot_gripkickdwell setting.
 					bs->gripkickAttemptTime = level.time;
-					bs->gripkickDwellUntil = level.time + (Q_irand(350, 550) * dwellPercent) / 100;
+					bs->gripkickDwellUntil = level.time + (Q_irand(220, 360) * dwellPercent) / 100;
 				}
 			}
 		}
@@ -8807,6 +8817,87 @@ static float NewBotAI_GetPullkickTimeToKickRange(bot_state_t *bs)
 	return ((bs->frame_Enemy_Len - pullKickRange) / closing) * 1000.0f;
 }
 
+//450ms keeps the combo window within ~9 think ticks (50ms each): enough time for a
+//real saber-hit->flipkick follow-through, but short enough that stale contact doesn't
+//unlock unrelated later jumps.
+#define NEWBOTAI_FAN_FLIPKICK_CONTACT_WINDOW_MS 450
+static qboolean NewBotAI_HasRecentSaberContact(bot_state_t *bs)
+{
+	return (bs->currentEnemy && bs->currentEnemy->client &&
+		bs->lastSaberContactTargetNum == bs->currentEnemy->s.number &&
+		bs->lastSaberContactTime > 0 &&
+		bs->lastSaberContactTime > level.time - NEWBOTAI_FAN_FLIPKICK_CONTACT_WINDOW_MS) ? qtrue : qfalse;
+}
+
+static qboolean NewBotAI_CanInitiateFlipkickUnderFanPressure(bot_state_t *bs)
+{
+	if (bs->fanPhase == FAN_PHASE_INACTIVE || bs->fanPhase == FAN_PHASE_DWELL)
+	{
+		return qtrue;
+	}
+
+	if (!NewBotAI_HasRecentSaberContact(bs))
+	{
+		return qfalse;
+	}
+
+	if (bs->fanChainStartTime > 0 && bs->lastSaberContactTime < bs->fanChainStartTime)
+	{
+		return qfalse;
+	}
+
+	return qtrue;
+}
+
+static void NewBotAI_UpdateRecentSaberContact(bot_state_t *bs)
+{
+	int enemyHealth;
+	int enemyArmor;
+	int enemyDurability;
+	const qboolean weAreInSaberContactWindow = (bs->cur_ps.weapon == WP_SABER &&
+		(BG_SaberInAttack(bs->cur_ps.saberMove) ||
+		PM_SaberInStart(bs->cur_ps.saberMove) ||
+		PM_SaberInTransition(bs->cur_ps.saberMove)) &&
+		bs->frame_Enemy_Len <= 220.0f) ? qtrue : qfalse;
+
+	if (!bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		bs->lastEnemyDurability = 0;
+		bs->lastEnemyDurabilityTargetNum = ENTITYNUM_NONE;
+		return;
+	}
+
+	enemyHealth = bs->currentEnemy->health;
+	if (enemyHealth < 0)
+	{
+		enemyHealth = 0;
+	}
+	enemyArmor = bs->currentEnemy->client->ps.stats[STAT_ARMOR];
+	if (enemyArmor < 0)
+	{
+		enemyArmor = 0;
+	}
+	enemyDurability = enemyHealth + enemyArmor;
+
+	if (bs->lastEnemyDurabilityTargetNum != bs->currentEnemy->s.number)
+	{
+		bs->lastEnemyDurability = enemyDurability;
+		bs->lastEnemyDurabilityTargetNum = bs->currentEnemy->s.number;
+		return;
+	}
+
+	if (enemyDurability < bs->lastEnemyDurability &&
+		weAreInSaberContactWindow &&
+		(bs->cur_ps.saberEventFlags & SEF_HITENEMY))
+	{
+		bs->lastSaberContactTime = level.time;
+		bs->lastSaberContactTargetNum = bs->currentEnemy->s.number;
+	}
+
+	bs->lastEnemyDurability = enemyDurability;
+	bs->lastEnemyDurabilityTargetNum = bs->currentEnemy->s.number;
+}
+
 // Schedules the pk/ptk flipkick jump so the bot leaps only once the enemy is actually
 // closing into kick range: immediately when a kick is already possible, after the
 // predicted closing time (plus a small 150ms lead so the ~50ms think tick can't make
@@ -8838,6 +8929,13 @@ static void NewBotAI_SchedulePullkickJump(bot_state_t *bs)
 	{
 		//Still cooling down from the last kick attempt/jump - don't re-arm a new one yet.
 		bs->pullKickJumpTime = 0;
+		return;
+	}
+
+	if (!NewBotAI_CanInitiateFlipkickUnderFanPressure(bs))
+	{
+		//Don't start a new pullkick jump while fan pressure is active unless the combo
+		//was just confirmed by saber contact; keep any existing pending schedule intact.
 		return;
 	}
 
@@ -9016,6 +9114,7 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 	}
 
 	aggressionBias = BotGetAggressionBias(bs);
+	NewBotAI_UpdateRecentSaberContact(bs);
 
 	//A scheduled pk/ptk jump is only meaningful while a kick could actually land. If
 	//flipkick stopped being possible (out of FP, no jump level, mid-swing ourselves,
@@ -10141,7 +10240,11 @@ static qboolean NewBotAI_HasDroppedOwnSaber(bot_state_t *bs)
 		return qfalse;
 	}
 
-	return (saberEnt->s.pos.trType == TR_GRAVITY || saberEnt->s.pos.trType == TR_STATIONARY) ? qtrue : qfalse;
+	//Downed saber physics can transition between a small set of movement types while still
+	//in dropped-saber think; accept those known downed states for recall eligibility.
+	return (saberEnt->s.pos.trType == TR_GRAVITY ||
+		saberEnt->s.pos.trType == TR_STATIONARY ||
+		saberEnt->s.pos.trType == TR_INTERPOLATE) ? qtrue : qfalse;
 }
 
 static int BotGetDrainHoldBiasMs(bot_state_t *bs)
@@ -10579,34 +10682,64 @@ static void NewBotAI_ResetFanChain(bot_state_t *bs)
 	bs->fanChainStartHealth = 0;
 }
 
-//Fanbias should weight heavily (effectively maxed out) whenever the bot is at full
-//health with under 40 force points to spend on anything else, and whenever the bot
-//is at a force point disadvantage against its target - in both cases fanning is the
-//best use of the bot's saber since force options are limited/losing.
-#define NEWBOTAI_FANBIAS_FULL_HEALTH 100
-#define NEWBOTAI_FANBIAS_LOW_FORCE_THRESHOLD 40
-#define NEWBOTAI_FANBIAS_MIN_WEIGHTED_PERCENT 90.0f
+//Fan pressure should be strongest while healthy and pressing an advantage; outside of
+//that (neutral/defensive, recently hurt, or low health), scale it down so bots don't
+//overcommit into vulnerable saber exchanges.
 static float NewBotAI_GetFanBiasPercent(bot_state_t *bs)
 {
 	float fanBias = BotGetChanceBiasPercent(bot_fanbias.value);
 	const int ourHealth = g_entities[bs->client].health;
-	const int ourForce = bs->cur_ps.fd.forcePower;
-	const qboolean hasForceDisadvantage = (bs->currentEnemy && bs->currentEnemy->client &&
-		ourForce < bs->currentEnemy->client->ps.fd.forcePower) ? qtrue : qfalse;
+	const qboolean pressingAdvantage = NewBotAI_ShouldPressAdvantage(bs);
+	const qboolean clearAdvantage = NewBotAI_HasClearAdvantage(bs);
+	const qboolean recentlyHurt = (bs->lastHurtTime > level.time - 1200) ? qtrue : qfalse;
 
-	if (fanBias > 0.0f &&
-		((ourHealth >= NEWBOTAI_FANBIAS_FULL_HEALTH && ourForce < NEWBOTAI_FANBIAS_LOW_FORCE_THRESHOLD) ||
-		 hasForceDisadvantage))
+	if (fanBias <= 0.0f)
 	{
-		if (fanBias < NEWBOTAI_FANBIAS_MIN_WEIGHTED_PERCENT)
+		return 0.0f;
+	}
+
+	if (ourHealth < 55)
+	{
+		return 0.0f;
+	}
+	else if (ourHealth < 70)
+	{
+		fanBias *= 0.35f;
+	}
+	else if (!pressingAdvantage)
+	{
+		fanBias *= clearAdvantage ? 0.75f : 0.55f;
+	}
+
+	if (recentlyHurt)
+	{
+		fanBias *= 0.6f;
+	}
+
+	if (pressingAdvantage && ourHealth >= 85)
+	{
+		if (fanBias < 80.0f)
 		{
-			fanBias = NEWBOTAI_FANBIAS_MIN_WEIGHTED_PERCENT;
+			fanBias = 80.0f;
+		}
+	}
+	else if (clearAdvantage && ourHealth >= 75)
+	{
+		if (fanBias < 65.0f)
+		{
+			fanBias = 65.0f;
 		}
 	}
 
-	if (fanBias > 0.0f && NewBotAI_IsDrainlockAdvantage(bs) && fanBias < 80.0f)
+	if (fanBias > 0.0f && NewBotAI_IsDrainlockAdvantage(bs) && pressingAdvantage &&
+		ourHealth >= 80 && fanBias < 70.0f)
 	{
-		fanBias = 80.0f;
+		fanBias = 70.0f;
+	}
+
+	if (fanBias < 0.0f)
+	{
+		fanBias = 0.0f;
 	}
 
 	return fanBias;
@@ -10705,7 +10838,9 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 		//Start a new chain, preferring whichever direction we're already strafing.
 		int startDir = 0;
 
-		if (bs->randomStrafeEndTime > level.time && bs->randomStrafeDir)
+		//Even when we already have a lateral strafe direction, only convert it into a fan
+		//chain when fanBias is enabled (>0), so bot_fanbias 0 remains a strict "off".
+		if (fanBias > 0.0f && bs->randomStrafeEndTime > level.time && bs->randomStrafeDir)
 		{
 			startDir = bs->randomStrafeDir;
 		}
