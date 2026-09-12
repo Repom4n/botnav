@@ -11286,7 +11286,7 @@ static qboolean NewBotAI_GetEnemySaberFlightThreat(bot_state_t *bs, float *forwa
 	{
 		return qfalse;
 	}
-	if (saberEntNum < 0 || saberEntNum >= MAX_ENTITIESTOTAL)
+	if (saberEntNum <= 0 || saberEntNum >= MAX_GENTITIES || saberEntNum == ENTITYNUM_NONE)
 	{
 		return qfalse;
 	}
@@ -11626,7 +11626,7 @@ static qboolean NewBotAI_ShouldCloseGapVsEnemySaberThrow(bot_state_t *bs)
 	}
 
 	saberEntNum = bs->currentEnemy->client->ps.saberEntityNum;
-	if (saberEntNum < 0 || saberEntNum >= MAX_ENTITIESTOTAL)
+	if (saberEntNum <= 0 || saberEntNum >= MAX_GENTITIES || saberEntNum == ENTITYNUM_NONE)
 	{
 		return qfalse;
 	}
