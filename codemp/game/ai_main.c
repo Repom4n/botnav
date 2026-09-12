@@ -8003,6 +8003,13 @@ void NewBotAI_Draining(bot_state_t *bs)
 	{
 		shouldHold = qtrue;
 	}
+	else if (healDrainlock && ourHealth < 100 && hisForce && enemyVisible)
+	{
+		//If a heal-driven deep-drain tap was truncated by our current FP pool, keep holding
+		//drain so we immediately resume channeling as force regenerates instead of breaking
+		//the drainlock into a different action before we're topped off.
+		shouldHold = qtrue;
+	}
 
 	if (shouldHold)
 	{
