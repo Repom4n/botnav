@@ -11266,7 +11266,6 @@ static void NewBotAI_ApplySidewaysDrainRoll(bot_state_t *bs, qboolean moveBack)
 	{
 		bs->drainRollDir = Q_irand(0, 1) ? 1 : -1;
 		bs->drainRollYawStart = level.time;
-		bs->drainRollYawStart = level.time;
 	}
 
 	level.clients[bs->client].ps.fd.forcePowerSelected = FP_DRAIN;
