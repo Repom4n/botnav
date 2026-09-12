@@ -161,6 +161,7 @@ static void NewBotAI_ConsumeCombatHop(bot_state_t *bs);
 static float NewBotAI_GetPullkickTimeToKickRange(bot_state_t *bs);
 static void NewBotAI_SchedulePullkickJump(bot_state_t *bs);
 static qboolean NewBotAI_IsPullkickOpportunity(bot_state_t *bs);
+static int NewBotAI_GetDrainTapTargetTicks(bot_state_t *bs);
 static int NewBotAI_GetDrainTapTargetCost(bot_state_t *bs);
 static qboolean NewBotAI_IsPullkickDrainWindow(bot_state_t *bs);
 static qboolean NewBotAI_IsDrainlockAdvantage(bot_state_t *bs);
@@ -7966,7 +7967,7 @@ void NewBotAI_Draining(bot_state_t *bs)
 	const int hisForce = bs->currentEnemy->client->ps.fd.forcePower;
 	const qboolean enemyVisible = (OrgVisible(bs->eye, bs->currentEnemy->client->ps.origin, bs->client) &&
 		!(bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB))) ? qtrue : qfalse;
-	const int drainTapTargetCost = NewBotAI_GetDrainTapTargetCost(bs);
+	const int drainTapTargetTicks = NewBotAI_GetDrainTapTargetTicks(bs);
 	const qboolean healDrainlock = NewBotAI_ShouldHealDrainlock(bs);
 	const qboolean safeDrainVsThrow = NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bs);
 	const qboolean jumpDrainThreat = NewBotAI_ShouldJumpDrainVsSaberThrow(bs);
@@ -7980,11 +7981,10 @@ void NewBotAI_Draining(bot_state_t *bs)
 		//so they release the drain key almost immediately (one think) instead of holding it
 		//down. Heal-driven drainlocks and force-biased pullkick setups both hold exactly long
 		//enough for the computed whole-tick FP removal, not a moment longer.
-		if (drainTapTargetCost > 0 &&
+		if (drainTapTargetTicks > 0 &&
 			(healDrainlock || NewBotAI_IsPullkickDrainWindow(bs)))
 		{
-			const int drainTapTicks = drainTapTargetCost / 5;
-			holdMs = (drainTapTicks * 100) + 1; //hold through the last full 100ms drain tick
+			holdMs = (drainTapTargetTicks * 100) + 1; //hold through the last full 100ms drain tick
 		}
 		else
 		{
@@ -12178,7 +12178,7 @@ static qboolean NewBotAI_ShouldDrainlockDeep(bot_state_t *bs)
 	return ((ourForce - hisForce) >= requiredLead) ? qtrue : qfalse;
 }
 
-// Computes exactly how many of our own force points a drain tap must spend against the
+// Computes exactly how many drain ticks a targeted drain tap should hold against the
 // current enemy. Normally this targets landing them safely under the free-pullkick
 // threshold (19 FP, with a 1 FP margin for their regen tick ticking in slightly later
 // than ours) - the "20, 19, 18..." thresholds. Each 5 FP we spend draining removes 4
@@ -12190,13 +12190,22 @@ static qboolean NewBotAI_ShouldDrainlockDeep(bot_state_t *bs)
 // (e.g. as low as 3 with the standard 4 FP/tick rate) rather than always 18. Returns 0
 // when the enemy is already below the relevant threshold or the values can't be
 // determined.
-static int NewBotAI_GetDrainTapTargetCost(bot_state_t *bs)
+static int NewBotAI_GetDrainTapTargetTicks(bot_state_t *bs)
 {
-	const int ourForce = bs->cur_ps.fd.forcePower;
-	const int hisForce = bs->currentEnemy->client->ps.fd.forcePower;
-	const int fpPerTick = (g_tweakForce.integer & FT_DRAINDMGNERF) ? 3 : 4;
+	int ourForce;
+	int hisForce;
+	int fpPerTick;
 	int fpToRemove;
 	int ticks;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return 0;
+	}
+
+	ourForce = bs->cur_ps.fd.forcePower;
+	hisForce = bs->currentEnemy->client->ps.fd.forcePower;
+	fpPerTick = (g_tweakForce.integer & FT_DRAINDMGNERF) ? 3 : 4;
 
 	if (NewBotAI_ShouldDrainlockDeep(bs))
 	{
@@ -12213,7 +12222,7 @@ static int NewBotAI_GetDrainTapTargetCost(bot_state_t *bs)
 			ticks = maxAffordableTicks;
 		}
 
-		return ticks * 5; //drain self-cost is 5 FP per tick
+		return ticks;
 	}
 
 	if (hisForce < 19)
@@ -12224,7 +12233,12 @@ static int NewBotAI_GetDrainTapTargetCost(bot_state_t *bs)
 	fpToRemove = hisForce - 18; //land them at 18, safely below 19 to survive their regen tick
 	ticks = (fpToRemove + fpPerTick - 1) / fpPerTick;
 
-	return ticks * 5; //drain self-cost is 5 FP per tick
+	return ticks;
+}
+
+static int NewBotAI_GetDrainTapTargetCost(bot_state_t *bs)
+{
+	return NewBotAI_GetDrainTapTargetTicks(bs) * 5; //drain self-cost is 5 FP per tick
 }
 
 // True when this bot is in "force bias with pullkick weights" mode: aggressive, PTK-weighted,
