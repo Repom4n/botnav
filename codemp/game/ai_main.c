@@ -11922,9 +11922,6 @@ int NewBotAI_GetPull(bot_state_t *bs) {
 		//pullkick the second - keep the base pull high here and let PTK's own weight stack on
 		//top below when it is available.
 		if (enemySaberReturning) {
-			if (ourHealth > 30 && ourForce > bs->currentEnemy->client->ps.fd.forcePower && ptkWeight > 0) {
-				return 100;
-			}
 			weight = (ourHealth > 30 && ourForce > bs->currentEnemy->client->ps.fd.forcePower) ? 95.0f : 85.0f;
 		}
 		else {
@@ -12211,21 +12208,8 @@ int NewBotAI_GetDrain(bot_state_t *bs) {
 		NewBotAI_IsEnemySaberReturning(bs) &&
 		!BG_SaberInAttack(bs->currentEnemy->client->ps.saberMove) &&
 		totalHealthDelta >= 30) ? qtrue : qfalse;
-	const qboolean returnWindowPullAvailable =
-		!(g_forcePowerDisable.integer & (1 << FP_PULL)) &&
-		(bs->cur_ps.fd.forcePowersKnown & (1 << FP_PULL)) &&
-		NewBotAI_IsEnemyPullable(bs) &&
-		bs->cur_ps.groundEntityNum != ENTITYNUM_NONE &&
-		bs->frame_Enemy_Len >= 50 &&
-		bs->frame_Enemy_Len <= 640 &&
-		!(bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB)) &&
-		ourForce >= 21 ? qtrue : qfalse;
 	const qboolean returnWindowPTKAvailable =
-		returnWindowPullAvailable &&
-		g_flipKick.integer &&
-		NewBotAI_CanAttemptFlipkick(bs) &&
-		ourForce > 38 &&
-		NewBotAI_GetPTKWeight(bs) > 0 ? qtrue : qfalse;
+		(pressureDrainVsThrow && NewBotAI_GetPTKWeight(bs) > 0) ? qtrue : qfalse;
 	int weight = 100;
 	vec3_t a_fo;
 
