@@ -130,13 +130,12 @@ static int NewBotAI_GetPTKWeight(bot_state_t *bs);
 static qboolean NewBotAI_IsKnockdownRecoveryRoll(int anim);
 static qboolean NewBotAI_IsSaberSwingStartWindow(bot_state_t *bs);
 static qboolean NewBotAI_CanAttemptFlipkick(bot_state_t *bs);
+static void NewBotAI_RetreatStraight(bot_state_t *bs);
 static float NewBotAI_GetEnemyClosingSpeed(bot_state_t *bs);
 static void NewBotAI_SaberDuelIndecisionFallback(bot_state_t *bs, qboolean horizontalSwingStart);
 static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs);
 static void NewBotAI_ApplyHorizontalSwingMove(bot_state_t *bs);
 static void NewBotAI_ResetFanChain(bot_state_t *bs);
-static void NewBotAI_UpdateRecentSaberContact(bot_state_t *bs);
-static qboolean NewBotAI_HasRecentSaberContact(bot_state_t *bs);
 static qboolean NewBotAI_CanInitiateFlipkickUnderFanPressure(bot_state_t *bs);
 
 // Fan-chain phases (see NewBotAI_PrepareHorizontalSwingStart): DWELL is a free-movement
@@ -6945,6 +6944,11 @@ static void NewBotAI_RetreatDiagonal(bot_state_t *bs, qboolean moveLeft)
 		trap->EA_MoveRight(bs->client);
 }
 
+static void NewBotAI_RetreatStraight(bot_state_t *bs)
+{
+	trap->EA_MoveBack(bs->client);
+}
+
 // The only scenario where our bot should avoid flipkicking despite being able to: the enemy has
 // enough health to survive a fight (>49) while we are critically low (<20), meaning we would be
 // one hit from dying during the flipkick's vulnerable window. In that exact scenario we drain and
@@ -7354,6 +7358,11 @@ void NewBotAI_ReactToBeingGripped(bot_state_t *bs) //Test this more, does it pus
 	qboolean useTheForce = qfalse;
 	qboolean gripMistakeActive;
 
+	if (!(g_entities[bs->client].r.svFlags & SVF_BOT))
+	{
+		return;
+	}
+
 	//Item 4: a fresh grip session is detected by a gap since the last think we were
 	//reacting to being gripped (a continuous grip calls this every think). Roll the
 	//escape delay once per session instead of re-rolling a chance every think - a
@@ -7699,7 +7708,7 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 			bs->ideal_viewangles[YAW] = a_fo[YAW] + bs->gripkickJerkYawOffset;
 			bs->ideal_viewangles[PITCH] = bs->gripkickJerkPitch;
 			trap->EA_Move(bs->client, vec3_origin, 0);
-			NewBotAI_RetreatDiagonal(bs, bs->gripkickJerkDirection < 0);
+			NewBotAI_RetreatStraight(bs);
 		}
 		else if (bs->gripkickJerkCount > 0) {
 			const int dwellPercent = Com_Clampi(10, 300, bot_gripkickdwell.integer);
@@ -7727,7 +7736,7 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 			bs->ideal_viewangles[YAW] = a_fo[YAW] + bs->gripkickJerkYawOffset;
 			bs->ideal_viewangles[PITCH] = bs->gripkickJerkPitch;
 			trap->EA_Move(bs->client, vec3_origin, 0);
-			NewBotAI_RetreatDiagonal(bs, bs->gripkickJerkDirection < 0);
+			NewBotAI_RetreatStraight(bs);
 		}
 		else if (bs->gripkickDwellUntil > level.time) {
 			//Hold the target straight down while moving forward, but do not yaw back
@@ -7788,16 +7797,14 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 		}
 		else {
 			//The target drifted outside the forward kick cone (or landed on top of us):
-			//yaw toward them while stepping sideways until they are in front for the
-			//flipkick again. Never backpedal here - the only backward movement in the
-			//gripkick belongs to the jerk phases; backing out from under a stacked
-			//target (or out of a drift) was costing us the kick window entirely.
+			//keep rotating yaw toward them, but issue no strafe input during gripkick.
+			//Move straight forward to re-center, or straight back only when stacked.
 			bs->ideal_viewangles[PITCH] = 89;
 			if (enemyOnTopOfUs)
 			{
 				//They are stacked on us - face the target's true direction so the
-				//sidestep resolves to a clean lateral exit instead of wandering off
-				//the accumulating yaw correction below.
+				//straight back step resolves cleanly instead of wandering off the
+				//accumulating yaw correction below.
 				bs->ideal_viewangles[YAW] = a_fo[YAW];
 			}
 			else
@@ -7805,10 +7812,14 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 				bs->ideal_viewangles[YAW] += (a_fo[YAW] > bs->viewangles[YAW]) ? 12.0f : -12.0f;
 			}
 			trap->EA_Move(bs->client, vec3_origin, 0);
-			if (a_fo[YAW] < bs->viewangles[YAW])
-				trap->EA_MoveLeft(bs->client);
+			if (enemyOnTopOfUs)
+			{
+				trap->EA_MoveBack(bs->client);
+			}
 			else
-				trap->EA_MoveRight(bs->client);
+			{
+				trap->EA_MoveForward(bs->client);
+			}
 		}
 	}
 
@@ -8884,17 +8895,8 @@ static float NewBotAI_GetPullkickTimeToKickRange(bot_state_t *bs)
 	return ((bs->frame_Enemy_Len - pullKickRange) / closing) * 1000.0f;
 }
 
-//450ms keeps the combo window within ~9 think ticks (50ms each): enough time for a
-//real saber-hit->flipkick follow-through, but short enough that stale contact doesn't
-//unlock unrelated later jumps.
-#define NEWBOTAI_FAN_FLIPKICK_CONTACT_WINDOW_MS 450
-static qboolean NewBotAI_HasRecentSaberContact(bot_state_t *bs)
-{
-	return (bs->currentEnemy && bs->currentEnemy->client &&
-		bs->lastSaberContactTargetNum == bs->currentEnemy->s.number &&
-		bs->lastSaberContactTime > 0 &&
-		bs->lastSaberContactTime > level.time - NEWBOTAI_FAN_FLIPKICK_CONTACT_WINDOW_MS) ? qtrue : qfalse;
-}
+#define NEWBOTAI_FAN_FLIPKICK_INIT_DELAY_MS 100
+#define NEWBOTAI_FAN_PRESSURE_TIMEOUT_MS 3000
 
 static qboolean NewBotAI_CanInitiateFlipkickUnderFanPressure(bot_state_t *bs)
 {
@@ -8903,66 +8905,18 @@ static qboolean NewBotAI_CanInitiateFlipkickUnderFanPressure(bot_state_t *bs)
 		return qtrue;
 	}
 
-	if (!NewBotAI_HasRecentSaberContact(bs))
+	if (!bs->fanAttackDir || bs->fanChainStartTime <= 0 ||
+		level.time - bs->fanChainStartTime > NEWBOTAI_FAN_PRESSURE_TIMEOUT_MS)
 	{
 		return qfalse;
 	}
 
-	if (bs->fanChainStartTime > 0 && bs->lastSaberContactTime < bs->fanChainStartTime)
+	if (level.time < bs->fanChainStartTime + NEWBOTAI_FAN_FLIPKICK_INIT_DELAY_MS)
 	{
 		return qfalse;
 	}
 
 	return qtrue;
-}
-
-static void NewBotAI_UpdateRecentSaberContact(bot_state_t *bs)
-{
-	int enemyHealth;
-	int enemyArmor;
-	int enemyDurability;
-	const qboolean weAreInSaberContactWindow = (bs->cur_ps.weapon == WP_SABER &&
-		(BG_SaberInAttack(bs->cur_ps.saberMove) ||
-		PM_SaberInStart(bs->cur_ps.saberMove) ||
-		PM_SaberInTransition(bs->cur_ps.saberMove)) &&
-		bs->frame_Enemy_Len <= 220.0f) ? qtrue : qfalse;
-
-	if (!bs->currentEnemy || !bs->currentEnemy->client)
-	{
-		bs->lastEnemyDurability = 0;
-		bs->lastEnemyDurabilityTargetNum = ENTITYNUM_NONE;
-		return;
-	}
-
-	enemyHealth = bs->currentEnemy->health;
-	if (enemyHealth < 0)
-	{
-		enemyHealth = 0;
-	}
-	enemyArmor = bs->currentEnemy->client->ps.stats[STAT_ARMOR];
-	if (enemyArmor < 0)
-	{
-		enemyArmor = 0;
-	}
-	enemyDurability = enemyHealth + enemyArmor;
-
-	if (bs->lastEnemyDurabilityTargetNum != bs->currentEnemy->s.number)
-	{
-		bs->lastEnemyDurability = enemyDurability;
-		bs->lastEnemyDurabilityTargetNum = bs->currentEnemy->s.number;
-		return;
-	}
-
-	if (enemyDurability < bs->lastEnemyDurability &&
-		weAreInSaberContactWindow &&
-		(bs->cur_ps.saberEventFlags & SEF_HITENEMY))
-	{
-		bs->lastSaberContactTime = level.time;
-		bs->lastSaberContactTargetNum = bs->currentEnemy->s.number;
-	}
-
-	bs->lastEnemyDurability = enemyDurability;
-	bs->lastEnemyDurabilityTargetNum = bs->currentEnemy->s.number;
 }
 
 // Schedules the pk/ptk flipkick jump so the bot leaps only once the enemy is actually
@@ -8982,6 +8936,7 @@ static void NewBotAI_UpdateRecentSaberContact(bot_state_t *bs)
 //same post-attempt cooldown NewBotAI_Flipkick uses (lastFlipkickAttemptTime) to hold off
 //scheduling a fresh jump until that cooldown expires.
 #define NEWBOTAI_PULLKICK_JUMP_DELAY_MS 30
+#define NEWBOTAI_IMMEDIATE_FLIPKICK_RANGE 135.0f
 static void NewBotAI_SchedulePullkickJump(bot_state_t *bs)
 {
 	const float timeToRange = NewBotAI_GetPullkickTimeToKickRange(bs);
@@ -9001,12 +8956,12 @@ static void NewBotAI_SchedulePullkickJump(bot_state_t *bs)
 
 	if (!NewBotAI_CanInitiateFlipkickUnderFanPressure(bs))
 	{
-		//Don't start a new pullkick jump while fan pressure is active unless the combo
-		//was just confirmed by saber contact; keep any existing pending schedule intact.
+		//Don't start a new pullkick jump during the fan chain's initial delay window;
+		//keep any existing pending schedule intact.
 		return;
 	}
 
-	if (bs->frame_Enemy_Len <= 135.0f || !NewBotAI_CanAttemptFlipkick(bs))
+	if (bs->frame_Enemy_Len <= NEWBOTAI_IMMEDIATE_FLIPKICK_RANGE || !NewBotAI_CanAttemptFlipkick(bs))
 	{
 		//Kick is already possible (or unavailable) - still hold the jump for the extra
 		//30ms delay instead of firing this same think.
@@ -9181,7 +9136,6 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 	}
 
 	aggressionBias = BotGetAggressionBias(bs);
-	NewBotAI_UpdateRecentSaberContact(bs);
 
 	//A scheduled pk/ptk jump is only meaningful while a kick could actually land. If
 	//flipkick stopped being possible (out of FP, no jump level, mid-swing ourselves,
@@ -10141,6 +10095,11 @@ static void NewBotAI_ApplyPullMistake(bot_state_t *bs)
 {
 	const float mistakeChance = BotGetMistakeBiasChance(bs);
 	float missAngle;
+
+	if (!(g_entities[bs->client].r.svFlags & SVF_BOT))
+	{
+		return;
+	}
 
 	if (mistakeChance <= 0.0f || Q_irand(1, 100) > (int)mistakeChance)
 	{
@@ -11550,6 +11509,30 @@ static void NewBotAI_ApplyRandomStrafeOverlay(bot_state_t *bs)
 		return;
 	}
 
+	if (bs->flipkickInputTime > level.time || bs->pullKickJumpTime != 0)
+	{
+		//Flipkick and scheduled pullkick jumps need exclusive forward input.
+		bs->randomStrafeDir = 0;
+		bs->randomStrafeEndTime = 0;
+		return;
+	}
+
+	if (bs->fanPhase != FAN_PHASE_INACTIVE)
+	{
+		//Fan chain owns strafe timing/direction itself.
+		bs->randomStrafeDir = 0;
+		bs->randomStrafeEndTime = 0;
+		return;
+	}
+
+	if (bs->combatAction == BOT_COMBAT_ACTION_RETREAT_DEFENSE || bs->runningLikeASissy)
+	{
+		//Supplemental strafing must not override directed retreat/chase movement.
+		bs->randomStrafeDir = 0;
+		bs->randomStrafeEndTime = 0;
+		return;
+	}
+
 	if (NewBotAI_IsSaberSwingStartWindow(bs))
 	{
 		return;
@@ -11643,6 +11626,8 @@ int NewBotAI_GetPull(bot_state_t *bs) {
 		return 0; //dont need to pull, we are so close
 	if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE)
 		return 0; //pull-kicks must be initiated from the ground
+	if (g_flipKick.integer && NewBotAI_CanAttemptFlipkick(bs) && bs->frame_Enemy_Len <= NEWBOTAI_IMMEDIATE_FLIPKICK_RANGE)
+		return 0; //already in immediate flipkick range: don't overshoot by pulling
 	if (!bs->frame_Enemy_Vis)
 		return 0;
 	if (bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB))
