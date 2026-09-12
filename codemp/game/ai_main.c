@@ -8896,6 +8896,7 @@ static float NewBotAI_GetPullkickTimeToKickRange(bot_state_t *bs)
 }
 
 #define NEWBOTAI_FAN_FLIPKICK_INIT_DELAY_MS 100
+#define NEWBOTAI_FAN_PRESSURE_TIMEOUT_MS 3000
 
 static qboolean NewBotAI_CanInitiateFlipkickUnderFanPressure(bot_state_t *bs)
 {
@@ -8904,7 +8905,8 @@ static qboolean NewBotAI_CanInitiateFlipkickUnderFanPressure(bot_state_t *bs)
 		return qtrue;
 	}
 
-	if (bs->fanChainStartTime <= 0)
+	if (!bs->fanAttackDir || bs->fanChainStartTime <= 0 ||
+		level.time - bs->fanChainStartTime > NEWBOTAI_FAN_PRESSURE_TIMEOUT_MS)
 	{
 		return qfalse;
 	}
@@ -8934,6 +8936,7 @@ static qboolean NewBotAI_CanInitiateFlipkickUnderFanPressure(bot_state_t *bs)
 //same post-attempt cooldown NewBotAI_Flipkick uses (lastFlipkickAttemptTime) to hold off
 //scheduling a fresh jump until that cooldown expires.
 #define NEWBOTAI_PULLKICK_JUMP_DELAY_MS 30
+#define NEWBOTAI_IMMEDIATE_FLIPKICK_RANGE 135.0f
 static void NewBotAI_SchedulePullkickJump(bot_state_t *bs)
 {
 	const float timeToRange = NewBotAI_GetPullkickTimeToKickRange(bs);
@@ -8958,7 +8961,7 @@ static void NewBotAI_SchedulePullkickJump(bot_state_t *bs)
 		return;
 	}
 
-	if (bs->frame_Enemy_Len <= 135.0f || !NewBotAI_CanAttemptFlipkick(bs))
+	if (bs->frame_Enemy_Len <= NEWBOTAI_IMMEDIATE_FLIPKICK_RANGE || !NewBotAI_CanAttemptFlipkick(bs))
 	{
 		//Kick is already possible (or unavailable) - still hold the jump for the extra
 		//30ms delay instead of firing this same think.
@@ -11623,7 +11626,7 @@ int NewBotAI_GetPull(bot_state_t *bs) {
 		return 0; //dont need to pull, we are so close
 	if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE)
 		return 0; //pull-kicks must be initiated from the ground
-	if (g_flipKick.integer && NewBotAI_CanAttemptFlipkick(bs) && bs->frame_Enemy_Len <= 135.0f)
+	if (g_flipKick.integer && NewBotAI_CanAttemptFlipkick(bs) && bs->frame_Enemy_Len <= NEWBOTAI_IMMEDIATE_FLIPKICK_RANGE)
 		return 0; //already in immediate flipkick range: don't overshoot by pulling
 	if (!bs->frame_Enemy_Vis)
 		return 0;
