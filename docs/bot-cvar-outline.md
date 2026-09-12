@@ -20,7 +20,7 @@ This document describes all cvars added for the NewBotAI system and how they rel
 | `bot_rangeshort` | `160` | Shared short-range upper bound for the tactical range weighting system. |
 | `bot_rangemedium` | `320` | Shared medium-range upper bound; anything beyond this is treated as long range. |
 | `bot_lowhangingfruitHP` | `40` | HP threshold below which a target is considered "low-hanging fruit" (easy kill). |
-| `bot_lowhanginfruitDistance` | `1024` | Max distance to prioritize low-HP targets. |
+| `bot_lowhanginfruitDistance` | `1024` | Max distance to prioritize low-hanging-fruit targets. |
 
 ## Tactical Range Weighting
 

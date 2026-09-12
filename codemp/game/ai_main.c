@@ -8848,6 +8848,7 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 	qboolean hasHealthDisadvantage;
 	qboolean suppressSaberAttack;
 	int saberAttackRangeWeightPercent;
+	qboolean allowNewSaberAttack;
 	int lightSaberHealthThreshold;
 	int strongSaberHealthThreshold;
 	// const float speed = NewBotAI_GetSpeedTowardsEnemy(bs);
@@ -8863,6 +8864,7 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 		bot_saberattackweight_short.integer,
 		bot_saberattackweight_medium.integer,
 		bot_saberattackweight_long.integer);
+	allowNewSaberAttack = (saberAttackRangeWeightPercent > 0) ? qtrue : qfalse;
 	lightSaberHealthThreshold = BotScaleThresholdByRangeWeight(40, saberAttackRangeWeightPercent);
 	strongSaberHealthThreshold = BotScaleThresholdByRangeWeight(70, saberAttackRangeWeightPercent);
 
@@ -8887,7 +8889,7 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 	}
 
 	if (bs->cur_ps.weapon == WP_SABER) {//Fullforce saber attacks
-		if (saberAttackRangeWeightPercent <= 0 &&
+		if (!allowNewSaberAttack &&
 			!BG_SaberInAttack(bs->cur_ps.saberMove) &&
 			bs->fanPhase == FAN_PHASE_INACTIVE)
 		{
@@ -8962,7 +8964,10 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 				return;
 			}
 
-			if ((g_entities[bs->client].client->ps.saberMove == LS_NONE || g_entities[bs->client].client->ps.saberMove == LS_READY) && bs->frame_Enemy_Len < 256 && ((NewBotAI_GetTimeToInRange(bs, 75, 800) < 800) || bs->frame_Enemy_Len < 128)) {
+			if (allowNewSaberAttack &&
+				(g_entities[bs->client].client->ps.saberMove == LS_NONE || g_entities[bs->client].client->ps.saberMove == LS_READY) &&
+				bs->frame_Enemy_Len < 256 &&
+				((NewBotAI_GetTimeToInRange(bs, 75, 800) < 800) || bs->frame_Enemy_Len < 128)) {
 				if (g_entities[bs->client].health > lightSaberHealthThreshold) {
 					//See if they can't saberthrow?
 					//Com_Printf("Their torso time is %i\n", bs->currentEnemy->client->ps.torsoTimer);
@@ -9030,7 +9035,9 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 			}
 
 			//todo - skip if we are already during a swing
-			if ((g_entities[bs->client].client->ps.saberMove == LS_NONE || g_entities[bs->client].client->ps.saberMove == LS_READY) && NewBotAI_GetTimeToInRange(bs, 75, 600) < 600) {
+			if (allowNewSaberAttack &&
+				(g_entities[bs->client].client->ps.saberMove == LS_NONE || g_entities[bs->client].client->ps.saberMove == LS_READY) &&
+				NewBotAI_GetTimeToInRange(bs, 75, 600) < 600) {
 				if (g_entities[bs->client].health > strongSaberHealthThreshold) {
 					if ((bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_DRAIN) || (bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB))) ||
 						((bs->cur_ps.fd.forcePower < 60) || ((bs->frame_Enemy_Len < 70) && (bs->currentEnemy->client->ps.origin[2] - bs->cur_ps.origin[2]) > 50))) {
