@@ -459,6 +459,8 @@ int BotAI_GetClientState( int clientNum, playerState_t *state ) {
 	}
 
 	memcpy( state, &ent->client->ps, sizeof(playerState_t) );
+	//Downed saber physics can transition between movement types while still in the dropped
+	//think state; once the ownership/downed checks above pass, treat it as recall-eligible.
 	return qtrue;
 }
 
@@ -8888,8 +8890,7 @@ static void NewBotAI_UpdateRecentSaberContact(bot_state_t *bs)
 
 	if (enemyDurability < bs->lastEnemyDurability &&
 		weAreInSaberContactWindow &&
-		bs->currentEnemy->client->lasthurt_client == bs->client &&
-		bs->currentEnemy->client->lasthurt_mod == MOD_SABER)
+		(bs->cur_ps.saberEventFlags & SEF_HITENEMY))
 	{
 		bs->lastSaberContactTime = level.time;
 		bs->lastSaberContactTargetNum = bs->currentEnemy->s.number;
@@ -10241,7 +10242,7 @@ static qboolean NewBotAI_HasDroppedOwnSaber(bot_state_t *bs)
 		return qfalse;
 	}
 
-	return (saberEnt->s.pos.trType == TR_GRAVITY || saberEnt->s.pos.trType == TR_STATIONARY) ? qtrue : qfalse;
+	return qtrue;
 }
 
 static int BotGetDrainHoldBiasMs(bot_state_t *bs)
