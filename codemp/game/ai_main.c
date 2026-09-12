@@ -655,6 +655,38 @@ static float BotGetAimSpeedMaxChange(bot_state_t *bs, float legacyMaxChange)
 	return legacyMaxChange * (1.0f + (t * t) * 100.0f);
 }
 
+//Gripkick yaw reacquisition needs to be faster than the generic post-fix 6-degree step so
+//bots do not lag behind a dragged target, but the high-skill bots that prompted the fix
+//still need a hard ceiling so they do not snap/spiral back into the old problem.
+static float BotGetGripkickYawStep(bot_state_t *bs)
+{
+	float skill;
+	float yawStep;
+
+	if (!bs)
+	{
+		return 9.5f;
+	}
+
+	skill = bs->settings.skill;
+	if (skill < 1.0f)
+	{
+		skill = 1.0f;
+	}
+	else if (skill > 10.0f)
+	{
+		skill = 10.0f;
+	}
+
+	yawStep = 8.0f + (skill * 0.25f);
+	if (yawStep > 9.5f)
+	{
+		yawStep = 9.5f;
+	}
+
+	return yawStep;
+}
+
 /*
 ==============
 BotChangeViewAngles
@@ -7694,7 +7726,7 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 {
 	//float heightDiff = bs->cur_ps.origin[2] - bs->currentEnemy->client->ps.origin[2]; //We are above them by this much
 	const int gripkickBonus = BotGetAggressionWeightedBonus(bs, BotGetChanceBiasPercent(bot_gripkickbias.value), 30, qtrue);
-	const float gripkickYawStep = 6.0f;
+	const float gripkickYawStep = BotGetGripkickYawStep(bs);
 
 	if (!bs->gripkickActive)
 	{
