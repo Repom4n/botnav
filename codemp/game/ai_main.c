@@ -11630,13 +11630,13 @@ static qboolean NewBotAI_ShouldCloseGapVsEnemySaberThrow(bot_state_t *bs)
 	BG_EvaluateTrajectory(&saberEnt->s.pos, level.time, saberOrigin);
 	saberDist = Distance(bs->cur_ps.origin, saberOrigin);
 
-	if (bs->frame_Enemy_Len <= saberDist)
+	if (saberDist <= bs->frame_Enemy_Len)
 	{
 		return qtrue;
 	}
 
 	return (NewBotAI_IsEnemySaberReturning(bs) &&
-		bs->frame_Enemy_Len <= saberDist + 32.0f) ? qtrue : qfalse;
+		saberDist + 32.0f <= bs->frame_Enemy_Len) ? qtrue : qfalse;
 }
 
 static void NewBotAI_TrySaberThrowDefenseBreak(bot_state_t *bs)
