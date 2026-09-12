@@ -12570,7 +12570,7 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 	//Never charge/hold a throw once the enemy has closed into flipkick striking range -
 	//a free flipkick should always win out over sitting in an alt-attack charge that
 	//just gets the two bots colliding with each other.
-	if ((saberthrowBias > 0.0f || antiDrainWeight > 0 || (forceLead > 0 && enemyArmor > 0)) &&
+	if ((saberthrowBias > 0.0f || antiDrainWeight > 0) &&
 		ourForce > 20 && bs->frame_Enemy_Len > 120 &&
 		!NewBotAI_ShouldPreferFlipkickOverThrow(bs))
 	{
