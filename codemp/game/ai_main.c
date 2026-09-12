@@ -12400,7 +12400,7 @@ int NewBotAI_GetDrain(bot_state_t *bs) {
 	if (bs->currentEnemy->client->ps.saberInFlight)
 		return 0;
 
-	if (NewBotAI_ShouldHealDrainlock(bs))
+	if (NewBotAI_ShouldHealDrainlock(bs) && hisForce >= 20)
 	{
 		weight = 100 + (-totalHealthDelta);
 		if (weight > 140)
