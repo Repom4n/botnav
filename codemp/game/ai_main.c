@@ -11230,7 +11230,7 @@ static qboolean NewBotAI_ShouldEmergencyDrainRollSaberThrow(bot_state_t *bs)
 		return qfalse;
 	}
 
-	if (g_entities[bs->client].health > 22 || bs->frame_Enemy_Len <= 160)
+	if (g_entities[bs->client].health > 22 || bs->frame_Enemy_Len >= 160)
 	{
 		return qfalse;
 	}
@@ -11599,6 +11599,7 @@ int NewBotAI_GetPull(bot_state_t *bs) {
 	if (ourForce < 21)
 		return 0;
 	if (NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bs) &&
+		hisForce >= 20 &&
 		!NewBotAI_IsDrainlockAdvantage(bs) &&
 		!NewBotAI_ShouldPreferFlipkickOverThrow(bs))
 		return 0;
