@@ -8949,15 +8949,14 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 				return;
 			}
 
-			if (saberAttackRangeWeightPercent > 0 &&
-				(g_entities[bs->client].client->ps.saberMove == LS_NONE || g_entities[bs->client].client->ps.saberMove == LS_READY) &&
+			if ((g_entities[bs->client].client->ps.saberMove == LS_NONE || g_entities[bs->client].client->ps.saberMove == LS_READY) &&
 				bs->frame_Enemy_Len < 256 &&
 				((NewBotAI_GetTimeToInRange(bs, 75, 800) < 800) || bs->frame_Enemy_Len < 128)) {
 				//See if they can't saberthrow?
 				//Com_Printf("Their torso time is %i\n", bs->currentEnemy->client->ps.torsoTimer);
 				//if ((bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_DRAIN) || (bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB))) || ((bs->frame_Enemy_Len < 70) && (bs->currentEnemy->client->ps.origin[2] - bs->cur_ps.origin[2]) > 50)) {
 					NewBotAI_ApplyHorizontalSwingMove(bs);
-					if (!suppressSaberAttack)
+					if (saberAttackRangeWeightPercent > 0 && !suppressSaberAttack)
 						trap->EA_Attack(bs->client);
 					return;
 				//}
@@ -9018,8 +9017,7 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 			}
 
 			//todo - skip if we are already during a swing
-			if (saberAttackRangeWeightPercent > 0 &&
-				(g_entities[bs->client].client->ps.saberMove == LS_NONE || g_entities[bs->client].client->ps.saberMove == LS_READY) &&
+			if ((g_entities[bs->client].client->ps.saberMove == LS_NONE || g_entities[bs->client].client->ps.saberMove == LS_READY) &&
 				NewBotAI_GetTimeToInRange(bs, 75, 600) < 600) {
 				if ((bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_DRAIN) || (bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB))) ||
 					((bs->cur_ps.fd.forcePower < 60) || ((bs->frame_Enemy_Len < 70) && (bs->currentEnemy->client->ps.origin[2] - bs->cur_ps.origin[2]) > 50))) {
@@ -9029,7 +9027,7 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 					{
 						NewBotAI_ResetFanChain(bs);
 					}
-					if (!suppressSaberAttack)
+					if (saberAttackRangeWeightPercent > 0 && !suppressSaberAttack)
 						trap->EA_Attack(bs->client);
 					return;
 				}

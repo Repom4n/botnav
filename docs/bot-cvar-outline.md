@@ -37,7 +37,7 @@ The shared bands are:
 | Cvar group | Default | Description |
 |------|---------|-------------|
 | `bot_pullweight_short`, `bot_pullweight_medium`, `bot_pullweight_long` | `90`, `140`, `115` | Pull now leans most heavily into medium range, stays usable long, and is slightly de-emphasized at point-blank. |
-| `bot_ptkweight_short`, `bot_ptkweight_medium`, `bot_ptkweight_long` | `85`, `150`, `110` | PTK follow-up strongly prefers medium range, where pullkick setups are easiest to stabilize. |
+| `bot_ptkweight_short`, `bot_ptkweight_medium`, `bot_ptkweight_long` | `85`, `150`, `110` | PTK-driven pull selection and its follow-up strongly prefer medium range, where pullkick setups are easiest to stabilize. |
 | `bot_saberthrowweight_short`, `bot_saberthrowweight_medium`, `bot_saberthrowweight_long` | `45`, `125`, `165` | Saber throw is discouraged up close and increasingly favored as distance opens. |
 | `bot_lightningweight_short`, `bot_lightningweight_medium`, `bot_lightningweight_long` | `40`, `150`, `125` | Lightning is discouraged at close range and favored once the enemy is outside melee pressure. |
 | `bot_gripweight_short`, `bot_gripweight_medium`, `bot_gripweight_long` | `170`, `90`, `35` | Grip/gripkick is a close-range finisher first, then tails off sharply as distance opens. |
