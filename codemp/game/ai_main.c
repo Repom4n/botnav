@@ -8522,7 +8522,7 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 	else
 		weapon = NewBotAI_GetWeapon(bs);
 	BotSelectWeapon(bs->client, weapon);
-	if (!hasDroppedOwnSaber && NewBotAI_IsEnemySaberThreatImminent(bs))
+	if (NewBotAI_IsEnemySaberThreatImminent(bs))
 		return;
 
 	if (bs->runningLikeASissy) //Dont attack when chasing them with strafe i guess
@@ -14954,6 +14954,13 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 	{
 		const qboolean hasDroppedOwnSaber = NewBotAI_HasDroppedOwnSaber(bs);
 		const qboolean enemySaberThreatImminent = NewBotAI_IsEnemySaberThreatImminent(bs);
+
+		if (enemySaberThreatImminent)
+		{
+			bs->doAttack = 0;
+			bs->doAltAttack = 0;
+			useTheForce = 0;
+		}
 
 		if (hasDroppedOwnSaber && !enemySaberThreatImminent)
 		{
