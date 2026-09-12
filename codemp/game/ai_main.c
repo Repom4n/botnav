@@ -6739,6 +6739,7 @@ int NewBotAI_GetProtect(bot_state_t* bs) {
 void NewBotAI_Getup(bot_state_t *bs)
 {
 	qboolean useTheForce = qfalse;
+	qboolean rollingEscape = qfalse;
 	const int ourHealth = g_entities[bs->client].health;
 	qboolean enemyIncomingSaber = qfalse;
 	const qboolean emergencyRollEscape = (ourHealth <= 22 && bs->frame_Enemy_Len < 160 && Q_irand(1, 100) <= 20) ? qtrue : qfalse;
@@ -6756,16 +6757,52 @@ void NewBotAI_Getup(bot_state_t *bs)
 
 	if (enemyIncomingSaber && emergencyRollEscape)
 	{
+		if (bs->drainRollYawStart <= 0 || bs->drainRollYawStart > level.time)
+		{
+			bs->drainRollDir = Q_irand(0, 1) ? 1 : -1;
+		}
+
 		//Sideways roll away from the incoming swing: hold a lateral input (alternating so
 		//we don't just run in a straight line) to trigger/steer the sideways getup roll.
-		if (level.framenum & 1)
+		if (bs->drainRollDir < 0)
 			trap->EA_MoveLeft(bs->client);
 		else
 			trap->EA_MoveRight(bs->client);
-
+		rollingEscape = qtrue;
 	}
 
-	if (!useTheForce && enemyIncomingSaber &&
+	if (!useTheForce && rollingEscape &&
+		!(g_forcePowerDisable.integer & (1 << FP_DRAIN)) &&
+		(bs->cur_ps.fd.forcePowersKnown & (1 << FP_DRAIN)) &&
+		bs->cur_ps.fd.forcePower >= 25)
+	{
+		vec3_t a_fo;
+		vec3_t yawTarget;
+		float yawBlend;
+		float yawOffset;
+
+		level.clients[bs->client].ps.fd.forcePowerSelected = FP_DRAIN;
+		useTheForce = qtrue;
+
+		if (bs->drainRollYawStart <= 0 || bs->drainRollYawStart > level.time)
+		{
+			bs->drainRollYawStart = level.time;
+		}
+
+		VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, a_fo);
+		vectoangles(a_fo, a_fo);
+		yawBlend = (float)(level.time - bs->drainRollYawStart) / 200.0f;
+		if (yawBlend > 1.0f)
+		{
+			yawBlend = 1.0f;
+		}
+		yawOffset = (bs->drainRollDir < 0) ? -90.0f : 90.0f;
+		VectorCopy(bs->ideal_viewangles, yawTarget);
+		yawTarget[YAW] = AngleNormalize360(a_fo[YAW] + (yawOffset * yawBlend));
+		bs->ideal_viewangles[YAW] = yawTarget[YAW];
+		bs->goalAngles[YAW] = yawTarget[YAW];
+	}
+	else if (!useTheForce && enemyIncomingSaber &&
 		!(g_forcePowerDisable.integer & (1 << FP_PUSH)) &&
 		(bs->cur_ps.fd.forcePowersKnown & (1 << FP_PUSH)) &&
 		bs->cur_ps.fd.forcePower >= 20 &&
@@ -6775,7 +6812,10 @@ void NewBotAI_Getup(bot_state_t *bs)
 		level.clients[bs->client].ps.fd.forcePowerSelected = FP_PUSH;
 		useTheForce = qtrue;
 	}
-	bs->drainRollYawStart = 0;
+	else
+	{
+		bs->drainRollYawStart = 0;
+	}
 
 	if (useTheForce) {
 		trap->EA_ForcePower(bs->client);
@@ -6837,17 +6877,10 @@ static qboolean NewBotAI_ShouldPreferFlipkickOverThrow(bot_state_t *bs)
 // to chase down - so this now just strafes/backpedals on foot while draining instead.
 static void NewBotAI_DrainRollEscape(bot_state_t *bs)
 {
-	qboolean draining = qfalse;
-	vec3_t a_fo;
-	vec3_t yawTarget;
-	float yawBlend;
-	float yawOffset;
-
 	if (!(g_forcePowerDisable.integer & (1 << FP_DRAIN)) && (bs->cur_ps.fd.forcePowersKnown & (1 << FP_DRAIN)))
 	{
 		level.clients[bs->client].ps.fd.forcePowerSelected = FP_DRAIN;
 		trap->EA_ForcePower(bs->client);
-		draining = qtrue;
 	}
 
 	if (bs->drainRollResetTime < level.time)
@@ -6860,33 +6893,7 @@ static void NewBotAI_DrainRollEscape(bot_state_t *bs)
 		NewBotAI_RetreatDiagonal(bs, qtrue);
 	else
 		NewBotAI_RetreatDiagonal(bs, qfalse);
-
-	//When we choose the drain-roll escape while breaking out of a grip, turn 90 degrees
-	//away from the opponent over 200ms so the roll/drift path exits their attack line.
-	if (draining && bs->currentEnemy && bs->currentEnemy->client)
-	{
-		if (bs->drainRollYawStart <= 0 || bs->drainRollYawStart > level.time)
-		{
-			bs->drainRollYawStart = level.time;
-		}
-
-		VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, a_fo);
-		vectoangles(a_fo, a_fo);
-		yawBlend = (float)(level.time - bs->drainRollYawStart) / 200.0f;
-		if (yawBlend > 1.0f)
-		{
-			yawBlend = 1.0f;
-		}
-		yawOffset = (bs->drainRollDir < 0) ? -90.0f : 90.0f;
-		VectorCopy(bs->ideal_viewangles, yawTarget);
-		yawTarget[YAW] = AngleNormalize360(a_fo[YAW] + (yawOffset * yawBlend));
-		bs->ideal_viewangles[YAW] = yawTarget[YAW];
-		bs->goalAngles[YAW] = yawTarget[YAW];
-	}
-	else
-	{
-		bs->drainRollYawStart = 0;
-	}
+	bs->drainRollYawStart = 0;
 }
 
 static void NewBotAI_RetreatDiagonal(bot_state_t *bs, qboolean moveLeft)
@@ -10908,11 +10915,14 @@ static qboolean NewBotAI_IsEnemySaberThreatImminent(bot_state_t *bs)
 		return qfalse;
 	}
 
-	//Pre-throw anticipation: if a visible saber user in front of us is already holding
-	//alt-attack, treat it as an imminent throw threat before saberInFlight flips on.
+	//Pre-throw anticipation: only treat it as imminent when the enemy is in an actual
+	//saber-throw windup signal (selected saberthrow + alt-charge), not just generic
+	//alt-attack input that can occur in non-throw saber states.
 	if (!bs->currentEnemy->client->ps.saberInFlight &&
 		bs->currentEnemy->client->ps.weapon == WP_SABER &&
 		(bs->currentEnemy->client->buttons & BUTTON_ALT_ATTACK) &&
+		bs->currentEnemy->client->ps.fd.forcePowerSelected == FP_SABERTHROW &&
+		bs->currentEnemy->client->ps.weaponstate == WEAPON_CHARGING_ALT &&
 		bs->frame_Enemy_Vis &&
 		bs->frame_Enemy_Len < 220 &&
 		!BG_SaberInAttack(bs->currentEnemy->client->ps.saberMove))
@@ -11584,6 +11594,22 @@ int NewBotAI_GetDrain(bot_state_t *bs) {
 		return 0; //never drain while our saber is mid-flight
 	if (bs->frame_Enemy_Len > MAX_DRAIN_DISTANCE)
 		return 0;
+	if (ourForce < 25)
+		return 0;
+	if (hisForce == 0)
+		return 0;
+	if (bs->cur_ps.weaponstate == WEAPON_CHARGING_ALT && bs->cur_ps.weaponChargeTime > 700) //don't drain if we are at a charge
+		return 0;
+
+	if (NewBotAI_IsPullkickDrainWindow(bs))
+	{
+		if (NewBotAI_IsEnemySaberThreatImminent(bs) || bs->currentEnemy->client->ps.saberInFlight)
+			return 0;
+		//Force-biased, PTK-weighted bot with enough FP: drain exactly enough to put them
+		//below 19 so the follow-up pullkick is free. Strong weight so this beats other powers.
+		return 90;
+	}
+
 	if (bs->frame_Enemy_Len < 120)
 		return 0;
 	if (!bs->frame_Enemy_Vis)
@@ -11594,22 +11620,10 @@ int NewBotAI_GetDrain(bot_state_t *bs) {
 		return 0;
 	if (bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB))
 		return 0;
-	if (ourForce < 25)
-		return 0;
-	if (hisForce == 0)
-		return 0;
-	if (bs->cur_ps.weaponstate == WEAPON_CHARGING_ALT && bs->cur_ps.weaponChargeTime > 700) //don't drain if we are at a charge
-		return 0;
 	if (NewBotAI_IsEnemySaberThreatImminent(bs))
 		return 0;
 	if (bs->currentEnemy->client->ps.saberInFlight)
 		return 0;
-
-	if (NewBotAI_IsPullkickDrainWindow(bs)) {
-		//Force-biased, PTK-weighted bot with enough FP: drain exactly enough to put them
-		//below 19 so the follow-up pullkick is free. Strong weight so this beats other powers.
-		return 90;
-	}
 
 	if (ourHealth < 100)
 	{
@@ -11874,9 +11888,6 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 	qboolean useTheForce = qfalse;
 	int pushWeight, pullWeight, lightningWeight, drainWeight, gripWeight;//, doNothingWeight;
 	int minWeight = 0;
-	const int ourHealth = g_entities[bs->client].health;
-	const int healthBiasThreshold = BotGetHealthBiasThreshold();
-	const qboolean prioritizeHealing = (ourHealth <= healthBiasThreshold) ? qtrue : qfalse;
 
 	//Disengaged in a bot_conservation window - hold off on spending any force so it regens.
 	if (bs->conserveUntil > level.time)
@@ -11896,11 +11907,7 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 	lightningWeight = NewBotAI_GetLightningWeight(bs);
 	//doNothingWeight = NewBotAI_GetWait(bs);
 
-	if (prioritizeHealing && drainWeight > minWeight && drainWeight >= gripWeight) {
-		level.clients[bs->client].ps.fd.forcePowerSelected = FP_DRAIN;
-		useTheForce = qtrue;
-	}
-	else if (pushWeight > pullWeight && pushWeight > drainWeight && pushWeight > gripWeight && pushWeight > minWeight) {
+	if (pushWeight > pullWeight && pushWeight > drainWeight && pushWeight > gripWeight && pushWeight > minWeight) {
 		level.clients[bs->client].ps.fd.forcePowerSelected = FP_PUSH;
 		useTheForce = qtrue;
 
@@ -12011,9 +12018,17 @@ int NewBotAI_GetHeal(bot_state_t* bs) {
 	if (ourHealth <= healthBiasThreshold)
 	{
 		diff += 40 + (healthBiasThreshold - ourHealth);
+		if (NewBotAI_ShouldPressAdvantage(bs))
+		{
+			diff = (int)(diff * 0.6f);
+		}
 		if (diff < 80)
 		{
 			diff = 80;
+		}
+		else if (diff > 100)
+		{
+			diff = 100;
 		}
 		return diff;
 	}
@@ -12063,9 +12078,6 @@ void NewBotAI_GetLSForcepower(bot_state_t *bs)
 	qboolean useTheForce = qfalse;
 	int pullWeight, pushWeight, absorbWeight, protectWeight, healWeight;
 	int minWeight = 0;
-	const int ourHealth = g_entities[bs->client].health;
-	const int healthBiasThreshold = BotGetHealthBiasThreshold();
-	const qboolean prioritizeHealing = (ourHealth <= healthBiasThreshold) ? qtrue : qfalse;
 
 	//Disengaged in a bot_conservation window - hold off on spending any force so it regens.
 	if (bs->conserveUntil > level.time)
@@ -12085,11 +12097,7 @@ void NewBotAI_GetLSForcepower(bot_state_t *bs)
 	healWeight = NewBotAI_GetHeal(bs);
 	//get weights
 
-	if (prioritizeHealing && healWeight > minWeight) {
-		level.clients[bs->client].ps.fd.forcePowerSelected = FP_HEAL;
-		useTheForce = qtrue;
-	}
-	else if (pushWeight > pullWeight && pushWeight > absorbWeight && pushWeight > protectWeight && pushWeight > healWeight && pushWeight > minWeight) {
+	if (pushWeight > pullWeight && pushWeight > absorbWeight && pushWeight > protectWeight && pushWeight > healWeight && pushWeight > minWeight) {
 		level.clients[bs->client].ps.fd.forcePowerSelected = FP_PUSH;
 		useTheForce = qtrue;
 		//trap->Print("Push - Weights -- Pull: %i, Push: %i, Absorb: %i, Protect: %i, Heal %i\n", pullWeight, pushWeight, absorbWeight, protectWeight, healWeight);
@@ -12123,7 +12131,6 @@ void NewBotAI_GetLSForcepower(bot_state_t *bs)
 		useTheForce = qtrue;
 		//trap->Print("Heal - Weights -- Pull: %i, Push: %i, Absorb: %i, Protect: %i, Heal %i\n", pullWeight, pushWeight, absorbWeight, protectWeight, healWeight);
 	}
-
 	if (!useTheForce && !(g_forcePowerDisable.integer & (1 << FP_SPEED)) && (bs->cur_ps.fd.forcePowersKnown & (1 << FP_SPEED)) && (bs->frame_Enemy_Len > 90) && (bs->frame_Enemy_Len < 384) && bs->frame_Enemy_Vis) {
 		//if (bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB)) {
 		if (bs->cur_ps.fd.forcePowersActive & (1 << FP_ABSORB)) {
