@@ -12108,38 +12108,61 @@ int NewBotAI_GetPush(bot_state_t *bs) {
 	return 0;
 }
 
-// True when the bot is behind on total health, still has HP to recover, and is not so
-// reckless that it should abandon a healing drainlock early.
+// True when the bot should stay in the latched, heal-driven drainlock mode: it starts once
+// the bot is behind on total health, then persists on that same enemy until the bot tops
+// off or turns reckless enough to give the heal up early.
 static qboolean NewBotAI_ShouldHealDrainlock(bot_state_t *bs)
 {
 	float aggressionBias;
 	int ourHealth;
+	int enemyNum;
 
-	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	if (!bs)
 	{
+		return qfalse;
+	}
+
+	if (!bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		bs->healDrainlockActive = qfalse;
+		bs->healDrainlockTargetNum = ENTITYNUM_NONE;
 		return qfalse;
 	}
 
 	aggressionBias = BotGetAggressionBias(bs);
 	ourHealth = g_entities[bs->client].health;
+	enemyNum = bs->currentEnemy->s.number;
 
 	if (ourHealth >= 100)
 	{
-		return qfalse;
-	}
-
-	if (NewBotAI_GetTotalHealthDelta(bs) >= 0)
-	{
+		bs->healDrainlockActive = qfalse;
+		bs->healDrainlockTargetNum = ENTITYNUM_NONE;
 		return qfalse;
 	}
 
 	//Only extremely aggressive bots should give up a heal-driven drainlock before topping off.
 	if (aggressionBias >= 0.75f)
 	{
+		bs->healDrainlockActive = qfalse;
+		bs->healDrainlockTargetNum = ENTITYNUM_NONE;
 		return qfalse;
 	}
 
-	return qtrue;
+	if (bs->healDrainlockActive && bs->healDrainlockTargetNum == enemyNum)
+	{
+		return qtrue;
+	}
+
+	if (NewBotAI_GetTotalHealthDelta(bs) < 0)
+	{
+		bs->healDrainlockActive = qtrue;
+		bs->healDrainlockTargetNum = enemyNum;
+		return qtrue;
+	}
+
+	bs->healDrainlockActive = qfalse;
+	bs->healDrainlockTargetNum = ENTITYNUM_NONE;
+	return qfalse;
 }
 
 // True when either a heal-driven drainlock should commit to a deep drain regardless of
@@ -12192,7 +12215,6 @@ static qboolean NewBotAI_ShouldDrainlockDeep(bot_state_t *bs)
 // determined.
 static int NewBotAI_GetDrainTapTargetTicks(bot_state_t *bs)
 {
-	int ourForce;
 	int hisForce;
 	int fpPerTick;
 	int fpToRemove;
@@ -12203,25 +12225,17 @@ static int NewBotAI_GetDrainTapTargetTicks(bot_state_t *bs)
 		return 0;
 	}
 
-	ourForce = bs->cur_ps.fd.forcePower;
 	hisForce = bs->currentEnemy->client->ps.fd.forcePower;
 	fpPerTick = (g_tweakForce.integer & FT_DRAINDMGNERF) ? 3 : 4;
 
 	if (NewBotAI_ShouldDrainlockDeep(bs))
 	{
-		const int maxAffordableTicks = ourForce / 5;
-
-		if (hisForce <= 0 || maxAffordableTicks <= 0)
+		if (hisForce <= 0)
 		{
 			return 0;
 		}
 
 		ticks = (hisForce + fpPerTick - 1) / fpPerTick;
-		if (ticks > maxAffordableTicks)
-		{
-			ticks = maxAffordableTicks;
-		}
-
 		return ticks;
 	}
 

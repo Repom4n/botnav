@@ -375,6 +375,8 @@ typedef struct bot_state_s
 	int					fanChainStartTime; // level.time the fan chain began - chain hard-caps at 3s
 	int					fanChainStartHealth; // health when the fan chain began - chain breaks once it takes more than 4 total damage
 	int					drainHoldTime;
+	qboolean			healDrainlockActive; // latched once a health-disadvantaged drainlock starts; stays active on the same enemy until topped off or aggression turns reckless
+	int					healDrainlockTargetNum; // enemy clientNum associated with healDrainlockActive
 	int					randomStrafeDir;
 	int					randomStrafeEndTime;
 	int					lastFlipkickAttemptTime;
