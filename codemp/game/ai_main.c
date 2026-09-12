@@ -6753,10 +6753,11 @@ void NewBotAI_Getup(bot_state_t *bs)
 		bs->currentEnemy->client->ps.saberInFlight) ? qtrue : qfalse;
 	const qboolean enemyTooClose = (bs->currentEnemy && bs->currentEnemy->client &&
 		bs->frame_Enemy_Len < 250) ? qtrue : qfalse;
-	const qboolean canPushGetup = (enemyTooClose &&
+	const qboolean canPushGetup = (bs->currentEnemy && bs->currentEnemy->client &&
 		!(g_forcePowerDisable.integer & (1 << FP_PUSH)) &&
 		(bs->cur_ps.fd.forcePowersKnown & (1 << FP_PUSH)) &&
 		bs->cur_ps.fd.forcePower >= 20 &&
+		bs->frame_Enemy_Len <= 640 &&
 		!enemyIncomingThrow &&
 		!(bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB))) ? qtrue : qfalse;
 	const qboolean emergencyRollEscape = (ourHealth <= 22 && bs->frame_Enemy_Len < 160 && Q_irand(1, 100) <= 20) ? qtrue : qfalse;
@@ -6776,28 +6777,12 @@ void NewBotAI_Getup(bot_state_t *bs)
 		rollingEscape = qtrue;
 		drainRollingEscape = qtrue;
 	}
-	else if (enemyTooClose && !canPushGetup)
+	else if (enemyIncomingSaber && enemyTooClose && !canPushGetup && emergencyRollEscape)
 	{
 		if (bs->drainRollYawStart <= 0 || bs->drainRollYawStart > level.time)
 		{
 			bs->drainRollDir = Q_irand(0, 1) ? 1 : -1;
-		}
-
-		if (bs->drainRollDir < 0)
-			trap->EA_MoveLeft(bs->client);
-		else
-			trap->EA_MoveRight(bs->client);
-		if (enemyIncomingSaber && emergencyRollEscape)
-		{
-			rollingEscape = qtrue;
-			drainRollingEscape = qtrue;
-		}
-	}
-	else if (enemyIncomingSaber && emergencyRollEscape)
-	{
-		if (bs->drainRollYawStart <= 0 || bs->drainRollYawStart > level.time)
-		{
-			bs->drainRollDir = Q_irand(0, 1) ? 1 : -1;
+			bs->drainRollYawStart = level.time;
 		}
 
 		//Sideways roll away from the incoming swing: hold a lateral input (alternating so
@@ -6846,7 +6831,7 @@ void NewBotAI_Getup(bot_state_t *bs)
 		bs->ideal_viewangles[YAW] = yawTarget[YAW];
 		bs->goalAngles[YAW] = yawTarget[YAW];
 	}
-	else if (!useTheForce && canPushGetup)
+	else if (!useTheForce && canPushGetup && (enemyTooClose || enemyIncomingSaber))
 	{
 		level.clients[bs->client].ps.fd.forcePowerSelected = FP_PUSH;
 		useTheForce = qtrue;
@@ -11746,7 +11731,8 @@ int NewBotAI_GetPush(bot_state_t *bs) {
 		return 0;
 	if (bs->cur_ps.fd.forcePowersActive & (1 << FP_PROTECT)) //we can tank the dmg..
 		return 0;
-	if (NewBotAI_IsEnemySaberThreatImminent(bs))
+	if (NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bs) &&
+		NewBotAI_IsEnemySaberThreatImminent(bs))
 		return 0;
 
 	if (NewBotAI_IsEnemyPullable(bs) && (ourHealth < 25) && (bs->frame_Enemy_Len < 160) && (bs->currentEnemy->client->ps.weapon == WP_SABER)) {
