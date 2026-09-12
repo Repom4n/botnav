@@ -12252,9 +12252,8 @@ int NewBotAI_GetDrain(bot_state_t *bs) {
 	{
 		//During the saber's return-to-hand window the enemy is at their most pull-vulnerable:
 		//prefer PTK first and plain pullkick second, instead of spending the turn on a drain
-		//that leaves the opening unused.
-		if (returnWindowPTKAvailable)
-			return 0;
+		//that leaves the opening unused. Lower the drain weight here instead of disabling it
+		//outright so it still remains a fallback when pull loses later comparisons.
 		if (!bs->frame_Enemy_Vis)
 			return 0;
 		VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, a_fo);
@@ -12265,9 +12264,9 @@ int NewBotAI_GetDrain(bot_state_t *bs) {
 			return 0;
 		if (NewBotAI_IsEnemySaberThreatImminent(bs))
 			return 0;
-		weight = 95;
+		weight = returnWindowPTKAvailable ? 55 : 95;
 		if (hisForce >= 20)
-			weight += 10;
+			weight += returnWindowPTKAvailable ? 5 : 10;
 		return weight;
 	}
 	if (bs->frame_Enemy_Len < 120 &&
