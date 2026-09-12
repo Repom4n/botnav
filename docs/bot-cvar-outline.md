@@ -17,8 +17,32 @@ This document describes all cvars added for the NewBotAI system and how they rel
 | `g_newBotAITarget` | `-1` | Target selection mode. `-1` = default (closest), `-2` = humans only, `-3` = prefer humans then bots and offer force duels to either while continuing combat, `-4` = prefer humans then bots but only offer force duels and retreat/heal instead of attacking, `>=0` = force specific client index. |
 | `bot_targetdistance` | `4096` | Max distance at which bots will engage targets. |
 | `g_newBotAITargetDistance` | `4096` | Declared but currently unused (superseded by `bot_targetdistance`). |
+| `bot_rangeshort` | `160` | Shared short-range upper bound for the tactical range weighting system. |
+| `bot_rangemedium` | `320` | Shared medium-range upper bound; anything beyond this is treated as long range. |
 | `bot_lowhangingfruitHP` | `40` | HP threshold below which a target is considered "low-hanging fruit" (easy kill). |
 | `bot_lowhanginfruitDistance` | `1024` | Max distance to prioritize low-HP targets. |
+
+## Tactical Range Weighting
+
+All range-weight cvars are percent scalers:
+- `100` = legacy/neutral behavior
+- `0` = disable that attack in that range band
+- `>100` = weight it more heavily in that band
+
+The shared bands are:
+- **Short:** `distance <= bot_rangeshort`
+- **Medium:** `distance <= bot_rangemedium`
+- **Long:** `distance > bot_rangemedium`
+
+| Cvar group | Default | Description |
+|------|---------|-------------|
+| `bot_pullweight_short`, `bot_pullweight_medium`, `bot_pullweight_long` | `100` | Range weighting for pull selection. |
+| `bot_ptkweight_short`, `bot_ptkweight_medium`, `bot_ptkweight_long` | `100` | Range weighting for PTK follow-up preference inside pullkick windows. |
+| `bot_saberthrowweight_short`, `bot_saberthrowweight_medium`, `bot_saberthrowweight_long` | `100` | Range weighting for saber-throw selection. |
+| `bot_lightningweight_short`, `bot_lightningweight_medium`, `bot_lightningweight_long` | `100` | Range weighting for lightning selection on top of `bot_lightningdistance`. |
+| `bot_gripweight_short`, `bot_gripweight_medium`, `bot_gripweight_long` | `100` | Range weighting for grip/gripkick selection. |
+| `bot_drainweight_short`, `bot_drainweight_medium`, `bot_drainweight_long` | `100` | Range weighting for drain selection. |
+| `bot_saberattackweight_short`, `bot_saberattackweight_medium`, `bot_saberattackweight_long` | `100` | Range weighting for saber attack commitment and fan-chain starts. |
 
 ## Aggression System
 
@@ -66,7 +90,7 @@ These are all percentage-based (0-100) chance weights that gate specific behavio
 
 **PTK chain flow:**
 1. `NewBotAI_GetPTKWeight()` computes a weight based on FP/HP advantages + aggression.
-2. This weight feeds into `NewBotAI_GetPull()` — if high enough, the bot pulls.
+2. This weight feeds into `NewBotAI_GetPull()` — if high enough, the bot pulls, and both values can now be range-weighted independently.
 3. After a successful pull, `NewBotAI_Flipkick()` is called (the "kick" in PTK).
 4. When saber is thrown, `NewBotAI_TrySaberThrowDefenseBreak()` selects pull (aggressive) or push (defensive).
 
@@ -106,6 +130,7 @@ Notes:
 - `-4` bots fight normally once a duel actually starts (`duelInProgress`); the force-duel-only approach only applies while finding/challenging.
 - `-3` bots target the true nearest enemy (no health weighting), like `-1`, while still issuing/accepting duels.
 - Bots throttle their own duel requests to one every 7 seconds, so a declined/expired challenge is not immediately re-issued.
+- The tactical range system only changes weighting/commitment inside already-legal attack windows; it does not replace the existing hard range safety gates.
 
 ## Miscellaneous
 
@@ -143,6 +168,7 @@ g_newBotAI (master switch)
   +-- Targeting
   |     +-- g_newBotAITarget
   |     +-- bot_targetdistance
+  |     +-- bot_rangeshort / bot_rangemedium
   |     +-- bot_lowhangingfruitHP / bot_lowhanginfruitDistance
   |
   +-- Aggression Core
@@ -158,6 +184,7 @@ g_newBotAI (master switch)
   |           +-- bot_drainbias --> drain hold duration
   |           +-- bot_antidrainbias --> anti-drain priority
   |           +-- bot_lightningbias + bot_lightningdistance --> lightning
+  |           +-- bot_*weight_(short/medium/long) --> tactical range weighting
   |           +-- bot_ptk_aggressionbias + bot_ptk_fpdifference + bot_ptk_hpdifference --> PTK
   |           +-- Retreat thresholds (health/distance)
   |           +-- Saber throw defense break (pull vs push)

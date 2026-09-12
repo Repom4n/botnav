@@ -113,6 +113,11 @@ static float BotGetAggressionBias(bot_state_t *bs);
 static float BotGetAimSpeedLevel(void);
 static float BotGetAimSpeedFactor(bot_state_t *bs);
 static float BotGetAimSpeedMaxChange(bot_state_t *bs, float legacyMaxChange);
+static float BotGetShortRangeMax(void);
+static float BotGetMediumRangeMax(void);
+static int BotGetRangeWeightPercentForDistance(float distance, int shortWeight, int mediumWeight, int longWeight);
+static int BotApplyAttackRangeWeight(bot_state_t *bs, int baseWeight, int shortWeight, int mediumWeight, int longWeight);
+static int BotScaleThresholdByRangeWeight(int threshold, int weightPercent);
 static int BotGetReflexScaledResponseDelayMs(bot_state_t *bs);
 static float BotGetChanceBiasPercent(float value);
 static float BotGetMistakeBiasChance(bot_state_t *bs);
@@ -653,6 +658,86 @@ static float BotGetAimSpeedMaxChange(bot_state_t *bs, float legacyMaxChange)
 
 	t = level / 10.0f;
 	return legacyMaxChange * (1.0f + (t * t) * 100.0f);
+}
+
+static float BotGetShortRangeMax(void)
+{
+	float shortRange = bot_rangeshort.value;
+
+	if (shortRange < 0.0f)
+	{
+		shortRange = 0.0f;
+	}
+
+	return shortRange;
+}
+
+static float BotGetMediumRangeMax(void)
+{
+	float mediumRange = bot_rangemedium.value;
+	const float shortRange = BotGetShortRangeMax();
+
+	if (mediumRange < shortRange)
+	{
+		mediumRange = shortRange;
+	}
+
+	return mediumRange;
+}
+
+static int BotGetRangeWeightPercentForDistance(float distance, int shortWeight, int mediumWeight, int longWeight)
+{
+	const float shortRange = BotGetShortRangeMax();
+	const float mediumRange = BotGetMediumRangeMax();
+	int weightPercent;
+
+	if (distance < 0.0f)
+	{
+		distance = 0.0f;
+	}
+
+	if (distance <= shortRange)
+	{
+		weightPercent = shortWeight;
+	}
+	else if (distance <= mediumRange)
+	{
+		weightPercent = mediumWeight;
+	}
+	else
+	{
+		weightPercent = longWeight;
+	}
+
+	return Com_Clampi(0, 1000, weightPercent);
+}
+
+static int BotApplyAttackRangeWeight(bot_state_t *bs, int baseWeight, int shortWeight, int mediumWeight, int longWeight)
+{
+	const int weightPercent = (!bs) ? 100 :
+		BotGetRangeWeightPercentForDistance(bs->frame_Enemy_Len, shortWeight, mediumWeight, longWeight);
+
+	if (baseWeight <= 0 || weightPercent == 100)
+	{
+		return baseWeight;
+	}
+
+	return (int)((float)baseWeight * ((float)weightPercent / 100.0f));
+}
+
+static int BotScaleThresholdByRangeWeight(int threshold, int weightPercent)
+{
+	if (weightPercent <= 0)
+	{
+		return 999999;
+	}
+
+	if (weightPercent == 100)
+	{
+		return threshold;
+	}
+
+	return (threshold * 100 + weightPercent - 1) / weightPercent;
 }
 
 //Gripkick yaw reacquisition needs to be faster than the generic post-fix 6-degree step so
@@ -8762,6 +8847,12 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 	const qboolean hasDroppedOwnSaber = NewBotAI_HasDroppedOwnSaber(bs);
 	const qboolean hasHealthDisadvantage = (totalHealthDelta < 0) ? qtrue : qfalse;
 	const qboolean suppressSaberAttack = (hasHealthDisadvantage && !hasDroppedOwnSaber) ? qtrue : qfalse;
+	const int saberAttackRangeWeightPercent = BotGetRangeWeightPercentForDistance(bs->frame_Enemy_Len,
+		bot_saberattackweight_short.integer,
+		bot_saberattackweight_medium.integer,
+		bot_saberattackweight_long.integer);
+	const int lightSaberHealthThreshold = BotScaleThresholdByRangeWeight(40, saberAttackRangeWeightPercent);
+	const int strongSaberHealthThreshold = BotScaleThresholdByRangeWeight(70, saberAttackRangeWeightPercent);
 	// const float speed = NewBotAI_GetSpeedTowardsEnemy(bs);
 
 	if (!bs->client || !bs->currentEnemy || !bs->currentEnemy->client)
@@ -8788,6 +8879,13 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 	}
 
 	if (bs->cur_ps.weapon == WP_SABER) {//Fullforce saber attacks
+		if (saberAttackRangeWeightPercent <= 0 &&
+			!BG_SaberInAttack(bs->cur_ps.saberMove) &&
+			bs->fanPhase == FAN_PHASE_INACTIVE)
+		{
+			return;
+		}
+
 		if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE &&
 			!BG_SaberInAttack(bs->cur_ps.saberMove))
 		{
@@ -8849,7 +8947,7 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 			if (BG_SaberInAttack(bs->cur_ps.saberMove) &&
 				(bs->fanPhase != FAN_PHASE_INACTIVE || bs->cur_ps.saberMove == LS_A_L2R || bs->cur_ps.saberMove == LS_A_R2L) &&
 				bs->frame_Enemy_Len < 320 &&
-				NewBotAI_GetTimeToInRange(bs, 75, 800) < 800 && g_entities[bs->client].health > 40)
+				NewBotAI_GetTimeToInRange(bs, 75, 800) < 800 && g_entities[bs->client].health > lightSaberHealthThreshold)
 			{
 				if (!suppressSaberAttack)
 					trap->EA_Attack(bs->client);
@@ -8857,7 +8955,7 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 			}
 
 			if ((g_entities[bs->client].client->ps.saberMove == LS_NONE || g_entities[bs->client].client->ps.saberMove == LS_READY) && bs->frame_Enemy_Len < 256 && ((NewBotAI_GetTimeToInRange(bs, 75, 800) < 800) || bs->frame_Enemy_Len < 128)) {
-				if (g_entities[bs->client].health > 40) {
+				if (g_entities[bs->client].health > lightSaberHealthThreshold) {
 					//See if they can't saberthrow?
 					//Com_Printf("Their torso time is %i\n", bs->currentEnemy->client->ps.torsoTimer);
 					//if ((bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_DRAIN) || (bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB))) || ((bs->frame_Enemy_Len < 70) && (bs->currentEnemy->client->ps.origin[2] - bs->cur_ps.origin[2]) > 50)) {
@@ -8916,7 +9014,7 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 			//swing instead of releasing through every swing tail (same fix as the lightside
 			//path above - the press has to still be down when weaponTime clears).
 			if (BG_SaberInAttack(bs->cur_ps.saberMove) && NewBotAI_GetTimeToInRange(bs, 75, 600) < 600 &&
-				g_entities[bs->client].health > 70)
+				g_entities[bs->client].health > strongSaberHealthThreshold)
 			{
 				if (!suppressSaberAttack)
 					trap->EA_Attack(bs->client);
@@ -8925,7 +9023,7 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 
 			//todo - skip if we are already during a swing
 			if ((g_entities[bs->client].client->ps.saberMove == LS_NONE || g_entities[bs->client].client->ps.saberMove == LS_READY) && NewBotAI_GetTimeToInRange(bs, 75, 600) < 600) {
-				if (g_entities[bs->client].health > 70) {
+				if (g_entities[bs->client].health > strongSaberHealthThreshold) {
 					if ((bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_DRAIN) || (bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB))) ||
 						((bs->cur_ps.fd.forcePower < 60) || ((bs->frame_Enemy_Len < 70) && (bs->currentEnemy->client->ps.origin[2] - bs->cur_ps.origin[2]) > 50))) {
 						//Red/strong style never fans - make sure a stale chain from a prior
@@ -10777,7 +10875,11 @@ static int NewBotAI_GetLightningWeight(bot_state_t *bs)
 	{
 		defensiveFactor += -aggressionBias;
 	}
-	return (int)(defensiveFactor * distanceFactor * (lightningBias / 100.0f) * 400.0f);
+	return BotApplyAttackRangeWeight(bs,
+		(int)(defensiveFactor * distanceFactor * (lightningBias / 100.0f) * 400.0f),
+		bot_lightningweight_short.integer,
+		bot_lightningweight_medium.integer,
+		bot_lightningweight_long.integer);
 }
 
 static int NewBotAI_GetPTKWeight(bot_state_t *bs)
@@ -10920,7 +11022,10 @@ static int NewBotAI_GetPTKWeight(bot_state_t *bs)
 		weight += 25;
 	}
 
-	return weight;
+	return BotApplyAttackRangeWeight(bs, weight,
+		bot_ptkweight_short.integer,
+		bot_ptkweight_medium.integer,
+		bot_ptkweight_long.integer);
 }
 
 static qboolean NewBotAI_IsSaberSwingStartWindow(bot_state_t *bs)
@@ -11040,6 +11145,10 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 	const float fanBias = NewBotAI_GetFanBiasPercent(bs);
 	const int dwellMs = Com_Clampi(10, 3000, bot_fandwell.integer);
 	const int swingHoldMs = 160 + (int)(fanBias * 5.0f) + Q_irand(0, 120);
+	const int saberAttackRangeWeightPercent = BotGetRangeWeightPercentForDistance(bs->frame_Enemy_Len,
+		bot_saberattackweight_short.integer,
+		bot_saberattackweight_medium.integer,
+		bot_saberattackweight_long.integer);
 
 	if (!NewBotAI_IsSaberSwingStartWindow(bs))
 	{
@@ -11117,6 +11226,11 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 	{
 		//Start a new chain, preferring whichever direction we're already strafing.
 		int startDir = 0;
+
+		if (saberAttackRangeWeightPercent <= 0)
+		{
+			return;
+		}
 
 		//Even when we already have a lateral strafe direction, only convert it into a fan
 		//chain when fanBias is enabled (>0), so bot_fanbias 0 remains a strict "off".
@@ -12049,13 +12163,19 @@ int NewBotAI_GetPull(bot_state_t *bs) {
 
 	if (bs->frame_Enemy_Len < 200 && ourForce >= 20) { //Pulling their weapon should be top priority always
 		if (bs->currentEnemy->client->ps.weapon >= WP_BLASTER)
-			return 100;
+			return BotApplyAttackRangeWeight(bs, 100,
+				bot_pullweight_short.integer,
+				bot_pullweight_medium.integer,
+				bot_pullweight_long.integer);
 	}
 
 	if (NewBotAI_IsEnemyPullable(bs) && (bs->cur_ps.weapon == WP_SABER || bs->cur_ps.weapon == WP_MELEE) && g_flipKick.integer) {
 		if (hisHealth <= 20 && bs->frame_Enemy_Len < 250) {//Check for the insta kill, this should be better maybe... on ground pullablable should be a diff range than in air pullable
 			//Com_Printf("pullable 2\n");
-			return 100;
+			return BotApplyAttackRangeWeight(bs, 100,
+				bot_pullweight_short.integer,
+				bot_pullweight_medium.integer,
+				bot_pullweight_long.integer);
 		}
 		//Item 5: drainlock finisher - the enemy's force is already below the free-pullkick
 		//threshold and they're in range, so land the free pullkick right now instead of
@@ -12063,25 +12183,40 @@ int NewBotAI_GetPull(bot_state_t *bs) {
 		//drain (bring them back under 20) and pullkick (cash it in) until they're dead or
 		//the force advantage is lost.
 		if (bs->currentEnemy->client->ps.fd.forcePower < 20 && bs->frame_Enemy_Len < 250) {
-			return 100;
+			return BotApplyAttackRangeWeight(bs, 100,
+				bot_pullweight_short.integer,
+				bot_pullweight_medium.integer,
+				bot_pullweight_long.integer);
 		}
 		if (BG_InKnockDown(bs->currentEnemy->client->ps.legsAnim)) {
 			//Item 9: a knocked-down target about to drop (<19 HP) should be finished with a
 			//pullkick alone - no saber throw - but only once they are actually within
 			//pullkick range (pull range is 640).
 			if (hisHealth < 19 && bs->frame_Enemy_Len < 640) {
-				return 100;
+				return BotApplyAttackRangeWeight(bs, 100,
+					bot_pullweight_short.integer,
+					bot_pullweight_medium.integer,
+					bot_pullweight_long.integer);
 			}
 			//Com_Printf("pullable 3\n");
-			return (int)(weight * 2) + ptkWeight;
+			return BotApplyAttackRangeWeight(bs, (int)(weight * 2) + ptkWeight,
+				bot_pullweight_short.integer,
+				bot_pullweight_medium.integer,
+				bot_pullweight_long.integer);
 		}
 		//Com_Printf("pullable 1\n");
 		if (bs->cur_ps.fd.forceSide == FORCE_LIGHTSIDE) {
 			if (bs->frame_Enemy_Len < 250 && ourForce > 32)
-				return (int)weight + ptkWeight;
+				return BotApplyAttackRangeWeight(bs, (int)weight + ptkWeight,
+					bot_pullweight_short.integer,
+					bot_pullweight_medium.integer,
+					bot_pullweight_long.integer);
 		}
 		else
-			return (int)weight + ptkWeight;
+			return BotApplyAttackRangeWeight(bs, (int)weight + ptkWeight,
+				bot_pullweight_short.integer,
+				bot_pullweight_medium.integer,
+				bot_pullweight_long.integer);
 	}
 	else { //When should we pull stun?
 		//Lets say they should be on the same plane roughly..
@@ -12090,7 +12225,10 @@ int NewBotAI_GetPull(bot_state_t *bs) {
 			if (bs->frame_Enemy_Len < 100 && ourForce >= 60) { //Close enough and enough force
 				weight = (float)ourForce * 0.1f;
 				//Com_Printf("weight: %i\n", weight);
-				return (int)weight + ptkWeight;
+				return BotApplyAttackRangeWeight(bs, (int)weight + ptkWeight,
+					bot_pullweight_short.integer,
+					bot_pullweight_medium.integer,
+					bot_pullweight_long.integer);
 			}
 		}
 
@@ -12309,7 +12447,10 @@ int NewBotAI_GetDrain(bot_state_t *bs) {
 			return 0;
 		//Force-biased, PTK-weighted bot with enough FP: drain exactly enough to put them
 		//below 19 so the follow-up pullkick is free. Strong weight so this beats other powers.
-		return 90;
+		return BotApplyAttackRangeWeight(bs, 90,
+			bot_drainweight_short.integer,
+			bot_drainweight_medium.integer,
+			bot_drainweight_long.integer);
 	}
 
 	if (safeDrainVsThrow)
@@ -12321,7 +12462,10 @@ int NewBotAI_GetDrain(bot_state_t *bs) {
 			weight += 15;
 		if (hisForce >= 20)
 			weight += 10;
-		return weight;
+		return BotApplyAttackRangeWeight(bs, weight,
+			bot_drainweight_short.integer,
+			bot_drainweight_medium.integer,
+			bot_drainweight_long.integer);
 	}
 	if (pressureDrainVsThrow)
 	{
@@ -12342,7 +12486,10 @@ int NewBotAI_GetDrain(bot_state_t *bs) {
 		weight = returnWindowPTKAvailable ? 55 : 95;
 		if (hisForce >= 20)
 			weight += returnWindowPTKAvailable ? 5 : 10;
-		return weight;
+		return BotApplyAttackRangeWeight(bs, weight,
+			bot_drainweight_short.integer,
+			bot_drainweight_medium.integer,
+			bot_drainweight_long.integer);
 	}
 	if (bs->frame_Enemy_Len < 120 &&
 		(BG_SaberInAttack(bs->currentEnemy->client->ps.saberMove) ||
@@ -12372,7 +12519,10 @@ int NewBotAI_GetDrain(bot_state_t *bs) {
 			{
 				weight = 100;
 			}
-			return weight;
+			return BotApplyAttackRangeWeight(bs, weight,
+				bot_drainweight_short.integer,
+				bot_drainweight_medium.integer,
+				bot_drainweight_long.integer);
 		}
 		weight -= 25;
 		if (weight < 0)
@@ -12387,7 +12537,10 @@ int NewBotAI_GetDrain(bot_state_t *bs) {
 				weight = 0;
 			}
 		}
-		return weight;
+		return BotApplyAttackRangeWeight(bs, weight,
+			bot_drainweight_short.integer,
+			bot_drainweight_medium.integer,
+			bot_drainweight_long.integer);
 	}
 
 	return 0;
@@ -12431,29 +12584,47 @@ int NewBotAI_GetGrip(bot_state_t *bs) {
 	if (hisForce < 20) {
 		if (((bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_LEVITATION))) || (bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_SPEED)) || (bs->currentEnemy->client->saberKnockedTime > level.time )) {
 			if (hisHealth < 52)
-				return 100 + aggressionBonus;
-			return (weight - 10 + aggressionBonus);
+				return BotApplyAttackRangeWeight(bs, 100 + aggressionBonus,
+					bot_gripweight_short.integer,
+					bot_gripweight_medium.integer,
+					bot_gripweight_long.integer);
+			return BotApplyAttackRangeWeight(bs, (weight - 10 + aggressionBonus),
+				bot_gripweight_short.integer,
+				bot_gripweight_medium.integer,
+				bot_gripweight_long.integer);
 		}
 	}
 	
 	if ((bs->currentEnemy->client->ps.saberMove > 1) && (bs->currentEnemy->client->ps.fd.saberAnimLevel == SS_STRONG && !(bs->cur_ps.weaponstate == WEAPON_CHARGING_ALT)))
-		return (ourHealth - hisForce + aggressionBonus);
+		return BotApplyAttackRangeWeight(bs, (ourHealth - hisForce + aggressionBonus),
+			bot_gripweight_short.integer,
+			bot_gripweight_medium.integer,
+			bot_gripweight_long.integer);
 
 	//A dominant bot (high health, big force lead) should heavily favor gripkicking
 	//rather than trading swings - this is our strongest, safest finisher when we can
 	//clearly afford it. Weighted independently of bot_gripkickbias being left at its
 	//default of 0 (that cvar only adds/removes a smaller aggression bonus on top).
 	if (ourHealth > NEWBOTAI_GRIPKICK_DOMINANT_HEALTH && ourForce > hisForce + NEWBOTAI_GRIPKICK_DOMINANT_FORCE_LEAD)
-		return 100 + aggressionBonus;
+		return BotApplyAttackRangeWeight(bs, 100 + aggressionBonus,
+			bot_gripweight_short.integer,
+			bot_gripweight_medium.integer,
+			bot_gripweight_long.integer);
 
 	//Same dominant-health/force lead, but specifically against an enemy who is
 	//mid saberthrow - punish the whiffed/committed throw with a gripkick instead of
 	//letting them recover.
 	if (bs->currentEnemy->client->ps.saberInFlight && ourHealth > NEWBOTAI_GRIPKICK_DOMINANT_HEALTH && ourForce > hisForce)
-		return 90 + aggressionBonus;
+		return BotApplyAttackRangeWeight(bs, 90 + aggressionBonus,
+			bot_gripweight_short.integer,
+			bot_gripweight_medium.integer,
+			bot_gripweight_long.integer);
 
 	if (ourForce > 65 && ourHealth > 55 && hisHealth < 80)
-		return 45 + aggressionBonus;
+		return BotApplyAttackRangeWeight(bs, 45 + aggressionBonus,
+			bot_gripweight_short.integer,
+			bot_gripweight_medium.integer,
+			bot_gripweight_long.integer);
 
 	//Item 5: outside all of the specific rules above, still let a high bot_gripkickbias
 	//show up more often as a purely random pick whenever we hold both a health and
@@ -12464,7 +12635,10 @@ int NewBotAI_GetGrip(bot_state_t *bs) {
 	{
 		if (Q_irand(1, 100) <= (int)gripkickBias)
 		{
-			return (int)(gripkickBias * 0.6f) + aggressionBonus;
+			return BotApplyAttackRangeWeight(bs, (int)(gripkickBias * 0.6f) + aggressionBonus,
+				bot_gripweight_short.integer,
+				bot_gripweight_medium.integer,
+				bot_gripweight_long.integer);
 		}
 	}
 
@@ -12643,7 +12817,10 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 		}
 	}
 
-	return weight;
+	return BotApplyAttackRangeWeight(bs, weight,
+		bot_saberthrowweight_short.integer,
+		bot_saberthrowweight_medium.integer,
+		bot_saberthrowweight_long.integer);
 }
 
 void NewBotAI_GetDSForcepower(bot_state_t *bs)
