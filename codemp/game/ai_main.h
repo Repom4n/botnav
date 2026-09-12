@@ -380,6 +380,8 @@ typedef struct bot_state_s
 	int					lastFlipkickAttemptTime;
 	int					flipkickInputTime;
 	qboolean			flipkickJumpHeld;
+	int					lastSaberContactTime; // level.time of the most recent confirmed saber contact on currentEnemy; used to gate fan-chain -> flipkick combo timing
+	int					lastEnemyDurability; // previous think's currentEnemy HP+armor snapshot for saber-contact detection
 	int					drainRollDir; // -1 left, 0 back, 1 right; used by NewBotAI_DrainRollEscape
 	int					drainRollResetTime;
 	int					gripkickJerkUntil;
