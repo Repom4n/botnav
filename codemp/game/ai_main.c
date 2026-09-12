@@ -8526,6 +8526,12 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 		weapon = WP_SABER;
 	}
 
+	if (g_tweakWeapons.integer & WT_TRIBES)
+		weapon = NewBotAI_GetTribesWeapon(bs);
+	else
+		weapon = NewBotAI_GetWeapon(bs);
+	BotSelectWeapon(bs->client, weapon);
+
 	if (bs->cur_ps.weapon == WP_SABER &&
 		bs->saberThrowQueued &&
 		bs->doAltAttack)
@@ -8540,11 +8546,6 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 		bs->doAltAttack)
 		return;
 
-	else if (g_tweakWeapons.integer & WT_TRIBES)
-		weapon = NewBotAI_GetTribesWeapon(bs);
-	else
-		weapon = NewBotAI_GetWeapon(bs);
-	BotSelectWeapon(bs->client, weapon);
 	if (!hasDroppedOwnSaber && NewBotAI_IsEnemySaberThreatImminent(bs))
 		return;
 
