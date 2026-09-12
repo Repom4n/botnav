@@ -7155,6 +7155,12 @@ void NewBotAI_Flipkick(bot_state_t *bs)
 		return;
 	}
 
+	if (bs->fanPhase != FAN_PHASE_INACTIVE)
+	{
+		//Never layer flipkick jump inputs on top of an active fan chain's held attack.
+		return;
+	}
+
 	if (bs->cur_ps.saberInFlight)
 	{
 		//Never kick empty-handed mid-throw.
@@ -8972,6 +8978,7 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 	int softRetreatHealth;
 	float retreatDistance;
 	qboolean horizontalSwingStart = qfalse;
+	qboolean fanChainActive = qfalse;
 	const qboolean pressAdvantage = NewBotAI_ShouldPressAdvantage(bs);
 
 	bs->combatAction = BOT_COMBAT_ACTION_AGGRESSION;
@@ -9028,6 +9035,12 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 	NewBotAI_PrepareHorizontalSwingStart(bs);
 	horizontalSwingStart = (bs->fanPhase == FAN_PHASE_TAP_PRE_SWING || bs->fanPhase == FAN_PHASE_SWING ||
 		bs->fanPhase == FAN_PHASE_TAP_POST_SWING) ? qtrue : qfalse;
+	fanChainActive = (bs->fanPhase != FAN_PHASE_INACTIVE) ? qtrue : qfalse;
+
+	if (fanChainActive && bs->pullKickJumpTime != 0)
+	{
+		bs->pullKickJumpTime = 0;
+	}
 
 	hardRetreatHealth = 30 - (int)(aggressionBias * 25.0f);
 	softRetreatHealth = 60 - (int)(aggressionBias * 35.0f);
@@ -9329,7 +9342,7 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 		//fires when reached; -1 holds until the enemy is within 320 units (nobody was
 		//closing when we pulled, so don't commit to a timed leap). The kick attempt
 		//itself happens via NewBotAI_Flipkick in the normal combat path below.
-		else if (bs->pullKickJumpTime != 0)
+		else if (bs->pullKickJumpTime != 0 && !fanChainActive)
 		{
 			trap->EA_MoveForward(bs->client);
 			if (bs->cur_ps.groundEntityNum != ENTITYNUM_NONE &&
@@ -9407,7 +9420,7 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 				trap->EA_Crouch(bs->client); 
 			}
 			else {
-				if (NewBotAI_CanAttemptFlipkick(bs))
+				if (!fanChainActive && NewBotAI_CanAttemptFlipkick(bs))
 				{
 					NewBotAI_Flipkick(bs);
 				}
@@ -10705,7 +10718,7 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 		//Start a new chain, preferring whichever direction we're already strafing.
 		int startDir = 0;
 
-		if (bs->randomStrafeEndTime > level.time && bs->randomStrafeDir)
+		if (fanBias > 0.0f && bs->randomStrafeEndTime > level.time && bs->randomStrafeDir)
 		{
 			startDir = bs->randomStrafeDir;
 		}
