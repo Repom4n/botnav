@@ -12642,8 +12642,10 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 		//Always arm the pullkick follow-through after a pull so the pull itself can create the
 		//close-range window; only fire the immediate kick when the window already exists now.
 		NewBotAI_SchedulePullkickJump(bs);
-		if (NewBotAI_IsPullkickOpportunity(bs) &&
-			bs->frame_Enemy_Len <= NEWBOTAI_IMMEDIATE_FLIPKICK_RANGE)
+		if (bs->pullKickJumpTime == 0 &&
+			NewBotAI_IsPullkickOpportunity(bs) &&
+			bs->frame_Enemy_Len <= NEWBOTAI_IMMEDIATE_FLIPKICK_RANGE &&
+			NewBotAI_IsFlipkickSetupReady(bs))
 			NewBotAI_Flipkick(bs);
 
 		//trap->Print("Pulling -- Pull: %i, Push: %i, Drain: %i, Grip: %i\n", pullWeight, pushWeight, drainWeight, gripWeight);
@@ -12836,8 +12838,10 @@ void NewBotAI_GetLSForcepower(bot_state_t *bs)
 		//Always arm the pullkick follow-through after a pull so the pull itself can create the
 		//close-range window; only fire the immediate kick when the window already exists now.
 		NewBotAI_SchedulePullkickJump(bs);
-		if (NewBotAI_IsPullkickOpportunity(bs) &&
-			bs->frame_Enemy_Len <= NEWBOTAI_IMMEDIATE_FLIPKICK_RANGE)
+		if (bs->pullKickJumpTime == 0 &&
+			NewBotAI_IsPullkickOpportunity(bs) &&
+			bs->frame_Enemy_Len <= NEWBOTAI_IMMEDIATE_FLIPKICK_RANGE &&
+			NewBotAI_IsFlipkickSetupReady(bs))
 			NewBotAI_Flipkick(bs);
 		//trap->Print("Pull - Weights -- Pull: %i, Push: %i, Absorb: %i, Protect: %i, Heal %i\n", pullWeight, pushWeight, absorbWeight, protectWeight, healWeight);
 	}
