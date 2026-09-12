@@ -12224,22 +12224,24 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 
 	drainWeight = NewBotAI_GetDrain(bs);
 	gripWeight = NewBotAI_GetGrip(bs);
-	if (NewBotAI_IsEnemySaberThreatImminent(bs))
+	if (NewBotAI_IsEnemySaberThreatImminent(bs) &&
+		NewBotAI_ShouldEmergencyDrainRollSaberThrow(bs))
 	{
-		if (NewBotAI_ShouldEmergencyDrainRollSaberThrow(bs))
-		{
-			NewBotAI_ApplySidewaysDrainRoll(bs, qtrue);
-			return;
-		}
-		if (!NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bs))
-		{
-			return;
-		}
+		NewBotAI_ApplySidewaysDrainRoll(bs, qtrue);
+		return;
+	}
+	if (NewBotAI_IsEnemySaberThreatImminent(bs) &&
+		NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bs))
+	{
 		if (drainWeight > minWeight)
 		{
 			level.clients[bs->client].ps.fd.forcePowerSelected = FP_DRAIN;
 			trap->EA_ForcePower(bs->client);
 		}
+		return;
+	}
+	if (NewBotAI_IsEnemySaberThreatImminent(bs))
+	{
 		return;
 	}
 	pullWeight = NewBotAI_GetPull(bs);
