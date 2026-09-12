@@ -12235,6 +12235,12 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 		{
 			return;
 		}
+		if (drainWeight > minWeight)
+		{
+			level.clients[bs->client].ps.fd.forcePowerSelected = FP_DRAIN;
+			trap->EA_ForcePower(bs->client);
+		}
+		return;
 	}
 	pullWeight = NewBotAI_GetPull(bs);
 	pushWeight = NewBotAI_GetPush(bs);
