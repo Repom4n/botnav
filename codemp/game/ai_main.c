@@ -12474,6 +12474,18 @@ int NewBotAI_GetTeamEnergize(bot_state_t* bs) {
 }
 
 int NewBotAI_GetSaberthrow(bot_state_t* bs) {
+	const int knockdownFinishMinHealth = 18;
+	const int knockdownFinishMaxHealth = 30;
+	const int knockdownBaseForceThreshold = 30;
+	const int knockdownHeavyForceThreshold = 40;
+	const int knockdownHeavyHealthThreshold = 50;
+	const int knockdownHeavyWeight = 100;
+	const int knockdownPressureWeight = 90;
+	const int knockdownBaseWeight = 85;
+	const int armorForceBonusBase = 20;
+	const int armorForceBonusStrongLead = 25;
+	const int armorForceBonusHeavyArmor = 50;
+	const int armorForceBonusStep = 10;
 	const int ourHealth = g_entities[bs->client].health;
 	const int ourForce = bs->cur_ps.fd.forcePower;
 	const int hisForce = bs->currentEnemy->client->ps.fd.forcePower;
@@ -12539,17 +12551,17 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 	if (enemyKnockedDown) {
 		//A knocked-down opponent is the best saber-throw punish; bias heavily toward it,
 		//especially when our force lead or their armor means the throw cashes in pressure.
-		if (enemyTotalHealth >= 18 && enemyTotalHealth <= 30) {
-			weight = 100;
+		if (enemyTotalHealth >= knockdownFinishMinHealth && enemyTotalHealth <= knockdownFinishMaxHealth) {
+			weight = knockdownHeavyWeight;
 		}
-		else if (ourForce > 40 && enemyTotalHealth <= 50) {
-			weight = 100;
+		else if (ourForce > knockdownHeavyForceThreshold && enemyTotalHealth <= knockdownHeavyHealthThreshold) {
+			weight = knockdownHeavyWeight;
 		}
-		else if (ourForce > 40 && (forceLead > 0 || enemyArmor > 0)) {
-			weight = 90;
+		else if (ourForce > knockdownHeavyForceThreshold && (forceLead > 0 || enemyArmor > 0)) {
+			weight = knockdownPressureWeight;
 		}
-		else if (ourForce > 30) {
-			weight = 85;
+		else if (ourForce > knockdownBaseForceThreshold) {
+			weight = knockdownBaseWeight;
 		}
 	}
 
@@ -12586,14 +12598,14 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 		}
 		if (forceLead > 0 && enemyArmor > 0)
 		{
-			armorForceBonus = 20;
-			if (forceLead >= 25)
+			armorForceBonus = armorForceBonusBase;
+			if (forceLead >= armorForceBonusStrongLead)
 			{
-				armorForceBonus += 10;
+				armorForceBonus += armorForceBonusStep;
 			}
-			if (enemyArmor >= 50)
+			if (enemyArmor >= armorForceBonusHeavyArmor)
 			{
-				armorForceBonus += 10;
+				armorForceBonus += armorForceBonusStep;
 			}
 		}
 
