@@ -11964,7 +11964,7 @@ int NewBotAI_GetPull(bot_state_t *bs) {
 		//pullkick the second - keep the base pull high here and let PTK's own weight stack on
 		//top below when it is available.
 		if (enemySaberReturning) {
-			weight = (ourHealth > 30 && ourForce > bs->currentEnemy->client->ps.fd.forcePower) ? 95.0f : 85.0f;
+			weight = (ourHealth > 30 && ourForce > bs->currentEnemy->client->ps.fd.forcePower) ? 100.0f : 85.0f;
 		}
 		else {
 			weight = (ourHealth > 30 && ourForce > bs->currentEnemy->client->ps.fd.forcePower) ? 85.0f : 75.0f;
