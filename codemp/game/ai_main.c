@@ -11367,12 +11367,7 @@ static qboolean NewBotAI_IsEnemySaberThreatImminent(bot_state_t *bs)
 		}
 	}
 
-	if (bs->currentEnemy->client->ps.saberInFlight)
-	{
-		return NewBotAI_GetEnemySaberFlightThreat(bs, NULL, NULL, NULL);
-	}
-
-	return qfalse;
+	return NewBotAI_GetEnemySaberFlightThreat(bs, NULL, NULL, NULL);
 }
 
 static qboolean NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bot_state_t *bs)
