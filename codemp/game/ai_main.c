@@ -161,9 +161,12 @@ static void NewBotAI_ConsumeCombatHop(bot_state_t *bs);
 static float NewBotAI_GetPullkickTimeToKickRange(bot_state_t *bs);
 static void NewBotAI_SchedulePullkickJump(bot_state_t *bs);
 static qboolean NewBotAI_IsPullkickOpportunity(bot_state_t *bs);
+static int NewBotAI_GetDrainTapTargetTicks(bot_state_t *bs);
 static int NewBotAI_GetDrainTapTargetCost(bot_state_t *bs);
 static qboolean NewBotAI_IsPullkickDrainWindow(bot_state_t *bs);
 static qboolean NewBotAI_IsDrainlockAdvantage(bot_state_t *bs);
+static void NewBotAI_UpdateHealDrainlockState(bot_state_t *bs);
+static qboolean NewBotAI_ShouldHealDrainlock(bot_state_t *bs);
 static qboolean NewBotAI_ShouldDrainlockDeep(bot_state_t *bs);
 int NewBotAI_GetDrain(bot_state_t *bs);
 int NewBotAI_GetGrip(bot_state_t *bs);
@@ -178,6 +181,8 @@ static qboolean NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bot_state_t *bs);
 static qboolean NewBotAI_ShouldJumpDrainVsSaberThrow(bot_state_t *bs);
 static qboolean NewBotAI_ShouldEmergencyDrainRollSaberThrow(bot_state_t *bs);
 static void NewBotAI_ApplySidewaysDrainRoll(bot_state_t *bs, qboolean moveBack);
+
+#define NEWBOTAI_DRAIN_TICK_MSEC 100
 static qboolean NewBotAI_HandleRecoveryRollForcepower(bot_state_t *bs);
 static qboolean NewBotAI_IsBetweenOwnSaberAndEnemy(bot_state_t *bs);
 static qboolean NewBotAI_ShouldCloseGapVsEnemySaberThrow(bot_state_t *bs);
@@ -7965,22 +7970,28 @@ void NewBotAI_Draining(bot_state_t *bs)
 	const int hisForce = bs->currentEnemy->client->ps.fd.forcePower;
 	const qboolean enemyVisible = (OrgVisible(bs->eye, bs->currentEnemy->client->ps.origin, bs->client) &&
 		!(bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB))) ? qtrue : qfalse;
-	const int drainTapTargetCost = NewBotAI_GetDrainTapTargetCost(bs);
+	int drainTapTargetTicks;
+	qboolean healDrainlock;
 	const qboolean safeDrainVsThrow = NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bs);
 	const qboolean jumpDrainThreat = NewBotAI_ShouldJumpDrainVsSaberThrow(bs);
 	const qboolean flipkickDrainEscape = (safeDrainVsThrow && NewBotAI_ShouldPreferFlipkickOverThrow(bs)) ? qtrue : qfalse;
 	qboolean shouldHold = qfalse;
 	int holdMs = 0;
 
+	NewBotAI_UpdateHealDrainlockState(bs);
+	drainTapTargetTicks = NewBotAI_GetDrainTapTargetTicks(bs);
+	healDrainlock = NewBotAI_ShouldHealDrainlock(bs);
+
 	if (ourHealth < 100 && hisForce && enemyVisible)
 	{
-		//Health-biased bots just want minimal drain taps to top their own health off, so they
-		//release the drain key almost immediately (one think) instead of holding it down.
-		//Force-biased bots going for the below-19 pullkick setup hold exactly long enough for
-		//the tap to pay for the computed FP removal, not a moment longer.
-		if (drainTapTargetCost > 0 && NewBotAI_IsPullkickDrainWindow(bs))
+		//Ordinary health-biased bots just want minimal drain taps to top their own health off,
+		//so they release the drain key almost immediately (one think) instead of holding it
+		//down. Heal-driven drainlocks and force-biased pullkick setups both hold exactly long
+		//enough for the computed whole-tick FP removal, not a moment longer.
+		if (drainTapTargetTicks > 0 &&
+			(healDrainlock || NewBotAI_IsPullkickDrainWindow(bs)))
 		{
-			holdMs = drainTapTargetCost * 20; //5 FP per 100ms drain tick -> 20ms per FP
+			holdMs = (drainTapTargetTicks * NEWBOTAI_DRAIN_TICK_MSEC) + 1; //hold through the last full drain tick
 		}
 		else
 		{
@@ -7997,6 +8008,13 @@ void NewBotAI_Draining(bot_state_t *bs)
 	}
 	else if (bs->drainHoldTime > level.time)
 	{
+		shouldHold = qtrue;
+	}
+	else if (healDrainlock && ourHealth < 100 && hisForce && enemyVisible)
+	{
+		//If a heal-driven deep-drain tap was truncated by our current FP pool, keep holding
+		//drain so we immediately resume channeling as force regenerates instead of breaking
+		//the drainlock into a different action before we're topped off.
 		shouldHold = qtrue;
 	}
 
@@ -8024,7 +8042,8 @@ void NewBotAI_Draining(bot_state_t *bs)
 
 	//Between drain taps, or as soon as the enemy is drained low enough to be pullable, go for
 	//the pullkick follow-up instead of standing in the drain.
-	if ((flipkickDrainEscape || hisForce < 20 || bs->drainHoldTime <= level.time) &&
+	if (!healDrainlock &&
+		(flipkickDrainEscape || hisForce < 20 || bs->drainHoldTime <= level.time) &&
 		!jumpDrainThreat)
 	{
 		NewBotAI_Flipkick(bs);
@@ -12096,19 +12115,89 @@ int NewBotAI_GetPush(bot_state_t *bs) {
 	return 0;
 }
 
-// True once this bot holds a big enough force lead (>=40 FP over the enemy) that,
-// instead of the normal safe-below-19 tap, it should commit to a long-held, deep drain
-// that pushes the enemy's force as close to 0 as efficiently possible (see
-// NewBotAI_GetDrainTapTargetCost) to set up a repeated drainlock+pullkick sequence.
-// bot_drainlockbias only weights how defensively-aggressive that choice reads (it does
-// not need drain to already know pull - IsPullkickDrainWindow/IsDrainlockAdvantage still
-// gate the follow-up pullkick separately).
+// Updates the latched heal-driven drainlock state. Once triggered by a health disadvantage,
+// it persists on the same enemy until the bot tops off or becomes reckless enough to give
+// the heal up early.
+static void NewBotAI_UpdateHealDrainlockState(bot_state_t *bs)
+{
+	float aggressionBias;
+	int ourHealth;
+	int enemyNum;
+
+	if (!bs)
+	{
+		return;
+	}
+
+	if (!bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		bs->healDrainlockActive = qfalse;
+		bs->healDrainlockTargetNum = ENTITYNUM_NONE;
+		return;
+	}
+
+	aggressionBias = BotGetAggressionBias(bs);
+	ourHealth = g_entities[bs->client].health;
+	enemyNum = bs->currentEnemy->s.number;
+
+	if (ourHealth >= 100)
+	{
+		bs->healDrainlockActive = qfalse;
+		bs->healDrainlockTargetNum = ENTITYNUM_NONE;
+		return;
+	}
+
+	//Only extremely aggressive bots should give up a heal-driven drainlock before topping off.
+	if (aggressionBias >= 0.75f)
+	{
+		bs->healDrainlockActive = qfalse;
+		bs->healDrainlockTargetNum = ENTITYNUM_NONE;
+		return;
+	}
+
+	if (bs->healDrainlockActive && bs->healDrainlockTargetNum == enemyNum)
+	{
+		return;
+	}
+
+	if (NewBotAI_GetTotalHealthDelta(bs) < 0)
+	{
+		bs->healDrainlockActive = qtrue;
+		bs->healDrainlockTargetNum = enemyNum;
+		return;
+	}
+
+	bs->healDrainlockActive = qfalse;
+	bs->healDrainlockTargetNum = ENTITYNUM_NONE;
+}
+
+static qboolean NewBotAI_ShouldHealDrainlock(bot_state_t *bs)
+{
+	if (!bs || !bs->healDrainlockActive || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return qfalse;
+	}
+
+	return (bs->healDrainlockTargetNum == bs->currentEnemy->s.number) ? qtrue : qfalse;
+}
+
+// True when either a heal-driven drainlock should commit to a deep drain regardless of
+// cvar bias, or a big enough force lead (>=40 FP over the enemy) plus bot_drainlockbias
+// should push the bot into the same long-held, efficient deep-drain targeting. See
+// NewBotAI_GetDrainTapTargetCost; IsPullkickDrainWindow/IsDrainlockAdvantage still gate
+// the follow-up pullkick separately.
 static qboolean NewBotAI_ShouldDrainlockDeep(bot_state_t *bs)
 {
 	const float drainlockBias = BotGetChanceBiasPercent(bot_drainlockbias.value);
 	const int ourForce = bs->cur_ps.fd.forcePower;
 	const int hisForce = bs->currentEnemy->client->ps.fd.forcePower;
 	int requiredLead;
+
+	NewBotAI_UpdateHealDrainlockState(bs);
+	if (NewBotAI_ShouldHealDrainlock(bs))
+	{
+		return qtrue;
+	}
 
 	if (drainlockBias <= 0.0f)
 	{
@@ -12129,7 +12218,7 @@ static qboolean NewBotAI_ShouldDrainlockDeep(bot_state_t *bs)
 	return ((ourForce - hisForce) >= requiredLead) ? qtrue : qfalse;
 }
 
-// Computes exactly how many of our own force points a drain tap must spend against the
+// Computes exactly how many drain ticks a targeted drain tap should hold against the
 // current enemy. Normally this targets landing them safely under the free-pullkick
 // threshold (19 FP, with a 1 FP margin for their regen tick ticking in slightly later
 // than ours) - the "20, 19, 18..." thresholds. Each 5 FP we spend draining removes 4
@@ -12141,12 +12230,20 @@ static qboolean NewBotAI_ShouldDrainlockDeep(bot_state_t *bs)
 // (e.g. as low as 3 with the standard 4 FP/tick rate) rather than always 18. Returns 0
 // when the enemy is already below the relevant threshold or the values can't be
 // determined.
-static int NewBotAI_GetDrainTapTargetCost(bot_state_t *bs)
+static int NewBotAI_GetDrainTapTargetTicks(bot_state_t *bs)
 {
-	const int hisForce = bs->currentEnemy->client->ps.fd.forcePower;
-	const int fpPerTick = (g_tweakForce.integer & FT_DRAINDMGNERF) ? 3 : 4;
+	int hisForce;
+	int fpPerTick;
 	int fpToRemove;
 	int ticks;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return 0;
+	}
+
+	hisForce = bs->currentEnemy->client->ps.fd.forcePower;
+	fpPerTick = (g_tweakForce.integer & FT_DRAINDMGNERF) ? 3 : 4;
 
 	if (NewBotAI_ShouldDrainlockDeep(bs))
 	{
@@ -12156,8 +12253,7 @@ static int NewBotAI_GetDrainTapTargetCost(bot_state_t *bs)
 		}
 
 		ticks = (hisForce + fpPerTick - 1) / fpPerTick;
-
-		return ticks * 5; //drain self-cost is 5 FP per tick
+		return ticks;
 	}
 
 	if (hisForce < 19)
@@ -12168,7 +12264,12 @@ static int NewBotAI_GetDrainTapTargetCost(bot_state_t *bs)
 	fpToRemove = hisForce - 18; //land them at 18, safely below 19 to survive their regen tick
 	ticks = (fpToRemove + fpPerTick - 1) / fpPerTick;
 
-	return ticks * 5; //drain self-cost is 5 FP per tick
+	return ticks;
+}
+
+static int NewBotAI_GetDrainTapTargetCost(bot_state_t *bs)
+{
+	return NewBotAI_GetDrainTapTargetTicks(bs) * 5; //drain self-cost is 5 FP per tick
 }
 
 // True when this bot is in "force bias with pullkick weights" mode: aggressive, PTK-weighted,
@@ -12253,6 +12354,9 @@ int NewBotAI_GetDrain(bot_state_t *bs) {
 		totalHealthDelta >= 30) ? qtrue : qfalse;
 	const qboolean returnWindowPTKAvailable =
 		(pressureDrainVsThrow && NewBotAI_GetPTKWeight(bs) > 0) ? qtrue : qfalse;
+	int drainTapTargetCost;
+	qboolean healDrainlock;
+	qboolean continuingLatchedHealDrain;
 	int weight = 100;
 	vec3_t a_fo;
 
@@ -12271,6 +12375,10 @@ int NewBotAI_GetDrain(bot_state_t *bs) {
 	if (bs->cur_ps.weaponstate == WEAPON_CHARGING_ALT && bs->cur_ps.weaponChargeTime > 700) //don't drain if we are at a charge
 		return 0;
 
+	NewBotAI_UpdateHealDrainlockState(bs);
+	healDrainlock = NewBotAI_ShouldHealDrainlock(bs);
+	drainTapTargetCost = NewBotAI_GetDrainTapTargetCost(bs);
+	continuingLatchedHealDrain = (healDrainlock && bs->drainHoldTime > 0) ? qtrue : qfalse;
 	if (NewBotAI_IsPullkickDrainWindow(bs))
 	{
 		if (NewBotAI_IsEnemySaberThreatImminent(bs) || bs->currentEnemy->client->ps.saberInFlight)
@@ -12329,6 +12437,17 @@ int NewBotAI_GetDrain(bot_state_t *bs) {
 		return 0;
 	if (bs->currentEnemy->client->ps.saberInFlight)
 		return 0;
+
+	if (healDrainlock && drainTapTargetCost > 0 &&
+		(ourForce >= drainTapTargetCost || continuingLatchedHealDrain))
+	{
+		weight = 100 + (-totalHealthDelta);
+		if (weight > 140)
+		{
+			weight = 140;
+		}
+		return weight;
+	}
 
 	if (ourHealth < 100)
 	{

@@ -383,8 +383,11 @@ XCVAR_DEF( bot_fandwell,				"250",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_drainbias,				"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 // Percent chance-style bias (see BotGetChanceBiasPercent) that weights how readily a bot
 // commits to a long-held, deep drain (toward 0 FP rather than the normal safe-below-19
-// tap) once it holds a >=40 FP advantage over its enemy. Higher values lean the bot more
-// defensively aggressive into this drainlock-deepening play. See
+// tap) once it holds a >=40 FP advantage over its enemy. This cvar only weights that
+// force-lead-driven version of the behavior; bots that are behind on health separately use
+// the same efficient whole-tick deep-drain targeting unless their aggression bias is
+// extremely reckless. Higher values lean the bot more defensively aggressive into the
+// cvar-driven drainlock-deepening play. See
 // NewBotAI_ShouldDrainlockDeep / NewBotAI_GetDrainTapTargetCost.
 XCVAR_DEF( bot_drainlockbias,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_lightningbias,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
