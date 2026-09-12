@@ -6787,9 +6787,11 @@ void NewBotAI_Getup(bot_state_t *bs)
 			trap->EA_MoveLeft(bs->client);
 		else
 			trap->EA_MoveRight(bs->client);
-		rollingEscape = qtrue;
 		if (enemyIncomingSaber && emergencyRollEscape)
+		{
+			rollingEscape = qtrue;
 			drainRollingEscape = qtrue;
+		}
 	}
 	else if (enemyIncomingSaber && emergencyRollEscape)
 	{
@@ -10243,7 +10245,7 @@ static qboolean NewBotAI_HasDroppedOwnSaber(bot_state_t *bs)
 		return qfalse;
 	}
 
-	if (bs->cur_ps.weapon != WP_SABER && bs->cur_ps.weapon != WP_MELEE)
+	if (bs->cur_ps.weapon != WP_SABER)
 	{
 		return qfalse;
 	}
@@ -11603,7 +11605,7 @@ int NewBotAI_GetPull(bot_state_t *bs) {
 	if (ourForce < 21)
 		return 0;
 	if (NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bs) &&
-		bs->frame_Enemy_Len > 250 &&
+		NewBotAI_IsEnemySaberThreatImminent(bs) &&
 		hisForce >= 20 &&
 		!NewBotAI_IsDrainlockAdvantage(bs) &&
 		!NewBotAI_ShouldPreferFlipkickOverThrow(bs))
