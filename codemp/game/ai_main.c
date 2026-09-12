@@ -181,6 +181,8 @@ static qboolean NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bot_state_t *bs);
 static qboolean NewBotAI_ShouldJumpDrainVsSaberThrow(bot_state_t *bs);
 static qboolean NewBotAI_ShouldEmergencyDrainRollSaberThrow(bot_state_t *bs);
 static void NewBotAI_ApplySidewaysDrainRoll(bot_state_t *bs, qboolean moveBack);
+
+#define NEWBOTAI_DRAIN_TICK_MSEC 100
 static qboolean NewBotAI_HandleRecoveryRollForcepower(bot_state_t *bs);
 static qboolean NewBotAI_IsBetweenOwnSaberAndEnemy(bot_state_t *bs);
 static qboolean NewBotAI_ShouldCloseGapVsEnemySaberThrow(bot_state_t *bs);
@@ -7989,7 +7991,7 @@ void NewBotAI_Draining(bot_state_t *bs)
 		if (drainTapTargetTicks > 0 &&
 			(healDrainlock || NewBotAI_IsPullkickDrainWindow(bs)))
 		{
-			holdMs = (drainTapTargetTicks * 100) + 1; //hold through the last full 100ms drain tick
+			holdMs = (drainTapTargetTicks * NEWBOTAI_DRAIN_TICK_MSEC) + 1; //hold through the last full drain tick
 		}
 		else
 		{
@@ -12345,9 +12347,6 @@ static qboolean NewBotAI_IsDrainlockAdvantage(bot_state_t *bs)
 int NewBotAI_GetDrain(bot_state_t *bs) {
 	const int ourHealth = g_entities[bs->client].health, ourForce = bs->cur_ps.fd.forcePower, hisForce = bs->currentEnemy->client->ps.fd.forcePower;
 	const int totalHealthDelta = NewBotAI_GetTotalHealthDelta(bs);
-	const qboolean healDrainlockWasActive = bs->healDrainlockActive;
-	const int healDrainlockTargetNum = bs->healDrainlockTargetNum;
-	const int drainTapTargetCost = NewBotAI_GetDrainTapTargetCost(bs);
 	const qboolean safeDrainVsThrow = NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bs);
 	const qboolean pressureDrainVsThrow = (bs->currentEnemy->client->ps.saberInFlight &&
 		NewBotAI_IsEnemySaberReturning(bs) &&
@@ -12355,6 +12354,9 @@ int NewBotAI_GetDrain(bot_state_t *bs) {
 		totalHealthDelta >= 30) ? qtrue : qfalse;
 	const qboolean returnWindowPTKAvailable =
 		(pressureDrainVsThrow && NewBotAI_GetPTKWeight(bs) > 0) ? qtrue : qfalse;
+	int drainTapTargetCost;
+	qboolean healDrainlock;
+	qboolean continuingLatchedHealDrain;
 	int weight = 100;
 	vec3_t a_fo;
 
@@ -12374,6 +12376,9 @@ int NewBotAI_GetDrain(bot_state_t *bs) {
 		return 0;
 
 	NewBotAI_UpdateHealDrainlockState(bs);
+	healDrainlock = NewBotAI_ShouldHealDrainlock(bs);
+	drainTapTargetCost = NewBotAI_GetDrainTapTargetCost(bs);
+	continuingLatchedHealDrain = (healDrainlock && bs->drainHoldTime > 0) ? qtrue : qfalse;
 	if (NewBotAI_IsPullkickDrainWindow(bs))
 	{
 		if (NewBotAI_IsEnemySaberThreatImminent(bs) || bs->currentEnemy->client->ps.saberInFlight)
@@ -12433,10 +12438,9 @@ int NewBotAI_GetDrain(bot_state_t *bs) {
 	if (bs->currentEnemy->client->ps.saberInFlight)
 		return 0;
 
-	if (NewBotAI_ShouldHealDrainlock(bs) && hisForce >= 20 &&
+	if (healDrainlock && hisForce >= 20 &&
 		drainTapTargetCost > 0 &&
-		(ourForce >= drainTapTargetCost ||
-			(healDrainlockWasActive && healDrainlockTargetNum == bs->currentEnemy->s.number)))
+		(ourForce >= drainTapTargetCost || continuingLatchedHealDrain))
 	{
 		weight = 100 + (-totalHealthDelta);
 		if (weight > 140)
