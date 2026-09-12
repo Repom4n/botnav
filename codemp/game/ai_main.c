@@ -459,8 +459,6 @@ int BotAI_GetClientState( int clientNum, playerState_t *state ) {
 	}
 
 	memcpy( state, &ent->client->ps, sizeof(playerState_t) );
-	//Downed saber physics can transition between movement types while still in the dropped
-	//think state; once the ownership/downed checks above pass, treat it as recall-eligible.
 	return qtrue;
 }
 
@@ -10242,7 +10240,12 @@ static qboolean NewBotAI_HasDroppedOwnSaber(bot_state_t *bs)
 		return qfalse;
 	}
 
-	return qtrue;
+	//Downed saber physics can transition between a small set of movement types while still
+	//in dropped-saber think; accept those known downed states for recall eligibility.
+	return (saberEnt->s.pos.trType == TR_GRAVITY ||
+		saberEnt->s.pos.trType == TR_STATIONARY ||
+		saberEnt->s.pos.trType == TR_INTERPOLATE ||
+		saberEnt->s.pos.trType == TR_LINEAR) ? qtrue : qfalse;
 }
 
 static int BotGetDrainHoldBiasMs(bot_state_t *bs)
