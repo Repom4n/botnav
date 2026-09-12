@@ -10245,7 +10245,7 @@ static qboolean NewBotAI_HasDroppedOwnSaber(bot_state_t *bs)
 		return qfalse;
 	}
 
-	if (bs->cur_ps.weapon != WP_SABER)
+	if (bs->cur_ps.weapon != WP_SABER && bs->cur_ps.weapon != WP_MELEE)
 	{
 		return qfalse;
 	}
@@ -11196,7 +11196,7 @@ static qboolean NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bot_state_t *bs)
 		return qfalse;
 	}
 
-	if (bs->cur_ps.weapon != WP_SABER && bs->cur_ps.weapon != WP_MELEE)
+	if (bs->cur_ps.weapon != WP_SABER)
 	{
 		return qfalse;
 	}
@@ -11265,6 +11265,7 @@ static void NewBotAI_ApplySidewaysDrainRoll(bot_state_t *bs, qboolean moveBack)
 	if (bs->drainRollYawStart <= 0 || bs->drainRollYawStart > level.time)
 	{
 		bs->drainRollDir = Q_irand(0, 1) ? 1 : -1;
+		bs->drainRollYawStart = level.time;
 		bs->drainRollYawStart = level.time;
 	}
 
@@ -11746,7 +11747,7 @@ int NewBotAI_GetPush(bot_state_t *bs) {
 		return 0;
 	if (bs->cur_ps.fd.forcePowersActive & (1 << FP_PROTECT)) //we can tank the dmg..
 		return 0;
-	if (bs->currentEnemy->client->ps.saberInFlight || NewBotAI_IsEnemySaberThreatImminent(bs))
+	if (NewBotAI_IsEnemySaberThreatImminent(bs))
 		return 0;
 
 	if (NewBotAI_IsEnemyPullable(bs) && (ourHealth < 25) && (bs->frame_Enemy_Len < 160) && (bs->currentEnemy->client->ps.weapon == WP_SABER)) {
