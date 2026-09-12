@@ -8817,20 +8817,36 @@ static float NewBotAI_GetPullkickTimeToKickRange(bot_state_t *bs)
 	return ((bs->frame_Enemy_Len - pullKickRange) / closing) * 1000.0f;
 }
 
+//450ms keeps the combo window within ~9 think ticks (50ms each): enough time for a
+//real saber-hit->flipkick follow-through, but short enough that stale contact doesn't
+//unlock unrelated later jumps.
 #define NEWBOTAI_FAN_FLIPKICK_CONTACT_WINDOW_MS 450
 static qboolean NewBotAI_HasRecentSaberContact(bot_state_t *bs)
 {
-	return (bs->lastSaberContactTime > level.time - NEWBOTAI_FAN_FLIPKICK_CONTACT_WINDOW_MS) ? qtrue : qfalse;
+	return (bs->currentEnemy && bs->currentEnemy->client &&
+		bs->lastSaberContactTargetNum == bs->currentEnemy->s.number &&
+		bs->lastSaberContactTime > 0 &&
+		bs->lastSaberContactTime > level.time - NEWBOTAI_FAN_FLIPKICK_CONTACT_WINDOW_MS) ? qtrue : qfalse;
 }
 
 static qboolean NewBotAI_CanInitiateFlipkickUnderFanPressure(bot_state_t *bs)
 {
-	if (bs->fanPhase == FAN_PHASE_INACTIVE)
+	if (bs->fanPhase == FAN_PHASE_INACTIVE || bs->fanPhase == FAN_PHASE_DWELL)
 	{
 		return qtrue;
 	}
 
-	return NewBotAI_HasRecentSaberContact(bs);
+	if (!NewBotAI_HasRecentSaberContact(bs))
+	{
+		return qfalse;
+	}
+
+	if (bs->fanChainStartTime > 0 && bs->lastSaberContactTime < bs->fanChainStartTime)
+	{
+		return qfalse;
+	}
+
+	return qtrue;
 }
 
 static void NewBotAI_UpdateRecentSaberContact(bot_state_t *bs)
@@ -8847,6 +8863,7 @@ static void NewBotAI_UpdateRecentSaberContact(bot_state_t *bs)
 	if (!bs->currentEnemy || !bs->currentEnemy->client)
 	{
 		bs->lastEnemyDurability = 0;
+		bs->lastEnemyDurabilityTargetNum = ENTITYNUM_NONE;
 		return;
 	}
 
@@ -8862,15 +8879,24 @@ static void NewBotAI_UpdateRecentSaberContact(bot_state_t *bs)
 	}
 	enemyDurability = enemyHealth + enemyArmor;
 
-	if (bs->lastEnemyDurability > 0 && enemyDurability < bs->lastEnemyDurability &&
+	if (bs->lastEnemyDurabilityTargetNum != bs->currentEnemy->s.number)
+	{
+		bs->lastEnemyDurability = enemyDurability;
+		bs->lastEnemyDurabilityTargetNum = bs->currentEnemy->s.number;
+		return;
+	}
+
+	if (enemyDurability < bs->lastEnemyDurability &&
 		weAreInSaberContactWindow &&
 		bs->currentEnemy->client->lasthurt_client == bs->client &&
 		bs->currentEnemy->client->lasthurt_mod == MOD_SABER)
 	{
 		bs->lastSaberContactTime = level.time;
+		bs->lastSaberContactTargetNum = bs->currentEnemy->s.number;
 	}
 
 	bs->lastEnemyDurability = enemyDurability;
+	bs->lastEnemyDurabilityTargetNum = bs->currentEnemy->s.number;
 }
 
 // Schedules the pk/ptk flipkick jump so the bot leaps only once the enemy is actually
@@ -8909,7 +8935,8 @@ static void NewBotAI_SchedulePullkickJump(bot_state_t *bs)
 
 	if (!NewBotAI_CanInitiateFlipkickUnderFanPressure(bs))
 	{
-		bs->pullKickJumpTime = 0;
+		//Don't start a new pullkick jump while fan pressure is active unless the combo
+		//was just confirmed by saber contact; keep any existing pending schedule intact.
 		return;
 	}
 
@@ -9101,11 +9128,6 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 	NewBotAI_PrepareHorizontalSwingStart(bs);
 	horizontalSwingStart = (bs->fanPhase == FAN_PHASE_TAP_PRE_SWING || bs->fanPhase == FAN_PHASE_SWING ||
 		bs->fanPhase == FAN_PHASE_TAP_POST_SWING) ? qtrue : qfalse;
-
-	if (!NewBotAI_CanInitiateFlipkickUnderFanPressure(bs) && bs->pullKickJumpTime != 0)
-	{
-		bs->pullKickJumpTime = 0;
-	}
 
 	hardRetreatHealth = 30 - (int)(aggressionBias * 25.0f);
 	softRetreatHealth = 60 - (int)(aggressionBias * 35.0f);
@@ -9407,7 +9429,7 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 		//fires when reached; -1 holds until the enemy is within 320 units (nobody was
 		//closing when we pulled, so don't commit to a timed leap). The kick attempt
 		//itself happens via NewBotAI_Flipkick in the normal combat path below.
-		else if (bs->pullKickJumpTime != 0 && NewBotAI_CanInitiateFlipkickUnderFanPressure(bs))
+		else if (bs->pullKickJumpTime != 0)
 		{
 			trap->EA_MoveForward(bs->client);
 			if (bs->cur_ps.groundEntityNum != ENTITYNUM_NONE &&
@@ -9485,7 +9507,7 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 				trap->EA_Crouch(bs->client); 
 			}
 			else {
-				if (NewBotAI_CanInitiateFlipkickUnderFanPressure(bs) && NewBotAI_CanAttemptFlipkick(bs))
+				if (NewBotAI_CanAttemptFlipkick(bs))
 				{
 					NewBotAI_Flipkick(bs);
 				}
@@ -10813,6 +10835,8 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 		//Start a new chain, preferring whichever direction we're already strafing.
 		int startDir = 0;
 
+		//Even when we already have a lateral strafe direction, only convert it into a fan
+		//chain when fanBias is enabled (>0), so bot_fanbias 0 remains a strict "off".
 		if (fanBias > 0.0f && bs->randomStrafeEndTime > level.time && bs->randomStrafeDir)
 		{
 			startDir = bs->randomStrafeDir;
