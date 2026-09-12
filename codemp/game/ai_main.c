@@ -6846,6 +6846,22 @@ void NewBotAI_Getup(bot_state_t *bs)
 	}
 }
 
+static int NewBotAI_GetTotalHealthDelta(bot_state_t *bs)
+{
+	int ourTotalHealth;
+	int enemyTotalHealth;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return 0;
+	}
+
+	ourTotalHealth = g_entities[bs->client].health + bs->cur_ps.stats[STAT_ARMOR];
+	enemyTotalHealth = bs->currentEnemy->health + bs->currentEnemy->client->ps.stats[STAT_ARMOR];
+
+	return ourTotalHealth - enemyTotalHealth;
+}
+
 static qboolean NewBotAI_CanAttemptFlipkick(bot_state_t *bs)
 {
 	if (!g_flipKick.integer)
@@ -8562,11 +8578,10 @@ int NewBotAI_GetCharge(bot_state_t* bs)
 void NewBotAI_GetAttack(bot_state_t *bs)
 {
 	int weapon;
+	const int totalHealthDelta = NewBotAI_GetTotalHealthDelta(bs);
 	const qboolean hasDroppedOwnSaber = NewBotAI_HasDroppedOwnSaber(bs);
-	const int ourTotalHealth = g_entities[bs->client].health + bs->cur_ps.stats[STAT_ARMOR];
-	const int enemyTotalHealth = (bs->currentEnemy && bs->currentEnemy->client) ?
-		(bs->currentEnemy->health + bs->currentEnemy->client->ps.stats[STAT_ARMOR]) : ourTotalHealth;
-	const qboolean hasHealthDisadvantage = (ourTotalHealth < enemyTotalHealth) ? qtrue : qfalse;
+	const qboolean hasHealthDisadvantage = (totalHealthDelta < 0) ? qtrue : qfalse;
+	const qboolean suppressSaberAttack = (hasHealthDisadvantage && !hasDroppedOwnSaber) ? qtrue : qfalse;
 	// const float speed = NewBotAI_GetSpeedTowardsEnemy(bs);
 
 	if (!bs->client || !bs->currentEnemy || !bs->currentEnemy->client)
@@ -8593,11 +8608,6 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 	}
 
 	if (bs->cur_ps.weapon == WP_SABER) {//Fullforce saber attacks
-		if (hasHealthDisadvantage && !hasDroppedOwnSaber)
-		{
-			return;
-		}
-
 		if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE &&
 			!BG_SaberInAttack(bs->cur_ps.saberMove))
 		{
@@ -8646,7 +8656,8 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 			if (bs->fanPhase != FAN_PHASE_INACTIVE)
 			{
 				NewBotAI_ApplyHorizontalSwingMove(bs);
-				trap->EA_Attack(bs->client);
+				if (!suppressSaberAttack)
+					trap->EA_Attack(bs->client);
 				return;
 			}
 
@@ -8660,7 +8671,8 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 				bs->frame_Enemy_Len < 320 &&
 				NewBotAI_GetTimeToInRange(bs, 75, 800) < 800 && g_entities[bs->client].health > 40)
 			{
-				trap->EA_Attack(bs->client);
+				if (!suppressSaberAttack)
+					trap->EA_Attack(bs->client);
 				return;
 			}
 
@@ -8670,7 +8682,8 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 					//Com_Printf("Their torso time is %i\n", bs->currentEnemy->client->ps.torsoTimer);
 					//if ((bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_DRAIN) || (bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB))) || ((bs->frame_Enemy_Len < 70) && (bs->currentEnemy->client->ps.origin[2] - bs->cur_ps.origin[2]) > 50)) {
 						NewBotAI_ApplyHorizontalSwingMove(bs);
-						trap->EA_Attack(bs->client);
+						if (!suppressSaberAttack)
+							trap->EA_Attack(bs->client);
 						return;
 					//}
 				}
@@ -8725,7 +8738,8 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 			if (BG_SaberInAttack(bs->cur_ps.saberMove) && NewBotAI_GetTimeToInRange(bs, 75, 600) < 600 &&
 				g_entities[bs->client].health > 70)
 			{
-				trap->EA_Attack(bs->client);
+				if (!suppressSaberAttack)
+					trap->EA_Attack(bs->client);
 				return;
 			}
 
@@ -8740,7 +8754,8 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 						{
 							NewBotAI_ResetFanChain(bs);
 						}
-						trap->EA_Attack(bs->client);
+						if (!suppressSaberAttack)
+							trap->EA_Attack(bs->client);
 						return;
 					}
 				}
@@ -9344,9 +9359,7 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 		}
 		else if (NewBotAI_IsEnemySaberThreatImminent(bs))
 		{
-			const int ourTotalHealth = g_entities[bs->client].health + bs->cur_ps.stats[STAT_ARMOR];
-			const int enemyTotalHealth = bs->currentEnemy->health + bs->currentEnemy->client->ps.stats[STAT_ARMOR];
-			const int totalHealthDelta = ourTotalHealth - enemyTotalHealth;
+			const int totalHealthDelta = NewBotAI_GetTotalHealthDelta(bs);
 
 			if (totalHealthDelta >= 30)
 			{
@@ -10314,10 +10327,11 @@ static qboolean NewBotAI_HasDroppedOwnSaber(bot_state_t *bs)
 		return qfalse;
 	}
 
-	//Downed saber physics can transition between a small set of movement types while still
-	//in dropped-saber think; accept those known downed states for recall eligibility.
+	//Dropped saber physics can include a brief interpolate phase while still in
+	//DownedSaberThink, so keep all known downed movement states eligible.
 	return (saberEnt->s.pos.trType == TR_GRAVITY ||
-		saberEnt->s.pos.trType == TR_STATIONARY) ? qtrue : qfalse;
+		saberEnt->s.pos.trType == TR_STATIONARY ||
+		saberEnt->s.pos.trType == TR_INTERPOLATE) ? qtrue : qfalse;
 }
 
 static int BotGetDrainHoldBiasMs(bot_state_t *bs)
@@ -11196,7 +11210,6 @@ static qboolean NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bot_state_t *bs)
 {
 	vec3_t a_fo;
 	int ourTotalHealth;
-	int enemyTotalHealth;
 	int totalHealthDelta;
 
 	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
@@ -11240,21 +11253,15 @@ static qboolean NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bot_state_t *bs)
 		return qfalse;
 	}
 
+	totalHealthDelta = NewBotAI_GetTotalHealthDelta(bs);
 	ourTotalHealth = g_entities[bs->client].health + bs->cur_ps.stats[STAT_ARMOR];
-	enemyTotalHealth = bs->currentEnemy->health + bs->currentEnemy->client->ps.stats[STAT_ARMOR];
-	totalHealthDelta = ourTotalHealth - enemyTotalHealth;
 
-	if (g_entities[bs->client].health <= BotGetHealthBiasThreshold())
+	if (ourTotalHealth <= BotGetHealthBiasThreshold())
 	{
 		return qtrue;
 	}
 
 	if (totalHealthDelta < 0)
-	{
-		return qtrue;
-	}
-
-	if (totalHealthDelta >= 30)
 	{
 		return qtrue;
 	}
@@ -11267,22 +11274,25 @@ static qboolean NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bot_state_t *bs)
 // "about to die with no stable footing" window where the sideways drain roll is allowed.
 static qboolean NewBotAI_ShouldEmergencyDrainRollSaberThrow(bot_state_t *bs)
 {
+	int ourTotalHealth;
+	qboolean pullActive;
+	qboolean canEmergencyDrainRoll;
+
 	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
 	{
 		return qfalse;
 	}
+	ourTotalHealth = g_entities[bs->client].health + bs->cur_ps.stats[STAT_ARMOR];
+	pullActive = (bs->cur_ps.forceHandExtend == HANDEXTEND_FORCEPULL ||
+		bs->cur_ps.powerups[PW_PULL] > level.time) ? qtrue : qfalse;
+	canEmergencyDrainRoll = (bs->currentEnemy->client->ps.saberInFlight &&
+		NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bs) &&
+		NewBotAI_IsEnemySaberThreatImminent(bs) &&
+		ourTotalHealth < 31 &&
+		bs->frame_Enemy_Len < 220 &&
+		pullActive) ? qtrue : qfalse;
 
-	if (!NewBotAI_IsEnemySaberThreatImminent(bs))
-	{
-		return qfalse;
-	}
-
-	if (g_entities[bs->client].health >= 31 || bs->frame_Enemy_Len >= 220)
-	{
-		return qfalse;
-	}
-
-	return qtrue;
+	return canEmergencyDrainRoll;
 }
 
 static void NewBotAI_ApplySidewaysDrainRoll(bot_state_t *bs, qboolean moveBack)
@@ -11942,7 +11952,12 @@ static qboolean NewBotAI_IsDrainlockAdvantage(bot_state_t *bs)
 
 int NewBotAI_GetDrain(bot_state_t *bs) {
 	const int ourHealth = g_entities[bs->client].health, ourForce = bs->cur_ps.fd.forcePower, hisForce = bs->currentEnemy->client->ps.fd.forcePower;
+	const int totalHealthDelta = NewBotAI_GetTotalHealthDelta(bs);
 	const qboolean safeDrainVsThrow = NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bs);
+	const qboolean pressureDrainVsThrow = (bs->currentEnemy->client->ps.saberInFlight &&
+		NewBotAI_IsEnemySaberReturning(bs) &&
+		!BG_SaberInAttack(bs->currentEnemy->client->ps.saberMove) &&
+		totalHealthDelta >= 30) ? qtrue : qfalse;
 	int weight = 100;
 	vec3_t a_fo;
 
@@ -11977,6 +11992,23 @@ int NewBotAI_GetDrain(bot_state_t *bs) {
 		weight = 110;
 		if (NewBotAI_ShouldPreferFlipkickOverThrow(bs))
 			weight += 15;
+		if (hisForce >= 20)
+			weight += 10;
+		return weight;
+	}
+	if (pressureDrainVsThrow)
+	{
+		if (!bs->frame_Enemy_Vis)
+			return 0;
+		VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, a_fo);
+		vectoangles(a_fo, a_fo);
+		if (!InFieldOfVision(bs->viewangles, 60, a_fo))
+			return 0;
+		if (bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB))
+			return 0;
+		if (NewBotAI_IsEnemySaberThreatImminent(bs))
+			return 0;
+		weight = 95;
 		if (hisForce >= 20)
 			weight += 10;
 		return weight;
@@ -15485,9 +15517,9 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 
 		if (bs->currentEnemy && bs->currentEnemy->client)
 		{
-			const int ourTotalHealth = g_entities[bs->client].health + bs->cur_ps.stats[STAT_ARMOR];
-			const int enemyTotalHealth = bs->currentEnemy->health + bs->currentEnemy->client->ps.stats[STAT_ARMOR];
-			if (ourTotalHealth < enemyTotalHealth && !hasDroppedOwnSaber)
+			if (NewBotAI_GetTotalHealthDelta(bs) < 0 &&
+				!BG_SaberInAttack(bs->cur_ps.saberMove) &&
+				!hasDroppedOwnSaber)
 			{
 				bs->doAttack = 0;
 			}
