@@ -12554,13 +12554,13 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 		if (enemyTotalHealth >= knockdownFinishMinHealth && enemyTotalHealth <= knockdownFinishMaxHealth) {
 			weight = knockdownHeavyWeight;
 		}
-		else if (ourForce > knockdownHeavyForceThreshold && enemyTotalHealth <= knockdownHeavyHealthThreshold) {
+		else if (ourForce >= knockdownHeavyForceThreshold && enemyTotalHealth <= knockdownHeavyHealthThreshold) {
 			weight = knockdownHeavyWeight;
 		}
-		else if (ourForce > knockdownHeavyForceThreshold && (forceLead > 0 || enemyArmor > 0)) {
+		else if (ourForce >= knockdownHeavyForceThreshold && (forceLead > 0 || enemyArmor > 0)) {
 			weight = knockdownPressureWeight;
 		}
-		else if (ourForce > knockdownBaseForceThreshold) {
+		else if (ourForce >= knockdownBaseForceThreshold) {
 			weight = knockdownBaseWeight;
 		}
 	}
