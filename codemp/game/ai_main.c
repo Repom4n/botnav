@@ -12438,8 +12438,7 @@ int NewBotAI_GetDrain(bot_state_t *bs) {
 	if (bs->currentEnemy->client->ps.saberInFlight)
 		return 0;
 
-	if (healDrainlock && hisForce >= 20 &&
-		drainTapTargetCost > 0 &&
+	if (healDrainlock && drainTapTargetCost > 0 &&
 		(ourForce >= drainTapTargetCost || continuingLatchedHealDrain))
 	{
 		weight = 100 + (-totalHealthDelta);
