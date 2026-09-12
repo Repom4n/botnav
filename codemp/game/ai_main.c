@@ -11221,11 +11221,6 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 		//Start a new chain, preferring whichever direction we're already strafing.
 		int startDir = 0;
 
-		if (saberAttackRangeWeightPercent <= 0)
-		{
-			return;
-		}
-
 		//Even when we already have a lateral strafe direction, only convert it into a fan
 		//chain when fanBias is enabled (>0), so bot_fanbias 0 remains a strict "off".
 		if (fanBias > 0.0f && bs->randomStrafeEndTime > level.time && bs->randomStrafeDir)
@@ -11237,7 +11232,7 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 			startDir = Q_irand(0, 1) ? 1 : -1;
 		}
 
-		if (startDir)
+		if (startDir && saberAttackRangeWeightPercent > 0)
 		{
 			bs->fanAttackDir = startDir;
 			bs->fanPhase = FAN_PHASE_DWELL;
