@@ -12345,6 +12345,7 @@ static qboolean NewBotAI_IsDrainlockAdvantage(bot_state_t *bs)
 int NewBotAI_GetDrain(bot_state_t *bs) {
 	const int ourHealth = g_entities[bs->client].health, ourForce = bs->cur_ps.fd.forcePower, hisForce = bs->currentEnemy->client->ps.fd.forcePower;
 	const int totalHealthDelta = NewBotAI_GetTotalHealthDelta(bs);
+	const int drainTapTargetCost = NewBotAI_GetDrainTapTargetCost(bs);
 	const qboolean safeDrainVsThrow = NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bs);
 	const qboolean pressureDrainVsThrow = (bs->currentEnemy->client->ps.saberInFlight &&
 		NewBotAI_IsEnemySaberReturning(bs) &&
@@ -12430,7 +12431,8 @@ int NewBotAI_GetDrain(bot_state_t *bs) {
 	if (bs->currentEnemy->client->ps.saberInFlight)
 		return 0;
 
-	if (NewBotAI_ShouldHealDrainlock(bs) && hisForce >= 20)
+	if (NewBotAI_ShouldHealDrainlock(bs) && hisForce >= 20 &&
+		drainTapTargetCost > 0 && ourForce >= drainTapTargetCost)
 	{
 		weight = 100 + (-totalHealthDelta);
 		if (weight > 140)
