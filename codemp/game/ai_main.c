@@ -10586,13 +10586,9 @@ static float NewBotAI_GetFanBiasPercent(bot_state_t *bs)
 	const qboolean hasForceDisadvantage = (bs->currentEnemy && bs->currentEnemy->client &&
 		ourForce < bs->currentEnemy->client->ps.fd.forcePower) ? qtrue : qfalse;
 
-	if (fanBias <= 0.0f)
-	{
-		return 0.0f;
-	}
-
-	if ((ourHealth >= NEWBOTAI_FANBIAS_FULL_HEALTH && ourForce < NEWBOTAI_FANBIAS_LOW_FORCE_THRESHOLD) ||
-		hasForceDisadvantage)
+	if (fanBias > 0.0f &&
+		((ourHealth >= NEWBOTAI_FANBIAS_FULL_HEALTH && ourForce < NEWBOTAI_FANBIAS_LOW_FORCE_THRESHOLD) ||
+		 hasForceDisadvantage))
 	{
 		if (fanBias < NEWBOTAI_FANBIAS_MIN_WEIGHTED_PERCENT)
 		{
@@ -10600,7 +10596,7 @@ static float NewBotAI_GetFanBiasPercent(bot_state_t *bs)
 		}
 	}
 
-	if (NewBotAI_IsDrainlockAdvantage(bs) && fanBias < 80.0f)
+	if (fanBias > 0.0f && NewBotAI_IsDrainlockAdvantage(bs) && fanBias < 80.0f)
 	{
 		fanBias = 80.0f;
 	}
@@ -10915,14 +10911,12 @@ static qboolean NewBotAI_IsEnemySaberThreatImminent(bot_state_t *bs)
 		return qfalse;
 	}
 
-	//Pre-throw anticipation: only treat it as imminent when the enemy is in an actual
-	//saber-throw windup signal (selected saberthrow + alt-charge), not just generic
-	//alt-attack input that can occur in non-throw saber states.
+	//Pre-throw anticipation: only treat it as imminent when replicated player state
+	//matches saber-throw windup, not generic saber states.
 	if (!bs->currentEnemy->client->ps.saberInFlight &&
 		bs->currentEnemy->client->ps.weapon == WP_SABER &&
-		(bs->currentEnemy->client->buttons & BUTTON_ALT_ATTACK) &&
-		bs->currentEnemy->client->ps.fd.forcePowerSelected == FP_SABERTHROW &&
-		bs->currentEnemy->client->ps.weaponstate == WEAPON_CHARGING_ALT &&
+		(bs->currentEnemy->client->ps.weaponstate == WEAPON_CHARGING_ALT ||
+		 bs->currentEnemy->client->ps.weaponstate == WEAPON_FIRING) &&
 		bs->frame_Enemy_Vis &&
 		bs->frame_Enemy_Len < 220 &&
 		!BG_SaberInAttack(bs->currentEnemy->client->ps.saberMove))
@@ -11610,7 +11604,10 @@ int NewBotAI_GetDrain(bot_state_t *bs) {
 		return 90;
 	}
 
-	if (bs->frame_Enemy_Len < 120)
+	if (bs->frame_Enemy_Len < 120 &&
+		(BG_SaberInAttack(bs->currentEnemy->client->ps.saberMove) ||
+		 NewBotAI_IsEnemySaberThreatImminent(bs) ||
+		 bs->currentEnemy->client->ps.saberInFlight))
 		return 0;
 	if (!bs->frame_Enemy_Vis)
 		return 0;
@@ -11932,7 +11929,9 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 		level.clients[bs->client].ps.fd.forcePowerSelected = FP_LIGHTNING;
 		useTheForce = qtrue;
 	}
-	else if (drainWeight > pushWeight && drainWeight > pullWeight && drainWeight > gripWeight && drainWeight > minWeight) {
+	//Explicit tie-break: when drain ties for best weight, prefer drain over grip/push/pull
+	//but not over lightning.
+	else if (drainWeight > lightningWeight && drainWeight >= pushWeight && drainWeight >= pullWeight && drainWeight >= gripWeight && drainWeight > minWeight) {
 		level.clients[bs->client].ps.fd.forcePowerSelected = FP_DRAIN;
 		useTheForce = qtrue;
 
@@ -12003,6 +12002,7 @@ int NewBotAI_GetHeal(bot_state_t* bs) {
 	const int ourForce = bs->cur_ps.fd.forcePower;
 	const int ourHealth = g_entities[bs->client].health;
 	const int healthBiasThreshold = BotGetHealthBiasThreshold();
+	const qboolean pressingAdvantage = NewBotAI_ShouldPressAdvantage(bs);
 	int diff = ((ourForce - ourHealth) + 101) * 0.5f; //Range is 0-100?
 
 	if (g_forcePowerDisable.integer & (1 << FP_HEAL))
@@ -12018,13 +12018,17 @@ int NewBotAI_GetHeal(bot_state_t* bs) {
 	if (ourHealth <= healthBiasThreshold)
 	{
 		diff += 40 + (healthBiasThreshold - ourHealth);
-		if (NewBotAI_ShouldPressAdvantage(bs))
+		if (pressingAdvantage)
 		{
-			diff = (int)(diff * 0.6f);
+			diff = (int)(diff * 0.5f);
 		}
-		if (diff < 80)
+		else if (diff < 80)
 		{
 			diff = 80;
+		}
+		if (diff < 0)
+		{
+			diff = 0;
 		}
 		else if (diff > 100)
 		{
@@ -12032,7 +12036,7 @@ int NewBotAI_GetHeal(bot_state_t* bs) {
 		}
 		return diff;
 	}
-	if (NewBotAI_ShouldPressAdvantage(bs))
+	if (pressingAdvantage)
 		return 0;
 	return diff;
 }
@@ -12126,7 +12130,11 @@ void NewBotAI_GetLSForcepower(bot_state_t *bs)
 		useTheForce = qtrue;
 		//trap->Print("Protect - Weights -- Pull: %i, Push: %i, Absorb: %i, Protect: %i, Heal %i\n", pullWeight, pushWeight, absorbWeight, protectWeight, healWeight);
 	}
-	else if (healWeight > protectWeight && healWeight > pushWeight && healWeight > pullWeight && healWeight > absorbWeight && healWeight > minWeight) {
+	//Explicit tie-break: only under health-bias threshold, prefer heal on ties.
+	else if (((healWeight > protectWeight && healWeight > pushWeight && healWeight > pullWeight && healWeight > absorbWeight) ||
+		(g_entities[bs->client].health <= BotGetHealthBiasThreshold() &&
+			healWeight >= protectWeight && healWeight >= pushWeight && healWeight >= pullWeight && healWeight >= absorbWeight)) &&
+		healWeight > minWeight) {
 		level.clients[bs->client].ps.fd.forcePowerSelected = FP_HEAL;
 		useTheForce = qtrue;
 		//trap->Print("Heal - Weights -- Pull: %i, Push: %i, Absorb: %i, Protect: %i, Heal %i\n", pullWeight, pushWeight, absorbWeight, protectWeight, healWeight);
