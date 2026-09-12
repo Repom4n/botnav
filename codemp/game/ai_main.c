@@ -117,7 +117,6 @@ static float BotGetShortRangeMax(void);
 static float BotGetMediumRangeMax(void);
 static int BotGetRangeWeightPercentForDistance(float distance, int shortWeight, int mediumWeight, int longWeight);
 static int BotApplyAttackRangeWeight(bot_state_t *bs, int baseWeight, int shortWeight, int mediumWeight, int longWeight);
-static int BotScaleThresholdByRangeWeight(int threshold, int weightPercent);
 static int BotGetReflexScaledResponseDelayMs(bot_state_t *bs);
 static float BotGetChanceBiasPercent(float value);
 static float BotGetMistakeBiasChance(bot_state_t *bs);
@@ -723,21 +722,6 @@ static int BotApplyAttackRangeWeight(bot_state_t *bs, int baseWeight, int shortW
 	}
 
 	return (int)((float)baseWeight * ((float)weightPercent / 100.0f));
-}
-
-static int BotScaleThresholdByRangeWeight(int threshold, int weightPercent)
-{
-	if (weightPercent <= 0)
-	{
-		return threshold;
-	}
-
-	if (weightPercent == 100)
-	{
-		return threshold;
-	}
-
-	return (threshold * 100 + weightPercent - 1) / weightPercent;
 }
 
 //Gripkick yaw reacquisition needs to be faster than the generic post-fix 6-degree step so
@@ -8849,8 +8833,8 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 	qboolean suppressSaberAttack;
 	int saberAttackRangeWeightPercent;
 	qboolean allowNewSaberAttack;
-	int lightSaberHealthThreshold;
-	int strongSaberHealthThreshold;
+	int lightSaberStartWeight;
+	int strongSaberStartWeight;
 	// const float speed = NewBotAI_GetSpeedTowardsEnemy(bs);
 
 	if (!bs->client || !bs->currentEnemy || !bs->currentEnemy->client)
@@ -8865,8 +8849,16 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 		bot_saberattackweight_medium.integer,
 		bot_saberattackweight_long.integer);
 	allowNewSaberAttack = (saberAttackRangeWeightPercent > 0) ? qtrue : qfalse;
-	lightSaberHealthThreshold = BotScaleThresholdByRangeWeight(40, saberAttackRangeWeightPercent);
-	strongSaberHealthThreshold = BotScaleThresholdByRangeWeight(70, saberAttackRangeWeightPercent);
+	lightSaberStartWeight = BotApplyAttackRangeWeight(bs,
+		g_entities[bs->client].health - 40,
+		bot_saberattackweight_short.integer,
+		bot_saberattackweight_medium.integer,
+		bot_saberattackweight_long.integer);
+	strongSaberStartWeight = BotApplyAttackRangeWeight(bs,
+		g_entities[bs->client].health - 70,
+		bot_saberattackweight_short.integer,
+		bot_saberattackweight_medium.integer,
+		bot_saberattackweight_long.integer);
 
 	if (hasDroppedOwnSaber)
 		weapon = WP_SABER;
@@ -8957,7 +8949,7 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 			if (BG_SaberInAttack(bs->cur_ps.saberMove) &&
 				(bs->fanPhase != FAN_PHASE_INACTIVE || bs->cur_ps.saberMove == LS_A_L2R || bs->cur_ps.saberMove == LS_A_R2L) &&
 				bs->frame_Enemy_Len < 320 &&
-				NewBotAI_GetTimeToInRange(bs, 75, 800) < 800 && g_entities[bs->client].health > lightSaberHealthThreshold)
+				NewBotAI_GetTimeToInRange(bs, 75, 800) < 800 && g_entities[bs->client].health > 40)
 			{
 				if (!suppressSaberAttack)
 					trap->EA_Attack(bs->client);
@@ -8968,7 +8960,7 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 				(g_entities[bs->client].client->ps.saberMove == LS_NONE || g_entities[bs->client].client->ps.saberMove == LS_READY) &&
 				bs->frame_Enemy_Len < 256 &&
 				((NewBotAI_GetTimeToInRange(bs, 75, 800) < 800) || bs->frame_Enemy_Len < 128)) {
-				if (g_entities[bs->client].health > lightSaberHealthThreshold) {
+				if (lightSaberStartWeight > 0) {
 					//See if they can't saberthrow?
 					//Com_Printf("Their torso time is %i\n", bs->currentEnemy->client->ps.torsoTimer);
 					//if ((bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_DRAIN) || (bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB))) || ((bs->frame_Enemy_Len < 70) && (bs->currentEnemy->client->ps.origin[2] - bs->cur_ps.origin[2]) > 50)) {
@@ -9027,7 +9019,7 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 			//swing instead of releasing through every swing tail (same fix as the lightside
 			//path above - the press has to still be down when weaponTime clears).
 			if (BG_SaberInAttack(bs->cur_ps.saberMove) && NewBotAI_GetTimeToInRange(bs, 75, 600) < 600 &&
-				g_entities[bs->client].health > strongSaberHealthThreshold)
+				g_entities[bs->client].health > 70)
 			{
 				if (!suppressSaberAttack)
 					trap->EA_Attack(bs->client);
@@ -9038,7 +9030,7 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 			if (allowNewSaberAttack &&
 				(g_entities[bs->client].client->ps.saberMove == LS_NONE || g_entities[bs->client].client->ps.saberMove == LS_READY) &&
 				NewBotAI_GetTimeToInRange(bs, 75, 600) < 600) {
-				if (g_entities[bs->client].health > strongSaberHealthThreshold) {
+				if (strongSaberStartWeight > 0) {
 					if ((bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_DRAIN) || (bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB))) ||
 						((bs->cur_ps.fd.forcePower < 60) || ((bs->frame_Enemy_Len < 70) && (bs->currentEnemy->client->ps.origin[2] - bs->cur_ps.origin[2]) > 50))) {
 						//Red/strong style never fans - make sure a stale chain from a prior
