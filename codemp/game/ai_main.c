@@ -159,6 +159,7 @@ static qboolean NewBotAI_ShouldUseCombatHop(bot_state_t *bs, qboolean forceImmed
 static void NewBotAI_ConsumeCombatHop(bot_state_t *bs);
 static float NewBotAI_GetPullkickTimeToKickRange(bot_state_t *bs);
 static void NewBotAI_SchedulePullkickJump(bot_state_t *bs);
+static qboolean NewBotAI_IsPullkickOpportunity(bot_state_t *bs);
 static int NewBotAI_GetDrainTapTargetCost(bot_state_t *bs);
 static qboolean NewBotAI_IsPullkickDrainWindow(bot_state_t *bs);
 static qboolean NewBotAI_IsDrainlockAdvantage(bot_state_t *bs);
@@ -9119,6 +9120,29 @@ static void NewBotAI_SchedulePullkickJump(bot_state_t *bs)
 	}
 }
 
+static qboolean NewBotAI_IsPullkickOpportunity(bot_state_t *bs)
+{
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return qfalse;
+	}
+
+	if (BG_InKnockDown(bs->currentEnemy->client->ps.legsAnim) ||
+		BG_InRoll3(bs->currentEnemy->client->ps.legsAnim) ||
+		bs->currentEnemy->client->ps.saberInFlight)
+	{
+		return qtrue;
+	}
+
+	if (bs->currentEnemy->client->ps.groundEntityNum == ENTITYNUM_NONE ||
+		bs->currentEnemy->client->ps.fd.forcePower < 20)
+	{
+		return qtrue;
+	}
+
+	return (bs->frame_Enemy_Len <= 220.0f) ? qtrue : qfalse;
+}
+
 // Saber-duel deadlock fix: when flipkick isn't available (g_flipkick disabled, or the duel type
 // disallows it), give the bot a real goal instead of standing indecisively -- lean on fan-chain
 // attacks and pick evenly between red/staff and yellow swing chains (no bias toward red).
@@ -10749,6 +10773,11 @@ static int NewBotAI_GetPTKWeight(bot_state_t *bs)
 	//Item 10: PTK spends ~40 FP (20 pull + 20 throw), so it is never the right call until
 	//we actually have that banked - no PTK weight at all at or under 38 force points.
 	if (ourForce <= 38)
+	{
+		return 0;
+	}
+
+	if (!NewBotAI_IsPullkickOpportunity(bs))
 	{
 		return 0;
 	}
@@ -12597,14 +12626,10 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 		level.clients[bs->client].ps.fd.forcePowerSelected = FP_PULL;
 		NewBotAI_ApplyPullMistake(bs);
 		useTheForce = qtrue;
-		//A pull that brings the enemy into flipkick range should always follow through with the
-		//kick (PTK combo) -- PTK weight only influences whether we chose to pull in the first
-		//place (see NewBotAI_GetPull), it should not gate the kick itself. Schedule the jump:
-		//already in range kicks right now, otherwise we wait for the enemy to actually close
-		//instead of hopping the instant we pull and sailing over them.
-		NewBotAI_SchedulePullkickJump(bs);
-		if (bs->pullKickJumpTime == 0 && bs->frame_Enemy_Len < 220)
-			NewBotAI_Flipkick(bs);
+		//Only convert the pull into a pullkick when it is a real pullkick window, and let the
+		//distance-based schedule decide when the jump should happen.
+		if (NewBotAI_IsPullkickOpportunity(bs))
+			NewBotAI_SchedulePullkickJump(bs);
 
 		//trap->Print("Pulling -- Pull: %i, Push: %i, Drain: %i, Grip: %i\n", pullWeight, pushWeight, drainWeight, gripWeight);
 	}
@@ -12793,14 +12818,10 @@ void NewBotAI_GetLSForcepower(bot_state_t *bs)
 		level.clients[bs->client].ps.fd.forcePowerSelected = FP_PULL;
 		NewBotAI_ApplyPullMistake(bs);
 		useTheForce = qtrue;
-		//A pull that brings the enemy into flipkick range should always follow through with the
-		//kick (PTK combo) -- PTK weight only influences whether we chose to pull in the first
-		//place (see NewBotAI_GetPull), it should not gate the kick itself. Schedule the jump:
-		//already in range kicks right now, otherwise we wait for the enemy to actually close
-		//instead of hopping the instant we pull and sailing over them.
-		NewBotAI_SchedulePullkickJump(bs);
-		if (bs->pullKickJumpTime == 0 && bs->frame_Enemy_Len < 220)
-			NewBotAI_Flipkick(bs);
+		//Only convert the pull into a pullkick when it is a real pullkick window, and let the
+		//distance-based schedule decide when the jump should happen.
+		if (NewBotAI_IsPullkickOpportunity(bs))
+			NewBotAI_SchedulePullkickJump(bs);
 		//trap->Print("Pull - Weights -- Pull: %i, Push: %i, Absorb: %i, Protect: %i, Heal %i\n", pullWeight, pushWeight, absorbWeight, protectWeight, healWeight);
 	}
 	else if (absorbWeight > pushWeight && absorbWeight > pullWeight && absorbWeight > protectWeight && absorbWeight > healWeight && absorbWeight > minWeight) {
