@@ -8950,7 +8950,8 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 				return;
 			}
 
-			if ((g_entities[bs->client].client->ps.saberMove == LS_NONE || g_entities[bs->client].client->ps.saberMove == LS_READY) &&
+			if (saberAttackRangeWeightPercent > 0 &&
+				(g_entities[bs->client].client->ps.saberMove == LS_NONE || g_entities[bs->client].client->ps.saberMove == LS_READY) &&
 				bs->frame_Enemy_Len < 256 &&
 				((NewBotAI_GetTimeToInRange(bs, 75, 800) < 800) || bs->frame_Enemy_Len < 128)) {
 				//See if they can't saberthrow?
@@ -9018,7 +9019,8 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 			}
 
 			//todo - skip if we are already during a swing
-			if ((g_entities[bs->client].client->ps.saberMove == LS_NONE || g_entities[bs->client].client->ps.saberMove == LS_READY) &&
+			if (saberAttackRangeWeightPercent > 0 &&
+				(g_entities[bs->client].client->ps.saberMove == LS_NONE || g_entities[bs->client].client->ps.saberMove == LS_READY) &&
 				NewBotAI_GetTimeToInRange(bs, 75, 600) < 600) {
 				if ((bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_DRAIN) || (bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB))) ||
 					((bs->cur_ps.fd.forcePower < 60) || ((bs->frame_Enemy_Len < 70) && (bs->currentEnemy->client->ps.origin[2] - bs->cur_ps.origin[2]) > 50))) {
