@@ -12517,12 +12517,6 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 	//edge needs to flip the fight. Hold the saber instead.
 	if (ourHealth < 50 && (hisForce - ourForce) > 40)
 		return 0;
-	//Winning the force game: grip (and the gripkick it feeds into) takes priority over
-	//throwing the saber away unless the target is still carrying armor (convert the
-	//force edge into real damage) or is already knocked down and vulnerable.
-	if (forceLead > 0 && enemyArmor <= 0 && !enemyKnockedDown)
-		return 0;
-
 	//Item 1: while the opponent is drainlocked (actively tapped below 19 FP for a free
 	//pullkick, or already under the free-pullkick threshold), weight the pullkick over
 	//the saber throw - throwing the saber away just gives up the drainlock's
