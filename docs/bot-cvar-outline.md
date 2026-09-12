@@ -42,7 +42,7 @@ The shared bands are:
 | `bot_lightningweight_short`, `bot_lightningweight_medium`, `bot_lightningweight_long` | `40`, `150`, `125` | Lightning is discouraged at close range and favored once the enemy is outside melee pressure. |
 | `bot_gripweight_short`, `bot_gripweight_medium`, `bot_gripweight_long` | `170`, `90`, `35` | Grip/gripkick is a close-range finisher first, then tails off sharply as distance opens. |
 | `bot_drainweight_short`, `bot_drainweight_medium`, `bot_drainweight_long` | `70`, `120`, `150` | Drain is still possible up close, but the preset prefers using it from safer medium/long spacing. |
-| `bot_saberattackweight_short`, `bot_saberattackweight_medium`, `bot_saberattackweight_long` | `155`, `95`, `40` | Saber attack starts and fan chains are favored in close range and strongly reduced at the far edge of legal saber pressure. |
+| `bot_saberattackweight_short`, `bot_saberattackweight_medium`, `bot_saberattackweight_long` | `155`, `95`, `40` | Saber combo commitment and fan-chain starts are favored in close range and strongly reduced at the far edge of legal saber pressure, without replacing the base saber legality checks. |
 
 ## Aggression System
 
