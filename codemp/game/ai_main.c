@@ -11922,6 +11922,9 @@ int NewBotAI_GetPull(bot_state_t *bs) {
 		//pullkick the second - keep the base pull high here and let PTK's own weight stack on
 		//top below when it is available.
 		if (enemySaberReturning) {
+			if (ourHealth > 30 && ourForce > bs->currentEnemy->client->ps.fd.forcePower && ptkWeight > 0) {
+				return 100 + ptkWeight;
+			}
 			weight = (ourHealth > 30 && ourForce > bs->currentEnemy->client->ps.fd.forcePower) ? 95.0f : 85.0f;
 		}
 		else {
@@ -12208,6 +12211,15 @@ int NewBotAI_GetDrain(bot_state_t *bs) {
 		NewBotAI_IsEnemySaberReturning(bs) &&
 		!BG_SaberInAttack(bs->currentEnemy->client->ps.saberMove) &&
 		totalHealthDelta >= 30) ? qtrue : qfalse;
+	const qboolean returnWindowPullAvailable =
+		!(g_forcePowerDisable.integer & (1 << FP_PULL)) &&
+		(bs->cur_ps.fd.forcePowersKnown & (1 << FP_PULL)) &&
+		NewBotAI_IsEnemyPullable(bs) &&
+		bs->cur_ps.groundEntityNum != ENTITYNUM_NONE &&
+		bs->frame_Enemy_Len >= 50 &&
+		bs->frame_Enemy_Len <= 640 &&
+		!(bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB)) &&
+		ourForce >= 21 ? qtrue : qfalse;
 	int weight = 100;
 	vec3_t a_fo;
 
@@ -12251,7 +12263,7 @@ int NewBotAI_GetDrain(bot_state_t *bs) {
 		//During the saber's return-to-hand window the enemy is at their most pull-vulnerable:
 		//prefer PTK first and plain pullkick second, instead of spending the turn on a drain
 		//that leaves the opening unused.
-		if (NewBotAI_IsEnemySaberReturning(bs) && NewBotAI_GetPull(bs) > 0)
+		if (returnWindowPullAvailable)
 			return 0;
 		if (!bs->frame_Enemy_Vis)
 			return 0;
