@@ -10244,8 +10244,7 @@ static qboolean NewBotAI_HasDroppedOwnSaber(bot_state_t *bs)
 	//in dropped-saber think; accept those known downed states for recall eligibility.
 	return (saberEnt->s.pos.trType == TR_GRAVITY ||
 		saberEnt->s.pos.trType == TR_STATIONARY ||
-		saberEnt->s.pos.trType == TR_INTERPOLATE ||
-		saberEnt->s.pos.trType == TR_LINEAR) ? qtrue : qfalse;
+		saberEnt->s.pos.trType == TR_INTERPOLATE) ? qtrue : qfalse;
 }
 
 static int BotGetDrainHoldBiasMs(bot_state_t *bs)
