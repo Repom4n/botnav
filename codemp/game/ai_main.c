@@ -10067,6 +10067,7 @@ static qboolean NewBotAI_HasDroppedOwnSaber(bot_state_t *bs)
 {
 	gentity_t *saberEnt;
 	int saberEntNum;
+	int saberKnockedTime;
 
 	if (!bs)
 	{
@@ -10079,6 +10080,12 @@ static qboolean NewBotAI_HasDroppedOwnSaber(bot_state_t *bs)
 	}
 
 	if (bs->cur_ps.weapon != WP_SABER && bs->cur_ps.weapon != WP_MELEE)
+	{
+		return qfalse;
+	}
+
+	saberKnockedTime = g_entities[bs->client].client->saberKnockedTime;
+	if (saberKnockedTime <= 0 || saberKnockedTime >= level.time)
 	{
 		return qfalse;
 	}
@@ -14941,8 +14948,9 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 
 	{
 		const qboolean hasDroppedOwnSaber = NewBotAI_HasDroppedOwnSaber(bs);
+		const qboolean enemySaberThreatImminent = NewBotAI_IsEnemySaberThreatImminent(bs);
 
-		if (hasDroppedOwnSaber)
+		if (hasDroppedOwnSaber && !enemySaberThreatImminent)
 		{
 			//saber knocked away: the engine only recalls the saber on a fresh +attack edge, and
 			//a held button counts as one press forever. Toggle a genuine press/release edge -
@@ -14958,6 +14966,11 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 		}
 		else
 		{
+			if (enemySaberThreatImminent)
+			{
+				bs->doAttack = 0;
+				bs->doAltAttack = 0;
+			}
 			//Saber is back (or not ours to recall): reset the toggle so the next knock-away
 			//starts with a fresh press.
 			bs->saberRetrieveSpamTime = 0;
