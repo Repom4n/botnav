@@ -131,6 +131,7 @@ static qboolean NewBotAI_IsKnockdownRecoveryRoll(int anim);
 static qboolean NewBotAI_IsSaberSwingStartWindow(bot_state_t *bs);
 static qboolean NewBotAI_CanAttemptFlipkick(bot_state_t *bs);
 static qboolean NewBotAI_IsFlipkickSetupReady(bot_state_t *bs);
+qboolean BG_InRoll3(int anim);
 static void NewBotAI_RetreatStraight(bot_state_t *bs);
 static float NewBotAI_GetEnemyClosingSpeed(bot_state_t *bs);
 static void NewBotAI_SaberDuelIndecisionFallback(bot_state_t *bs, qboolean horizontalSwingStart);
@@ -11310,7 +11311,7 @@ static qboolean NewBotAI_GetEnemySaberFlightThreat(bot_state_t *bs, float *forwa
 	{
 		return qfalse;
 	}
-	if (saberEntNum <= 0 || saberEntNum >= MAX_GENTITIES || saberEntNum == ENTITYNUM_NONE)
+	if (saberEntNum <= 0 || saberEntNum >= ENTITYNUM_WORLD || saberEntNum == ENTITYNUM_NONE)
 	{
 		return qfalse;
 	}
@@ -11650,7 +11651,7 @@ static qboolean NewBotAI_ShouldCloseGapVsEnemySaberThrow(bot_state_t *bs)
 	}
 
 	saberEntNum = bs->currentEnemy->client->ps.saberEntityNum;
-	if (saberEntNum <= 0 || saberEntNum >= MAX_GENTITIES || saberEntNum == ENTITYNUM_NONE)
+	if (saberEntNum <= 0 || saberEntNum >= ENTITYNUM_WORLD || saberEntNum == ENTITYNUM_NONE)
 	{
 		return qfalse;
 	}
