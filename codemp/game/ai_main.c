@@ -10085,7 +10085,7 @@ static qboolean NewBotAI_HasDroppedOwnSaber(bot_state_t *bs)
 	}
 
 	saberKnockedTime = g_entities[bs->client].client->saberKnockedTime;
-	if (saberKnockedTime <= 0 || saberKnockedTime >= level.time)
+	if (saberKnockedTime > 0 && saberKnockedTime >= level.time)
 	{
 		return qfalse;
 	}
