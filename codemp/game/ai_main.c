@@ -11892,7 +11892,6 @@ static qboolean NewBotAI_IsDrainlockAdvantage(bot_state_t *bs)
 
 int NewBotAI_GetDrain(bot_state_t *bs) {
 	const int ourHealth = g_entities[bs->client].health, ourForce = bs->cur_ps.fd.forcePower, hisForce = bs->currentEnemy->client->ps.fd.forcePower;
-	const int healthBiasThreshold = BotGetHealthBiasThreshold();
 	const qboolean safeDrainVsThrow = NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bs);
 	int weight = 100;
 	vec3_t a_fo;
@@ -11953,9 +11952,9 @@ int NewBotAI_GetDrain(bot_state_t *bs) {
 	if (ourHealth < 100)
 	{
 		weight = ((weight - ourHealth) + 20); //Eeee  //100 - 25 + 20 = 95
-		if (ourHealth <= healthBiasThreshold)
+		if (ourHealth <= BotGetHealthBiasThreshold())
 		{
-			weight += 70 + (healthBiasThreshold - ourHealth);
+			weight += 70 + (BotGetHealthBiasThreshold() - ourHealth);
 			if (weight < 100)
 			{
 				weight = 100;
