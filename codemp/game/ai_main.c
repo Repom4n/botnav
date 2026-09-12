@@ -11923,7 +11923,7 @@ int NewBotAI_GetPull(bot_state_t *bs) {
 		//top below when it is available.
 		if (enemySaberReturning) {
 			if (ourHealth > 30 && ourForce > bs->currentEnemy->client->ps.fd.forcePower && ptkWeight > 0) {
-				return 100 + ptkWeight;
+				return 100;
 			}
 			weight = (ourHealth > 30 && ourForce > bs->currentEnemy->client->ps.fd.forcePower) ? 95.0f : 85.0f;
 		}
@@ -12220,6 +12220,12 @@ int NewBotAI_GetDrain(bot_state_t *bs) {
 		bs->frame_Enemy_Len <= 640 &&
 		!(bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB)) &&
 		ourForce >= 21 ? qtrue : qfalse;
+	const qboolean returnWindowPTKAvailable =
+		returnWindowPullAvailable &&
+		g_flipKick.integer &&
+		NewBotAI_CanAttemptFlipkick(bs) &&
+		ourForce > 38 &&
+		NewBotAI_GetPTKWeight(bs) > 0 ? qtrue : qfalse;
 	int weight = 100;
 	vec3_t a_fo;
 
@@ -12263,7 +12269,7 @@ int NewBotAI_GetDrain(bot_state_t *bs) {
 		//During the saber's return-to-hand window the enemy is at their most pull-vulnerable:
 		//prefer PTK first and plain pullkick second, instead of spending the turn on a drain
 		//that leaves the opening unused.
-		if (returnWindowPullAvailable)
+		if (returnWindowPTKAvailable)
 			return 0;
 		if (!bs->frame_Enemy_Vis)
 			return 0;
