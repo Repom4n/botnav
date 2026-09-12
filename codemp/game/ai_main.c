@@ -155,6 +155,8 @@ static qboolean NewBotAI_CanUseSaberThrowDefenseBreakForce(bot_state_t *bs, qboo
 static void NewBotAI_TryRandomHop(bot_state_t *bs);
 static int NewBotAI_GetNextHopIntervalMs(bot_state_t *bs, float hopFrequency);
 static void NewBotAI_PushHopRetryCooldown(bot_state_t *bs);
+static qboolean NewBotAI_ShouldUseCombatHop(bot_state_t *bs, qboolean forceImmediate);
+static void NewBotAI_ConsumeCombatHop(bot_state_t *bs);
 static float NewBotAI_GetPullkickTimeToKickRange(bot_state_t *bs);
 static void NewBotAI_SchedulePullkickJump(bot_state_t *bs);
 static int NewBotAI_GetDrainTapTargetCost(bot_state_t *bs);
@@ -168,6 +170,7 @@ static qboolean NewBotAI_ShouldPressAdvantage(bot_state_t *bs);
 static qboolean NewBotAI_HasDroppedOwnSaber(bot_state_t *bs);
 static qboolean NewBotAI_IsCombatProgressStalled(bot_state_t *bs);
 static qboolean NewBotAI_IsEnemySaberReturning(bot_state_t *bs);
+static qboolean NewBotAI_GetEnemySaberFlightThreat(bot_state_t *bs, float *forwardDistOut, float *saberSpeedOut, qboolean *isReturningOut);
 static qboolean NewBotAI_IsEnemySaberThreatImminent(bot_state_t *bs);
 static qboolean NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bot_state_t *bs);
 static qboolean NewBotAI_ShouldJumpDrainVsSaberThrow(bot_state_t *bs);
@@ -175,6 +178,7 @@ static qboolean NewBotAI_ShouldEmergencyDrainRollSaberThrow(bot_state_t *bs);
 static void NewBotAI_ApplySidewaysDrainRoll(bot_state_t *bs, qboolean moveBack);
 static qboolean NewBotAI_HandleRecoveryRollForcepower(bot_state_t *bs);
 static qboolean NewBotAI_IsBetweenOwnSaberAndEnemy(bot_state_t *bs);
+static qboolean NewBotAI_ShouldCloseGapVsEnemySaberThrow(bot_state_t *bs);
 static void NewBotAI_AdjustSaberThrowArcAim(bot_state_t *bs, vec3_t headlevel);
 static void NewBotAI_AdjustSaberThrowLead(bot_state_t *bs);
 static void NewBotAI_TrySaberThrowDefenseBreak(bot_state_t *bs);
@@ -7069,6 +7073,51 @@ static void NewBotAI_PushHopRetryCooldown(bot_state_t *bs)
 	bs->hopWasGrounded = qtrue;
 }
 
+static qboolean NewBotAI_ShouldUseCombatHop(bot_state_t *bs, qboolean forceImmediate)
+{
+	const float hopFrequency = bot_hopfrequency.value;
+
+	if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE)
+	{
+		return qfalse;
+	}
+
+	if (forceImmediate)
+	{
+		return qtrue;
+	}
+
+	if (hopFrequency <= 0.0f)
+	{
+		return qfalse;
+	}
+
+	if (bs->nextHopTime == 0)
+	{
+		bs->nextHopTime = level.time + NewBotAI_GetNextHopIntervalMs(bs, hopFrequency);
+		bs->hopWasGrounded = qtrue;
+		return qfalse;
+	}
+
+	if (bs->nextHopTime == -1 || bs->nextHopTime > level.time)
+	{
+		return qfalse;
+	}
+
+	return qtrue;
+}
+
+static void NewBotAI_ConsumeCombatHop(bot_state_t *bs)
+{
+	if (bot_hopfrequency.value <= 0.0f)
+	{
+		return;
+	}
+
+	bs->nextHopTime = -1;
+	bs->hopWasGrounded = qtrue;
+}
+
 // Optional random hop. Flipkicks only add jump input when a kick is truly possible, so any
 // ambient hopping is handled here instead: bot_hopfrequency scales how soon after each hop
 // the next one is scheduled (default 100 = a random 0.5-8 second interval, higher = less
@@ -9418,6 +9467,8 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 				bs->combatAction = BOT_COMBAT_ACTION_AGGRESSION;
 				trap->EA_MoveForward(bs->client);
 				trap->EA_Jump(bs->client);
+				trap->EA_Crouch(bs->client);
+				NewBotAI_ConsumeCombatHop(bs);
 				if (pullActive &&
 					!(g_forcePowerDisable.integer & (1 << FP_DRAIN)) &&
 					(bs->cur_ps.fd.forcePowersKnown & (1 << FP_DRAIN)) &&
@@ -9428,6 +9479,11 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 				}
 			}
 			else if (totalHealthDelta >= 30)
+			{
+				bs->combatAction = BOT_COMBAT_ACTION_AGGRESSION;
+				trap->EA_MoveForward(bs->client);
+			}
+			else if (totalHealthDelta < 0 && NewBotAI_ShouldCloseGapVsEnemySaberThrow(bs))
 			{
 				bs->combatAction = BOT_COMBAT_ACTION_AGGRESSION;
 				trap->EA_MoveForward(bs->client);
@@ -10754,26 +10810,21 @@ static int NewBotAI_GetPTKWeight(bot_state_t *bs)
 
 	if (bs->currentEnemy->client->ps.saberInFlight)
 	{
+		const qboolean enemySaberReturning = NewBotAI_IsEnemySaberReturning(bs);
+
 		//The enemy has already committed their saber to a throw - punish the opening
 		//with a pullkick (pull + flipkick) rather than trading throws of our own, and
 		//keep this window strongly favored so drain taps between pullkicks (see
 		//NewBotAI_IsPullkickDrainWindow) also engage more readily. When we hold a
 		//drainlock (force advantage) and enough health to eat the saber, this is our
 		//best option outright, so weight it far heavier than the base opening.
-		if (ourHealth > 30 && ourForce > hisForce)
+		if (enemySaberReturning)
 		{
-			weight += 100;
+			weight += (ourHealth > 30 && ourForce > hisForce) ? 140 : 85;
 		}
 		else
 		{
-			weight += 50;
-		}
-		//The enemy stays vulnerable to the pullkick/PTK combo across the saber's whole
-		//return trip, not just at the initial throw - weight it further once it's on
-		//the way back to their hand.
-		if (NewBotAI_IsEnemySaberReturning(bs))
-		{
-			weight += 30;
+			weight += (ourHealth > 30 && ourForce > hisForce) ? 100 : 50;
 		}
 	}
 
@@ -11203,11 +11254,10 @@ static qboolean NewBotAI_IsEnemySaberReturning(bot_state_t *bs)
 	return (DotProduct(saberEnt->s.pos.trDelta, saberToEnemy) > 0.0f) ? qtrue : qfalse;
 }
 
-static qboolean NewBotAI_IsEnemySaberThreatImminent(bot_state_t *bs)
+static qboolean NewBotAI_GetEnemySaberFlightThreat(bot_state_t *bs, float *forwardDistOut, float *saberSpeedOut, qboolean *isReturningOut)
 {
 	gentity_t *saberEnt;
 	vec3_t saberOrigin, saberVelocity, saberToUs, saberDir, closestPoint;
-	vec3_t a_fo;
 	float forwardDist;
 	float lateralDistSq;
 	float saberSpeed;
@@ -11218,24 +11268,6 @@ static qboolean NewBotAI_IsEnemySaberThreatImminent(bot_state_t *bs)
 	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
 	{
 		return qfalse;
-	}
-
-	//Pre-throw anticipation: only treat it as imminent when replicated player state
-	//matches saber-throw windup, not generic saber states.
-	if (!bs->currentEnemy->client->ps.saberInFlight &&
-		bs->currentEnemy->client->ps.weapon == WP_SABER &&
-		(bs->currentEnemy->client->ps.weaponstate == WEAPON_CHARGING_ALT ||
-		 bs->currentEnemy->client->ps.weaponstate == WEAPON_FIRING) &&
-		bs->frame_Enemy_Vis &&
-		bs->frame_Enemy_Len < 220 &&
-		!BG_SaberInAttack(bs->currentEnemy->client->ps.saberMove))
-	{
-		VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, a_fo);
-		vectoangles(a_fo, a_fo);
-		if (InFieldOfVision(bs->viewangles, 75, a_fo))
-		{
-			return qtrue;
-		}
 	}
 
 	if (!bs->currentEnemy->client->ps.saberInFlight)
@@ -11282,7 +11314,55 @@ static qboolean NewBotAI_IsEnemySaberThreatImminent(bot_state_t *bs)
 	lateralDistSq = VectorLengthSquared(closestPoint);
 	threatRadius = RadiusFromBounds(g_entities[bs->client].r.mins, g_entities[bs->client].r.maxs) + 16.0f;
 
-	return (lateralDistSq <= (threatRadius * threatRadius)) ? qtrue : qfalse;
+	if (lateralDistSq > (threatRadius * threatRadius))
+	{
+		return qfalse;
+	}
+
+	if (forwardDistOut)
+	{
+		*forwardDistOut = forwardDist;
+	}
+	if (saberSpeedOut)
+	{
+		*saberSpeedOut = saberSpeed;
+	}
+	if (isReturningOut)
+	{
+		*isReturningOut = isReturning;
+	}
+
+	return qtrue;
+}
+
+static qboolean NewBotAI_IsEnemySaberThreatImminent(bot_state_t *bs)
+{
+	vec3_t a_fo;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return qfalse;
+	}
+
+	//Pre-throw anticipation: only treat it as imminent when replicated player state
+	//matches saber-throw windup, not generic saber states.
+	if (!bs->currentEnemy->client->ps.saberInFlight &&
+		bs->currentEnemy->client->ps.weapon == WP_SABER &&
+		(bs->currentEnemy->client->ps.weaponstate == WEAPON_CHARGING_ALT ||
+		 bs->currentEnemy->client->ps.weaponstate == WEAPON_FIRING) &&
+		bs->frame_Enemy_Vis &&
+		bs->frame_Enemy_Len < 220 &&
+		!BG_SaberInAttack(bs->currentEnemy->client->ps.saberMove))
+	{
+		VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, a_fo);
+		vectoangles(a_fo, a_fo);
+		if (InFieldOfVision(bs->viewangles, 75, a_fo))
+		{
+			return qtrue;
+		}
+	}
+
+	return NewBotAI_GetEnemySaberFlightThreat(bs, NULL, NULL, NULL);
 }
 
 static qboolean NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bot_state_t *bs)
@@ -11350,21 +11430,44 @@ static qboolean NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bot_state_t *bs)
 
 static qboolean NewBotAI_ShouldJumpDrainVsSaberThrow(bot_state_t *bs)
 {
+	float forwardDist;
+	float saberSpeed;
+	float timeToImpactMs;
+	qboolean isReturning;
+	const int ourHealth = g_entities[bs->client].health;
+	const int totalHealthDelta = NewBotAI_GetTotalHealthDelta(bs);
+	const qboolean losingHealthWar = (totalHealthDelta < 0) ? qtrue : qfalse;
+	const qboolean canEatTheThrow = (ourHealth > 30 && !losingHealthWar) ? qtrue : qfalse;
+	qboolean forceImmediateHop;
+
 	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
 	{
 		return qfalse;
 	}
 
-	if (!NewBotAI_IsEnemySaberThreatImminent(bs))
+	if (!NewBotAI_GetEnemySaberFlightThreat(bs, &forwardDist, &saberSpeed, &isReturning))
 	{
 		return qfalse;
 	}
 
-	if (g_entities[bs->client].health <= 20)
+	if (ourHealth <= 20)
 	{
 		return qfalse;
 	}
-	return qtrue;
+
+	timeToImpactMs = (forwardDist / saberSpeed) * 1000.0f;
+	forceImmediateHop = (timeToImpactMs <= 85.0f ||
+		forwardDist <= (isReturning ? 16.0f : 24.0f)) ? qtrue : qfalse;
+
+	//Healthy bots can afford to keep pressing or repositioning against most throws instead
+	//of bunny-hopping the moment the saber is merely on line; only hop when the impact is
+	//truly immediate or when we're already behind on total health.
+	if (canEatTheThrow && !forceImmediateHop)
+	{
+		return qfalse;
+	}
+
+	return NewBotAI_ShouldUseCombatHop(bs, forceImmediateHop);
 }
 
 // Low-health throw panic: when a saber throw is imminent and HP is below 20, roll
@@ -11501,6 +11604,32 @@ static qboolean NewBotAI_IsBetweenOwnSaberAndEnemy(bot_state_t *bs)
 	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->cur_ps.origin, usToEnemy);
 
 	return (VectorLengthSquared(usToEnemy) < VectorLengthSquared(saberToEnemy)) ? qtrue : qfalse;
+}
+
+static qboolean NewBotAI_ShouldCloseGapVsEnemySaberThrow(bot_state_t *bs)
+{
+	gentity_t *saberEnt;
+	vec3_t saberOrigin;
+	float saberDist;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client ||
+		!bs->currentEnemy->client->ps.saberInFlight ||
+		!bs->currentEnemy->client->ps.saberEntityNum)
+	{
+		return qfalse;
+	}
+
+	saberEnt = &g_entities[bs->currentEnemy->client->ps.saberEntityNum];
+	BG_EvaluateTrajectory(&saberEnt->s.pos, level.time, saberOrigin);
+	saberDist = Distance(bs->cur_ps.origin, saberOrigin);
+
+	if (bs->frame_Enemy_Len <= saberDist)
+	{
+		return qtrue;
+	}
+
+	return (NewBotAI_IsEnemySaberReturning(bs) &&
+		bs->frame_Enemy_Len <= saberDist + 32.0f) ? qtrue : qfalse;
 }
 
 static void NewBotAI_TrySaberThrowDefenseBreak(bot_state_t *bs)
@@ -11778,20 +11907,18 @@ int NewBotAI_GetPull(bot_state_t *bs) {
 	ptkWeight = NewBotAI_GetPTKWeight(bs);
 
 	if (bs->currentEnemy->client->ps.saberInFlight) {
+		const qboolean enemySaberReturning = NewBotAI_IsEnemySaberReturning(bs);
+
 		//They've committed to a saber throw and have no blade in hand to defend a pull -
 		//this is the ideal pullkick (pull + flipkick, no throw of our own) window. While
-		//we hold a drainlock (force advantage) and enough health to eat the incoming
-		//saber, the pullkick wins outright - return the max weight. Otherwise still
-		//weight it heavily instead of the old near-zero suppression.
-		if (ourHealth > 30 && ourForce > bs->currentEnemy->client->ps.fd.forcePower) {
-			return 100;
+		//the saber is coming back to their hand, PTK should be the first choice and a plain
+		//pullkick the second - keep the base pull high here and let PTK's own weight stack on
+		//top below when it is available.
+		if (enemySaberReturning) {
+			weight = (ourHealth > 30 && ourForce > bs->currentEnemy->client->ps.fd.forcePower) ? 95.0f : 85.0f;
 		}
-		weight = 80.0f;
-		//The enemy is genuinely vulnerable across their saber's whole return trip home,
-		//not just at the moment of the throw - weight the pullkick even more heavily
-		//once it's on the way back so we don't let up before it lands in their hand.
-		if (NewBotAI_IsEnemySaberReturning(bs)) {
-			weight = 100.0f;
+		else {
+			weight = (ourHealth > 30 && ourForce > bs->currentEnemy->client->ps.fd.forcePower) ? 85.0f : 75.0f;
 		}
 	}
 
@@ -12114,6 +12241,8 @@ int NewBotAI_GetDrain(bot_state_t *bs) {
 	}
 	if (pressureDrainVsThrow)
 	{
+		if (NewBotAI_IsEnemySaberReturning(bs) && NewBotAI_GetPull(bs) > 0)
+			return 0;
 		if (!bs->frame_Enemy_Vis)
 			return 0;
 		VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, a_fo);

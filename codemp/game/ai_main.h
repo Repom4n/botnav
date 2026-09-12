@@ -415,8 +415,8 @@ typedef struct bot_state_s
 	int					lastHurtTime;     // level.time when this bot last took damage (set in BotDamageNotification)
 	vec3_t				combatStuckOrigin; // sampled combat position used to detect failing to make meaningful progress toward a target
 	int					combatStuckSince; // when combatStuckOrigin was sampled/reset
-	int					nextHopTime;      // level.time the next scheduled random ambient hop may fire (bot_hopfrequency) - set to -1 after firing so the interval re-rolls only once we land again
-	qboolean			hopWasGrounded;   // groundEntityNum state as of the last NewBotAI_TryRandomHop call - used to detect a fresh landing (from a flipkick/knockdown/etc, not our own hop) so we re-roll instead of firing immediately
+	int					nextHopTime;      // level.time the next bot_hopfrequency-gated hop may fire (ambient/random or discretionary combat hop) - set to -1 after firing so the interval re-rolls only once we land again
+	qboolean			hopWasGrounded;   // groundEntityNum state as of the last hop-frequency update - used to detect a fresh landing (from a flipkick/knockdown/etc, not our own hop) so we re-roll instead of firing immediately
 	int					pullKickJumpTime; // level.time a scheduled pk/ptk flipkick jump should fire (0 = none pending, -1 = hold until the enemy closes)
 	int					wallAvoidNextTime; // gates repeat wall-avoidance jump/turn attempts so we don't spam them every think
 
