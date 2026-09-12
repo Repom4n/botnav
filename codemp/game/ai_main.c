@@ -130,6 +130,7 @@ static int NewBotAI_GetPTKWeight(bot_state_t *bs);
 static qboolean NewBotAI_IsKnockdownRecoveryRoll(int anim);
 static qboolean NewBotAI_IsSaberSwingStartWindow(bot_state_t *bs);
 static qboolean NewBotAI_CanAttemptFlipkick(bot_state_t *bs);
+static qboolean NewBotAI_IsFlipkickSetupReady(bot_state_t *bs);
 static void NewBotAI_RetreatStraight(bot_state_t *bs);
 static float NewBotAI_GetEnemyClosingSpeed(bot_state_t *bs);
 static void NewBotAI_SaberDuelIndecisionFallback(bot_state_t *bs, qboolean horizontalSwingStart);
@@ -153,6 +154,7 @@ enum {
 static qboolean NewBotAI_CanUseSaberThrowDefenseBreakForce(bot_state_t *bs, qboolean preferPull);
 static void NewBotAI_TryRandomHop(bot_state_t *bs);
 static int NewBotAI_GetNextHopIntervalMs(bot_state_t *bs, float hopFrequency);
+static void NewBotAI_PushHopRetryCooldown(bot_state_t *bs);
 static float NewBotAI_GetPullkickTimeToKickRange(bot_state_t *bs);
 static void NewBotAI_SchedulePullkickJump(bot_state_t *bs);
 static int NewBotAI_GetDrainTapTargetCost(bot_state_t *bs);
@@ -168,6 +170,7 @@ static qboolean NewBotAI_IsCombatProgressStalled(bot_state_t *bs);
 static qboolean NewBotAI_IsEnemySaberReturning(bot_state_t *bs);
 static qboolean NewBotAI_IsEnemySaberThreatImminent(bot_state_t *bs);
 static qboolean NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bot_state_t *bs);
+static qboolean NewBotAI_ShouldJumpDrainVsSaberThrow(bot_state_t *bs);
 static qboolean NewBotAI_ShouldEmergencyDrainRollSaberThrow(bot_state_t *bs);
 static void NewBotAI_ApplySidewaysDrainRoll(bot_state_t *bs, qboolean moveBack);
 static qboolean NewBotAI_HandleRecoveryRollForcepower(bot_state_t *bs);
@@ -6749,6 +6752,7 @@ void NewBotAI_Getup(bot_state_t *bs)
 	const int ourHealth = g_entities[bs->client].health;
 	qboolean enemyIncomingSaber = qfalse;
 	const qboolean imminentThrowThreat = NewBotAI_IsEnemySaberThreatImminent(bs);
+	const qboolean jumpDrainThreat = NewBotAI_ShouldJumpDrainVsSaberThrow(bs);
 	const qboolean enemyIncomingThrow = (bs->currentEnemy && bs->currentEnemy->client &&
 		bs->currentEnemy->client->ps.saberInFlight) ? qtrue : qfalse;
 	const qboolean enemyTooClose = (bs->currentEnemy && bs->currentEnemy->client &&
@@ -6830,6 +6834,19 @@ void NewBotAI_Getup(bot_state_t *bs)
 		bs->ideal_viewangles[YAW] = yawTarget[YAW];
 		bs->goalAngles[YAW] = yawTarget[YAW];
 	}
+	else if (!useTheForce && jumpDrainThreat)
+	{
+		const qboolean pullActive = (bs->cur_ps.forceHandExtend == HANDEXTEND_FORCEPULL ||
+			bs->cur_ps.powerups[PW_PULL] > level.time) ? qtrue : qfalse;
+		if (pullActive &&
+			!(g_forcePowerDisable.integer & (1 << FP_DRAIN)) &&
+			(bs->cur_ps.fd.forcePowersKnown & (1 << FP_DRAIN)) &&
+			bs->cur_ps.fd.forcePower >= 20)
+		{
+			level.clients[bs->client].ps.fd.forcePowerSelected = FP_DRAIN;
+			useTheForce = qtrue;
+		}
+	}
 	else if (!useTheForce && canPushGetup && (enemyTooClose || enemyIncomingSaber || enemyIncomingThrow))
 	{
 		level.clients[bs->client].ps.fd.forcePowerSelected = FP_PUSH;
@@ -6880,6 +6897,7 @@ static qboolean NewBotAI_CanAttemptFlipkick(bot_state_t *bs)
 //A free flipkick always beats holding/charging a saber throw once the enemy has closed
 //into kick range - otherwise the two bots just collide while we sit on the charge.
 #define NEWBOTAI_FLIPKICK_PREFERRED_RANGE 180.0f
+#define NEWBOTAI_IMMEDIATE_FLIPKICK_RANGE 135.0f
 
 // Item 4: for this long after a fresh grip session begins, levels 1-9 never successfully
 // pull/push free of the grip (see NewBotAI_ReactToBeingGripped) - giving a human player's
@@ -6984,6 +7002,44 @@ static qboolean NewBotAI_CanBackflip(bot_state_t *bs)
 		bs->frame_Enemy_Len > MAX_GRIP_DISTANCE * 2) ? qtrue : qfalse;
 }
 
+static qboolean NewBotAI_IsFlipkickSetupReady(bot_state_t *bs)
+{
+	vec3_t a_fo;
+	float yawDiff;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return qfalse;
+	}
+
+	if (!NewBotAI_CanAttemptFlipkick(bs))
+	{
+		return qfalse;
+	}
+
+	if (bs->cur_ps.saberInFlight)
+	{
+		return qfalse;
+	}
+
+	//Already in a live jump-toggle window for a kick attempt.
+	if (bs->flipkickInputTime > level.time)
+	{
+		return qtrue;
+	}
+
+	if (bs->frame_Enemy_Len > NEWBOTAI_IMMEDIATE_FLIPKICK_RANGE)
+	{
+		return qfalse;
+	}
+
+	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, a_fo);
+	vectoangles(a_fo, a_fo);
+	yawDiff = AngleDifference(a_fo[YAW], bs->viewangles[YAW]);
+
+	return (yawDiff <= 35.0f && yawDiff >= -35.0f) ? qtrue : qfalse;
+}
+
 // Item 6: higher-skill bots satisfy the real flipkick/pullkick gating (see
 // NewBotAI_Flipkick, NewBotAI_GetPull) far more often in normal combat than lower-skill
 // bots do, so their genuine kick attempts alone already read as frequent hopping - the
@@ -6997,6 +7053,20 @@ static int NewBotAI_GetNextHopIntervalMs(bot_state_t *bs, float hopFrequency)
 {
 	const float skillDampen = 1.0f + (bs->settings.skill * 0.15f);
 	return (int)((float)Q_irand(500, 8000) * (100.0f / hopFrequency) * skillDampen);
+}
+
+static void NewBotAI_PushHopRetryCooldown(bot_state_t *bs)
+{
+	const float hopFrequency = bot_hopfrequency.value;
+	const qboolean isGrounded = (bs->cur_ps.groundEntityNum != ENTITYNUM_NONE) ? qtrue : qfalse;
+
+	if (!isGrounded || hopFrequency <= 0.0f)
+	{
+		return;
+	}
+
+	bs->nextHopTime = level.time + NewBotAI_GetNextHopIntervalMs(bs, hopFrequency);
+	bs->hopWasGrounded = qtrue;
 }
 
 // Optional random hop. Flipkicks only add jump input when a kick is truly possible, so any
@@ -7212,6 +7282,12 @@ void NewBotAI_Flipkick(bot_state_t *bs)
 		return;
 	}
 
+	if (!isGripSequence && bs->flipkickInputTime <= level.time && !NewBotAI_IsFlipkickSetupReady(bs))
+	{
+		NewBotAI_PushHopRetryCooldown(bs);
+		return;
+	}
+
 	//We already committed to a flipkick and are still airborne and rising - keep
 	//re-arming the jump press/release toggle for the whole ascent instead of only a
 	//narrow window after the initial jump, so we don't stop pressing before the engine's
@@ -7250,12 +7326,14 @@ void NewBotAI_Flipkick(bot_state_t *bs)
 
 	if (!isGripSequence && NewBotAI_ShouldAvoidFlipkickForSafety(bs))
 	{
+		NewBotAI_PushHopRetryCooldown(bs);
 		NewBotAI_DrainRollEscape(bs);
 		return;
 	}
 
 	if (!isGripSequence && bs->lastFlipkickAttemptTime > level.time)
 	{
+		NewBotAI_PushHopRetryCooldown(bs);
 		return;
 	}
 
@@ -7837,6 +7915,7 @@ void NewBotAI_Draining(bot_state_t *bs)
 		!(bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB))) ? qtrue : qfalse;
 	const int drainTapTargetCost = NewBotAI_GetDrainTapTargetCost(bs);
 	const qboolean safeDrainVsThrow = NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bs);
+	const qboolean jumpDrainThreat = NewBotAI_ShouldJumpDrainVsSaberThrow(bs);
 	const qboolean flipkickDrainEscape = (safeDrainVsThrow && NewBotAI_ShouldPreferFlipkickOverThrow(bs)) ? qtrue : qfalse;
 	qboolean shouldHold = qfalse;
 	int holdMs = 0;
@@ -7880,6 +7959,11 @@ void NewBotAI_Draining(bot_state_t *bs)
 		{
 			NewBotAI_ApplySidewaysDrainRoll(bs, qfalse);
 		}
+		else if (jumpDrainThreat)
+		{
+			trap->EA_MoveForward(bs->client);
+			trap->EA_Jump(bs->client);
+		}
 		else if (!flipkickDrainEscape)
 		{
 			NewBotAI_RetreatDiagonal(bs, (level.framenum & 1) ? qtrue : qfalse);
@@ -7888,7 +7972,8 @@ void NewBotAI_Draining(bot_state_t *bs)
 
 	//Between drain taps, or as soon as the enemy is drained low enough to be pullable, go for
 	//the pullkick follow-up instead of standing in the drain.
-	if (flipkickDrainEscape || hisForce < 20 || bs->drainHoldTime <= level.time)
+	if ((flipkickDrainEscape || hisForce < 20 || bs->drainHoldTime <= level.time) &&
+		!jumpDrainThreat)
 	{
 		NewBotAI_Flipkick(bs);
 	}
@@ -8936,7 +9021,6 @@ static qboolean NewBotAI_CanInitiateFlipkickUnderFanPressure(bot_state_t *bs)
 //same post-attempt cooldown NewBotAI_Flipkick uses (lastFlipkickAttemptTime) to hold off
 //scheduling a fresh jump until that cooldown expires.
 #define NEWBOTAI_PULLKICK_JUMP_DELAY_MS 30
-#define NEWBOTAI_IMMEDIATE_FLIPKICK_RANGE 135.0f
 static void NewBotAI_SchedulePullkickJump(bot_state_t *bs)
 {
 	const float timeToRange = NewBotAI_GetPullkickTimeToKickRange(bs);
@@ -8961,10 +9045,17 @@ static void NewBotAI_SchedulePullkickJump(bot_state_t *bs)
 		return;
 	}
 
-	if (bs->frame_Enemy_Len <= NEWBOTAI_IMMEDIATE_FLIPKICK_RANGE || !NewBotAI_CanAttemptFlipkick(bs))
+	if (!NewBotAI_CanAttemptFlipkick(bs))
 	{
-		//Kick is already possible (or unavailable) - still hold the jump for the extra
-		//30ms delay instead of firing this same think.
+		bs->pullKickJumpTime = 0;
+		NewBotAI_PushHopRetryCooldown(bs);
+		return;
+	}
+
+	if (bs->frame_Enemy_Len <= NEWBOTAI_IMMEDIATE_FLIPKICK_RANGE)
+	{
+		//Kick is already possible - still hold the jump for the extra 30ms delay instead
+		//of firing this same think.
 		bs->pullKickJumpTime = level.time + NEWBOTAI_PULLKICK_JUMP_DELAY_MS;
 		return;
 	}
@@ -9315,7 +9406,28 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 		{
 			const int totalHealthDelta = NewBotAI_GetTotalHealthDelta(bs);
 
-			if (totalHealthDelta >= 30)
+			if (NewBotAI_ShouldEmergencyDrainRollSaberThrow(bs))
+			{
+				bs->combatAction = BOT_COMBAT_ACTION_RETREAT_DEFENSE;
+				NewBotAI_ApplySidewaysDrainRoll(bs, qfalse);
+			}
+			else if (NewBotAI_ShouldJumpDrainVsSaberThrow(bs))
+			{
+				const qboolean pullActive = (bs->cur_ps.forceHandExtend == HANDEXTEND_FORCEPULL ||
+					bs->cur_ps.powerups[PW_PULL] > level.time) ? qtrue : qfalse;
+				bs->combatAction = BOT_COMBAT_ACTION_AGGRESSION;
+				trap->EA_MoveForward(bs->client);
+				trap->EA_Jump(bs->client);
+				if (pullActive &&
+					!(g_forcePowerDisable.integer & (1 << FP_DRAIN)) &&
+					(bs->cur_ps.fd.forcePowersKnown & (1 << FP_DRAIN)) &&
+					bs->cur_ps.fd.forcePower >= 20)
+				{
+					level.clients[bs->client].ps.fd.forcePowerSelected = FP_DRAIN;
+					trap->EA_ForcePower(bs->client);
+				}
+			}
+			else if (totalHealthDelta >= 30)
 			{
 				bs->combatAction = BOT_COMBAT_ACTION_AGGRESSION;
 				trap->EA_MoveForward(bs->client);
@@ -9501,7 +9613,15 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 					else
 						trap->EA_MoveLeft(bs->client);
 				}
-				NewBotAI_Flipkick(bs);
+				if (NewBotAI_IsFlipkickSetupReady(bs))
+				{
+					NewBotAI_Flipkick(bs);
+				}
+				else
+				{
+					NewBotAI_PushHopRetryCooldown(bs);
+					NewBotAI_SaberDuelIndecisionFallback(bs, horizontalSwingStart);
+				}
 			}
 			if (!horizontalSwingStart) {
 				trap->EA_MoveForward(bs->client);//Always move forward i guess
@@ -9547,7 +9667,7 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 				trap->EA_Crouch(bs->client); 
 			}
 			else {
-				if (NewBotAI_CanAttemptFlipkick(bs))
+				if (NewBotAI_IsFlipkickSetupReady(bs))
 				{
 					NewBotAI_Flipkick(bs);
 				}
@@ -11228,28 +11348,39 @@ static qboolean NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bot_state_t *bs)
 	return qfalse;
 }
 
-// Panic escape used only while an enemy saber throw is already threatening us and the
-// bot is actively being yanked by force pull. That pull state is what creates the
-// "about to die with no stable footing" window where the sideways drain roll is allowed.
+static qboolean NewBotAI_ShouldJumpDrainVsSaberThrow(bot_state_t *bs)
+{
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return qfalse;
+	}
+
+	if (!NewBotAI_IsEnemySaberThreatImminent(bs))
+	{
+		return qfalse;
+	}
+
+	if (g_entities[bs->client].health <= 20)
+	{
+		return qfalse;
+	}
+	return qtrue;
+}
+
+// Low-health throw panic: when a saber throw is imminent and HP is below 20, roll
+// sideways and yaw while attempting drain instead of taking the direct line hit.
 static qboolean NewBotAI_ShouldEmergencyDrainRollSaberThrow(bot_state_t *bs)
 {
-	int ourTotalHealth;
-	qboolean pullActive;
 	qboolean canEmergencyDrainRoll;
 
 	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
 	{
 		return qfalse;
 	}
-	ourTotalHealth = g_entities[bs->client].health + bs->cur_ps.stats[STAT_ARMOR];
-	pullActive = (bs->cur_ps.forceHandExtend == HANDEXTEND_FORCEPULL ||
-		bs->cur_ps.powerups[PW_PULL] > level.time) ? qtrue : qfalse;
 	canEmergencyDrainRoll = (bs->currentEnemy->client->ps.saberInFlight &&
-		NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bs) &&
 		NewBotAI_IsEnemySaberThreatImminent(bs) &&
-		ourTotalHealth < 31 &&
-		bs->frame_Enemy_Len < 220 &&
-		pullActive) ? qtrue : qfalse;
+		g_entities[bs->client].health < 20 &&
+		bs->frame_Enemy_Len < 240) ? qtrue : qfalse;
 
 	return canEmergencyDrainRoll;
 }
