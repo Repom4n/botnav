@@ -168,6 +168,9 @@ static qboolean NewBotAI_HasDroppedOwnSaber(bot_state_t *bs);
 static qboolean NewBotAI_IsCombatProgressStalled(bot_state_t *bs);
 static qboolean NewBotAI_IsEnemySaberReturning(bot_state_t *bs);
 static qboolean NewBotAI_IsEnemySaberThreatImminent(bot_state_t *bs);
+static qboolean NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bot_state_t *bs);
+static qboolean NewBotAI_ShouldEmergencyDrainRollSaberThrow(bot_state_t *bs);
+static void NewBotAI_ApplySidewaysDrainRoll(bot_state_t *bs, qboolean moveBack);
 static qboolean NewBotAI_HandleRecoveryRollForcepower(bot_state_t *bs);
 static qboolean NewBotAI_IsBetweenOwnSaberAndEnemy(bot_state_t *bs);
 static void NewBotAI_AdjustSaberThrowArcAim(bot_state_t *bs, vec3_t headlevel);
@@ -6743,11 +6746,21 @@ void NewBotAI_Getup(bot_state_t *bs)
 {
 	qboolean useTheForce = qfalse;
 	qboolean rollingEscape = qfalse;
+	qboolean drainRollingEscape = qfalse;
 	const int ourHealth = g_entities[bs->client].health;
 	qboolean enemyIncomingSaber = qfalse;
+	const qboolean enemyIncomingThrow = (bs->currentEnemy && bs->currentEnemy->client &&
+		bs->currentEnemy->client->ps.saberInFlight) ? qtrue : qfalse;
+	const qboolean enemyTooClose = (bs->currentEnemy && bs->currentEnemy->client &&
+		bs->frame_Enemy_Len < 250) ? qtrue : qfalse;
+	const qboolean canPushGetup = (bs->currentEnemy && bs->currentEnemy->client &&
+		!(g_forcePowerDisable.integer & (1 << FP_PUSH)) &&
+		(bs->cur_ps.fd.forcePowersKnown & (1 << FP_PUSH)) &&
+		bs->cur_ps.fd.forcePower >= 20 &&
+		bs->frame_Enemy_Len <= 640 &&
+		!enemyIncomingThrow &&
+		!(bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB))) ? qtrue : qfalse;
 	const qboolean emergencyRollEscape = (ourHealth <= 22 && bs->frame_Enemy_Len < 160 && Q_irand(1, 100) <= 20) ? qtrue : qfalse;
-
-	trap->EA_Jump(bs->client);
 
 	//Getup rolls are a rare last-ditch escape only; default defense is jump+push.
 	if (bs->currentEnemy && bs->currentEnemy->client &&
@@ -6758,11 +6771,18 @@ void NewBotAI_Getup(bot_state_t *bs)
 		enemyIncomingSaber = qtrue;
 	}
 
-	if (enemyIncomingSaber && emergencyRollEscape)
+	if (NewBotAI_ShouldEmergencyDrainRollSaberThrow(bs))
+	{
+		NewBotAI_ApplySidewaysDrainRoll(bs, qfalse);
+		rollingEscape = qtrue;
+		drainRollingEscape = qtrue;
+	}
+	else if (enemyIncomingSaber && enemyTooClose && !canPushGetup && emergencyRollEscape)
 	{
 		if (bs->drainRollYawStart <= 0 || bs->drainRollYawStart > level.time)
 		{
 			bs->drainRollDir = Q_irand(0, 1) ? 1 : -1;
+			bs->drainRollYawStart = level.time;
 		}
 
 		//Sideways roll away from the incoming swing: hold a lateral input (alternating so
@@ -6772,9 +6792,15 @@ void NewBotAI_Getup(bot_state_t *bs)
 		else
 			trap->EA_MoveRight(bs->client);
 		rollingEscape = qtrue;
+		drainRollingEscape = qtrue;
 	}
 
-	if (!useTheForce && rollingEscape &&
+	if (!rollingEscape)
+	{
+		trap->EA_Jump(bs->client);
+	}
+
+	if (!useTheForce && drainRollingEscape &&
 		!(g_forcePowerDisable.integer & (1 << FP_DRAIN)) &&
 		(bs->cur_ps.fd.forcePowersKnown & (1 << FP_DRAIN)) &&
 		bs->cur_ps.fd.forcePower >= 25)
@@ -6805,12 +6831,7 @@ void NewBotAI_Getup(bot_state_t *bs)
 		bs->ideal_viewangles[YAW] = yawTarget[YAW];
 		bs->goalAngles[YAW] = yawTarget[YAW];
 	}
-	else if (!useTheForce && enemyIncomingSaber &&
-		!(g_forcePowerDisable.integer & (1 << FP_PUSH)) &&
-		(bs->cur_ps.fd.forcePowersKnown & (1 << FP_PUSH)) &&
-		bs->cur_ps.fd.forcePower >= 20 &&
-		bs->frame_Enemy_Len <= 640 &&
-		!(bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB)))
+	else if (!useTheForce && canPushGetup && (enemyTooClose || enemyIncomingSaber))
 	{
 		level.clients[bs->client].ps.fd.forcePowerSelected = FP_PUSH;
 		useTheForce = qtrue;
@@ -7788,6 +7809,8 @@ void NewBotAI_Draining(bot_state_t *bs)
 	const qboolean enemyVisible = (OrgVisible(bs->eye, bs->currentEnemy->client->ps.origin, bs->client) &&
 		!(bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB))) ? qtrue : qfalse;
 	const int drainTapTargetCost = NewBotAI_GetDrainTapTargetCost(bs);
+	const qboolean safeDrainVsThrow = NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bs);
+	const qboolean flipkickDrainEscape = (safeDrainVsThrow && NewBotAI_ShouldPreferFlipkickOverThrow(bs)) ? qtrue : qfalse;
 	qboolean shouldHold = qfalse;
 	int holdMs = 0;
 
@@ -7824,9 +7847,21 @@ void NewBotAI_Draining(bot_state_t *bs)
 		trap->EA_ForcePower(bs->client);
 	}
 
+	if (safeDrainVsThrow)
+	{
+		if (NewBotAI_ShouldEmergencyDrainRollSaberThrow(bs))
+		{
+			NewBotAI_ApplySidewaysDrainRoll(bs, qfalse);
+		}
+		else if (!flipkickDrainEscape)
+		{
+			NewBotAI_RetreatDiagonal(bs, (level.framenum & 1) ? qtrue : qfalse);
+		}
+	}
+
 	//Between drain taps, or as soon as the enemy is drained low enough to be pullable, go for
 	//the pullkick follow-up instead of standing in the drain.
-	if (hisForce < 20 || bs->drainHoldTime <= level.time)
+	if (flipkickDrainEscape || hisForce < 20 || bs->drainHoldTime <= level.time)
 	{
 		NewBotAI_Flipkick(bs);
 	}
@@ -9316,6 +9351,14 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 			if (bs->cur_ps.viewheight < 48) //only move forward if they are crouched
 				trap->EA_MoveForward(bs->client);
 			crouch = qtrue;
+		}
+		else if (NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bs) &&
+			bs->currentEnemy->client->ps.fd.forcePower < 20 &&
+			!NewBotAI_ShouldPreferFlipkickOverThrow(bs))
+		{
+			bs->combatAction = BOT_COMBAT_ACTION_RETREAT_DEFENSE;
+			NewBotAI_RetreatDiagonal(bs, (level.framenum & 1) ? qtrue : qfalse);
+			return;
 		}
 		else if (!pressAdvantage && !NewBotAI_CanAttemptFlipkick(bs) && NewBotAI_GetEnemyClosingSpeed(bs) > 420.0f) {
 			//Item 2B: retreat from a fast incoming enemy (saber duel / flipkick disabled) instead of
@@ -11119,6 +11162,127 @@ static qboolean NewBotAI_IsEnemySaberThreatImminent(bot_state_t *bs)
 	return (lateralDistSq <= (threatRadius * threatRadius)) ? qtrue : qfalse;
 }
 
+static qboolean NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bot_state_t *bs)
+{
+	vec3_t a_fo;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return qfalse;
+	}
+
+	if (!bs->currentEnemy->client->ps.saberInFlight)
+	{
+		return qfalse;
+	}
+
+	if (g_entities[bs->client].health > BotGetHealthBiasThreshold())
+	{
+		return qfalse;
+	}
+
+	if (bs->cur_ps.weapon != WP_SABER)
+	{
+		return qfalse;
+	}
+
+	if (bs->cur_ps.saberInFlight ||
+		(g_forcePowerDisable.integer & (1 << FP_DRAIN)) ||
+		!(bs->cur_ps.fd.forcePowersKnown & (1 << FP_DRAIN)) ||
+		bs->cur_ps.fd.forcePower < 25)
+	{
+		return qfalse;
+	}
+
+	if (!bs->frame_Enemy_Vis || bs->frame_Enemy_Len > MAX_DRAIN_DISTANCE)
+	{
+		return qfalse;
+	}
+
+	if (bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB))
+	{
+		return qfalse;
+	}
+
+	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, a_fo);
+	vectoangles(a_fo, a_fo);
+
+	return InFieldOfVision(bs->viewangles, 60, a_fo) ? qtrue : qfalse;
+}
+
+// Panic escape used only while an enemy saber throw is already threatening us and the
+// bot is actively being yanked by force pull. That pull state is what creates the
+// "about to die with no stable footing" window where the sideways drain roll is allowed.
+static qboolean NewBotAI_ShouldEmergencyDrainRollSaberThrow(bot_state_t *bs)
+{
+	if (!NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bs))
+	{
+		return qfalse;
+	}
+
+	if (g_entities[bs->client].health > 22 || bs->frame_Enemy_Len >= 160)
+	{
+		return qfalse;
+	}
+
+	if (bs->cur_ps.forceHandExtend != HANDEXTEND_FORCEPULL &&
+		bs->cur_ps.powerups[PW_PULL] <= level.time)
+	{
+		//Only use this escape while the pull physics are currently active.
+		return qfalse;
+	}
+
+	return NewBotAI_IsEnemySaberThreatImminent(bs);
+}
+
+static void NewBotAI_ApplySidewaysDrainRoll(bot_state_t *bs, qboolean moveBack)
+{
+	vec3_t a_fo;
+	vec3_t yawTarget;
+	float yawBlend;
+	float yawOffset;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return;
+	}
+
+	if (bs->drainRollYawStart <= 0 || bs->drainRollYawStart > level.time)
+	{
+		bs->drainRollDir = Q_irand(0, 1) ? 1 : -1;
+		bs->drainRollYawStart = level.time;
+	}
+
+	level.clients[bs->client].ps.fd.forcePowerSelected = FP_DRAIN;
+	trap->EA_ForcePower(bs->client);
+
+	if (moveBack)
+	{
+		trap->EA_MoveBack(bs->client);
+	}
+	if (bs->drainRollDir < 0)
+	{
+		trap->EA_MoveLeft(bs->client);
+	}
+	else
+	{
+		trap->EA_MoveRight(bs->client);
+	}
+
+	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, a_fo);
+	vectoangles(a_fo, a_fo);
+	yawBlend = (float)(level.time - bs->drainRollYawStart) / 200.0f;
+	if (yawBlend > 1.0f)
+	{
+		yawBlend = 1.0f;
+	}
+	yawOffset = (bs->drainRollDir < 0) ? -90.0f : 90.0f;
+	VectorCopy(bs->ideal_viewangles, yawTarget);
+	yawTarget[YAW] = AngleNormalize360(a_fo[YAW] + (yawOffset * yawBlend));
+	bs->ideal_viewangles[YAW] = yawTarget[YAW];
+	bs->goalAngles[YAW] = yawTarget[YAW];
+}
+
 static qboolean NewBotAI_HandleRecoveryRollForcepower(bot_state_t *bs)
 {
 	int drainWeight;
@@ -11425,6 +11589,12 @@ int NewBotAI_GetPull(bot_state_t *bs) {
 		return 0;
 	if (ourForce < 21)
 		return 0;
+	if (NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bs) &&
+		NewBotAI_IsEnemySaberThreatImminent(bs) &&
+		hisForce >= 20 &&
+		!NewBotAI_IsDrainlockAdvantage(bs) &&
+		!NewBotAI_ShouldPreferFlipkickOverThrow(bs))
+		return 0;
 
 	if (weight < 1)
 		weight = 1;
@@ -11560,6 +11730,9 @@ int NewBotAI_GetPush(bot_state_t *bs) {
 	if (ourForce < 20)
 		return 0;
 	if (bs->cur_ps.fd.forcePowersActive & (1 << FP_PROTECT)) //we can tank the dmg..
+		return 0;
+	if (NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bs) &&
+		NewBotAI_IsEnemySaberThreatImminent(bs))
 		return 0;
 
 	if (NewBotAI_IsEnemyPullable(bs) && (ourHealth < 25) && (bs->frame_Enemy_Len < 160) && (bs->currentEnemy->client->ps.weapon == WP_SABER)) {
@@ -11719,7 +11892,7 @@ static qboolean NewBotAI_IsDrainlockAdvantage(bot_state_t *bs)
 
 int NewBotAI_GetDrain(bot_state_t *bs) {
 	const int ourHealth = g_entities[bs->client].health, ourForce = bs->cur_ps.fd.forcePower, hisForce = bs->currentEnemy->client->ps.fd.forcePower;
-	const int healthBiasThreshold = BotGetHealthBiasThreshold();
+	const qboolean safeDrainVsThrow = NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bs);
 	int weight = 100;
 	vec3_t a_fo;
 
@@ -11747,6 +11920,17 @@ int NewBotAI_GetDrain(bot_state_t *bs) {
 		return 90;
 	}
 
+	if (safeDrainVsThrow)
+	{
+		if (hisForce < 20 && !NewBotAI_ShouldPreferFlipkickOverThrow(bs))
+			return 0;
+		weight = 110;
+		if (NewBotAI_ShouldPreferFlipkickOverThrow(bs))
+			weight += 15;
+		if (hisForce >= 20)
+			weight += 10;
+		return weight;
+	}
 	if (bs->frame_Enemy_Len < 120 &&
 		(BG_SaberInAttack(bs->currentEnemy->client->ps.saberMove) ||
 		 NewBotAI_IsEnemySaberThreatImminent(bs) ||
@@ -11768,9 +11952,9 @@ int NewBotAI_GetDrain(bot_state_t *bs) {
 	if (ourHealth < 100)
 	{
 		weight = ((weight - ourHealth) + 20); //Eeee  //100 - 25 + 20 = 95
-		if (ourHealth <= healthBiasThreshold)
+		if (ourHealth <= BotGetHealthBiasThreshold())
 		{
-			weight += 70 + (healthBiasThreshold - ourHealth);
+			weight += 70 + (BotGetHealthBiasThreshold() - ourHealth);
 			if (weight < 100)
 			{
 				weight = 100;
@@ -12040,8 +12224,26 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 
 	drainWeight = NewBotAI_GetDrain(bs);
 	gripWeight = NewBotAI_GetGrip(bs);
-	if (NewBotAI_IsEnemySaberThreatImminent(bs))
+	if (NewBotAI_IsEnemySaberThreatImminent(bs) &&
+		NewBotAI_ShouldEmergencyDrainRollSaberThrow(bs))
+	{
+		NewBotAI_ApplySidewaysDrainRoll(bs, qtrue);
 		return;
+	}
+	if (NewBotAI_IsEnemySaberThreatImminent(bs) &&
+		NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bs))
+	{
+		if (drainWeight > minWeight)
+		{
+			level.clients[bs->client].ps.fd.forcePowerSelected = FP_DRAIN;
+			trap->EA_ForcePower(bs->client);
+		}
+		return;
+	}
+	if (NewBotAI_IsEnemySaberThreatImminent(bs))
+	{
+		return;
+	}
 	pullWeight = NewBotAI_GetPull(bs);
 	pushWeight = NewBotAI_GetPush(bs);
 	lightningWeight = NewBotAI_GetLightningWeight(bs);
