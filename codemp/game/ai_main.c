@@ -7757,7 +7757,7 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 		VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, a_fo);
 		vectoangles(a_fo, a_fo);
 		targetYawDiff = AngleDifference(a_fo[YAW], bs->viewangles[YAW]);
-		targetInFront = (fabs(targetYawDiff) <= 45.0f) ? qtrue : qfalse;
+		targetInFront = (Q_fabs(targetYawDiff) <= 45.0f) ? qtrue : qfalse;
 
 		//The approach below moves forward until the target is basically touching us, so
 		//one of us can easily end up stacked on the other. Track both stackings - the
