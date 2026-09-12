@@ -12642,8 +12642,7 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 		//Always arm the pullkick follow-through after a pull so the pull itself can create the
 		//close-range window; only fire the immediate kick when the window already exists now.
 		NewBotAI_SchedulePullkickJump(bs);
-		if (bs->pullKickJumpTime == 0 &&
-			NewBotAI_IsPullkickOpportunity(bs) &&
+		if (NewBotAI_IsPullkickOpportunity(bs) &&
 			bs->frame_Enemy_Len <= NEWBOTAI_IMMEDIATE_FLIPKICK_RANGE &&
 			NewBotAI_IsFlipkickSetupReady(bs))
 			NewBotAI_Flipkick(bs);
@@ -12838,8 +12837,7 @@ void NewBotAI_GetLSForcepower(bot_state_t *bs)
 		//Always arm the pullkick follow-through after a pull so the pull itself can create the
 		//close-range window; only fire the immediate kick when the window already exists now.
 		NewBotAI_SchedulePullkickJump(bs);
-		if (bs->pullKickJumpTime == 0 &&
-			NewBotAI_IsPullkickOpportunity(bs) &&
+		if (NewBotAI_IsPullkickOpportunity(bs) &&
 			bs->frame_Enemy_Len <= NEWBOTAI_IMMEDIATE_FLIPKICK_RANGE &&
 			NewBotAI_IsFlipkickSetupReady(bs))
 			NewBotAI_Flipkick(bs);
