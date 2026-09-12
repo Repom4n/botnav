@@ -35,6 +35,8 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
  *****************************************************************************/
 
 
+#include <limits.h>
+
 #include "g_local.h"
 #include "qcommon/q_shared.h"
 #include "botlib/botlib.h"		//bot lib interface
@@ -715,7 +717,7 @@ static int BotApplyAttackRangeWeight(bot_state_t *bs, int baseWeight, int shortW
 {
 	const int weightPercent = (!bs) ? 100 :
 		BotGetRangeWeightPercentForDistance(bs->frame_Enemy_Len, shortWeight, mediumWeight, longWeight);
-	int weightedWeight;
+	long long weightedWeight;
 
 	if (baseWeight <= 0)
 	{
@@ -724,14 +726,16 @@ static int BotApplyAttackRangeWeight(bot_state_t *bs, int baseWeight, int shortW
 
 	if (weightPercent == 100)
 	{
-		weightedWeight = baseWeight;
-	}
-	else
-	{
-		weightedWeight = (int)((float)baseWeight * ((float)weightPercent / 100.0f));
+		return baseWeight;
 	}
 
-	return Com_Clampi(0, 1000, weightedWeight);
+	weightedWeight = ((long long)baseWeight * (long long)weightPercent) / 100LL;
+	if (weightedWeight > INT_MAX)
+	{
+		return INT_MAX;
+	}
+
+	return (int)weightedWeight;
 }
 
 //Gripkick yaw reacquisition needs to be faster than the generic post-fix 6-degree step so
@@ -8925,11 +8929,6 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 			if (bs->fanPhase != FAN_PHASE_INACTIVE)
 			{
 				NewBotAI_ApplyHorizontalSwingMove(bs);
-				if (saberAttackRangeWeightPercent <= 0)
-				{
-					NewBotAI_ResetFanChain(bs);
-					return;
-				}
 				if (!suppressSaberAttack)
 					trap->EA_Attack(bs->client);
 				return;
