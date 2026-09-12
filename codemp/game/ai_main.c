@@ -12630,7 +12630,12 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 		//Only convert the pull into a pullkick when it is a real pullkick window, and let the
 		//distance-based schedule decide when the jump should happen.
 		if (NewBotAI_IsPullkickOpportunity(bs))
-			NewBotAI_SchedulePullkickJump(bs);
+		{
+			if (bs->frame_Enemy_Len <= NEWBOTAI_IMMEDIATE_FLIPKICK_RANGE)
+				NewBotAI_Flipkick(bs);
+			else
+				NewBotAI_SchedulePullkickJump(bs);
+		}
 
 		//trap->Print("Pulling -- Pull: %i, Push: %i, Drain: %i, Grip: %i\n", pullWeight, pushWeight, drainWeight, gripWeight);
 	}
@@ -12822,7 +12827,12 @@ void NewBotAI_GetLSForcepower(bot_state_t *bs)
 		//Only convert the pull into a pullkick when it is a real pullkick window, and let the
 		//distance-based schedule decide when the jump should happen.
 		if (NewBotAI_IsPullkickOpportunity(bs))
-			NewBotAI_SchedulePullkickJump(bs);
+		{
+			if (bs->frame_Enemy_Len <= NEWBOTAI_IMMEDIATE_FLIPKICK_RANGE)
+				NewBotAI_Flipkick(bs);
+			else
+				NewBotAI_SchedulePullkickJump(bs);
+		}
 		//trap->Print("Pull - Weights -- Pull: %i, Push: %i, Absorb: %i, Protect: %i, Heal %i\n", pullWeight, pushWeight, absorbWeight, protectWeight, healWeight);
 	}
 	else if (absorbWeight > pushWeight && absorbWeight > pullWeight && absorbWeight > protectWeight && absorbWeight > healWeight && absorbWeight > minWeight) {
