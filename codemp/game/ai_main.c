@@ -12542,8 +12542,11 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 		if (enemyTotalHealth >= 18 && enemyTotalHealth <= 30) {
 			weight = 100;
 		}
-		else if (ourForce > 40 && (enemyTotalHealth <= 50 || forceLead > 0 || enemyArmor > 0)) {
+		else if (ourForce > 40 && enemyTotalHealth <= 50) {
 			weight = 100;
+		}
+		else if (ourForce > 40 && (forceLead > 0 || enemyArmor > 0)) {
+			weight = 90;
 		}
 		else if (ourForce > 30) {
 			weight = 85;
