@@ -8515,6 +8515,7 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 {
 	int weapon;
 	const qboolean hasDroppedOwnSaber = NewBotAI_HasDroppedOwnSaber(bs);
+	const qboolean saberInFlight = g_entities[bs->client].client->ps.saberInFlight;
 	// const float speed = NewBotAI_GetSpeedTowardsEnemy(bs);
 
 	if (!bs->client || !bs->currentEnemy || !bs->currentEnemy->client)
@@ -8529,12 +8530,13 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 		bs->saberThrowQueued &&
 		bs->doAltAttack)
 	{
-		bs->saberThrowQueued = qfalse;
+		if (saberInFlight)
+			bs->saberThrowQueued = qfalse;
 		return;
 	}
 
 	if (bs->cur_ps.weapon == WP_SABER &&
-		g_entities[bs->client].client->ps.saberInFlight &&
+		saberInFlight &&
 		bs->doAltAttack)
 		return;
 
