@@ -6749,6 +6749,7 @@ void NewBotAI_Getup(bot_state_t *bs)
 	qboolean drainRollingEscape = qfalse;
 	const int ourHealth = g_entities[bs->client].health;
 	qboolean enemyIncomingSaber = qfalse;
+	const qboolean imminentThrowThreat = NewBotAI_IsEnemySaberThreatImminent(bs);
 	const qboolean enemyIncomingThrow = (bs->currentEnemy && bs->currentEnemy->client &&
 		bs->currentEnemy->client->ps.saberInFlight) ? qtrue : qfalse;
 	const qboolean enemyTooClose = (bs->currentEnemy && bs->currentEnemy->client &&
@@ -6758,9 +6759,8 @@ void NewBotAI_Getup(bot_state_t *bs)
 		(bs->cur_ps.fd.forcePowersKnown & (1 << FP_PUSH)) &&
 		bs->cur_ps.fd.forcePower >= 20 &&
 		bs->frame_Enemy_Len <= 640 &&
-		!enemyIncomingThrow &&
 		!(bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB))) ? qtrue : qfalse;
-	const qboolean emergencyRollEscape = (ourHealth <= 22 && bs->frame_Enemy_Len < 160 && Q_irand(1, 100) <= 20) ? qtrue : qfalse;
+	const qboolean emergencyRollEscape = (ourHealth < 31 && imminentThrowThreat && bs->frame_Enemy_Len < 220) ? qtrue : qfalse;
 
 	//Getup rolls are a rare last-ditch escape only; default defense is jump+push.
 	if (bs->currentEnemy && bs->currentEnemy->client &&
@@ -6792,7 +6792,7 @@ void NewBotAI_Getup(bot_state_t *bs)
 		else
 			trap->EA_MoveRight(bs->client);
 		rollingEscape = qtrue;
-		drainRollingEscape = qtrue;
+		drainRollingEscape = qfalse;
 	}
 
 	if (!rollingEscape)
@@ -6831,7 +6831,7 @@ void NewBotAI_Getup(bot_state_t *bs)
 		bs->ideal_viewangles[YAW] = yawTarget[YAW];
 		bs->goalAngles[YAW] = yawTarget[YAW];
 	}
-	else if (!useTheForce && canPushGetup && (enemyTooClose || enemyIncomingSaber))
+	else if (!useTheForce && canPushGetup && (enemyTooClose || enemyIncomingSaber || enemyIncomingThrow))
 	{
 		level.clients[bs->client].ps.fd.forcePowerSelected = FP_PUSH;
 		useTheForce = qtrue;
@@ -8563,6 +8563,10 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 {
 	int weapon;
 	const qboolean hasDroppedOwnSaber = NewBotAI_HasDroppedOwnSaber(bs);
+	const int ourTotalHealth = g_entities[bs->client].health + bs->cur_ps.stats[STAT_ARMOR];
+	const int enemyTotalHealth = (bs->currentEnemy && bs->currentEnemy->client) ?
+		(bs->currentEnemy->health + bs->currentEnemy->client->ps.stats[STAT_ARMOR]) : ourTotalHealth;
+	const qboolean hasHealthDisadvantage = (ourTotalHealth < enemyTotalHealth) ? qtrue : qfalse;
 	// const float speed = NewBotAI_GetSpeedTowardsEnemy(bs);
 
 	if (!bs->client || !bs->currentEnemy || !bs->currentEnemy->client)
@@ -8589,6 +8593,17 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 	}
 
 	if (bs->cur_ps.weapon == WP_SABER) {//Fullforce saber attacks
+		if (hasHealthDisadvantage && !hasDroppedOwnSaber)
+		{
+			return;
+		}
+
+		if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE &&
+			!BG_SaberInAttack(bs->cur_ps.saberMove))
+		{
+			return;
+		}
+
 		const qboolean preferDrainlockFan = (NewBotAI_IsDrainlockAdvantage(bs) &&
 			bs->cur_ps.fd.saberAnimLevel != SS_STAFF &&
 			bs->cur_ps.fd.saberAnimLevel != SS_DUAL) ? qtrue : qfalse;
@@ -8640,7 +8655,9 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 			//moment weaponTime clears. The old LS_NONE/LS_READY-only gate below released
 			//attack for the entire tail of every swing, so the press usually landed during
 			//the recovery/return phase (no swing started) and the chain died after one hit.
-			if (BG_SaberInAttack(bs->cur_ps.saberMove) && bs->frame_Enemy_Len < 320 &&
+			if (BG_SaberInAttack(bs->cur_ps.saberMove) &&
+				(bs->fanPhase != FAN_PHASE_INACTIVE || bs->cur_ps.saberMove == LS_A_L2R || bs->cur_ps.saberMove == LS_A_R2L) &&
+				bs->frame_Enemy_Len < 320 &&
 				NewBotAI_GetTimeToInRange(bs, 75, 800) < 800 && g_entities[bs->client].health > 40)
 			{
 				trap->EA_Attack(bs->client);
@@ -9327,7 +9344,21 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 		}
 		else if (NewBotAI_IsEnemySaberThreatImminent(bs))
 		{
-			if (pressAdvantage)
+			const int ourTotalHealth = g_entities[bs->client].health + bs->cur_ps.stats[STAT_ARMOR];
+			const int enemyTotalHealth = bs->currentEnemy->health + bs->currentEnemy->client->ps.stats[STAT_ARMOR];
+			const int totalHealthDelta = ourTotalHealth - enemyTotalHealth;
+
+			if (totalHealthDelta >= 30)
+			{
+				bs->combatAction = BOT_COMBAT_ACTION_AGGRESSION;
+				trap->EA_MoveForward(bs->client);
+			}
+			else if (totalHealthDelta < 0)
+			{
+				bs->combatAction = BOT_COMBAT_ACTION_RETREAT_DEFENSE;
+				NewBotAI_RetreatDiagonal(bs, (level.framenum & 1) ? qtrue : qfalse);
+			}
+			else if (pressAdvantage)
 			{
 				bs->combatAction = BOT_COMBAT_ACTION_AGGRESSION;
 				trap->EA_MoveForward(bs->client);
@@ -10286,8 +10317,7 @@ static qboolean NewBotAI_HasDroppedOwnSaber(bot_state_t *bs)
 	//Downed saber physics can transition between a small set of movement types while still
 	//in dropped-saber think; accept those known downed states for recall eligibility.
 	return (saberEnt->s.pos.trType == TR_GRAVITY ||
-		saberEnt->s.pos.trType == TR_STATIONARY ||
-		saberEnt->s.pos.trType == TR_INTERPOLATE) ? qtrue : qfalse;
+		saberEnt->s.pos.trType == TR_STATIONARY) ? qtrue : qfalse;
 }
 
 static int BotGetDrainHoldBiasMs(bot_state_t *bs)
@@ -11165,6 +11195,9 @@ static qboolean NewBotAI_IsEnemySaberThreatImminent(bot_state_t *bs)
 static qboolean NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bot_state_t *bs)
 {
 	vec3_t a_fo;
+	int ourTotalHealth;
+	int enemyTotalHealth;
+	int totalHealthDelta;
 
 	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
 	{
@@ -11172,11 +11205,6 @@ static qboolean NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bot_state_t *bs)
 	}
 
 	if (!bs->currentEnemy->client->ps.saberInFlight)
-	{
-		return qfalse;
-	}
-
-	if (g_entities[bs->client].health > BotGetHealthBiasThreshold())
 	{
 		return qfalse;
 	}
@@ -11207,7 +11235,31 @@ static qboolean NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bot_state_t *bs)
 	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, a_fo);
 	vectoangles(a_fo, a_fo);
 
-	return InFieldOfVision(bs->viewangles, 60, a_fo) ? qtrue : qfalse;
+	if (!InFieldOfVision(bs->viewangles, 60, a_fo))
+	{
+		return qfalse;
+	}
+
+	ourTotalHealth = g_entities[bs->client].health + bs->cur_ps.stats[STAT_ARMOR];
+	enemyTotalHealth = bs->currentEnemy->health + bs->currentEnemy->client->ps.stats[STAT_ARMOR];
+	totalHealthDelta = ourTotalHealth - enemyTotalHealth;
+
+	if (g_entities[bs->client].health <= BotGetHealthBiasThreshold())
+	{
+		return qtrue;
+	}
+
+	if (totalHealthDelta < 0)
+	{
+		return qtrue;
+	}
+
+	if (totalHealthDelta >= 30)
+	{
+		return qtrue;
+	}
+
+	return qfalse;
 }
 
 // Panic escape used only while an enemy saber throw is already threatening us and the
@@ -11215,24 +11267,22 @@ static qboolean NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bot_state_t *bs)
 // "about to die with no stable footing" window where the sideways drain roll is allowed.
 static qboolean NewBotAI_ShouldEmergencyDrainRollSaberThrow(bot_state_t *bs)
 {
-	if (!NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bs))
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
 	{
 		return qfalse;
 	}
 
-	if (g_entities[bs->client].health > 22 || bs->frame_Enemy_Len >= 160)
+	if (!NewBotAI_IsEnemySaberThreatImminent(bs))
 	{
 		return qfalse;
 	}
 
-	if (bs->cur_ps.forceHandExtend != HANDEXTEND_FORCEPULL &&
-		bs->cur_ps.powerups[PW_PULL] <= level.time)
+	if (g_entities[bs->client].health >= 31 || bs->frame_Enemy_Len >= 220)
 	{
-		//Only use this escape while the pull physics are currently active.
 		return qfalse;
 	}
 
-	return NewBotAI_IsEnemySaberThreatImminent(bs);
+	return qtrue;
 }
 
 static void NewBotAI_ApplySidewaysDrainRoll(bot_state_t *bs, qboolean moveBack)
@@ -15424,6 +15474,28 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 			//starts with a fresh press.
 			bs->saberRetrieveSpamTime = 0;
 			bs->saberRetrieveSpamHeld = qfalse;
+		}
+	}
+
+	if (bs->doAttack && bs->cur_ps.weapon == WP_SABER)
+	{
+		const qboolean hasDroppedOwnSaber = NewBotAI_HasDroppedOwnSaber(bs);
+		const qboolean airborneStart = (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE &&
+			!BG_SaberInAttack(bs->cur_ps.saberMove)) ? qtrue : qfalse;
+
+		if (bs->currentEnemy && bs->currentEnemy->client)
+		{
+			const int ourTotalHealth = g_entities[bs->client].health + bs->cur_ps.stats[STAT_ARMOR];
+			const int enemyTotalHealth = bs->currentEnemy->health + bs->currentEnemy->client->ps.stats[STAT_ARMOR];
+			if (ourTotalHealth < enemyTotalHealth && !hasDroppedOwnSaber)
+			{
+				bs->doAttack = 0;
+			}
+		}
+
+		if (airborneStart && !hasDroppedOwnSaber)
+		{
+			bs->doAttack = 0;
 		}
 	}
 
