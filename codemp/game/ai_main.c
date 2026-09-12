@@ -11368,6 +11368,10 @@ static qboolean NewBotAI_GetEnemySaberFlightThreat(bot_state_t *bs, float *forwa
 static qboolean NewBotAI_IsEnemySaberThreatImminent(bot_state_t *bs)
 {
 	vec3_t a_fo;
+	float forwardDist;
+	float saberSpeed;
+	float timeToImpactMs;
+	qboolean isReturning;
 
 	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
 	{
@@ -11392,7 +11396,15 @@ static qboolean NewBotAI_IsEnemySaberThreatImminent(bot_state_t *bs)
 		}
 	}
 
-	return NewBotAI_GetEnemySaberFlightThreat(bs, NULL, NULL, NULL);
+	if (!NewBotAI_GetEnemySaberFlightThreat(bs, &forwardDist, &saberSpeed, &isReturning))
+	{
+		return qfalse;
+	}
+
+	timeToImpactMs = (forwardDist / saberSpeed) * 1000.0f;
+
+	return (timeToImpactMs <= 120.0f ||
+		forwardDist <= (isReturning ? 18.0f : 28.0f)) ? qtrue : qfalse;
 }
 
 static qboolean NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bot_state_t *bs)
@@ -12627,15 +12639,12 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 		level.clients[bs->client].ps.fd.forcePowerSelected = FP_PULL;
 		NewBotAI_ApplyPullMistake(bs);
 		useTheForce = qtrue;
-		//Only convert the pull into a pullkick when it is a real pullkick window, and let the
-		//distance-based schedule decide when the jump should happen.
-		if (NewBotAI_IsPullkickOpportunity(bs))
-		{
-			if (bs->frame_Enemy_Len <= NEWBOTAI_IMMEDIATE_FLIPKICK_RANGE)
-				NewBotAI_Flipkick(bs);
-			else
-				NewBotAI_SchedulePullkickJump(bs);
-		}
+		//Always arm the pullkick follow-through after a pull so the pull itself can create the
+		//close-range window; only fire the immediate kick when the window already exists now.
+		NewBotAI_SchedulePullkickJump(bs);
+		if (NewBotAI_IsPullkickOpportunity(bs) &&
+			bs->frame_Enemy_Len <= NEWBOTAI_IMMEDIATE_FLIPKICK_RANGE)
+			NewBotAI_Flipkick(bs);
 
 		//trap->Print("Pulling -- Pull: %i, Push: %i, Drain: %i, Grip: %i\n", pullWeight, pushWeight, drainWeight, gripWeight);
 	}
@@ -12824,15 +12833,12 @@ void NewBotAI_GetLSForcepower(bot_state_t *bs)
 		level.clients[bs->client].ps.fd.forcePowerSelected = FP_PULL;
 		NewBotAI_ApplyPullMistake(bs);
 		useTheForce = qtrue;
-		//Only convert the pull into a pullkick when it is a real pullkick window, and let the
-		//distance-based schedule decide when the jump should happen.
-		if (NewBotAI_IsPullkickOpportunity(bs))
-		{
-			if (bs->frame_Enemy_Len <= NEWBOTAI_IMMEDIATE_FLIPKICK_RANGE)
-				NewBotAI_Flipkick(bs);
-			else
-				NewBotAI_SchedulePullkickJump(bs);
-		}
+		//Always arm the pullkick follow-through after a pull so the pull itself can create the
+		//close-range window; only fire the immediate kick when the window already exists now.
+		NewBotAI_SchedulePullkickJump(bs);
+		if (NewBotAI_IsPullkickOpportunity(bs) &&
+			bs->frame_Enemy_Len <= NEWBOTAI_IMMEDIATE_FLIPKICK_RANGE)
+			NewBotAI_Flipkick(bs);
 		//trap->Print("Pull - Weights -- Pull: %i, Push: %i, Absorb: %i, Protect: %i, Heal %i\n", pullWeight, pushWeight, absorbWeight, protectWeight, healWeight);
 	}
 	else if (absorbWeight > pushWeight && absorbWeight > pullWeight && absorbWeight > protectWeight && absorbWeight > healWeight && absorbWeight > minWeight) {
