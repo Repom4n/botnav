@@ -11611,6 +11611,7 @@ static qboolean NewBotAI_ShouldCloseGapVsEnemySaberThrow(bot_state_t *bs)
 	gentity_t *saberEnt;
 	vec3_t saberOrigin;
 	float saberDist;
+	int saberEntNum;
 
 	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client ||
 		!bs->currentEnemy->client->ps.saberInFlight ||
@@ -11619,7 +11620,13 @@ static qboolean NewBotAI_ShouldCloseGapVsEnemySaberThrow(bot_state_t *bs)
 		return qfalse;
 	}
 
-	saberEnt = &g_entities[bs->currentEnemy->client->ps.saberEntityNum];
+	saberEntNum = bs->currentEnemy->client->ps.saberEntityNum;
+	if (saberEntNum < 0 || saberEntNum >= ENTITYNUM_WORLD)
+	{
+		return qfalse;
+	}
+
+	saberEnt = &g_entities[saberEntNum];
 	BG_EvaluateTrajectory(&saberEnt->s.pos, level.time, saberOrigin);
 	saberDist = Distance(bs->cur_ps.origin, saberOrigin);
 
@@ -12241,6 +12248,9 @@ int NewBotAI_GetDrain(bot_state_t *bs) {
 	}
 	if (pressureDrainVsThrow)
 	{
+		//During the saber's return-to-hand window the enemy is at their most pull-vulnerable:
+		//prefer PTK first and plain pullkick second, instead of spending the turn on a drain
+		//that leaves the opening unused.
 		if (NewBotAI_IsEnemySaberReturning(bs) && NewBotAI_GetPull(bs) > 0)
 			return 0;
 		if (!bs->frame_Enemy_Vis)
