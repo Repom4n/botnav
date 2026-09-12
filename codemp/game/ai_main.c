@@ -9468,12 +9468,7 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 				trap->EA_MoveForward(bs->client);
 				trap->EA_Jump(bs->client);
 				trap->EA_Crouch(bs->client);
-				if (bot_hopfrequency.value > 0.0f &&
-					bs->nextHopTime > 0 &&
-					bs->nextHopTime <= level.time)
-				{
-					NewBotAI_ConsumeCombatHop(bs);
-				}
+				NewBotAI_ConsumeCombatHop(bs);
 				if (pullActive &&
 					!(g_forcePowerDisable.integer & (1 << FP_DRAIN)) &&
 					(bs->cur_ps.fd.forcePowersKnown & (1 << FP_DRAIN)) &&
