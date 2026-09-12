@@ -175,6 +175,7 @@ static qboolean NewBotAI_ShouldConserveForce(bot_state_t *bs);
 static qboolean NewBotAI_TryNoWaypointYawEscape(bot_state_t *bs, vec3_t goalOrigin);
 qboolean NewBotAI_IsEnemyPullable(bot_state_t *bs);
 void Cmd_EngageDuel_f(gentity_t *ent, int dueltype);
+extern void DownedSaberThink(gentity_t *saberent);
 
 static qboolean BotHasActiveHumanPlayers(void);
 
@@ -10107,6 +10108,10 @@ static qboolean NewBotAI_HasDroppedOwnSaber(bot_state_t *bs)
 
 	saberEnt = &g_entities[saberEntNum];
 	if (!saberEnt->inuse)
+	{
+		return qfalse;
+	}
+	if (saberEnt->think != DownedSaberThink)
 	{
 		return qfalse;
 	}
