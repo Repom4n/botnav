@@ -6899,7 +6899,6 @@ void NewBotAI_Getup(bot_state_t *bs)
 			bs->drainRollYawStart = level.time;
 		}
 		NewBotAI_StartEscapeYawOverride(bs, NEWBOTAI_ESCAPE_YAW_OVERRIDE_MS);
-		NewBotAI_StartEscapeYawOverride(bs, NEWBOTAI_ESCAPE_YAW_OVERRIDE_MS);
 
 		//Sideways roll away from the incoming swing: hold a lateral input (alternating so
 		//we don't just run in a straight line) to trigger/steer the sideways getup roll.
@@ -12271,6 +12270,7 @@ static void NewBotAI_ClearRandomStrafeOverlay(bot_state_t *bs)
 static void NewBotAI_RollRandomStrafeOverlay(bot_state_t *bs, int minDuration, int maxDuration)
 {
 	int diagonalRoll;
+	qboolean retreating;
 
 	if (!bs)
 	{
@@ -12288,14 +12288,16 @@ static void NewBotAI_RollRandomStrafeOverlay(bot_state_t *bs, int minDuration, i
 
 	bs->randomStrafeDir = Q_irand(0, 1) ? 1 : -1;
 	bs->randomStrafeEndTime = level.time + Q_irand(minDuration, maxDuration);
+	retreating = (bs->combatAction == BOT_COMBAT_ACTION_RETREAT_DEFENSE ||
+		bs->runningLikeASissy) ? qtrue : qfalse;
 	diagonalRoll = Q_irand(1, 100);
 	if (diagonalRoll <= 60)
 	{
-		bs->randomStrafeMode = 1;
+		bs->randomStrafeMode = retreating ? -1 : 1;
 	}
 	else if (diagonalRoll <= 90)
 	{
-		bs->randomStrafeMode = -1;
+		bs->randomStrafeMode = retreating ? 1 : -1;
 	}
 	else
 	{
@@ -12305,26 +12307,18 @@ static void NewBotAI_RollRandomStrafeOverlay(bot_state_t *bs, int minDuration, i
 
 static void NewBotAI_ApplyRandomStrafePattern(bot_state_t *bs)
 {
-	qboolean retreating;
-
 	if (!bs)
 	{
 		return;
 	}
 
-	retreating = (bs->combatAction == BOT_COMBAT_ACTION_RETREAT_DEFENSE ||
-		bs->runningLikeASissy) ? qtrue : qfalse;
-
-	if (bs->randomStrafeMode != 0)
+	if (bs->randomStrafeMode > 0)
 	{
-		if (retreating)
-		{
-			trap->EA_MoveBack(bs->client);
-		}
-		else
-		{
-			trap->EA_MoveForward(bs->client);
-		}
+		trap->EA_MoveForward(bs->client);
+	}
+	else if (bs->randomStrafeMode < 0)
+	{
+		trap->EA_MoveBack(bs->client);
 	}
 
 	if (bs->randomStrafeDir > 0)
