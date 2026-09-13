@@ -13961,11 +13961,12 @@ int NewBotAI_ScanForEnemies(bot_state_t* bs) {
 	if (bs->currentEnemy) { //only switch to a new enemy if he's significantly closer
 		if (PassStandardEnemyChecks(bs, bs->currentEnemy))
 		{
+			const int currentEnemyHealth = Com_Clampi(1, (int)nominalFullHealth, bs->currentEnemy->health);
 			float normalizedHealth;
 			VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, a);
 			hasEnemyDist = VectorLength(a);
 			normalizedHealth = targetHealthFloor +
-				(bs->currentEnemy->health - 1) * (targetHealthCeil - targetHealthFloor) /
+				(currentEnemyHealth - 1) * (targetHealthCeil - targetHealthFloor) /
 				(nominalFullHealth - 1.0f);
 			normalizedHealth += (nominalFullHealth - ourHealth) * selfLowHealthBiasScale;
 			if (normalizedHealth < targetHealthFloor)
@@ -13984,7 +13985,7 @@ int NewBotAI_ScanForEnemies(bot_state_t* bs) {
 		}
 		else
 		{
-			hasEnemyDist = 0;
+			hasEnemyDist = startingClosest;
 		}
 	}
 
@@ -15225,8 +15226,10 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 		}
 	}
 
-	if (bs->enemySeenTime < level.time || !bs->frame_Enemy_Vis || !bs->currentEnemy ||
-		(bs->frame_Enemy_Vis && bs->currentEnemy && bs->frame_Enemy_Len > 300.0f))
+	{
+		const qboolean shouldRescanForCloserTarget =
+			(bs->currentEnemy && bs->frame_Enemy_Vis && bs->frame_Enemy_Len > 300.0f) ? qtrue : qfalse;
+	if (bs->enemySeenTime < level.time || !bs->frame_Enemy_Vis || !bs->currentEnemy || shouldRescanForCloserTarget)
 	{
 		enemy = ScanForEnemies(bs);
 
@@ -15235,6 +15238,7 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 			bs->currentEnemy = &g_entities[enemy];
 			bs->enemySeenTime = level.time + ENEMY_FORGET_MS;
 		}
+	}
 	}
 
 	if (!bs->squadLeader && !bs->isSquadLeader)
