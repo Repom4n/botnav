@@ -2179,21 +2179,48 @@ void G_GiveGunGameWeapon(gclient_t* client);
 extern qboolean g_dontFrickinCheck;
 extern qboolean g_endPDuel;
 extern qboolean g_noPDuelCheck;
+qboolean SpotWouldTelefrag3( vec3_t spot );
 extern void saberReactivate(gentity_t *saberent, gentity_t *saberOwner);
 extern void saberBackToOwner(gentity_t *saberent);
 #if _GRAPPLE
 void Weapon_HookFree (gentity_t *ent);
 #endif
 
+static qboolean G_IsValidDuelRespawnCandidate(vec3_t origin, int passEntityNum)
+{
+	trace_t tr;
+	vec3_t mins = {-15.0f, -15.0f, DEFAULT_MINS_2};
+	vec3_t maxs = {15.0f, 15.0f, DEFAULT_MAXS_2};
+	vec3_t end;
+
+	JP_Trace(&tr, origin, mins, maxs, origin, passEntityNum, MASK_PLAYERSOLID, qfalse, 0, 0);
+	if (tr.startsolid || tr.allsolid)
+	{
+		return qfalse;
+	}
+
+	VectorCopy(origin, end);
+	end[2] -= 64.0f;
+	JP_Trace(&tr, origin, mins, maxs, end, passEntityNum, MASK_PLAYERSOLID, qfalse, 0, 0);
+	if (tr.startsolid || tr.allsolid || tr.fraction >= 1.0f)
+	{
+		return qfalse;
+	}
+
+	return qtrue;
+}
+
 static void G_SetDuelRespawnNearOpponent(gentity_t *self, gentity_t *attacker)
 {
 	vec3_t baseOrigin;
 	vec3_t toVictim;
 	vec3_t dir;
+	vec3_t faceDir;
 	vec3_t right;
 	vec3_t spawnCandidate;
 	vec3_t fallbackDir;
 	vec3_t candidates[4];
+	qboolean foundSpot = qfalse;
 	int i;
 
 	VectorCopy(attacker->client->ps.origin, baseOrigin);
@@ -2211,6 +2238,7 @@ static void G_SetDuelRespawnNearOpponent(gentity_t *self, gentity_t *attacker)
 	}
 
 	VectorCopy(toVictim, dir);
+	VectorCopy(toVictim, faceDir);
 	VectorSet(right, -dir[1], dir[0], 0.0f);
 	if (VectorNormalize(right) < 0.1f)
 	{
@@ -2222,19 +2250,38 @@ static void G_SetDuelRespawnNearOpponent(gentity_t *self, gentity_t *attacker)
 	VectorMA(baseOrigin, 96.0f, right, candidates[2]);
 	VectorMA(baseOrigin, -96.0f, right, candidates[3]);
 
-	VectorCopy(baseOrigin, self->client->pers.respawnLocation);
+	VectorClear(self->client->pers.respawnLocation);
 	for (i = 0; i < 4; i++)
 	{
 		VectorCopy(candidates[i], spawnCandidate);
 		spawnCandidate[2] = baseOrigin[2] + 8.0f;
-		if (!SpotWouldTelefrag3(spawnCandidate))
+		if (!SpotWouldTelefrag3(spawnCandidate) && G_IsValidDuelRespawnCandidate(spawnCandidate, self->s.number))
 		{
 			VectorCopy(spawnCandidate, self->client->pers.respawnLocation);
+			foundSpot = qtrue;
 			break;
 		}
 	}
+	VectorCopy(baseOrigin, spawnCandidate);
+	spawnCandidate[2] = baseOrigin[2] + 8.0f;
+	if (!foundSpot &&
+		!SpotWouldTelefrag3(spawnCandidate) &&
+		G_IsValidDuelRespawnCandidate(spawnCandidate, self->s.number))
+	{
+		VectorCopy(spawnCandidate, self->client->pers.respawnLocation);
+		foundSpot = qtrue;
+	}
+	if (!foundSpot)
+	{
+		return;
+	}
 
 	VectorSubtract(attacker->client->ps.origin, self->client->pers.respawnLocation, dir);
+	if (VectorNormalize(dir) < 0.1f)
+	{
+		self->client->pers.respawnAngle = vectoyaw(faceDir);
+		return;
+	}
 	self->client->pers.respawnAngle = vectoyaw(dir);
 }
 

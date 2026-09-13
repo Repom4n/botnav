@@ -189,6 +189,7 @@ static void NewBotAI_ApplySidewaysDrainRoll(bot_state_t *bs, qboolean moveBack);
 #define NEWBOTAI_COMBAT_DISENGAGE_COOLDOWN_MS 2500
 #define NEWBOTAI_TARGET_COMMIT_DISTANCE 768.0f
 #define NEWBOTAI_LIGHTNING_LEVEL2_RANGE 2048.0f
+#define NEWBOTAI_PULL_EMERGENCY_MAX_FORCE 19
 static qboolean NewBotAI_HandleRecoveryRollForcepower(bot_state_t *bs);
 static qboolean NewBotAI_IsBetweenOwnSaberAndEnemy(bot_state_t *bs);
 static qboolean NewBotAI_ShouldCloseGapVsEnemySaberThrow(bot_state_t *bs);
@@ -11647,6 +11648,7 @@ static qboolean NewBotAI_ShouldEmergencyPushWhilePulled(bot_state_t *bs)
 	qboolean pullActive;
 	qboolean enemyMeleeThreat;
 	int pushCost;
+	int emergencyForceCeiling;
 
 	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
 	{
@@ -11660,11 +11662,12 @@ static qboolean NewBotAI_ShouldEmergencyPushWhilePulled(bot_state_t *bs)
 		 PM_SaberInTransition(bs->currentEnemy->client->ps.saberMove)) &&
 		bs->frame_Enemy_Len < 150.0f) ? qtrue : qfalse;
 	pushCost = forcePowerNeeded[bs->cur_ps.fd.forcePowerLevel[FP_PUSH]][FP_PUSH];
+	emergencyForceCeiling = (pushCost > NEWBOTAI_PULL_EMERGENCY_MAX_FORCE) ? pushCost : NEWBOTAI_PULL_EMERGENCY_MAX_FORCE;
 	if (!pullActive)
 	{
 		return qfalse;
 	}
-	if (bs->cur_ps.fd.forcePower >= 20)
+	if (bs->cur_ps.fd.forcePower > emergencyForceCeiling)
 	{
 		return qfalse;
 	}
@@ -12193,8 +12196,6 @@ int NewBotAI_GetPull(bot_state_t *bs) {
 		return 0;
 	if  (!(bs->cur_ps.fd.forcePowersKnown & (1 << FP_PULL)))
 		return 0;
-	if (NewBotAI_ShouldHoldOffPullkickVsSaberThrow(bs))
-		return 0;
 	if (bs->frame_Enemy_Len > 640) //Check pull range..
 		return 0;
 	if (bs->frame_Enemy_Len < 50)
@@ -12285,7 +12286,8 @@ int NewBotAI_GetPull(bot_state_t *bs) {
 			return 100;
 	}
 
-	if (NewBotAI_IsEnemyPullable(bs) && (bs->cur_ps.weapon == WP_SABER || bs->cur_ps.weapon == WP_MELEE) && g_flipKick.integer) {
+	if (NewBotAI_IsEnemyPullable(bs) && (bs->cur_ps.weapon == WP_SABER || bs->cur_ps.weapon == WP_MELEE) && g_flipKick.integer &&
+		!NewBotAI_ShouldHoldOffPullkickVsSaberThrow(bs)) {
 		if (hisHealth <= 20 && bs->frame_Enemy_Len < 250) {//Check for the insta kill, this should be better maybe... on ground pullablable should be a diff range than in air pullable
 			//Com_Printf("pullable 2\n");
 			return 100;
@@ -13027,7 +13029,8 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 {
 	vec3_t a_fo;
 	qboolean useTheForce = qfalse;
-	int pushWeight, pullWeight, lightningWeight, drainWeight, gripWeight;//, doNothingWeight;
+	qboolean emergencyPushWhilePulled = qfalse;
+	int pushWeight, pullWeight, lightningWeight, drainWeight, gripWeight = 0;//, doNothingWeight;
 	int minWeight = 0;
 
 	//Disengaged in a bot_conservation window - hold off on spending any force so it regens.
@@ -13040,7 +13043,6 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 	vectoangles(a_fo, a_fo);
 
 	drainWeight = NewBotAI_GetDrain(bs);
-	gripWeight = NewBotAI_GetGrip(bs);
 	if (NewBotAI_IsEnemySaberThreatImminent(bs) &&
 		NewBotAI_ShouldEmergencyDrainRollSaberThrow(bs))
 	{
@@ -13061,15 +13063,15 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 	{
 		return;
 	}
-	if (NewBotAI_ShouldEmergencyPushWhilePulled(bs))
-	{
-		level.clients[bs->client].ps.fd.forcePowerSelected = FP_PUSH;
-		trap->EA_ForcePower(bs->client);
-		return;
-	}
+	emergencyPushWhilePulled = NewBotAI_ShouldEmergencyPushWhilePulled(bs);
+	gripWeight = NewBotAI_GetGrip(bs);
 	pullWeight = NewBotAI_GetPull(bs);
 	pushWeight = NewBotAI_GetPush(bs);
 	lightningWeight = NewBotAI_GetLightningWeight(bs);
+	if (emergencyPushWhilePulled && pushWeight < 120)
+	{
+		pushWeight = 120;
+	}
 	//doNothingWeight = NewBotAI_GetWait(bs);
 
 	if (gripWeight > minWeight &&
