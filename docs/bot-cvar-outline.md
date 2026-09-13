@@ -14,7 +14,7 @@ This document describes all cvars added for the NewBotAI system and how they rel
 
 | Cvar | Default | Description |
 |------|---------|-------------|
-| `g_newBotAITarget` | `-1` | Target selection mode. `-1` = default (closest), `-2` = humans only, `-3` = prefer humans then bots and offer force duels to either while continuing combat, `-4` = prefer humans then bots but only offer force duels and retreat/heal instead of attacking, `>=0` = force specific client index. |
+| `g_newBotAITarget` | `-1` | Target selection mode. `-1` = default (closest), `-2` = humans only, `-3` = prefer humans then bots and keep duel offers focused on humans while throttling bot-vs-bot offers to once every 2 minutes, `-4` = same target preference/throttle but uses the force-duel-only approach while not already dueling, `>=0` = force specific client index. |
 | `bot_targetdistance` | `4096` | Max distance at which bots will engage targets. |
 | `g_newBotAITargetDistance` | `4096` | Declared but currently unused (superseded by `bot_targetdistance`). |
 | `bot_lowhangingfruitHP` | `40` | HP threshold below which a target is considered "low-hanging fruit" (easy kill). |
@@ -39,7 +39,7 @@ BotGetAggressionBias = clamp(bot_aggressionbias + healthComponent*bot_healthbias
 - `BotGetAggressionWeightedBonus(bs, biasPercent, maxBonus, aggressiveOnly)` scales a bonus by `aggressionBias * biasPercent/100 * maxBonus`. Only applies when aggression is positive (for `aggressiveOnly=true`).
 - Retreat thresholds: `hardRetreatHealth = 30 - aggression*25`, `softRetreatHealth = 60 - aggression*35`.
 - Saber throw defense break: `preferPull = (aggression > 0)` — pull when aggressive, push when defensive.
-- Lightning: only fires at/above `bot_lightningdistance` on defensive bias.
+- Lightning: once usable at/above `bot_lightningdistance`, darkside bots treat it as the exclusive weighted long-range force attack.
 
 ## Combat Behavior Biases
 
@@ -52,7 +52,7 @@ These are all percentage-based (0-100) chance weights that gate specific behavio
 | `bot_fanbias` | `0` | Chance weight for fan-chain attack patterns (horizontal swing chains). Used in `NewBotAI_PrepareHorizontalSwingStart()`. A committed chain holds attack for its whole duration (up to a 3s cap) and breaks only after taking more than 4 damage total. |
 | `bot_drainbias` | `0` | Scales ordinary non-drainlock drain holds. Higher = longer opportunistic drain taps. Feeds `BotGetDrainHoldBiasMs()`. |
 | `bot_drainlockbias` | `0` | Chance weight for committing to long deep-drain taps when the bot has a big FP lead. Separate from that cvar-driven behavior, bots that are behind on HP will keep heal-driven deep drainlocks until topped off unless aggression becomes extremely reckless. Feeds `NewBotAI_ShouldDrainlockDeep()`. |
-| `bot_antidrainbias` | `0` | Weight bonus for attacking drain-users. When enemy can drain and is low HP, bots prioritize killing them. Feeds `NewBotAI_GetAntiDrainWeight()`. |
+| `bot_antidrainbias` | `0` | Weight bonus for attacking drain-users. It now also activates when bots hold a strong health lead but are behind on force, feeding long-range lightning and anti-drain saber throws via `NewBotAI_GetAntiDrainWeight()`. |
 | `bot_lightningbias` | `0` | Chance weight for using lightning. Only fires on defensive aggression bias. |
 | `bot_lightningdistance` | `400` | Minimum range for lightning usage. Bot must be at least this far from the enemy. |
 | `bot_mistakebias` | `0` | Chance weight (0-100) for grip-escape mistakes when the *bot* is being gripped (never limits a player's own push/pull out of a grip). Lower-skill bots miss more: level 10 is unaffected, levels below it scale up to ~1.4x/ down to ~0.6x of the bias. Per grip session the bot rolls a wide range of failures: a random escape delay (0 up to ~3.6s) before it may pull free, missed pulls (aim offset), a fumbled push-instead-of-pull that shoves the gripper away, and occasionally never escaping the grip at all (kick-struggles until the grip ends). |
@@ -84,7 +84,7 @@ These are all percentage-based (0-100) chance weights that gate specific behavio
 
 | Cvar | Default | Description |
 |------|---------|-------------|
-| `bot_strafefrequency` | `0` | Percentage chance (0-100) per think tick to enter a random strafe. 0 = disabled. |
+| `bot_strafefrequency` | `0` | Percentage chance (0-100) per think tick to enter a random strafe. Strafing now leans toward saber pressure and conservation windows, with less interference for ranged attacks and force-power use. |
 | `bot_strafeduration` | `50` | Duration scale (0-100) for random strafes. 50 = 80-2500ms range. |
 | `bot_strafeOffset` | `0` | Legacy strafe offset. |
 | `bot_hopfrequency` | `0` | Scales how often the bot schedules its next hop while close to a saber enemy, covering both random ambient hops and non-emergency combat hops such as saber-throw counter jumps. The interval is only re-rolled once the bot lands from its previous hop, and is a random 0.5-8 second wait divided by this value as a percentage (100 = 0.5-8s; higher = longer/less frequent hops, lower = shorter/more frequent, 0 = disables discretionary hops). The wide range makes most hops occasional singles while an occasional short roll chains one hop straight into the next, keeping the bot unpredictable. |

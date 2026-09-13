@@ -212,6 +212,8 @@ static qboolean NewBotAI_TryNoWaypointYawEscape(bot_state_t *bs, vec3_t goalOrig
 qboolean NewBotAI_IsEnemyPullable(bot_state_t *bs);
 void Cmd_EngageDuel_f(gentity_t *ent, int dueltype);
 extern void DownedSaberThink(gentity_t *saberent);
+static qboolean NewBotAI_ShouldSkipPullForClosePTKWindow(bot_state_t *bs, int ptkWeight);
+static qboolean NewBotAI_IsEnemyDefenseOpenForSaberThrow(bot_state_t *bs);
 
 static qboolean BotHasActiveHumanPlayers(void);
 
@@ -903,6 +905,18 @@ void BotUpdateInput(bot_state_t *bs, int time, int elapsed_time) {
 	else
 	{
 		bs->flipkickJumpHeld = qfalse;
+	}
+	if (bi.actionflags & (ACTION_JUMP | ACTION_DELAYEDJUMP))
+	{
+		bs->jumpAttackSuppressUntil = time + NEWBOTAI_JUMP_ATTACK_GATE_MS;
+	}
+	if (NewBotAI_ShouldSuppressJumpSaberAttack(
+		(bs->cur_ps.weapon == WP_SABER) ? 1 : 0,
+		(bi.actionflags & (ACTION_JUMP | ACTION_DELAYEDJUMP)) ? 1 : 0,
+		bs->jumpAttackSuppressUntil,
+		time))
+	{
+		bi.actionflags &= ~ACTION_ATTACK;
 	}
 	//respawn hack
 	if (bi.actionflags & ACTION_RESPAWN) {
@@ -9336,6 +9350,63 @@ static qboolean NewBotAI_CanInitiateFlipkickUnderFanPressure(bot_state_t *bs)
 	return qtrue;
 }
 
+static qboolean NewBotAI_ShouldSkipPullForClosePTKWindow(bot_state_t *bs, int ptkWeight)
+{
+	float timeToKickRange;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return qfalse;
+	}
+	if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE)
+	{
+		return qfalse;
+	}
+
+	timeToKickRange = NewBotAI_GetPullkickTimeToKickRange(bs);
+
+	return NewBotAI_ShouldSkipPullForClosePTK(
+		ptkWeight,
+		(g_flipKick.integer && NewBotAI_CanAttemptFlipkick(bs)) ? 1 : 0,
+		bs->frame_Enemy_Len,
+		timeToKickRange) ? qtrue : qfalse;
+}
+
+static qboolean NewBotAI_IsEnemyDefenseOpenForSaberThrow(bot_state_t *bs)
+{
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return qfalse;
+	}
+
+	if (bs->currentEnemy->client->ps.saberInFlight)
+	{
+		return qtrue;
+	}
+	if (BG_SaberInAttack(bs->currentEnemy->client->ps.saberMove) ||
+		PM_SaberInStart(bs->currentEnemy->client->ps.saberMove) ||
+		PM_SaberInTransition(bs->currentEnemy->client->ps.saberMove))
+	{
+		return qtrue;
+	}
+	if (bs->currentEnemy->client->ps.weaponstate == WEAPON_CHARGING_ALT ||
+		bs->currentEnemy->client->ps.weaponstate == WEAPON_FIRING)
+	{
+		return qtrue;
+	}
+	if (bs->currentEnemy->client->ps.fd.forcePowersActive)
+	{
+		return qtrue;
+	}
+	if (bs->currentEnemy->client->ps.forceHandExtend != HANDEXTEND_NONE &&
+		bs->currentEnemy->client->ps.forceHandExtend != HANDEXTEND_WEAPONREADY)
+	{
+		return qtrue;
+	}
+
+	return qfalse;
+}
+
 // Schedules the pk/ptk flipkick jump so the bot leaps only once the enemy is actually
 // closing into kick range: immediately when a kick is already possible, after the
 // predicted closing time (plus a small 150ms lead so the ~50ms think tick can't make
@@ -9770,13 +9841,27 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 		{
 			const int totalHealthDelta = NewBotAI_GetTotalHealthDelta(bs);
 			const int ourHealth = g_entities[bs->client].health;
+			const qboolean canFlipkickNow =
+				(NewBotAI_CanAttemptFlipkick(bs) &&
+				 NewBotAI_IsFlipkickSetupReady(bs) &&
+				 NewBotAI_ShouldPreferFlipkickOverThrow(bs)) ? qtrue : qfalse;
+			const qboolean stayGroundedForLowEnemyForce =
+				NewBotAI_ShouldStayGroundedVsSaberThrow(
+					bs->currentEnemy->client->ps.fd.forcePower,
+					canFlipkickNow ? 1 : 0) ? qtrue : qfalse;
 
 			if (NewBotAI_ShouldEmergencyDrainRollSaberThrow(bs))
 			{
 				bs->combatAction = BOT_COMBAT_ACTION_RETREAT_DEFENSE;
 				NewBotAI_ApplySidewaysDrainRoll(bs, qfalse);
 			}
-			else if (NewBotAI_ShouldJumpDrainVsSaberThrow(bs))
+			else if (stayGroundedForLowEnemyForce && canFlipkickNow)
+			{
+				bs->combatAction = BOT_COMBAT_ACTION_AGGRESSION;
+				trap->EA_MoveForward(bs->client);
+				NewBotAI_Flipkick(bs);
+			}
+			else if (!stayGroundedForLowEnemyForce && NewBotAI_ShouldJumpDrainVsSaberThrow(bs))
 			{
 				const qboolean aggressiveHop =
 					(NewBotAI_ShouldPreferFlipkickOverThrow(bs) ||
@@ -10372,6 +10457,8 @@ static qboolean NewBotAI_InFFAExploreWindow(bot_state_t *bs, int targetMode)
 
 static qboolean NewBotAI_ShouldIssueBotDuelChallenge(bot_state_t *bs, int targetMode)
 {
+	const qboolean enemyIsBot = (bs && bs->currentEnemy && (bs->currentEnemy->r.svFlags & SVF_BOT)) ? qtrue : qfalse;
+
 	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
 	{
 		return qfalse;
@@ -10392,6 +10479,10 @@ static qboolean NewBotAI_ShouldIssueBotDuelChallenge(bot_state_t *bs, int target
 	{
 		return qfalse;
 	}
+	if (enemyIsBot && bs->botDuelChallengeThrottleUntil > level.time)
+	{
+		return qfalse;
+	}
 	if (!bs->frame_Enemy_Vis || bs->frame_Enemy_Len > 220.0f)
 	{
 		return qfalse;
@@ -10405,6 +10496,7 @@ static qboolean NewBotAI_TryIssueBotDuelChallenge(bot_state_t *bs, int targetMod
 	vec3_t toEnemy;
 	vec3_t oldViewAngles;
 	int duelType;
+	const qboolean enemyIsBot = (bs->currentEnemy->r.svFlags & SVF_BOT) ? qtrue : qfalse;
 
 	if (!NewBotAI_ShouldIssueBotDuelChallenge(bs, targetMode))
 	{
@@ -10424,6 +10516,11 @@ static qboolean NewBotAI_TryIssueBotDuelChallenge(bot_state_t *bs, int targetMod
 
 	VectorCopy(oldViewAngles, g_entities[bs->client].client->ps.viewangles);
 	bs->botChallengingTime = level.time + NEWBOTAI_DUEL_REQUEST_COOLDOWN_MS;
+	if (enemyIsBot)
+	{
+		bs->botDuelChallengeThrottleUntil = level.time +
+			NewBotAI_GetBotDuelChallengeThrottleMs(targetMode, 1);
+	}
 	bs->beStill = level.time + 250;
 	bs->doAttack = 0;
 	bs->doAltAttack = 0;
@@ -10952,27 +11049,45 @@ static float BotGetAggressionBias(bot_state_t *bs)
 static int NewBotAI_GetAntiDrainWeight(bot_state_t *bs)
 {
 	const float antiDrainBias = BotGetChanceBiasPercent(bot_antidrainbias.value);
+	const int ourHealth = g_entities[bs->client].health;
 	const int enemyHealth = bs->currentEnemy->health;
 	const int ourForce = bs->cur_ps.fd.forcePower;
+	const int enemyForce = bs->currentEnemy->client->ps.fd.forcePower;
+	const int healthLead = ourHealth - enemyHealth;
+	const int forceDeficit = enemyForce - ourForce;
 	const qboolean enemyCanDrain = ((bs->currentEnemy->client->ps.fd.forcePowersKnown & (1 << FP_DRAIN)) ||
 		(bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_DRAIN))) ? qtrue : qfalse;
+	int weight = 0;
 
-	if (antiDrainBias <= 0.0f || !enemyCanDrain || enemyHealth > 30 || bs->cur_ps.weapon != WP_SABER)
+	if (antiDrainBias <= 0.0f || !enemyCanDrain || bs->cur_ps.weapon != WP_SABER)
 	{
 		return 0;
 	}
 
-	if (ourForce < 25)
+	if (enemyHealth <= 30)
 	{
-		return (int)((antiDrainBias / 100.0f) * 35.0f);
+		weight = 20;
+		if (ourForce < 25)
+		{
+			weight += 15;
+		}
+		else if (ourForce >= 40 && ourForce <= 55)
+		{
+			weight += 10;
+		}
 	}
 
-	if (ourForce >= 40 && ourForce <= 55)
+	if (healthLead >= 25 && forceDeficit > 0)
 	{
-		return (int)((antiDrainBias / 100.0f) * 20.0f);
+		weight += 20 + (healthLead / 4) + (forceDeficit / 3);
 	}
 
-	return 0;
+	if (weight > 55)
+	{
+		weight = 55;
+	}
+
+	return (int)((antiDrainBias / 100.0f) * weight);
 }
 
 static float BotGetLightningMaxDistance(void)
@@ -11078,7 +11193,8 @@ static int NewBotAI_GetLightningWeight(bot_state_t *bs)
 	{
 		defensiveFactor += -aggressionBias;
 	}
-	return (int)(defensiveFactor * distanceFactor * (lightningBias / 100.0f) * 400.0f);
+	return (int)(defensiveFactor * distanceFactor * (lightningBias / 100.0f) * 400.0f) +
+		NewBotAI_GetAntiDrainWeight(bs);
 }
 
 static int NewBotAI_GetPTKWeight(bot_state_t *bs)
@@ -11481,6 +11597,7 @@ static void NewBotAI_ApplyHorizontalSwingMove(bot_state_t *bs)
 {
 	if (bs->fanPhase == FAN_PHASE_DWELL)
 	{
+		trap->EA_MoveForward(bs->client);
 		return;
 	}
 
@@ -12302,13 +12419,28 @@ static void NewBotAI_RollRandomStrafeOverlay(bot_state_t *bs, int minDuration, i
 		return;
 	}
 	diagonalRoll = Q_irand(1, 100);
-	if (diagonalRoll <= 60)
+	if (retreating)
 	{
-		bs->randomStrafeMode = retreating ? -1 : 1;
+		if (diagonalRoll <= 45)
+		{
+			bs->randomStrafeMode = -1;
+		}
+		else if (diagonalRoll <= 75)
+		{
+			bs->randomStrafeMode = 1;
+		}
+		else
+		{
+			bs->randomStrafeMode = 0;
+		}
 	}
-	else if (diagonalRoll <= 90)
+	else if (diagonalRoll <= 35)
 	{
-		bs->randomStrafeMode = retreating ? 1 : -1;
+		bs->randomStrafeMode = 1;
+	}
+	else if (diagonalRoll <= 55)
+	{
+		bs->randomStrafeMode = -1;
 	}
 	else
 	{
@@ -12377,9 +12509,14 @@ static void NewBotAI_ApplyRandomStrafeOverlay(bot_state_t *bs)
 
 	if (bs->combatAction == BOT_COMBAT_ACTION_RETREAT_DEFENSE || bs->runningLikeASissy)
 	{
-		//Directed retreat movement owns its inputs separately from the free-move strafe overlay.
-		NewBotAI_ClearRandomStrafeOverlay(bs);
-		return;
+		//Directed retreat movement owns its inputs separately except during an intentional
+		//conservation window, where we still allow random strafing to help dodge while
+		//regaining force.
+		if (bs->conserveUntil <= level.time)
+		{
+			NewBotAI_ClearRandomStrafeOverlay(bs);
+			return;
+		}
 	}
 
 	if (NewBotAI_IsSaberSwingStartWindow(bs))
@@ -12398,6 +12535,31 @@ static void NewBotAI_ApplyRandomStrafeOverlay(bot_state_t *bs)
 	{
 		NewBotAI_ClearRandomStrafeOverlay(bs);
 		return;
+	}
+	if (bs->cur_ps.weapon == WP_SABER && bs->currentEnemy->client->ps.weapon == WP_SABER)
+	{
+		frequency += 15;
+	}
+	else
+	{
+		frequency /= 3;
+	}
+	if (bs->conserveUntil > level.time)
+	{
+		frequency += 25;
+	}
+	if (bs->cur_ps.weapon != WP_SABER &&
+		(bs->doAttack || bs->doAltAttack ||
+		 bs->cur_ps.weaponstate == WEAPON_FIRING ||
+		 bs->cur_ps.weaponstate == WEAPON_CHARGING ||
+		 bs->cur_ps.weaponstate == WEAPON_CHARGING_ALT ||
+		 bs->cur_ps.fd.forcePowersActive))
+	{
+		frequency /= 2;
+	}
+	if (frequency > 100)
+	{
+		frequency = 100;
 	}
 
 	if (bs->randomStrafeEndTime <= level.time)
@@ -12494,6 +12656,10 @@ int NewBotAI_GetPull(bot_state_t *bs) {
 		weight = 1;
 
 	ptkWeight = NewBotAI_GetPTKWeight(bs);
+	if (NewBotAI_ShouldSkipPullForClosePTKWindow(bs, ptkWeight))
+	{
+		return 0;
+	}
 
 	if (bs->currentEnemy->client->ps.saberInFlight) {
 		const qboolean enemySaberReturning = NewBotAI_IsEnemySaberReturning(bs);
@@ -13190,6 +13356,9 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 	const qboolean enemyKnockedDown = BG_InKnockDown(bs->currentEnemy->client->ps.legsAnim) ? qtrue : qfalse;
 	const float saberthrowBias = BotGetChanceBiasPercent(bot_saberthrowbias.value);
 	const int antiDrainWeight = NewBotAI_GetAntiDrainWeight(bs);
+	const int ptkWeight = NewBotAI_GetPTKWeight(bs);
+	const qboolean skipPullPTKWindow = NewBotAI_ShouldSkipPullForClosePTKWindow(bs, ptkWeight);
+	const qboolean enemyDefenseOpen = NewBotAI_IsEnemyDefenseOpenForSaberThrow(bs);
 	int weight = 0;
 
 	//Check if we should saberthrow I guess.
@@ -13205,7 +13374,7 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 		return 0;
 	//Losing the force game (under 50 points left): fanbias/drain/retreat options take
 	//priority over spending force on a throw.
-	if (ourForce < 50)
+	if (ourForce < 40 || (ourForce < 50 && antiDrainWeight <= 0))
 		return 0;
 	//Too hurt to risk going saberless while the enemy holds a big force lead: even when
 	//we still hold the health advantage, a throw here gives them the opening their force
@@ -13263,9 +13432,9 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 	//Never charge/hold a throw once the enemy has closed into flipkick striking range -
 	//a free flipkick should always win out over sitting in an alt-attack charge that
 	//just gets the two bots colliding with each other.
-	if ((saberthrowBias > 0.0f || antiDrainWeight > 0) &&
-		ourForce > 20 && bs->frame_Enemy_Len > 120 &&
-		!NewBotAI_ShouldPreferFlipkickOverThrow(bs))
+	if ((saberthrowBias > 0.0f || antiDrainWeight > 0 || (skipPullPTKWindow && enemyDefenseOpen)) &&
+		ourForce > 20 && (bs->frame_Enemy_Len > 120 || (skipPullPTKWindow && enemyDefenseOpen)) &&
+		(!NewBotAI_ShouldPreferFlipkickOverThrow(bs) || (skipPullPTKWindow && enemyDefenseOpen)))
 	{
 		int aggressionBonus = BotGetAggressionWeightedBonus(bs, saberthrowBias, 45, qtrue);
 		int finishingBonus = 0;
@@ -13290,6 +13459,10 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 		if (enemyAttacking)
 		{
 			finishingBonus += 15;
+		}
+		if (skipPullPTKWindow && enemyDefenseOpen)
+		{
+			finishingBonus += 35;
 		}
 		if (forceLead > 0 && enemyArmor > 0)
 		{
@@ -13322,6 +13495,9 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 	int minWeight = 0;
 	const qboolean drainlockAdvantage = NewBotAI_IsDrainlockAdvantage(bs);
 	const qboolean pullkickDrainWindow = NewBotAI_IsPullkickDrainWindow(bs);
+	const qboolean closePTKThrowWindow =
+		(NewBotAI_ShouldSkipPullForClosePTKWindow(bs, NewBotAI_GetPTKWeight(bs)) &&
+		 NewBotAI_IsEnemyDefenseOpenForSaberThrow(bs)) ? qtrue : qfalse;
 
 	//Disengaged in a bot_conservation window - hold off on spending any force so it regens.
 	if (bs->conserveUntil > level.time)
@@ -13357,9 +13533,16 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 	pullWeight = NewBotAI_GetPull(bs);
 	pushWeight = NewBotAI_GetPush(bs);
 	lightningWeight = NewBotAI_GetLightningWeight(bs);
+	if (lightningWeight > minWeight &&
+		bs->frame_Enemy_Len >= BotGetLightningStartDistance() &&
+		bs->frame_Enemy_Len <= BotGetLightningMaxDistance())
+	{
+		level.clients[bs->client].ps.fd.forcePowerSelected = FP_LIGHTNING;
+		useTheForce = qtrue;
+	}
 	//doNothingWeight = NewBotAI_GetWait(bs);
 
-	if (bs->currentEnemy && bs->currentEnemy->client)
+	if (!useTheForce && bs->currentEnemy && bs->currentEnemy->client)
 	{
 		newbotai_drainlock_force_context_t drainlockForceContext;
 
@@ -13465,14 +13648,15 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 	//into kick range - otherwise the two bots just collide while we sit on the charge.
 	if (!NewBotAI_ShouldSuppressDrainlockSaberThrow(bs) &&
 		!drainlockAdvantage && !pullkickDrainWindow &&
-		NewBotAI_GetSaberthrow(bs) > minWeight && !NewBotAI_ShouldPreferFlipkickOverThrow(bs)) {
+		NewBotAI_GetSaberthrow(bs) > minWeight &&
+		(!NewBotAI_ShouldPreferFlipkickOverThrow(bs) || closePTKThrowWindow)) {
 		trap->EA_Alt_Attack(bs->client);
 		//Pre-select pull or push so it fires as the saber approaches the target. Pull when
 		//aggressive (PTK setup), push when defensive (break their guard). This runs after the
 		//normal force-power selection above so it can override a less useful pick.
 		{
 			const qboolean ptkWeighted = (BotGetAggressionBias(bs) > 0.0f) ? qtrue : qfalse;
-			if (ptkWeighted && NewBotAI_HasFreePullkickWindow(bs) &&
+			if (!closePTKThrowWindow && ptkWeighted && NewBotAI_HasFreePullkickWindow(bs) &&
 				!(g_forcePowerDisable.integer & (1 << FP_PULL)) &&
 				(bs->cur_ps.fd.forcePowersKnown & (1 << FP_PULL)) &&
 				bs->cur_ps.groundEntityNum != ENTITYNUM_NONE &&
@@ -13590,6 +13774,9 @@ void NewBotAI_GetLSForcepower(bot_state_t *bs)
 	qboolean useTheForce = qfalse;
 	int pullWeight, pushWeight, absorbWeight, protectWeight, healWeight;
 	int minWeight = 0;
+	const qboolean closePTKThrowWindow =
+		(NewBotAI_ShouldSkipPullForClosePTKWindow(bs, NewBotAI_GetPTKWeight(bs)) &&
+		 NewBotAI_IsEnemyDefenseOpenForSaberThrow(bs)) ? qtrue : qfalse;
 
 	//Disengaged in a bot_conservation window - hold off on spending any force so it regens.
 	if (bs->conserveUntil > level.time)
@@ -13665,14 +13852,15 @@ void NewBotAI_GetLSForcepower(bot_state_t *bs)
 	//Check if we should saberthrow I guess.
 	//A free flipkick always beats holding/charging a throw once the enemy has closed
 	//into kick range - otherwise the two bots just collide while we sit on the charge.
-	if (NewBotAI_GetSaberthrow(bs) > minWeight && !NewBotAI_ShouldPreferFlipkickOverThrow(bs)) {
+	if (NewBotAI_GetSaberthrow(bs) > minWeight &&
+		(!NewBotAI_ShouldPreferFlipkickOverThrow(bs) || closePTKThrowWindow)) {
 		trap->EA_Alt_Attack(bs->client);
 		//Pre-select pull or push so it fires as the saber approaches the target. Pull when
 		//aggressive (PTK setup), push when defensive (break their guard). This runs after the
 		//normal force-power selection above so it can override a less useful pick.
 		{
 			const qboolean ptkWeighted = (BotGetAggressionBias(bs) > 0.0f) ? qtrue : qfalse;
-			if (ptkWeighted && NewBotAI_HasFreePullkickWindow(bs) &&
+			if (!closePTKThrowWindow && ptkWeighted && NewBotAI_HasFreePullkickWindow(bs) &&
 				!(g_forcePowerDisable.integer & (1 << FP_PULL)) &&
 				(bs->cur_ps.fd.forcePowersKnown & (1 << FP_PULL)) &&
 				bs->cur_ps.groundEntityNum != ENTITYNUM_NONE &&
