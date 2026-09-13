@@ -9791,10 +9791,7 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 					NewBotAI_RetreatDiagonal(bs, (level.framenum & 1) ? qtrue : qfalse);
 				}
 				trap->EA_Jump(bs->client);
-				if (aggressiveHop)
-				{
-					trap->EA_Crouch(bs->client);
-				}
+				trap->EA_Crouch(bs->client);
 				NewBotAI_ConsumeCombatHop(bs);
 				if (pullActive &&
 					!(g_forcePowerDisable.integer & (1 << FP_DRAIN)) &&
