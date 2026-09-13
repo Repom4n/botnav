@@ -13115,6 +13115,7 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 	lightningWeight = NewBotAI_GetLightningWeight(bs);
 	//doNothingWeight = NewBotAI_GetWait(bs);
 
+	if (bs->currentEnemy && bs->currentEnemy->client)
 	{
 		newbotai_drainlock_force_context_t drainlockForceContext;
 
