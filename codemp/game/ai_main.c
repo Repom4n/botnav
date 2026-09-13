@@ -12526,7 +12526,7 @@ int NewBotAI_GetGrip(bot_state_t *bs) {
 		return 0;
 	if (bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB))
 		return 0;
-	if (ourForce <= gripForceRequired)
+	if (ourForce < saberThrowCounterMinForce || ourForce <= gripForceRequired)
 		return 0;
 
 	if (bs->cur_ps.weaponstate == WEAPON_CHARGING_ALT)
@@ -12557,8 +12557,6 @@ int NewBotAI_GetGrip(bot_state_t *bs) {
 		!NewBotAI_HasDroppedOwnSaber(bs) &&
 		bs->frame_Enemy_Len <= MAX_GRIP_DISTANCE &&
 		ourHealth > 20 &&
-		ourForce > gripForceRequired &&
-		ourForce >= saberThrowCounterMinForce &&
 		ourForce > hisForce + saberThrowCounterMinForceLead)
 		return 90 + aggressionBonus;
 
@@ -12689,7 +12687,9 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 	if (enemyKnockedDown) {
 		//A knocked-down opponent is the best saber-throw punish; bias heavily toward it,
 		//especially when they are already under 31 raw health and the throw can cash the
-		//knockdown in immediately instead of letting them recover.
+		//knockdown in immediately instead of letting them recover. We keep the older
+		//total-health band alongside that raw-health execute so armored targets still use
+		//the broader finisher window even when their HP alone is not yet in execute range.
 		if ((enemyHealth > 0 && enemyHealth < knockdownHeavyRawHealthThreshold) ||
 			(enemyTotalHealth >= knockdownFinishMinHealth && enemyTotalHealth <= knockdownFinishMaxHealth)) {
 			weight = knockdownHeavyWeight;
