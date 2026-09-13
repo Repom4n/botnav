@@ -15263,7 +15263,10 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 				!NewBotAI_IsCombatInitiatedAgainst(bs, &g_entities[enemy], qfalse))
 			{
 				//keep pursuing the currently latched waypoint target linearly
-				bs->enemySeenTime = level.time + ENEMY_FORGET_MS;
+				if (NewBotAI_IsCombatInitiatedAgainst(bs, bs->currentEnemy, bs->frame_Enemy_Vis ? qtrue : qfalse))
+				{
+					bs->enemySeenTime = level.time + ENEMY_FORGET_MS;
+				}
 			}
 			else
 			{
