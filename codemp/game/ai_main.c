@@ -12045,9 +12045,7 @@ static void NewBotAI_BlockAccidentalSaberSpecialMoves(bot_state_t *bs)
 	}
 
 	cmd->rightmove = 0;
-	cmd->forwardmove = 0;
 	cmd->upmove = 0;
-	bs->forceMove_Forward = 0;
 	bs->forceMove_Right = 0;
 	bs->forceMove_Up = 0;
 }
@@ -13117,32 +13115,37 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 	lightningWeight = NewBotAI_GetLightningWeight(bs);
 	//doNothingWeight = NewBotAI_GetWait(bs);
 
-	switch (NewBotAI_GetDrainlockForceChoice(
-		minWeight,
-		drainlockAdvantage,
-		pullkickDrainWindow,
-		drainWeight,
-		pullWeight,
-		bs->currentEnemy->client->ps.fd.forcePower))
 	{
-	case NEWBOTAI_DRAINLOCK_FORCE_PULL:
-		level.clients[bs->client].ps.fd.forcePowerSelected = FP_PULL;
-		NewBotAI_ApplyPullMistake(bs);
-		useTheForce = qtrue;
-		NewBotAI_SchedulePullkickJump(bs);
-		if (NewBotAI_IsPullkickOpportunity(bs) &&
-			bs->frame_Enemy_Len <= NEWBOTAI_IMMEDIATE_FLIPKICK_RANGE &&
-			NewBotAI_IsFlipkickSetupReady(bs))
+		newbotai_drainlock_force_context_t drainlockForceContext;
+
+		drainlockForceContext.minWeight = minWeight;
+		drainlockForceContext.drainlockAdvantage = drainlockAdvantage;
+		drainlockForceContext.pullkickDrainWindow = pullkickDrainWindow;
+		drainlockForceContext.drainWeight = drainWeight;
+		drainlockForceContext.pullWeight = pullWeight;
+		drainlockForceContext.enemyForce = bs->currentEnemy->client->ps.fd.forcePower;
+
+		switch (NewBotAI_GetDrainlockForceChoice(drainlockForceContext))
 		{
-			NewBotAI_Flipkick(bs);
+		case NEWBOTAI_DRAINLOCK_FORCE_PULL:
+			level.clients[bs->client].ps.fd.forcePowerSelected = FP_PULL;
+			NewBotAI_ApplyPullMistake(bs);
+			useTheForce = qtrue;
+			NewBotAI_SchedulePullkickJump(bs);
+			if (NewBotAI_IsPullkickOpportunity(bs) &&
+				bs->frame_Enemy_Len <= NEWBOTAI_IMMEDIATE_FLIPKICK_RANGE &&
+				NewBotAI_IsFlipkickSetupReady(bs))
+			{
+				NewBotAI_Flipkick(bs);
+			}
+			break;
+		case NEWBOTAI_DRAINLOCK_FORCE_DRAIN:
+			level.clients[bs->client].ps.fd.forcePowerSelected = FP_DRAIN;
+			useTheForce = qtrue;
+			break;
+		default:
+			break;
 		}
-		break;
-	case NEWBOTAI_DRAINLOCK_FORCE_DRAIN:
-		level.clients[bs->client].ps.fd.forcePowerSelected = FP_DRAIN;
-		useTheForce = qtrue;
-		break;
-	default:
-		break;
 	}
 
 	if (!useTheForce && gripWeight > minWeight &&

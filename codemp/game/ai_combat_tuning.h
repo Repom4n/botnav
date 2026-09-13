@@ -8,6 +8,16 @@ typedef enum
 	NEWBOTAI_DRAINLOCK_FORCE_DRAIN
 } newbotai_drainlock_force_choice_t;
 
+typedef struct
+{
+	int minWeight;
+	int drainlockAdvantage;
+	int pullkickDrainWindow;
+	int drainWeight;
+	int pullWeight;
+	int enemyForce;
+} newbotai_drainlock_force_context_t;
+
 enum
 {
 	NEWBOTAI_PTK_ARMOR_NO_LEAD_PENALTY = 60,
@@ -40,20 +50,25 @@ static inline int NewBotAI_AdjustPTKWeightForArmor(int weight, int enemyArmor, i
 	return weight + NEWBOTAI_PTK_ARMOR_STRONG_LEAD_BONUS;
 }
 
+// Drainlock policy: once either the sustained drainlock advantage or the immediate
+// pullkick-drain window is active, keep pull available as the first-choice finisher when it
+// meets the minimum weight and either the enemy is already below the free-pull threshold or
+// pull ties/exceeds drain. Otherwise, only a real drainlock advantage may fall back to drain.
 static inline newbotai_drainlock_force_choice_t NewBotAI_GetDrainlockForceChoice(
-	int minWeight, int drainlockAdvantage, int pullkickDrainWindow, int drainWeight, int pullWeight, int enemyForce)
+	newbotai_drainlock_force_context_t context)
 {
-	if (!drainlockAdvantage && !pullkickDrainWindow)
+	if (!context.drainlockAdvantage && !context.pullkickDrainWindow)
 	{
 		return NEWBOTAI_DRAINLOCK_FORCE_NONE;
 	}
 
-	if (pullWeight > minWeight && (enemyForce < 20 || pullWeight >= drainWeight))
+	if (context.pullWeight > context.minWeight &&
+		(context.enemyForce < 20 || context.pullWeight >= context.drainWeight))
 	{
 		return NEWBOTAI_DRAINLOCK_FORCE_PULL;
 	}
 
-	if (drainlockAdvantage && drainWeight > minWeight)
+	if (context.drainlockAdvantage && context.drainWeight > context.minWeight)
 	{
 		return NEWBOTAI_DRAINLOCK_FORCE_DRAIN;
 	}

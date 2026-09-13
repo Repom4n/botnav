@@ -17,20 +17,20 @@ BOOST_AUTO_TEST_CASE( ptk_armor_penalty_tracks_force_lead )
 BOOST_AUTO_TEST_CASE( drainlock_force_choice_prefers_pull_when_it_matches_or_beats_drain )
 {
 	BOOST_CHECK_EQUAL(
-		NewBotAI_GetDrainlockForceChoice( 0, 1, 0, 70, 70, 40 ),
+		NewBotAI_GetDrainlockForceChoice( { 0, 1, 0, 70, 70, 40 } ),
 		NEWBOTAI_DRAINLOCK_FORCE_PULL );
 	BOOST_CHECK_EQUAL(
-		NewBotAI_GetDrainlockForceChoice( 0, 0, 1, 90, 80, 10 ),
+		NewBotAI_GetDrainlockForceChoice( { 0, 0, 1, 90, 80, 10 } ),
 		NEWBOTAI_DRAINLOCK_FORCE_PULL );
 }
 
 BOOST_AUTO_TEST_CASE( drainlock_force_choice_falls_back_to_drain_when_pull_loses )
 {
 	BOOST_CHECK_EQUAL(
-		NewBotAI_GetDrainlockForceChoice( 0, 1, 0, 90, 60, 40 ),
+		NewBotAI_GetDrainlockForceChoice( { 0, 1, 0, 90, 60, 40 } ),
 		NEWBOTAI_DRAINLOCK_FORCE_DRAIN );
 	BOOST_CHECK_EQUAL(
-		NewBotAI_GetDrainlockForceChoice( 0, 0, 1, 90, 60, 40 ),
+		NewBotAI_GetDrainlockForceChoice( { 0, 0, 1, 90, 60, 40 } ),
 		NEWBOTAI_DRAINLOCK_FORCE_NONE );
 }
 
