@@ -7891,13 +7891,11 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 			trap->EA_Move(bs->client, vec3_origin, 0);
 		}
 		else if (targetInFront) {
-			//Every kick approach starts by looking straight down and moving
-			//only forward while holding grip. The kick is offered from 130 units -
-			//slightly wider than NewBotAI_Flipkick's own 110-unit grip gate - because
-			//the forward move above means we are 15-20 units closer by the next think;
-			//only offering it at 110 let the approach overshoot past the gate and fall
-			//into the not-in-front branch below without the first flipkick ever firing.
-			bs->ideal_viewangles[YAW] = BotChangeViewAngle(bs->viewangles[YAW], a_fo[YAW], gripkickYawStep);
+			//Once the target is in the forward kick cone, hand yaw back to the normal
+			//view-slew path instead of forcing a custom gripkick yaw step here. That keeps
+			//the first flipkick approach at the bot's default turn speed rather than
+			//jerking or lagging the target around with an extra grip-specific yaw clamp.
+			bs->ideal_viewangles[YAW] = a_fo[YAW];
 			bs->ideal_viewangles[PITCH] = 89;
 			trap->EA_Move(bs->client, vec3_origin, 0);
 			trap->EA_MoveForward(bs->client);
@@ -9471,6 +9469,7 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 		// const float speed = NewBotAI_GetSpeedTowardsEnemy(bs);
 		gentity_t *saber;
 		qboolean crouch = qfalse;
+		const qboolean enemySaberThreatImminent = NewBotAI_IsEnemySaberThreatImminent(bs);
 
 		bs->runningLikeASissy = 0;
 		bs->forceMove_Forward = 0;
@@ -9480,23 +9479,29 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 
 		if (NewBotAI_HasDroppedOwnSaber(bs))
 		{
-			//Keep pressuring/repositioning while the saber recall toggle runs; a knocked-away
-			//saber is vulnerable, but stalling or hard retreating was worse than continuing
-			//to close and fight with movement/force.
-			bs->combatAction = BOT_COMBAT_ACTION_AGGRESSION;
-			if (!NewBotAI_TryNoWaypointYawEscape(bs, bs->currentEnemy->client->ps.origin))
+			//A knocked-away saber should be recalled immediately while we retreat toward safer
+			//wall contact for a vertical wallrun recovery instead of lingering in place or
+			//pressing deeper into melee without a blade.
+			bs->combatAction = BOT_COMBAT_ACTION_RETREAT_DEFENSE;
+			if (NewBotAI_TryNoWaypointYawEscape(bs, bs->currentEnemy->client->ps.origin))
 			{
-				if (bs->frame_Enemy_Len > 96.0f)
-				{
-					trap->EA_MoveForward(bs->client);
-				}
-				else
-				{
-					NewBotAI_GetGroundDodge(bs);
-				}
+				//keep driving the escape route immediately when no waypoints are available
+			}
+			else if (!enemySaberThreatImminent && NewBotAI_TouchingWallNotEnemy(bs))
+			{
+				trap->EA_Jump(bs->client);
+				trap->EA_MoveBack(bs->client);
+			}
+			else if (bs->frame_Enemy_Len <= 96.0f)
+			{
+				NewBotAI_GetGroundDodge(bs);
+			}
+			else
+			{
+				NewBotAI_RetreatDiagonal(bs, (level.framenum & 1) ? qtrue : qfalse);
 			}
 		}
-		else if (NewBotAI_IsEnemySaberThreatImminent(bs))
+		else if (enemySaberThreatImminent)
 		{
 			const int totalHealthDelta = NewBotAI_GetTotalHealthDelta(bs);
 
@@ -12494,7 +12499,20 @@ int NewBotAI_GetGrip(bot_state_t *bs) {
 	//should heavily favor gripkicking over trading swings.
 	#define NEWBOTAI_GRIPKICK_DOMINANT_HEALTH 80
 	#define NEWBOTAI_GRIPKICK_DOMINANT_FORCE_LEAD 50
+	const int gripForceRequired = forcePowerNeeded[bs->cur_ps.fd.forcePowerLevel[FP_GRIP]][FP_GRIP];
+	const int saberThrowCounterMinForce = 50;
+	const int saberThrowCounterMinForceLead = 20;
 	const int ourHealth = g_entities[bs->client].health, hisHealth = bs->currentEnemy->health, ourForce = bs->cur_ps.fd.forcePower, hisForce = bs->currentEnemy->client->ps.fd.forcePower;
+	const int enemySaberEntNum = bs->currentEnemy->client->ps.saberEntityNum;
+	const qboolean enemyKnockedDown = BG_InKnockDown(bs->currentEnemy->client->ps.legsAnim) ? qtrue : qfalse;
+	const qboolean enemyCommittedSaberThrow = (bs->currentEnemy->client->ps.saberInFlight &&
+		enemySaberEntNum > 0 &&
+		enemySaberEntNum < ENTITYNUM_WORLD &&
+		g_entities[enemySaberEntNum].inuse &&
+		g_entities[enemySaberEntNum].s.weapon == WP_SABER &&
+		g_entities[enemySaberEntNum].r.ownerNum == bs->currentEnemy->s.number &&
+		g_entities[enemySaberEntNum].s.eType == ET_MISSILE &&
+		bs->currentEnemy->client->saberKnockedTime <= level.time) ? qtrue : qfalse;
 	int weight = 100;
 	const float gripkickBias = BotGetChanceBiasPercent(bot_gripkickbias.value);
 	const int aggressionBonus = BotGetAggressionWeightedBonus(bs, gripkickBias, 35, qtrue);
@@ -12509,7 +12527,7 @@ int NewBotAI_GetGrip(bot_state_t *bs) {
 		return 0;
 	if (bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB))
 		return 0;
-	if (ourForce < 50) //loda fixme
+	if (ourForce < saberThrowCounterMinForce || ourForce <= gripForceRequired)
 		return 0;
 
 	if (bs->cur_ps.weaponstate == WEAPON_CHARGING_ALT)
@@ -12533,10 +12551,16 @@ int NewBotAI_GetGrip(bot_state_t *bs) {
 	if (ourHealth > NEWBOTAI_GRIPKICK_DOMINANT_HEALTH && ourForce > hisForce + NEWBOTAI_GRIPKICK_DOMINANT_FORCE_LEAD)
 		return 100 + aggressionBonus;
 
-	//Same dominant-health/force lead, but specifically against an enemy who is
-	//mid saberthrow - punish the whiffed/committed throw with a gripkick instead of
-	//letting them recover.
-	if (bs->currentEnemy->client->ps.saberInFlight && ourHealth > NEWBOTAI_GRIPKICK_DOMINANT_HEALTH && ourForce > hisForce)
+	//An enemy who has already committed their saber to a throw is wide open to a gripkick.
+	//As long as they are still inside grip range and we are healthy enough to risk it,
+	//weight the counter heavily instead of waiting for the old dominant-health threshold.
+	if (!enemyKnockedDown &&
+		enemyCommittedSaberThrow &&
+		!bs->cur_ps.saberInFlight &&
+		!NewBotAI_HasDroppedOwnSaber(bs) &&
+		bs->frame_Enemy_Len <= MAX_GRIP_DISTANCE &&
+		ourHealth > 20 &&
+		ourForce > hisForce + saberThrowCounterMinForceLead)
 		return 90 + aggressionBonus;
 
 	if (ourForce > 65 && ourHealth > 55 && hisHealth < 80)
@@ -12598,6 +12622,7 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 	const int knockdownBaseForceThreshold = 30;
 	const int knockdownHeavyForceThreshold = 40;
 	const int knockdownHeavyHealthThreshold = 50;
+	const int knockdownHeavyRawHealthThreshold = 31;
 	const int knockdownHeavyWeight = 100;
 	const int knockdownPressureWeight = 90;
 	const int knockdownBaseWeight = 85;
@@ -12608,6 +12633,7 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 	const int ourHealth = g_entities[bs->client].health;
 	const int ourForce = bs->cur_ps.fd.forcePower;
 	const int hisForce = bs->currentEnemy->client->ps.fd.forcePower;
+	const int enemyHealth = bs->currentEnemy->health;
 	const int enemyArmor = bs->currentEnemy->client->ps.stats[STAT_ARMOR];
 	const int enemyTotalHealth = bs->currentEnemy->health + enemyArmor;
 	const int forceLead = ourForce - hisForce;
@@ -12663,8 +12689,12 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 
 	if (enemyKnockedDown) {
 		//A knocked-down opponent is the best saber-throw punish; bias heavily toward it,
-		//especially when our force lead or their armor means the throw cashes in pressure.
-		if (enemyTotalHealth >= knockdownFinishMinHealth && enemyTotalHealth <= knockdownFinishMaxHealth) {
+		//especially when they are already under 31 raw health and the throw can cash the
+		//knockdown in immediately instead of letting them recover. We keep the older
+		//total-health band alongside that raw-health execute so armored targets still use
+		//the broader finisher window even when their HP alone is not yet in execute range.
+		if ((enemyHealth > 0 && enemyHealth < knockdownHeavyRawHealthThreshold) ||
+			(enemyTotalHealth >= knockdownFinishMinHealth && enemyTotalHealth <= knockdownFinishMaxHealth)) {
 			weight = knockdownHeavyWeight;
 		}
 		else if (ourForce >= knockdownHeavyForceThreshold &&
