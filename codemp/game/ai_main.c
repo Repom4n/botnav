@@ -12915,8 +12915,8 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 	//doNothingWeight = NewBotAI_GetWait(bs);
 
 	if (gripWeight > minWeight &&
-		gripWeight >= pushWeight && gripWeight >= drainWeight &&
-		gripWeight >= pullWeight)
+		gripWeight > pushWeight && gripWeight > drainWeight &&
+		gripWeight > pullWeight)
 	{
 		level.clients[bs->client].ps.fd.forcePowerSelected = FP_GRIP;
 		useTheForce = qtrue;
@@ -13965,6 +13965,9 @@ int NewBotAI_ScanForEnemies(bot_state_t* bs) {
 			float normalizedHealth;
 			VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, a);
 			hasEnemyDist = VectorLength(a);
+			//Map enemy health into a distance multiplier before self-health bias:
+			//1 HP -> 0.25x, 100 HP -> 1.0x. Lower-HP enemies are treated as effectively
+			//closer (more attractive); our own low health nudges the multiplier upward.
 			normalizedHealth = targetHealthFloor +
 				(currentEnemyHealth - 1) * (targetHealthCeil - targetHealthFloor) /
 				(nominalFullHealth - 1.0f);
@@ -15228,9 +15231,9 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 
 	{
 		const float targetDistanceLimit = BotGetTargetDistanceLimit();
-		const float rescanDistanceThreshold = (targetDistanceLimit > 0.0f) ? targetDistanceLimit : 300.0f;
 		const qboolean shouldRescanForCloserTarget =
-			(bs->currentEnemy && bs->frame_Enemy_Vis && bs->frame_Enemy_Len > rescanDistanceThreshold) ? qtrue : qfalse;
+			(bs->currentEnemy && bs->frame_Enemy_Vis &&
+			 ((targetDistanceLimit <= 0.0f) || (bs->frame_Enemy_Len > targetDistanceLimit))) ? qtrue : qfalse;
 		if (bs->enemySeenTime < level.time || !bs->frame_Enemy_Vis || !bs->currentEnemy || shouldRescanForCloserTarget)
 		{
 			enemy = ScanForEnemies(bs);
