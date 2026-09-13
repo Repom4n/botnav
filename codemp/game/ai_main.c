@@ -14418,6 +14418,8 @@ static void NewBotAI_MaintainWaypointFallbackEnemyLock(bot_state_t *bs)
 
 static qboolean NewBotAI_CanUseWaypointFallbackInCombat(bot_state_t *bs)
 {
+	vec3_t enemyDelta, enemyOrigin;
+
 	if (!bs)
 	{
 		return qfalse;
@@ -14433,6 +14435,19 @@ static qboolean NewBotAI_CanUseWaypointFallbackInCombat(bot_state_t *bs)
 	}
 	if (!bs->frame_Enemy_Vis)
 	{
+		if (bs->combatNavHoldUntil > level.time)
+		{
+			VectorCopy(bs->currentEnemy->r.currentOrigin, enemyOrigin);
+			if (!enemyOrigin[0] && !enemyOrigin[1] && !enemyOrigin[2])
+			{
+				VectorCopy(bs->currentEnemy->client->ps.origin, enemyOrigin);
+			}
+			VectorSubtract(enemyOrigin, bs->origin, enemyDelta);
+			if (VectorLengthSquared(enemyDelta) <= NEWBOTAI_COMBAT_WAYPOINT_SEPARATION_SQ)
+			{
+				return qfalse;
+			}
+		}
 		return qtrue;
 	}
 
