@@ -77,9 +77,9 @@ static inline newbotai_drainlock_force_choice_t NewBotAI_GetDrainlockForceChoice
 }
 
 static inline int NewBotAI_ShouldBlockOrthogonalSaberSpecialInput(
-	int upmove, int rightmove, int forwardmove, int isGrounded, int saberBusy, int attackPressed)
+	int upmove, int rightmove, int hasForwardMove, int isGrounded, int saberBusy, int attackPressed)
 {
-	if (upmove <= 0 || rightmove == 0 || forwardmove != 0)
+	if (upmove <= 0 || rightmove == 0 || hasForwardMove)
 	{
 		return 0;
 	}

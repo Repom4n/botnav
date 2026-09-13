@@ -12021,7 +12021,6 @@ static void NewBotAI_BlockAccidentalSaberSpecialMoves(bot_state_t *bs)
 {
 	usercmd_t *cmd;
 	int effectiveRightMove;
-	int effectiveForwardMove;
 	int effectiveUpMove;
 	qboolean saberBusy;
 	qboolean attackPressed;
@@ -12033,7 +12032,6 @@ static void NewBotAI_BlockAccidentalSaberSpecialMoves(bot_state_t *bs)
 
 	cmd = &level.clients[bs->client].pers.cmd;
 	effectiveRightMove = NewBotAI_GetEffectiveMoveInput(cmd->rightmove, bs->forceMove_Right);
-	effectiveForwardMove = NewBotAI_GetEffectiveMoveInput(cmd->forwardmove, bs->forceMove_Forward);
 	effectiveUpMove = NewBotAI_GetEffectiveMoveInput(cmd->upmove, bs->forceMove_Up);
 	saberBusy = (BG_SaberInAttack(bs->cur_ps.saberMove) ||
 		PM_SaberInStart(bs->cur_ps.saberMove) ||
@@ -12043,7 +12041,7 @@ static void NewBotAI_BlockAccidentalSaberSpecialMoves(bot_state_t *bs)
 	if (!NewBotAI_ShouldBlockOrthogonalSaberSpecialInput(
 		effectiveUpMove,
 		effectiveRightMove,
-		effectiveForwardMove,
+		(cmd->forwardmove != 0 || bs->forceMove_Forward != 0),
 		bs->cur_ps.groundEntityNum != ENTITYNUM_NONE,
 		saberBusy,
 		attackPressed))
@@ -12052,9 +12050,7 @@ static void NewBotAI_BlockAccidentalSaberSpecialMoves(bot_state_t *bs)
 	}
 
 	cmd->rightmove = 0;
-	cmd->forwardmove = 0;
 	cmd->upmove = 0;
-	bs->forceMove_Forward = 0;
 	bs->forceMove_Right = 0;
 	bs->forceMove_Up = 0;
 }
