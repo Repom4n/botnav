@@ -13912,7 +13912,12 @@ static void NewBotAI_UpdateCombatInitiatedState(bot_state_t *bs)
 {
 	qboolean initiated;
 
-	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	if (!bs)
+	{
+		return;
+	}
+
+	if (!bs->currentEnemy || !bs->currentEnemy->client)
 	{
 		bs->combatInitiatedEnemyNum = -1;
 		bs->combatInitiatedUntil = 0;
@@ -15259,14 +15264,12 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 				enemy != bs->currentEnemy->s.number &&
 				bs->waypointPursuitEnemyNum == bs->currentEnemy->s.number &&
 				bs->waypointPursuitLockUntil > level.time &&
+				NewBotAI_IsCombatInitiatedAgainst(bs, bs->currentEnemy, bs->frame_Enemy_Vis ? qtrue : qfalse) &&
 				!OrgVisible(bs->eye, g_entities[enemy].client->ps.origin, bs->client) &&
 				!NewBotAI_IsCombatInitiatedAgainst(bs, &g_entities[enemy], qfalse))
 			{
 				//keep pursuing the currently latched waypoint target linearly
-				if (NewBotAI_IsCombatInitiatedAgainst(bs, bs->currentEnemy, bs->frame_Enemy_Vis ? qtrue : qfalse))
-				{
-					bs->enemySeenTime = level.time + ENEMY_FORGET_MS;
-				}
+				bs->enemySeenTime = level.time + ENEMY_FORGET_MS;
 			}
 			else
 			{
