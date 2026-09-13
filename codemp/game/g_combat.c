@@ -2293,12 +2293,18 @@ void player_die( gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int
 		return;
 
 	if (g_duelRespawn.integer && level.gametype == GT_FFA && self->client->ps.duelInProgress && !self->client->pers.noDuelTele && (meansOfDeath != MOD_SUICIDE) && (meansOfDeath != MOD_TEAM_CHANGE)) {
+		gentity_t *duelOpponent = NULL;
 		float respawnYaw = 0.0f;
-		if (attacker && attacker != self && attacker->client &&
-			attacker->client->ps.duelInProgress &&
-			attacker->client->ps.duelIndex == self->s.number &&
-			self->client->ps.duelIndex == attacker->s.number &&
-			G_CalcDuelNearOpponentRespawn(attacker, self->client->pers.respawnLocation, &respawnYaw))
+		if (self->client->ps.duelIndex >= 0 && self->client->ps.duelIndex < MAX_CLIENTS)
+		{
+			duelOpponent = &g_entities[self->client->ps.duelIndex];
+		}
+
+		if (duelOpponent && duelOpponent != self && duelOpponent->client &&
+			duelOpponent->inuse &&
+			duelOpponent->client->ps.duelInProgress &&
+			duelOpponent->client->ps.duelIndex == self->s.number &&
+			G_CalcDuelNearOpponentRespawn(duelOpponent, self->client->pers.respawnLocation, &respawnYaw))
 		{
 			self->client->pers.respawnAngle = respawnYaw;
 		}

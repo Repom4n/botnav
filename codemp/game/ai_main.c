@@ -14395,6 +14395,7 @@ static qboolean NewBotAI_IsDirectPathToEnemyBlocked(bot_state_t *bs)
 
 static qboolean NewBotAI_ShouldFallbackToWaypoints(bot_state_t *bs)
 {
+	vec3_t enemyOrigin, enemyDelta;
 	const qboolean progressStalled = NewBotAI_IsCombatProgressStalled(bs);
 
 	if (!bs->currentEnemy || !bs->currentEnemy->client)
@@ -14405,6 +14406,27 @@ static qboolean NewBotAI_ShouldFallbackToWaypoints(bot_state_t *bs)
 
 	if (!bs->frame_Enemy_Vis)
 	{
+		if (bs->doAttack || bs->doAltAttack ||
+			bs->cur_ps.weaponstate == WEAPON_FIRING ||
+			bs->cur_ps.weaponstate == WEAPON_CHARGING ||
+			bs->cur_ps.weaponstate == WEAPON_CHARGING_ALT)
+		{
+			return qfalse;
+		}
+		if (bs->combatNavHoldUntil > level.time)
+		{
+			return qfalse;
+		}
+		VectorCopy(bs->currentEnemy->r.currentOrigin, enemyOrigin);
+		if (!enemyOrigin[0] && !enemyOrigin[1] && !enemyOrigin[2])
+		{
+			VectorCopy(bs->currentEnemy->client->ps.origin, enemyOrigin);
+		}
+		VectorSubtract(enemyOrigin, bs->origin, enemyDelta);
+		if (VectorLengthSquared(enemyDelta) <= NEWBOTAI_COMBAT_WAYPOINT_SEPARATION_SQ)
+		{
+			return qfalse;
+		}
 		return qtrue;
 	}
 
