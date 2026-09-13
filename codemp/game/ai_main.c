@@ -12505,6 +12505,7 @@ int NewBotAI_GetGrip(bot_state_t *bs) {
 		enemySaberEntNum > 0 &&
 		enemySaberEntNum < ENTITYNUM_WORLD &&
 		g_entities[enemySaberEntNum].inuse &&
+		g_entities[enemySaberEntNum].s.weapon == WP_SABER &&
 		g_entities[enemySaberEntNum].r.ownerNum == bs->currentEnemy->s.number &&
 		g_entities[enemySaberEntNum].s.eType == ET_MISSILE &&
 		bs->currentEnemy->client->saberKnockedTime <= level.time) ? qtrue : qfalse;
