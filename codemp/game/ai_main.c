@@ -6932,7 +6932,7 @@ static int NewBotAI_GetFlipkickInputWindowMs(void)
 //retreat wall-avoid jump and the no-waypoint yaw escape to detect a genuinely stuck bot.
 #define NEWBOTAI_WALLAVOID_STUCK_SPEED_SQ 900.0f
 #define NEWBOTAI_COMBAT_STUCK_DISTANCE_SQ (96.0f * 96.0f)
-#define NEWBOTAI_COMBAT_STUCK_TIME_MS 5000
+#define NEWBOTAI_COMBAT_STUCK_TIME_MS 3000
 #define NEWBOTAI_DUEL_TARGET_BLACKLIST_MS 15000
 static qboolean NewBotAI_ShouldPreferFlipkickOverThrow(bot_state_t *bs)
 {
@@ -7699,7 +7699,6 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 {
 	//float heightDiff = bs->cur_ps.origin[2] - bs->currentEnemy->client->ps.origin[2]; //We are above them by this much
 	const int gripkickBonus = BotGetAggressionWeightedBonus(bs, BotGetChanceBiasPercent(bot_gripkickbias.value), 30, qtrue);
-	const float gripkickYawStep = 6.0f;
 
 	if (!bs->gripkickActive)
 	{
@@ -7712,6 +7711,7 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 		bs->gripkickJerkPitch = -70.0f;
 		bs->gripkickAttemptTime = 0;
 		bs->gripkickDwellUntil = 0;
+		bs->gripkickLookDownUntil = 0;
 		if (BG_InKnockDown(bs->currentEnemy->client->ps.legsAnim))
 		{
 			bs->gripkickJerkCount = Q_irand(1, 2);
@@ -7803,6 +7803,7 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 		{
 			bs->gripkickAttemptTime = 0;
 			bs->gripkickDwellUntil = 0;
+			bs->gripkickLookDownUntil = 0;
 			bs->gripkickKickCount++;
 			bs->lastGripkickSuccessTime = level.time;
 			if (weAreOnTopOfEnemy)
@@ -7833,6 +7834,7 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 		}
 
 		if (bs->gripkickJerkUntil > level.time) {
+			bs->gripkickLookDownUntil = 0;
 			//Jerk phases only move backward while looking up; do not issue
 			//jump, attack, or other competing inputs during them. Yaw is kept
 			//anchored to a_fo (the true, live direction to the gripped target)
@@ -7848,6 +7850,7 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 		else if (bs->gripkickJerkCount > 0) {
 			const int dwellPercent = Com_Clampi(10, 300, bot_gripkickdwell.integer);
 			const int gripLevel = bs->cur_ps.fd.forcePowerLevel[FP_GRIP];
+			bs->gripkickLookDownUntil = 0;
 			//Item 3: the force grip's own facing check (see ForceGrip in w_force.c) is only
 			//enforced below FORCE_LEVEL_3 - at max grip level the target can be jerked hard
 			//without auto-breaking the grip, so give it the full dramatic 145-200 degree yaw
@@ -7874,6 +7877,7 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 			NewBotAI_RetreatStraight(bs);
 		}
 		else if (bs->gripkickDwellUntil > level.time) {
+			bs->gripkickLookDownUntil = 0;
 			//Hold the target straight down while moving forward, but do not yaw back
 			//toward them until the actual flipkick attempt window. Pre-rotating here was
 			//pushing the target away before the kick landed.
@@ -7883,6 +7887,7 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 			trap->EA_MoveForward(bs->client);
 		}
 		else if (bs->gripkickKickCount >= 3) {
+			bs->gripkickLookDownUntil = 0;
 			//Item 1B: after the 3rd confirmed grip flipkick, stop approaching/kicking
 			//entirely and just hold the target gripped (aimed at them) until grip ends
 			//on its own (max grip duration) or the target escapes/dies.
@@ -7891,15 +7896,17 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 			trap->EA_Move(bs->client, vec3_origin, 0);
 		}
 		else if (targetInFront) {
-			//Once the target is in the forward kick cone, hand yaw back to the normal
-			//view-slew path instead of forcing a custom gripkick yaw step here. That keeps
-			//the first flipkick approach at the bot's default turn speed rather than
-			//jerking or lagging the target around with an extra grip-specific yaw clamp.
+			const int gripkickLookDownSettleMs = 220;
+			//Once the target is in the forward kick cone, lock straight to them, look down,
+			//and briefly hold still so grip drag can settle the target into flipkick range.
 			bs->ideal_viewangles[YAW] = a_fo[YAW];
 			bs->ideal_viewangles[PITCH] = 89;
 			trap->EA_Move(bs->client, vec3_origin, 0);
-			trap->EA_MoveForward(bs->client);
-			if (bs->frame_Enemy_Len <= 130)
+			if (bs->gripkickLookDownUntil <= level.time)
+			{
+				bs->gripkickLookDownUntil = level.time + gripkickLookDownSettleMs;
+			}
+			if (bs->gripkickLookDownUntil <= level.time && bs->frame_Enemy_Len <= 130)
 			{
 				//NewBotAI_Flipkick skips its own post-attempt cooldown for grip
 				//sequences, so enforce it here - otherwise the kick is re-offered
@@ -7925,6 +7932,7 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 					//bot_gripkickdwell setting.
 					bs->gripkickAttemptTime = level.time;
 					bs->gripkickDwellUntil = level.time + (Q_irand(220, 360) * dwellPercent) / 100;
+					bs->gripkickLookDownUntil = 0;
 				}
 			}
 		}
@@ -7933,6 +7941,7 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 			//keep rotating yaw toward them, but issue no strafe input during gripkick.
 			//Move straight forward to re-center, or straight back only when stacked.
 			bs->ideal_viewangles[PITCH] = 89;
+			bs->gripkickLookDownUntil = 0;
 			if (enemyOnTopOfUs)
 			{
 				//They are stacked on us - face the target's true direction so the
@@ -7942,7 +7951,7 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 			}
 			else
 			{
-				bs->ideal_viewangles[YAW] = BotChangeViewAngle(bs->viewangles[YAW], a_fo[YAW], gripkickYawStep);
+				bs->ideal_viewangles[YAW] = a_fo[YAW];
 			}
 			trap->EA_Move(bs->client, vec3_origin, 0);
 			if (enemyOnTopOfUs)
@@ -14264,6 +14273,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		bs->gripkickJerkPitch = 0.0f;
 		bs->gripkickAttemptTime = 0;
 		bs->gripkickDwellUntil = 0;
+		bs->gripkickLookDownUntil = 0;
 	}
 	//An enemy swap drops any pending pk/ptk kick jump - the schedule was computed for
 	//the old opponent's approach.
@@ -15001,6 +15011,66 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 				else if (wp == backIndex)
 				{
 					bs->wpDirection = bs->lastWPDir;
+				}
+			}
+
+			//If we have a live objective or enemy, keep waypoint direction ordered toward
+			//that target so we don't bounce between a local triangle of nearby points.
+			if (bs->wpDestination && gWPArray[wp] && gWPArray[wp]->inuse)
+			{
+				const int forwardIndex = wp + 1;
+				const int backwardIndex = wp - 1;
+				float forwardTrail = -1.0f;
+				float backwardTrail = -1.0f;
+
+				if (forwardIndex >= 0 && forwardIndex < gWPNum &&
+					gWPArray[forwardIndex] && gWPArray[forwardIndex]->inuse)
+				{
+					forwardTrail = TotalTrailDistance(forwardIndex, bs->wpDestination->index, bs);
+				}
+				if (backwardIndex >= 0 && backwardIndex < gWPNum &&
+					gWPArray[backwardIndex] && gWPArray[backwardIndex]->inuse)
+				{
+					backwardTrail = TotalTrailDistance(backwardIndex, bs->wpDestination->index, bs);
+				}
+
+				if (forwardTrail >= 0.0f && (backwardTrail < 0.0f || forwardTrail <= backwardTrail))
+				{
+					bs->wpDirection = 0;
+				}
+				else if (backwardTrail >= 0.0f)
+				{
+					bs->wpDirection = 1;
+				}
+			}
+			else if (bs->currentEnemy && bs->currentEnemy->client && gWPArray[wp] && gWPArray[wp]->inuse)
+			{
+				const int forwardIndex = wp + 1;
+				const int backwardIndex = wp - 1;
+				float forwardDist = -1.0f;
+				float backwardDist = -1.0f;
+				vec3_t toEnemy;
+
+				if (forwardIndex >= 0 && forwardIndex < gWPNum &&
+					gWPArray[forwardIndex] && gWPArray[forwardIndex]->inuse)
+				{
+					VectorSubtract(gWPArray[forwardIndex]->origin, bs->currentEnemy->client->ps.origin, toEnemy);
+					forwardDist = VectorLengthSquared(toEnemy);
+				}
+				if (backwardIndex >= 0 && backwardIndex < gWPNum &&
+					gWPArray[backwardIndex] && gWPArray[backwardIndex]->inuse)
+				{
+					VectorSubtract(gWPArray[backwardIndex]->origin, bs->currentEnemy->client->ps.origin, toEnemy);
+					backwardDist = VectorLengthSquared(toEnemy);
+				}
+
+				if (forwardDist >= 0.0f && (backwardDist < 0.0f || forwardDist <= backwardDist))
+				{
+					bs->wpDirection = 0;
+				}
+				else if (backwardDist >= 0.0f)
+				{
+					bs->wpDirection = 1;
 				}
 			}
 
