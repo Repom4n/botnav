@@ -13957,6 +13957,20 @@ static void NewBotAI_MaintainThroughWallAim(bot_state_t *bs)
 	VectorCopy(headlevel, bs->lastEnemySpotted);
 }
 
+static qboolean NewBotAI_IsEnemyDirectlyVisibleToBot(bot_state_t *bs, gentity_t *enemy)
+{
+	vec3_t headlevel;
+
+	if (!bs || !enemy || !enemy->client)
+	{
+		return qfalse;
+	}
+
+	VectorCopy(enemy->client->ps.origin, headlevel);
+	headlevel[2] += enemy->client->ps.viewheight - 24;
+	return OrgVisible(bs->eye, headlevel, bs->client) ? qtrue : qfalse;
+}
+
 static void NewBotAI_RunNavigationOrAlone(bot_state_t *bs, float thinktime)
 {
 	if (bot_navigation.integer)
@@ -14353,7 +14367,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		bs->waypointPursuitEnemyNum == bs->currentEnemy->s.number &&
 		bs->waypointPursuitLockUntil > level.time &&
 		closestID != bs->currentEnemy->s.number &&
-		!OrgVisible(bs->eye, g_entities[closestID].client->ps.origin, bs->client) &&
+		!NewBotAI_IsEnemyDirectlyVisibleToBot(bs, &g_entities[closestID]) &&
 		!NewBotAI_IsCombatInitiatedAgainst(bs, &g_entities[closestID], qfalse))
 	{
 		closestID = bs->currentEnemy->s.number;
@@ -15261,7 +15275,7 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 	}
 
 	if (bs->enemySeenTime < level.time || !bs->currentEnemy ||
-		(!bs->frame_Enemy_Vis && !NewBotAI_IsCombatInitiatedAgainst(bs, bs->currentEnemy, qfalse)))
+		!bs->frame_Enemy_Vis)
 	{
 		enemy = ScanForEnemies(bs);
 
@@ -15272,7 +15286,7 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 				bs->waypointPursuitEnemyNum == bs->currentEnemy->s.number &&
 				bs->waypointPursuitLockUntil > level.time &&
 				NewBotAI_IsCombatInitiatedAgainst(bs, bs->currentEnemy, bs->frame_Enemy_Vis ? qtrue : qfalse) &&
-				!OrgVisible(bs->eye, g_entities[enemy].client->ps.origin, bs->client) &&
+				!NewBotAI_IsEnemyDirectlyVisibleToBot(bs, &g_entities[enemy]) &&
 				!NewBotAI_IsCombatInitiatedAgainst(bs, &g_entities[enemy], qfalse))
 			{
 				//keep pursuing the currently latched waypoint target linearly
