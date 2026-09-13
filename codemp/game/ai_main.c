@@ -14431,6 +14431,13 @@ static qboolean NewBotAI_CanUseWaypointFallbackInCombat(bot_state_t *bs)
 	}
 	if (!bs->frame_Enemy_Vis)
 	{
+		if (bs->doAttack || bs->doAltAttack ||
+			bs->cur_ps.weaponstate == WEAPON_FIRING ||
+			bs->cur_ps.weaponstate == WEAPON_CHARGING ||
+			bs->cur_ps.weaponstate == WEAPON_CHARGING_ALT)
+		{
+			return qfalse;
+		}
 		if (bs->combatNavHoldUntil > level.time)
 		{
 			VectorCopy(bs->currentEnemy->r.currentOrigin, enemyOrigin);
