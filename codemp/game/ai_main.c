@@ -744,8 +744,8 @@ void BotChangeViewAngles(bot_state_t *bs, float thinktime) {
 		diff = AngleDifference(bs->viewangles[i], bs->ideal_viewangles[i]);
 		disired_speed = diff * axisFactor;
 		bs->viewanglespeed[i] += (bs->viewanglespeed[i] - disired_speed);
-		if (bs->viewanglespeed[i] > 180) bs->viewanglespeed[i] = axisMaxchange;
-		if (bs->viewanglespeed[i] < -180) bs->viewanglespeed[i] = -axisMaxchange;
+		if (bs->viewanglespeed[i] > axisMaxchange) bs->viewanglespeed[i] = axisMaxchange;
+		if (bs->viewanglespeed[i] < -axisMaxchange) bs->viewanglespeed[i] = -axisMaxchange;
 		anglespeed = bs->viewanglespeed[i];
 		if (anglespeed > axisMaxchange) anglespeed = axisMaxchange;
 		if (anglespeed < -axisMaxchange) anglespeed = -axisMaxchange;
