@@ -12033,7 +12033,15 @@ static void NewBotAI_BlockAccidentalSaberSpecialMoves(bot_state_t *bs)
 	}
 
 	cmd = &level.clients[bs->client].pers.cmd;
-	if (cmd->upmove <= 0 || cmd->rightmove == 0)
+	if (cmd->upmove <= 0 || cmd->rightmove == 0 || cmd->forwardmove != 0)
+	{
+		return;
+	}
+
+	if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE ||
+		BG_SaberInAttack(bs->cur_ps.saberMove) ||
+		PM_SaberInStart(bs->cur_ps.saberMove) ||
+		PM_SaberInTransition(bs->cur_ps.saberMove))
 	{
 		return;
 	}
