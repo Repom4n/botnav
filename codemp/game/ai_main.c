@@ -12308,6 +12308,10 @@ static void NewBotAI_RollRandomStrafeOverlay(bot_state_t *bs, int minDuration, i
 		bs->randomStrafeDir = 0;
 	}
 	bs->randomStrafeEndTime = level.time + Q_irand(minDuration, maxDuration);
+	if (bs->randomStrafeEndTime <= level.time)
+	{
+		bs->randomStrafeEndTime = level.time + 1;
+	}
 	if (!bs->randomStrafeDir)
 	{
 		bs->randomStrafeMode = 0;
