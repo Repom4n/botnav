@@ -12542,7 +12542,8 @@ int NewBotAI_GetGrip(bot_state_t *bs) {
 	//As long as they are still inside grip range and we are healthy enough to risk it,
 	//weight the counter heavily instead of waiting for the old dominant-health threshold.
 	if (bs->currentEnemy->client->ps.saberInFlight &&
-		bs->currentEnemy->client->ps.saberEntityNum &&
+		bs->currentEnemy->client->ps.saberEntityNum > 0 &&
+		bs->currentEnemy->client->ps.saberEntityNum < ENTITYNUM_WORLD &&
 		bs->currentEnemy->client->saberKnockedTime <= level.time &&
 		bs->frame_Enemy_Len <= MAX_GRIP_DISTANCE &&
 		ourHealth > 20 &&
