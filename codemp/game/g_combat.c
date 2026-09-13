@@ -2229,6 +2229,7 @@ static qboolean G_CalcDuelNearOpponentRespawn(gentity_t *attacker, vec3_t outOri
 				continue;
 			}
 			VectorCopy(tr.endpos, candidate);
+			candidate[2] -= mins[2];
 
 			trap->Trace(&tr, candidate, mins, maxs, candidate, ENTITYNUM_NONE, MASK_PLAYERSOLID, qfalse, 0, 0);
 			if (tr.allsolid || tr.startsolid)
