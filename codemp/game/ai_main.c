@@ -9567,6 +9567,7 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 		if (bs->randomStrafeEndTime <= level.time)
 		{
 			NewBotAI_RollRandomStrafeOverlay(bs, 200, 600, qtrue);
+			bs->randomStrafeMode = 0;
 		}
 		if (bs->randomStrafeDir < 0)
 		{
@@ -9792,7 +9793,6 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 			}
 			else if (NewBotAI_ShouldJumpDrainVsSaberThrow(bs))
 			{
-				const qboolean pullActive = NewBotAI_IsBeingPulledTowardEnemy(bs);
 				const qboolean aggressiveHop =
 					(NewBotAI_ShouldPreferFlipkickOverThrow(bs) ||
 					 (NewBotAI_IsDrainlockAdvantage(bs) && ourHealth > 20) ||
@@ -9809,7 +9809,7 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 				trap->EA_Jump(bs->client);
 				trap->EA_Crouch(bs->client);
 				NewBotAI_ConsumeCombatHop(bs);
-				if (pullActive &&
+				if (NewBotAI_IsBeingPulledTowardEnemy(bs) &&
 					!(g_forcePowerDisable.integer & (1 << FP_DRAIN)) &&
 					(bs->cur_ps.fd.forcePowersKnown & (1 << FP_DRAIN)) &&
 					bs->cur_ps.fd.forcePower >= 20)
@@ -11261,6 +11261,7 @@ static int NewBotAI_GetPTKWeight(bot_state_t *bs)
 	}
 
 	if (bs->currentEnemy->client->ps.saberInFlight &&
+		!NewBotAI_IsEnemySaberReturning(bs) &&
 		!freePullkickWindow &&
 		weight > 55)
 	{
@@ -12307,6 +12308,11 @@ static void NewBotAI_RollRandomStrafeOverlay(bot_state_t *bs, int minDuration, i
 		bs->randomStrafeDir = 0;
 	}
 	bs->randomStrafeEndTime = level.time + Q_irand(minDuration, maxDuration);
+	if (!bs->randomStrafeDir)
+	{
+		bs->randomStrafeMode = 0;
+		return;
+	}
 	diagonalRoll = Q_irand(1, 100);
 	if (diagonalRoll <= 60)
 	{
@@ -12383,7 +12389,7 @@ static void NewBotAI_ApplyRandomStrafeOverlay(bot_state_t *bs)
 
 	if (bs->combatAction == BOT_COMBAT_ACTION_RETREAT_DEFENSE || bs->runningLikeASissy)
 	{
-		//Supplemental strafing must not override directed retreat/chase movement.
+		//Directed retreat movement owns its inputs separately from the free-move strafe overlay.
 		NewBotAI_ClearRandomStrafeOverlay(bs);
 		return;
 	}
