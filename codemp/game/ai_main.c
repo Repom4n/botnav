@@ -188,7 +188,7 @@ static qboolean NewBotAI_HasFreePullkickWindow(bot_state_t *bs);
 static qboolean NewBotAI_IsBeingPulledTowardEnemy(bot_state_t *bs);
 static qboolean NewBotAI_IsImmediateFlipkickContact(bot_state_t *bs);
 static void NewBotAI_ClearRandomStrafeOverlay(bot_state_t *bs);
-static void NewBotAI_RollRandomStrafeOverlay(bot_state_t *bs, int minDuration, int maxDuration);
+static void NewBotAI_RollRandomStrafeOverlay(bot_state_t *bs, int minDuration, int maxDuration, qboolean retreating);
 static void NewBotAI_ApplyRandomStrafePattern(bot_state_t *bs);
 static void NewBotAI_StartEscapeYawOverride(bot_state_t *bs, int durationMs);
 
@@ -9560,7 +9560,7 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 		bs->combatAction = BOT_COMBAT_ACTION_RETREAT_DEFENSE;
 		if (bs->randomStrafeEndTime <= level.time)
 		{
-			NewBotAI_RollRandomStrafeOverlay(bs, 200, 600);
+			NewBotAI_RollRandomStrafeOverlay(bs, 200, 600, qtrue);
 		}
 		NewBotAI_ApplyRandomStrafePattern(bs);
 		NewBotAI_RetreatDiagonal(bs, bs->randomStrafeDir <= 0);
@@ -10035,7 +10035,7 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 				//straight-forward input or it turns into a diagonal wallrun off opponents/walls.
 				if (hisWeapon == WP_SABER && bs->cur_ps.weapon == WP_SABER && bs->cur_ps.groundEntityNum != ENTITYNUM_NONE && bs->flipkickInputTime <= level.time) {
 					if (bs->randomStrafeEndTime <= level.time) {
-						NewBotAI_RollRandomStrafeOverlay(bs, 180, 700 + (int)(BotGetChanceBiasPercent(bot_fanbias.value) * 5.0f));
+						NewBotAI_RollRandomStrafeOverlay(bs, 180, 700 + (int)(BotGetChanceBiasPercent(bot_fanbias.value) * 5.0f), qfalse);
 					}
 					if (!NewBotAI_ShouldAvoidDiagonalWallrun(bs))
 						NewBotAI_ApplyRandomStrafePattern(bs);
@@ -10049,7 +10049,7 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 			//Point-blank saber duel: also wiggle laterally to avoid glitching into each other.
 			if (hisWeapon == WP_SABER && bs->cur_ps.weapon == WP_SABER && bs->cur_ps.groundEntityNum != ENTITYNUM_NONE && bs->flipkickInputTime <= level.time) {
 				if (bs->randomStrafeEndTime <= level.time) {
-					NewBotAI_RollRandomStrafeOverlay(bs, 200, 600);
+					NewBotAI_RollRandomStrafeOverlay(bs, 200, 600, qfalse);
 				}
 				//Item 2C: lateral+forward while touching a wall becomes a diagonal wallrun -
 				//strip the lateral component unless we are critically low and escaping.
@@ -11196,28 +11196,21 @@ static int NewBotAI_GetPTKWeight(bot_state_t *bs)
 		//with PTK only once a real drainlock/free-pullkick window already exists.
 		//Before that, keep the weight modest so drain/retreat/flipkick pressure can
 		//set the force advantage first instead of yanking straight into an early pull.
-		if (freePullkickWindow)
-		{
-			if (enemySaberReturning)
-			{
-				weight += (ourHealth > 30 && ourForce > hisForce) ? 120 : 75;
-			}
-			else
-			{
-				weight += (ourHealth > 30 && ourForce > hisForce) ? 80 : 40;
-			}
-		}
-		else
-		{
-			weight += enemySaberReturning ? 20 : 10;
-		}
+		weight += NewBotAI_GetSaberThrowPTKBonus(
+			freePullkickWindow ? 1 : 0,
+			enemySaberReturning ? 1 : 0,
+			ourHealth,
+			ourForce,
+			hisForce);
 	}
 
 	if (NewBotAI_IsBeingPulledTowardEnemy(bs) &&
-		bs->frame_Enemy_Len <= 220.0f &&
 		bs->currentEnemy->client->ps.weapon == WP_SABER)
 	{
-		weight += freePullkickWindow ? 140 : 90;
+		weight += NewBotAI_GetPulledTowardEnemyPTKBonus(
+			freePullkickWindow ? 1 : 0,
+			bs->frame_Enemy_Len,
+			1);
 	}
 
 	//Pressed forward past our own thrown saber and now the closer, saberless one -
@@ -12268,10 +12261,9 @@ static void NewBotAI_ClearRandomStrafeOverlay(bot_state_t *bs)
 	bs->randomStrafeMode = 0;
 }
 
-static void NewBotAI_RollRandomStrafeOverlay(bot_state_t *bs, int minDuration, int maxDuration)
+static void NewBotAI_RollRandomStrafeOverlay(bot_state_t *bs, int minDuration, int maxDuration, qboolean retreating)
 {
 	int diagonalRoll;
-	qboolean retreating;
 
 	if (!bs)
 	{
@@ -12289,8 +12281,6 @@ static void NewBotAI_RollRandomStrafeOverlay(bot_state_t *bs, int minDuration, i
 
 	bs->randomStrafeDir = Q_irand(0, 1) ? 1 : -1;
 	bs->randomStrafeEndTime = level.time + Q_irand(minDuration, maxDuration);
-	retreating = (bs->combatAction == BOT_COMBAT_ACTION_RETREAT_DEFENSE ||
-		bs->runningLikeASissy) ? qtrue : qfalse;
 	diagonalRoll = Q_irand(1, 100);
 	if (diagonalRoll <= 60)
 	{
@@ -12395,7 +12385,11 @@ static void NewBotAI_ApplyRandomStrafeOverlay(bot_state_t *bs)
 		if (Q_irand(1, 100) <= frequency)
 		{
 			const int duration = BotRollStrafeDurationMs();
-			NewBotAI_RollRandomStrafeOverlay(bs, duration, duration);
+			NewBotAI_RollRandomStrafeOverlay(
+				bs,
+				duration,
+				duration,
+				(bs->combatAction == BOT_COMBAT_ACTION_RETREAT_DEFENSE || bs->runningLikeASissy) ? qtrue : qfalse);
 		}
 		else
 		{

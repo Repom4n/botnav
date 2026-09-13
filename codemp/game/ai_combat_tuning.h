@@ -50,6 +50,33 @@ static inline int NewBotAI_AdjustPTKWeightForArmor(int weight, int enemyArmor, i
 	return weight + NEWBOTAI_PTK_ARMOR_STRONG_LEAD_BONUS;
 }
 
+static inline int NewBotAI_GetSaberThrowPTKBonus(
+	int freePullkickWindow, int enemySaberReturning, int ourHealth, int ourForce, int hisForce)
+{
+	if (freePullkickWindow)
+	{
+		if (enemySaberReturning)
+		{
+			return (ourHealth > 30 && ourForce > hisForce) ? 120 : 75;
+		}
+
+		return (ourHealth > 30 && ourForce > hisForce) ? 80 : 40;
+	}
+
+	return enemySaberReturning ? 20 : 10;
+}
+
+static inline int NewBotAI_GetPulledTowardEnemyPTKBonus(
+	int freePullkickWindow, float enemyDistance, int enemyHasSaber)
+{
+	if (!enemyHasSaber || enemyDistance > 220.0f)
+	{
+		return 0;
+	}
+
+	return freePullkickWindow ? 140 : 90;
+}
+
 // Drainlock policy: the "drain" half comes first. Before the enemy is actually below the
 // free-pull threshold, a pullkick-drain window keeps choosing drain. Once the free-pull
 // finisher is live, preserve the existing pull-vs-drain weight comparison so the chosen
