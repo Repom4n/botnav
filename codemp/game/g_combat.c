@@ -2241,7 +2241,7 @@ static qboolean G_CalcDuelNearOpponentRespawn(gentity_t *attacker, vec3_t outOri
 			}
 
 			VectorCopy(candidate, outOrigin);
-			VectorSubtract(attacker->client->ps.origin, candidate, toOpponent);
+			VectorSubtract(baseOrigin, candidate, toOpponent);
 			vectoangles(toOpponent, candidateAngles);
 			*outYaw = candidateAngles[YAW];
 			return qtrue;

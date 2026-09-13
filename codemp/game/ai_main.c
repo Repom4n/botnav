@@ -6933,7 +6933,7 @@ void NewBotAI_Getup(bot_state_t *bs)
 	{
 		const qboolean pullActive = (bs->cur_ps.forceHandExtend == HANDEXTEND_FORCEPULL ||
 			bs->cur_ps.powerups[PW_PULL] > level.time) ? qtrue : qfalse;
-		if (pullActive && NewBotAI_ShouldEmergencyPushWhilePulled(bs))
+		if (pullActive && bs->cur_ps.fd.forcePower <= 25 && NewBotAI_ShouldEmergencyPushWhilePulled(bs))
 		{
 			level.clients[bs->client].ps.fd.forcePowerSelected = FP_PUSH;
 			useTheForce = qtrue;
@@ -9692,7 +9692,7 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 			}
 			return;
 		}
-		else if (NewBotAI_ShouldEmergencyPushWhilePulled(bs))
+		else if (bs->cur_ps.fd.forcePower <= 25 && NewBotAI_ShouldEmergencyPushWhilePulled(bs))
 		{
 			bs->combatAction = BOT_COMBAT_ACTION_RETREAT_DEFENSE;
 			NewBotAI_RetreatDiagonal(bs, (level.framenum & 1) ? qtrue : qfalse);
@@ -11783,10 +11783,6 @@ static qboolean NewBotAI_ShouldEmergencyPushWhilePulled(bot_state_t *bs)
 		bs->cur_ps.powerups[PW_PULL] > level.time)) ? qtrue : qfalse;
 
 	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client || !pullActive)
-	{
-		return qfalse;
-	}
-	if (bs->cur_ps.fd.forcePower > 25)
 	{
 		return qfalse;
 	}
