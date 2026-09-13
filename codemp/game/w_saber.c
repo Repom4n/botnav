@@ -6920,6 +6920,10 @@ qboolean saberKnockOutOfHand(gentity_t *saberent, gentity_t *saberOwner, vec3_t 
 	{
 		return qfalse;
 	}
+	if (saberOwner->r.svFlags & SVF_BOT)
+	{
+		return qfalse;
+	}
 
 	saberOwner->client->ps.saberInFlight = qtrue;
 	saberOwner->client->ps.saberEntityState = 1;
@@ -7142,6 +7146,10 @@ qboolean saberCheckKnockdown_Smashed(gentity_t *saberent, gentity_t *saberOwner,
 	{
 		return qfalse;
 	}
+	if (saberOwner->r.svFlags & SVF_BOT)
+	{
+		return qfalse;
+	}
 
 	if (!saberOwner->client->ps.saberInFlight)
 	{ //can only do this if the saber is already actually in flight
@@ -7175,6 +7183,10 @@ qboolean saberCheckKnockdown_Thrown(gentity_t *saberent, gentity_t *saberOwner, 
 	qboolean tossIt = qfalse;
 
 	if (SABERINVALID)
+	{
+		return qfalse;
+	}
+	if (saberOwner->r.svFlags & SVF_BOT)
 	{
 		return qfalse;
 	}
