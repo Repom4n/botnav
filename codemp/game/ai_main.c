@@ -7895,7 +7895,7 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 			//view-slew path instead of forcing a custom gripkick yaw step here. That keeps
 			//the first flipkick approach at the bot's default turn speed rather than
 			//jerking or lagging the target around with an extra grip-specific yaw clamp.
-			VectorCopy(a_fo, bs->ideal_viewangles);
+			bs->ideal_viewangles[YAW] = a_fo[YAW];
 			bs->ideal_viewangles[PITCH] = 89;
 			trap->EA_Move(bs->client, vec3_origin, 0);
 			trap->EA_MoveForward(bs->client);
@@ -9482,7 +9482,11 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 			//wall contact for a vertical wallrun recovery instead of lingering in place or
 			//pressing deeper into melee without a blade.
 			bs->combatAction = BOT_COMBAT_ACTION_RETREAT_DEFENSE;
-			if (NewBotAI_TouchingWallNotEnemy(bs))
+			if (NewBotAI_TryNoWaypointYawEscape(bs, bs->currentEnemy->client->ps.origin))
+			{
+				//keep driving the escape route immediately when no waypoints are available
+			}
+			else if (NewBotAI_TouchingWallNotEnemy(bs))
 			{
 				trap->EA_Jump(bs->client);
 				trap->EA_MoveBack(bs->client);
@@ -12536,7 +12540,10 @@ int NewBotAI_GetGrip(bot_state_t *bs) {
 	//An enemy who has already committed their saber to a throw is wide open to a gripkick.
 	//As long as they are still inside grip range and we are healthy enough to risk it,
 	//weight the counter heavily instead of waiting for the old dominant-health threshold.
-	if (bs->currentEnemy->client->ps.saberInFlight && bs->frame_Enemy_Len <= MAX_GRIP_DISTANCE && ourHealth > 20)
+	if (bs->currentEnemy->client->ps.saberInFlight &&
+		bs->frame_Enemy_Len <= MAX_GRIP_DISTANCE &&
+		ourHealth > 20 &&
+		ourForce >= 50)
 		return 100 + aggressionBonus;
 
 	if (ourForce > 65 && ourHealth > 55 && hisHealth < 80)
