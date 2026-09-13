@@ -15233,7 +15233,7 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 		const float targetDistanceLimit = BotGetTargetDistanceLimit();
 		const qboolean shouldRescanForCloserTarget =
 			(bs->currentEnemy && bs->frame_Enemy_Vis &&
-			 ((targetDistanceLimit <= 0.0f) || (bs->frame_Enemy_Len > targetDistanceLimit))) ? qtrue : qfalse;
+			 (targetDistanceLimit > 0.0f) && (bs->frame_Enemy_Len > targetDistanceLimit)) ? qtrue : qfalse;
 		if (bs->enemySeenTime < level.time || !bs->frame_Enemy_Vis || !bs->currentEnemy || shouldRescanForCloserTarget)
 		{
 			enemy = ScanForEnemies(bs);
