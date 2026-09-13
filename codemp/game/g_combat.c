@@ -2211,6 +2211,9 @@ static qboolean G_CalcDuelNearOpponentRespawn(gentity_t *attacker, vec3_t outOri
 		{
 			vec3_t forward;
 			vec3_t yawAngles;
+			vec3_t occupancyProbe;
+			vec3_t feetProbe;
+			vec3_t headProbe;
 
 			VectorSet(yawAngles, 0.0f, AngleNormalize360(baseYaw + yawOffsets[j]), 0.0f);
 			AngleVectors(yawAngles, forward, NULL, NULL);
@@ -2231,8 +2234,19 @@ static qboolean G_CalcDuelNearOpponentRespawn(gentity_t *attacker, vec3_t outOri
 			VectorCopy(tr.endpos, candidate);
 			candidate[2] -= mins[2];
 
-			trap->Trace(&tr, candidate, mins, maxs, candidate, ENTITYNUM_NONE, MASK_PLAYERSOLID, qfalse, 0, 0);
-			if (tr.allsolid || tr.startsolid)
+			VectorCopy(candidate, occupancyProbe);
+			occupancyProbe[2] += 1.0f;
+			trap->Trace(&tr, candidate, mins, maxs, occupancyProbe, ENTITYNUM_NONE, MASK_PLAYERSOLID, qfalse, 0, 0);
+			if (tr.allsolid || tr.startsolid || tr.fraction < 1.0f)
+			{
+				continue;
+			}
+			VectorCopy(candidate, feetProbe);
+			feetProbe[2] += 1.0f;
+			VectorCopy(candidate, headProbe);
+			headProbe[2] += maxs[2] - 1.0f;
+			if ((trap->PointContents(feetProbe, ENTITYNUM_NONE) & MASK_PLAYERSOLID) ||
+				(trap->PointContents(headProbe, ENTITYNUM_NONE) & MASK_PLAYERSOLID))
 			{
 				continue;
 			}
