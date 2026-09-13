@@ -421,6 +421,7 @@ typedef struct bot_state_s
 	int					enemyWaypointFallbackEnemyNum; // enemy entity number associated with enemyWaypointFallbackIndex
 	int					combatInitiatedEnemyNum; // enemy entity number for through-wall combat persistence
 	int					combatInitiatedUntil; // while > level.time, keep combat lock even without direct LOS
+	int					combatInitiatedUntilByEnemy[MAX_CLIENTS]; // per-enemy through-wall combat persistence expiry
 	int					waypointPursuitEnemyNum; // enemy entity number currently latched for linear waypoint pursuit
 	int					waypointPursuitLockUntil; // while > level.time, avoid swapping waypoint pursuit target unless directly seen/engaged
 	vec3_t				combatStuckOrigin; // sampled combat position used to detect failing to make meaningful progress toward a target

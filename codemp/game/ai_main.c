@@ -2242,10 +2242,9 @@ void BotDamageNotification(gclient_t *bot, gentity_t *attacker)
 	if (bs_a)
 	{ //if the client attacking us is a bot as well
 		bs_a->lastAttacked = &g_entities[bot->ps.clientNum];
-		if (!bs_a->currentEnemy || bs_a->currentEnemy->s.number == bot->ps.clientNum)
+		if (bot->ps.clientNum >= 0 && bot->ps.clientNum < MAX_CLIENTS)
 		{
-			bs_a->combatInitiatedEnemyNum = bot->ps.clientNum;
-			bs_a->combatInitiatedUntil = level.time + 6000;
+			bs_a->combatInitiatedUntilByEnemy[bot->ps.clientNum] = level.time + 6000;
 		}
 		i = 0;
 
@@ -2286,10 +2285,9 @@ void BotDamageNotification(gclient_t *bot, gentity_t *attacker)
 
 	bs->lastHurt = attacker;
 	bs->lastHurtTime = level.time;
-	if (!bs->currentEnemy || bs->currentEnemy->s.number == attacker->s.number)
+	if (attacker->s.number >= 0 && attacker->s.number < MAX_CLIENTS)
 	{
-		bs->combatInitiatedEnemyNum = attacker->s.number;
-		bs->combatInitiatedUntil = level.time + 6000;
+		bs->combatInitiatedUntilByEnemy[attacker->s.number] = level.time + 6000;
 	}
 
 	if (bs->currentEnemy)
@@ -13900,7 +13898,8 @@ static qboolean NewBotAI_IsCombatInitiatedAgainst(bot_state_t *bs, gentity_t *en
 		return qtrue;
 	}
 
-	if (bs->combatInitiatedEnemyNum == enemy->s.number && bs->combatInitiatedUntil > level.time)
+	if (enemy->s.number >= 0 && enemy->s.number < MAX_CLIENTS &&
+		bs->combatInitiatedUntilByEnemy[enemy->s.number] > level.time)
 	{
 		return qtrue;
 	}
@@ -13935,6 +13934,10 @@ static void NewBotAI_UpdateCombatInitiatedState(bot_state_t *bs)
 	{
 		bs->combatInitiatedEnemyNum = bs->currentEnemy->s.number;
 		bs->combatInitiatedUntil = level.time + 6000;
+		if (bs->currentEnemy->s.number >= 0 && bs->currentEnemy->s.number < MAX_CLIENTS)
+		{
+			bs->combatInitiatedUntilByEnemy[bs->currentEnemy->s.number] = level.time + 6000;
+		}
 	}
 }
 
