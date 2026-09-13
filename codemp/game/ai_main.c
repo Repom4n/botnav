@@ -12499,6 +12499,7 @@ int NewBotAI_GetGrip(bot_state_t *bs) {
 	//should heavily favor gripkicking over trading swings.
 	#define NEWBOTAI_GRIPKICK_DOMINANT_HEALTH 80
 	#define NEWBOTAI_GRIPKICK_DOMINANT_FORCE_LEAD 50
+	const int gripForceRequired = forcePowerNeeded[bs->cur_ps.fd.forcePowerLevel[FP_GRIP]][FP_GRIP];
 	const int saberThrowCounterMinForce = 50;
 	const int saberThrowCounterMinForceLead = 20;
 	const int ourHealth = g_entities[bs->client].health, hisHealth = bs->currentEnemy->health, ourForce = bs->cur_ps.fd.forcePower, hisForce = bs->currentEnemy->client->ps.fd.forcePower;
@@ -12525,7 +12526,7 @@ int NewBotAI_GetGrip(bot_state_t *bs) {
 		return 0;
 	if (bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB))
 		return 0;
-	if (ourForce < 50) //loda fixme
+	if (ourForce <= gripForceRequired)
 		return 0;
 
 	if (bs->cur_ps.weaponstate == WEAPON_CHARGING_ALT)
@@ -12556,6 +12557,7 @@ int NewBotAI_GetGrip(bot_state_t *bs) {
 		!NewBotAI_HasDroppedOwnSaber(bs) &&
 		bs->frame_Enemy_Len <= MAX_GRIP_DISTANCE &&
 		ourHealth > 20 &&
+		ourForce > gripForceRequired &&
 		ourForce >= saberThrowCounterMinForce &&
 		ourForce > hisForce + saberThrowCounterMinForceLead)
 		return 90 + aggressionBonus;
