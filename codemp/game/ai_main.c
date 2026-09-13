@@ -12552,6 +12552,7 @@ int NewBotAI_GetGrip(bot_state_t *bs) {
 	//As long as they are still inside grip range and we are healthy enough to risk it,
 	//weight the counter heavily instead of waiting for the old dominant-health threshold.
 	if (enemyCommittedSaberThrow &&
+		!NewBotAI_HasDroppedOwnSaber(bs) &&
 		bs->frame_Enemy_Len <= MAX_GRIP_DISTANCE &&
 		ourHealth > 20 &&
 		ourForce >= 50 &&
