@@ -10870,11 +10870,10 @@ static int NewBotAI_GetLightningWeight(bot_state_t *bs)
 	{
 		return 0;
 	}
-	if (bs->cur_ps.fd.forcePowerLevel[FP_LIGHTNING] > FORCE_LEVEL_2)
+	if (bs->cur_ps.fd.forcePowerLevel[FP_LIGHTNING] != FORCE_LEVEL_2)
 	{
-		//Never use lightning level 3: its close-range arc both wastes the force pool
-		//on splash and leaves us wide open at saber range. Level 2's straight beam
-		//is the only version worth using, and only at distance (checked below).
+		//Bots are configured for level-2 lightning only; keep weighting aligned with
+		//that forced setting and skip other levels.
 		return 0;
 	}
 	if (!bs->frame_Enemy_Vis || bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB))
@@ -14363,7 +14362,7 @@ static qboolean NewBotAI_ShouldFallbackToWaypoints(bot_state_t *bs)
 	if (!bs->currentEnemy || !bs->currentEnemy->client)
 	{
 		bs->combatStuckSince = 0;
-		return qfalse;
+		return qtrue;
 	}
 
 	if (!bs->frame_Enemy_Vis)
@@ -15051,7 +15050,7 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 				useTheForce = 1;
 				forceHostile = 1;
 			}
-			else if ((bs->cur_ps.fd.forcePowersKnown & (1 << FP_LIGHTNING)) && bs->cur_ps.fd.forcePowerLevel[FP_LIGHTNING] <= FORCE_LEVEL_2 && bs->frame_Enemy_Len >= BotGetLightningStartDistance() && bs->frame_Enemy_Len <= BotGetLightningMaxDistance() && level.clients[bs->client].ps.fd.forcePower > 50 && InFieldOfVision(bs->viewangles, 50, a_fo))
+			else if ((bs->cur_ps.fd.forcePowersKnown & (1 << FP_LIGHTNING)) && bs->cur_ps.fd.forcePowerLevel[FP_LIGHTNING] == FORCE_LEVEL_2 && bs->frame_Enemy_Len >= BotGetLightningStartDistance() && bs->frame_Enemy_Len <= BotGetLightningMaxDistance() && level.clients[bs->client].ps.fd.forcePower > 50 && InFieldOfVision(bs->viewangles, 50, a_fo))
 			{ //only lightning level 2, and only from the configured range out; point-blank zaps waste force on level-3's short arc
 				level.clients[bs->client].ps.fd.forcePowerSelected = FP_LIGHTNING;
 				useTheForce = 1;
