@@ -12553,7 +12553,7 @@ int NewBotAI_GetGrip(bot_state_t *bs) {
 		bs->frame_Enemy_Len <= MAX_GRIP_DISTANCE &&
 		ourHealth > 20 &&
 		ourForce >= 50)
-		return 100 + aggressionBonus;
+		return 90 + aggressionBonus;
 
 	if (ourForce > 65 && ourHealth > 55 && hisHealth < 80)
 		return 45 + aggressionBonus;
@@ -15950,7 +15950,6 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 			//a held button counts as one press forever. Toggle a genuine press/release edge -
 			//held 20ms, released 5ms - so repeated +attack inputs keep firing until the saber
 			//returns, instead of a single held button that only counts once.
-			useTheForce = 0;
 			bs->doAltAttack = 0;
 			if (bs->saberRetrieveSpamTime <= level.time)
 			{
