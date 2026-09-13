@@ -62,7 +62,7 @@ static inline newbotai_drainlock_force_choice_t NewBotAI_GetDrainlockForceChoice
 		return NEWBOTAI_DRAINLOCK_FORCE_NONE;
 	}
 
-	if (context.pullWeight > context.minWeight &&
+	if (context.pullWeight >= context.minWeight &&
 		(context.enemyForce < 20 || context.pullWeight >= context.drainWeight))
 	{
 		return NEWBOTAI_DRAINLOCK_FORCE_PULL;
