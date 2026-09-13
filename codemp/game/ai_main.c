@@ -11796,8 +11796,7 @@ static qboolean NewBotAI_ShouldUseSafePushWindowWhilePulled(bot_state_t *bs)
 		return qfalse;
 	}
 	if (bs->currentEnemy->client->ps.saberInFlight ||
-		NewBotAI_IsEnemySaberThreatImminent(bs) ||
-		BG_SaberInAttack(bs->currentEnemy->client->ps.saberMove))
+		NewBotAI_IsEnemySaberThreatImminent(bs))
 	{
 		return qfalse;
 	}
@@ -14363,11 +14362,6 @@ static qboolean NewBotAI_IsDirectPathToEnemyBlocked(bot_state_t *bs)
 	trace_t tr;
 
 	if (!bs->currentEnemy || !bs->currentEnemy->client)
-	{
-		return qfalse;
-	}
-
-	if (!bs->frame_Enemy_Vis)
 	{
 		return qfalse;
 	}
