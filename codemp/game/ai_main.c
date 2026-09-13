@@ -182,7 +182,7 @@ static qboolean NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bot_state_t *bs);
 static qboolean NewBotAI_ShouldJumpDrainVsSaberThrow(bot_state_t *bs);
 static qboolean NewBotAI_ShouldEmergencyDrainRollSaberThrow(bot_state_t *bs);
 static void NewBotAI_ApplySidewaysDrainRoll(bot_state_t *bs, qboolean moveBack);
-static qboolean NewBotAI_ShouldEmergencyPushWhilePulled(bot_state_t *bs);
+static qboolean NewBotAI_ShouldUseSafePushWindowWhilePulled(bot_state_t *bs);
 
 #define NEWBOTAI_DRAIN_TICK_MSEC 100
 #define NEWBOTAI_COMBAT_DISENGAGE_COOLDOWN_MS 2500
@@ -6933,7 +6933,7 @@ void NewBotAI_Getup(bot_state_t *bs)
 	{
 		const qboolean pullActive = (bs->cur_ps.forceHandExtend == HANDEXTEND_FORCEPULL ||
 			bs->cur_ps.powerups[PW_PULL] > level.time) ? qtrue : qfalse;
-		if (pullActive && NewBotAI_ShouldEmergencyPushWhilePulled(bs))
+		if (pullActive && NewBotAI_ShouldUseSafePushWindowWhilePulled(bs))
 		{
 			level.clients[bs->client].ps.fd.forcePowerSelected = FP_PUSH;
 			useTheForce = qtrue;
@@ -9692,7 +9692,7 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 			}
 			return;
 		}
-		else if (NewBotAI_ShouldEmergencyPushWhilePulled(bs))
+		else if (NewBotAI_ShouldUseSafePushWindowWhilePulled(bs))
 		{
 			bs->combatAction = BOT_COMBAT_ACTION_RETREAT_DEFENSE;
 			NewBotAI_RetreatDiagonal(bs, (level.framenum & 1) ? qtrue : qfalse);
@@ -11777,7 +11777,7 @@ static void NewBotAI_ApplySidewaysDrainRoll(bot_state_t *bs, qboolean moveBack)
 	bs->goalAngles[YAW] = yawTarget[YAW];
 }
 
-static qboolean NewBotAI_ShouldEmergencyPushWhilePulled(bot_state_t *bs)
+static qboolean NewBotAI_ShouldUseSafePushWindowWhilePulled(bot_state_t *bs)
 {
 	const qboolean pullActive = (bs && (bs->cur_ps.forceHandExtend == HANDEXTEND_FORCEPULL ||
 		bs->cur_ps.powerups[PW_PULL] > level.time)) ? qtrue : qfalse;
@@ -14363,7 +14363,7 @@ static qboolean NewBotAI_ShouldFallbackToWaypoints(bot_state_t *bs)
 	if (!bs->currentEnemy || !bs->currentEnemy->client)
 	{
 		bs->combatStuckSince = 0;
-		return qtrue;
+		return qfalse;
 	}
 
 	if (!bs->frame_Enemy_Vis)
@@ -14414,6 +14414,8 @@ static void NewBotAI_MaintainWaypointFallbackEnemyLock(bot_state_t *bs)
 
 static qboolean NewBotAI_CanUseWaypointFallbackInCombat(bot_state_t *bs)
 {
+	vec3_t enemyDelta, enemyOrigin;
+
 	if (!bs)
 	{
 		return qfalse;
@@ -14437,6 +14439,16 @@ static qboolean NewBotAI_CanUseWaypointFallbackInCombat(bot_state_t *bs)
 			return qfalse;
 		}
 		if (bs->combatNavHoldUntil > level.time)
+		{
+			return qfalse;
+		}
+		VectorCopy(bs->currentEnemy->r.currentOrigin, enemyOrigin);
+		if (!enemyOrigin[0] && !enemyOrigin[1] && !enemyOrigin[2])
+		{
+			VectorCopy(bs->currentEnemy->client->ps.origin, enemyOrigin);
+		}
+		VectorSubtract(enemyOrigin, bs->origin, enemyDelta);
+		if (VectorLengthSquared(enemyDelta) <= NEWBOTAI_COMBAT_WAYPOINT_SEPARATION_SQ)
 		{
 			return qfalse;
 		}
@@ -15039,7 +15051,7 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 				useTheForce = 1;
 				forceHostile = 1;
 			}
-			else if ((bs->cur_ps.fd.forcePowersKnown & (1 << FP_LIGHTNING)) && bs->cur_ps.fd.forcePowerLevel[FP_LIGHTNING] <= FORCE_LEVEL_2 && bs->frame_Enemy_Len >= BotGetLightningStartDistance() && bs->frame_Enemy_Len < BotGetLightningMaxDistance() && level.clients[bs->client].ps.fd.forcePower > 50 && InFieldOfVision(bs->viewangles, 50, a_fo))
+			else if ((bs->cur_ps.fd.forcePowersKnown & (1 << FP_LIGHTNING)) && bs->cur_ps.fd.forcePowerLevel[FP_LIGHTNING] <= FORCE_LEVEL_2 && bs->frame_Enemy_Len >= BotGetLightningStartDistance() && bs->frame_Enemy_Len <= BotGetLightningMaxDistance() && level.clients[bs->client].ps.fd.forcePower > 50 && InFieldOfVision(bs->viewangles, 50, a_fo))
 			{ //only lightning level 2, and only from the configured range out; point-blank zaps waste force on level-3's short arc
 				level.clients[bs->client].ps.fd.forcePowerSelected = FP_LIGHTNING;
 				useTheForce = 1;
