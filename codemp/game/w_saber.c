@@ -6920,11 +6920,6 @@ qboolean saberKnockOutOfHand(gentity_t *saberent, gentity_t *saberOwner, vec3_t 
 	{
 		return qfalse;
 	}
-	if (saberOwner->r.svFlags & SVF_BOT)
-	{
-		return qfalse;
-	}
-
 	saberOwner->client->ps.saberInFlight = qtrue;
 	saberOwner->client->ps.saberEntityState = 1;
 
@@ -7037,6 +7032,10 @@ qboolean saberCheckKnockdown_DuelLoss(gentity_t *saberent, gentity_t *saberOwner
 			disarmChance += other->client->saber[1].disarmBonus;
 		}
 	}
+	if ((saberOwner->r.svFlags & SVF_BOT))
+	{
+		return qfalse;
+	}
 	if ( Q_irand( 0, disarmChance ) )
 	{
 		return saberKnockOutOfHand(saberent, saberOwner, dif);
@@ -7128,6 +7127,10 @@ qboolean saberCheckKnockdown_BrokenParry(gentity_t *saberent, gentity_t *saberOw
 				disarmChance += other->client->saber[1].disarmBonus;
 			}
 		}
+		if ((saberOwner->r.svFlags & SVF_BOT))
+		{
+			return qfalse;
+		}
 		if ( Q_irand( 0, disarmChance ) )
 		{
 			return saberKnockOutOfHand(saberent, saberOwner, dif);
@@ -7146,11 +7149,6 @@ qboolean saberCheckKnockdown_Smashed(gentity_t *saberent, gentity_t *saberOwner,
 	{
 		return qfalse;
 	}
-	if (saberOwner->r.svFlags & SVF_BOT)
-	{
-		return qfalse;
-	}
-
 	if (!saberOwner->client->ps.saberInFlight)
 	{ //can only do this if the saber is already actually in flight
 		return qfalse;
@@ -7161,12 +7159,20 @@ qboolean saberCheckKnockdown_Smashed(gentity_t *saberent, gentity_t *saberOwner,
 		&& other->client
 		&& BG_InExtraDefenseSaberMove( other->client->ps.saberMove ) )
 	{ //make sure the blow was strong enough
+		if (saberOwner->r.svFlags & SVF_BOT)
+		{
+			return qfalse;
+		}
 		saberKnockDown(saberent, saberOwner, other);
 		return qtrue;
 	}
 
 	if (damage > 10)
 	{ //make sure the blow was strong enough
+		if (saberOwner->r.svFlags & SVF_BOT)
+		{
+			return qfalse;
+		}
 		saberKnockDown(saberent, saberOwner, other);
 		return qtrue;
 	}
@@ -7186,11 +7192,6 @@ qboolean saberCheckKnockdown_Thrown(gentity_t *saberent, gentity_t *saberOwner, 
 	{
 		return qfalse;
 	}
-	if (saberOwner->r.svFlags & SVF_BOT)
-	{
-		return qfalse;
-	}
-
 	if (!SaberSPStyle(saberOwner) && (g_tweakSaber.integer & ST_REDUCE_SABERDROP)) //test..
 		return qfalse; //Dont do saberdrops for idle STs either i guess..
 
@@ -7209,6 +7210,10 @@ qboolean saberCheckKnockdown_Thrown(gentity_t *saberent, gentity_t *saberOwner, 
 
 	if (tossIt)
 	{
+		if (saberOwner->r.svFlags & SVF_BOT)
+		{
+			return qfalse;
+		}
 		saberKnockDown(saberent, saberOwner, other);
 		return qtrue;
 	}
