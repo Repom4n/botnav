@@ -1103,6 +1103,11 @@ int BotAISetupClient(int client, struct bot_settings_s *settings, qboolean resta
 	memcpy(&bs->settings, settings, sizeof(bot_settings_t));
 
 	bs->client = client; //need to know the client number before doing personality stuff
+	bs->randomStrafeDir = 0;
+	bs->randomStrafeMode = 0;
+	bs->randomStrafeEndTime = 0;
+	bs->gripkickRestackDir = 0;
+	bs->escapeYawOverrideUntil = 0;
 
 	//initialize weapon weight defaults..
 	bs->botWeaponWeights[WP_NONE] = 0;
@@ -1219,6 +1224,11 @@ void BotResetState(bot_state_t *bs) {
 	bs->client = client;
 	bs->entitynum = entitynum;
 	bs->entergame_time = entergame_time;
+	bs->randomStrafeDir = 0;
+	bs->randomStrafeMode = 0;
+	bs->randomStrafeEndTime = 0;
+	bs->gripkickRestackDir = 0;
+	bs->escapeYawOverrideUntil = 0;
 	bs->lastWPIndex = -1; //no waypoint memory yet (0 is a valid index, so memset isn't enough)
 	bs->enemyWaypointFallbackIndex = -1;
 	bs->enemyWaypointFallbackEnemyNum = -1;
