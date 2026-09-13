@@ -7767,6 +7767,7 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 		bs->gripkickJerkDirection = 0;
 		bs->gripkickJerkYawOffset = 0.0f;
 		bs->gripkickJerkPitch = -70.0f;
+		bs->gripkickPitchVariant = Q_irand(0, 1);
 		bs->gripkickAttemptTime = 0;
 		bs->gripkickDwellUntil = 0;
 		bs->gripkickLookDownUntil = 0;
@@ -7926,9 +7927,16 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 			//Each jerk independently rolls its own random yaw direction/magnitude - no
 			//accumulation across jerks within the same phase.
 			bs->gripkickJerkYawOffset = (float)(bs->gripkickJerkDirection * yawMagnitude);
-			//Each upward jerk rolls its own pitch in the 45-80 degree range so the swing
-			//height of the gripped target varies jerk to jerk.
-			bs->gripkickJerkPitch = -(float)Q_irand(45, 80);
+			//Split upward jerk pitch per grip sequence:
+			//variant A uses 20-60, variant B uses 50-90.
+			if (bs->gripkickPitchVariant == 0)
+			{
+				bs->gripkickJerkPitch = -(float)Q_irand(20, 60);
+			}
+			else
+			{
+				bs->gripkickJerkPitch = -(float)Q_irand(50, 90);
+			}
 			bs->ideal_viewangles[YAW] = a_fo[YAW] + bs->gripkickJerkYawOffset;
 			bs->ideal_viewangles[PITCH] = bs->gripkickJerkPitch;
 			trap->EA_Move(bs->client, vec3_origin, 0);
@@ -7954,6 +7962,17 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 			trap->EA_Move(bs->client, vec3_origin, 0);
 		}
 		else if (targetInFront) {
+			if (enemyOnTopOfUs || weAreOnTopOfEnemy)
+			{
+				//Vertical stacking breaks forward-kick reliability in both directions:
+				//if they are on us, step out from underneath; if we are on them, step
+				//off before any flipkick attempt.
+				bs->ideal_viewangles[YAW] = a_fo[YAW];
+				bs->ideal_viewangles[PITCH] = 89;
+				trap->EA_Move(bs->client, vec3_origin, 0);
+				trap->EA_MoveBack(bs->client);
+				goto gripkick_finalize;
+			}
 			//Once the target is in the forward kick cone, lock straight to them, look down,
 			//and briefly hold still so grip drag can settle the target into flipkick range.
 			bs->ideal_viewangles[YAW] = a_fo[YAW];
@@ -8022,6 +8041,7 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 		}
 	}
 
+gripkick_finalize:
 	bs->ideal_viewangles[YAW] = AngleNormalize360(bs->ideal_viewangles[YAW]); //Normalize the angles
 	bs->ideal_viewangles[PITCH] = AngleNormalize360(bs->ideal_viewangles[PITCH]);
 
@@ -8039,6 +8059,7 @@ void NewBotAI_Draining(bot_state_t *bs)
 	const qboolean safeDrainVsThrow = NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bs);
 	const qboolean jumpDrainThreat = NewBotAI_ShouldJumpDrainVsSaberThrow(bs);
 	const qboolean flipkickDrainEscape = (safeDrainVsThrow && NewBotAI_ShouldPreferFlipkickOverThrow(bs)) ? qtrue : qfalse;
+	const qboolean maintainDrainlockTaps = (NewBotAI_IsPullkickDrainWindow(bs) || NewBotAI_IsDrainlockAdvantage(bs)) ? qtrue : qfalse;
 	qboolean shouldHold = qfalse;
 	int holdMs = 0;
 
@@ -8046,14 +8067,14 @@ void NewBotAI_Draining(bot_state_t *bs)
 	drainTapTargetTicks = NewBotAI_GetDrainTapTargetTicks(bs);
 	healDrainlock = NewBotAI_ShouldHealDrainlock(bs);
 
-	if (ourHealth < 100 && hisForce && enemyVisible)
+	if ((ourHealth < 100 || maintainDrainlockTaps) && hisForce && enemyVisible)
 	{
 		//Ordinary health-biased bots just want minimal drain taps to top their own health off,
 		//so they release the drain key almost immediately (one think) instead of holding it
 		//down. Heal-driven drainlocks and force-biased pullkick setups both hold exactly long
 		//enough for the computed whole-tick FP removal, not a moment longer.
 		if (drainTapTargetTicks > 0 &&
-			(healDrainlock || NewBotAI_IsPullkickDrainWindow(bs)))
+			(healDrainlock || maintainDrainlockTaps))
 		{
 			holdMs = (drainTapTargetTicks * NEWBOTAI_DRAIN_TICK_MSEC) + 1; //hold through the last full drain tick
 		}
@@ -8074,11 +8095,12 @@ void NewBotAI_Draining(bot_state_t *bs)
 	{
 		shouldHold = qtrue;
 	}
-	else if (healDrainlock && ourHealth < 100 && hisForce && enemyVisible)
+	else if ((healDrainlock || maintainDrainlockTaps) && hisForce && enemyVisible)
 	{
 		//If a heal-driven deep-drain tap was truncated by our current FP pool, keep holding
 		//drain so we immediately resume channeling as force regenerates instead of breaking
-		//the drainlock into a different action before we're topped off.
+		//the drainlock into a different action before we're topped off (or while keeping
+		//a pullkick drainlock loop active at full health).
 		shouldHold = qtrue;
 	}
 
@@ -8106,7 +8128,7 @@ void NewBotAI_Draining(bot_state_t *bs)
 
 	//Between drain taps, or as soon as the enemy is drained low enough to be pullable, go for
 	//the pullkick follow-up instead of standing in the drain.
-	if (!healDrainlock &&
+	if (!healDrainlock && !maintainDrainlockTaps &&
 		(flipkickDrainEscape || hisForce < 20 || bs->drainHoldTime <= level.time) &&
 		!jumpDrainThreat)
 	{
@@ -8907,7 +8929,10 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 				return;
 			}
 
-			if ((g_entities[bs->client].client->ps.saberMove == LS_NONE || g_entities[bs->client].client->ps.saberMove == LS_READY) && bs->frame_Enemy_Len < 256 && ((NewBotAI_GetTimeToInRange(bs, 75, 800) < 800) || bs->frame_Enemy_Len < 128)) {
+			if ((g_entities[bs->client].client->ps.saberMove == LS_NONE || g_entities[bs->client].client->ps.saberMove == LS_READY) &&
+				bs->fanPhase != FAN_PHASE_INACTIVE &&
+				bs->frame_Enemy_Len < 256 &&
+				((NewBotAI_GetTimeToInRange(bs, 75, 800) < 800) || bs->frame_Enemy_Len < 128)) {
 				if (g_entities[bs->client].health > 40) {
 					//See if they can't saberthrow?
 					//Com_Printf("Their torso time is %i\n", bs->currentEnemy->client->ps.torsoTimer);
@@ -12568,6 +12593,7 @@ int NewBotAI_GetGrip(bot_state_t *bs) {
 	const int gripForceRequired = forcePowerNeeded[bs->cur_ps.fd.forcePowerLevel[FP_GRIP]][FP_GRIP];
 	const int saberThrowCounterMinForce = 50;
 	const int saberThrowCounterMinForceLead = 20;
+	const int healthBiasThreshold = BotGetHealthBiasThreshold();
 	const int ourHealth = g_entities[bs->client].health, hisHealth = bs->currentEnemy->health, ourForce = bs->cur_ps.fd.forcePower, hisForce = bs->currentEnemy->client->ps.fd.forcePower;
 	const int enemySaberEntNum = bs->currentEnemy->client->ps.saberEntityNum;
 	const qboolean enemyKnockedDown = BG_InKnockDown(bs->currentEnemy->client->ps.legsAnim) ? qtrue : qfalse;
@@ -12596,6 +12622,15 @@ int NewBotAI_GetGrip(bot_state_t *bs) {
 	if (ourForce < saberThrowCounterMinForce || ourForce <= gripForceRequired)
 		return 0;
 
+	if (ourHealth <= healthBiasThreshold &&
+		!(g_forcePowerDisable.integer & (1 << FP_HEAL)) &&
+		(bs->cur_ps.fd.forcePowersKnown & (1 << FP_HEAL)) &&
+		ourForce >= 50)
+	{
+		//Low-health healing takes precedence over committing into grip.
+		return 0;
+	}
+
 	if (bs->cur_ps.weaponstate == WEAPON_CHARGING_ALT)
 		weight *= 0.9f; //Dont cancel a charge unless its important
 
@@ -12620,14 +12655,21 @@ int NewBotAI_GetGrip(bot_state_t *bs) {
 	//An enemy who has already committed their saber to a throw is wide open to a gripkick.
 	//As long as they are still inside grip range and we are healthy enough to risk it,
 	//weight the counter heavily instead of waiting for the old dominant-health threshold.
-	if (!enemyKnockedDown &&
-		enemyCommittedSaberThrow &&
-		!bs->cur_ps.saberInFlight &&
-		!NewBotAI_HasDroppedOwnSaber(bs) &&
-		bs->frame_Enemy_Len <= MAX_GRIP_DISTANCE &&
-		ourHealth > 20 &&
-		ourForce > hisForce + saberThrowCounterMinForceLead)
-		return 90 + aggressionBonus;
+	if (!enemyKnockedDown && enemyCommittedSaberThrow &&
+		!bs->cur_ps.saberInFlight && !NewBotAI_HasDroppedOwnSaber(bs) &&
+		bs->frame_Enemy_Len <= MAX_GRIP_DISTANCE)
+	{
+		//Against committed saber throws: if we are too weak, play the safe retreat/drain
+		//game; otherwise heavily favor closing and gripkicking.
+		if (ourHealth <= 30 || ourForce < 45 || ourForce <= hisForce + 5)
+		{
+			return 0;
+		}
+		if (ourForce > hisForce + saberThrowCounterMinForceLead)
+		{
+			return (bs->frame_Enemy_Len < 240 ? 145 : 130) + aggressionBonus;
+		}
+	}
 
 	if (ourForce > 65 && ourHealth > 55 && hisHealth < 80)
 		return 45 + aggressionBonus;
@@ -12872,7 +12914,14 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 	lightningWeight = NewBotAI_GetLightningWeight(bs);
 	//doNothingWeight = NewBotAI_GetWait(bs);
 
-	if (pushWeight > pullWeight && pushWeight > drainWeight && pushWeight > gripWeight && pushWeight > minWeight) {
+	if (gripWeight > minWeight &&
+		gripWeight >= pushWeight && gripWeight >= drainWeight &&
+		(gripWeight >= pullWeight || (gripWeight + 15 >= pullWeight)))
+	{
+		level.clients[bs->client].ps.fd.forcePowerSelected = FP_GRIP;
+		useTheForce = qtrue;
+	}
+	else if (pushWeight > pullWeight && pushWeight > drainWeight && pushWeight > gripWeight && pushWeight > minWeight) {
 		level.clients[bs->client].ps.fd.forcePowerSelected = FP_PUSH;
 		useTheForce = qtrue;
 
@@ -13906,7 +13955,27 @@ int NewBotAI_ScanForEnemies(bot_state_t* bs) {
 		lowHangingFruitDistance > 0.0f) ? qtrue : qfalse;
 
 	if (bs->currentEnemy) { //only switch to a new enemy if he's significantly closer
-		hasEnemyDist = 0;
+		if (PassStandardEnemyChecks(bs, bs->currentEnemy))
+		{
+			float normalizedHealth;
+			VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, a);
+			hasEnemyDist = VectorLength(a);
+			normalizedHealth = 0.25f + (bs->currentEnemy->health - 1) * (1.0f - 0.25f) / (100.0f - 1.0f);
+			normalizedHealth += (100 - ourHealth) * 0.005f;
+			if (normalizedHealth > 1.0f)
+			{
+				normalizedHealth = 1.0f;
+			}
+			if (targetMode == NEWBOTAI_TARGET_PREFER_HUMANS)
+			{
+				normalizedHealth = 1.0f;
+			}
+			hasEnemyDist *= normalizedHealth;
+		}
+		else
+		{
+			hasEnemyDist = 0;
+		}
 	}
 
 	if (bs->currentEnemy && bs->currentEnemy->client && bs->currentEnemy->client->ps.isJediMaster) { //The Jedi Master must die.
@@ -14334,6 +14403,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		bs->gripkickKickCount = 0;
 		bs->gripkickJerkDirection = 0;
 		bs->gripkickJerkPitch = 0.0f;
+		bs->gripkickPitchVariant = 0;
 		bs->gripkickAttemptTime = 0;
 		bs->gripkickDwellUntil = 0;
 		bs->gripkickLookDownUntil = 0;
@@ -15145,8 +15215,7 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 		}
 	}
 
-	if (bs->enemySeenTime < level.time || !bs->frame_Enemy_Vis || !bs->currentEnemy ||
-		(bs->currentEnemy /*&& bs->cur_ps.weapon == WP_SABER && bs->frame_Enemy_Len > 300*/))
+	if (bs->enemySeenTime < level.time || !bs->frame_Enemy_Vis || !bs->currentEnemy)
 	{
 		enemy = ScanForEnemies(bs);
 
