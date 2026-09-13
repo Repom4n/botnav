@@ -15925,14 +15925,13 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 			useTheForce = 0;
 		}
 
-		if (hasDroppedOwnSaber)
+		if (hasDroppedOwnSaber && !enemySaberThreatImminent)
 		{
 			//saber knocked away: the engine only recalls the saber on a fresh +attack edge, and
 			//a held button counts as one press forever. Toggle a genuine press/release edge -
 			//held 20ms, released 5ms - so repeated +attack inputs keep firing until the saber
 			//returns, instead of a single held button that only counts once.
 			useTheForce = 0;
-			bs->doAttack = 1;
 			bs->doAltAttack = 0;
 			if (bs->saberRetrieveSpamTime <= level.time)
 			{
