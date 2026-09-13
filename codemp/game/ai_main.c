@@ -8924,9 +8924,6 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 				return;
 			}
 
-			//No non-fan starts for blue/yellow.
-			return;
-
 			//Mid-swing/transition with the enemy close and closing: keep the attack button
 			//held so the engine's saber combo chains straight into the next swing the
 			//moment weaponTime clears. The old LS_NONE/LS_READY-only gate below released
