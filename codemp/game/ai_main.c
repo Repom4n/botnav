@@ -6972,6 +6972,22 @@ static int NewBotAI_GetEnemyTotalHealth(bot_state_t *bs)
 	return bs->currentEnemy->health + bs->currentEnemy->client->ps.stats[STAT_ARMOR];
 }
 
+static qboolean NewBotAI_ShouldSuppressDrainlockSaberThrow(bot_state_t *bs)
+{
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return qfalse;
+	}
+
+	if (bs->cur_ps.fd.forceSide != FORCE_DARKSIDE)
+	{
+		return qfalse;
+	}
+
+	return ((NewBotAI_IsPullkickDrainWindow(bs) || NewBotAI_IsDrainlockAdvantage(bs)) &&
+		NewBotAI_GetEnemyTotalHealth(bs) > 24) ? qtrue : qfalse;
+}
+
 static int NewBotAI_GetTotalHealthDelta(bot_state_t *bs)
 {
 	int ourTotalHealth;
@@ -8249,7 +8265,6 @@ void NewBotAI_SaberThrowing(bot_state_t* bs)
 	const int enemyHealth = bs->currentEnemy ? bs->currentEnemy->health : 0;
 	const int enemyForce = bs->currentEnemy && bs->currentEnemy->client ?
 		bs->currentEnemy->client->ps.fd.forcePower : 0;
-	const int enemyTotalHealth = NewBotAI_GetEnemyTotalHealth(bs);
 
 	if (bs->saberThrowStartTime <= 0)
 		bs->saberThrowStartTime = level.time;
@@ -8262,10 +8277,7 @@ void NewBotAI_SaberThrowing(bot_state_t* bs)
 		return;
 	}
 
-	if (bs->currentEnemy && bs->currentEnemy->client &&
-		bs->cur_ps.fd.forceSide == FORCE_DARKSIDE &&
-		(NewBotAI_IsPullkickDrainWindow(bs) || NewBotAI_IsDrainlockAdvantage(bs)) &&
-		enemyTotalHealth > 24)
+	if (NewBotAI_ShouldSuppressDrainlockSaberThrow(bs))
 	{
 		return;
 	}
@@ -12991,9 +13003,7 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 	//guaranteed-hit setup for a throw they can dodge/block. The only exception is the
 	//throw that is a very clear kill: otherwise keep the saber in hand and cash the
 	//force advantage in with drain taps and pullkicks instead of extending the throw.
-	if (bs->cur_ps.fd.forceSide == FORCE_DARKSIDE &&
-		(NewBotAI_IsPullkickDrainWindow(bs) || NewBotAI_IsDrainlockAdvantage(bs)) &&
-		enemyTotalHealth > 24)
+	if (NewBotAI_ShouldSuppressDrainlockSaberThrow(bs))
 	{
 		return 0;
 	}
@@ -13238,7 +13248,8 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 
 	//A free flipkick always beats holding/charging a throw once the enemy has closed
 	//into kick range - otherwise the two bots just collide while we sit on the charge.
-	if (!drainlockAdvantage && !pullkickDrainWindow &&
+	if (!NewBotAI_ShouldSuppressDrainlockSaberThrow(bs) &&
+		!drainlockAdvantage && !pullkickDrainWindow &&
 		NewBotAI_GetSaberthrow(bs) > minWeight && !NewBotAI_ShouldPreferFlipkickOverThrow(bs)) {
 		trap->EA_Alt_Attack(bs->client);
 		//Pre-select pull or push so it fires as the saber approaches the target. Pull when
