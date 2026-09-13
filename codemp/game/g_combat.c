@@ -2227,7 +2227,7 @@ static qboolean G_CalcDuelNearOpponentRespawn(gentity_t *attacker, vec3_t outOri
 			end[2] -= 128.0f;
 
 			trap->Trace(&tr, start, mins, maxs, end, ENTITYNUM_NONE, MASK_PLAYERSOLID, qfalse, 0, 0);
-			if (tr.allsolid || tr.startsolid)
+			if (tr.allsolid || tr.startsolid || tr.fraction >= 1.0f)
 			{
 				continue;
 			}

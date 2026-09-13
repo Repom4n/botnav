@@ -11777,10 +11777,15 @@ static void NewBotAI_ApplySidewaysDrainRoll(bot_state_t *bs, qboolean moveBack)
 
 static qboolean NewBotAI_ShouldUseSafePushWindowWhilePulled(bot_state_t *bs)
 {
-	const qboolean pullActive = (bs && (bs->cur_ps.forceHandExtend == HANDEXTEND_FORCEPULL ||
-		bs->cur_ps.powerups[PW_PULL] > level.time)) ? qtrue : qfalse;
+	qboolean pullActive;
 
-	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client || !pullActive)
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return qfalse;
+	}
+	pullActive = (bs->cur_ps.forceHandExtend == HANDEXTEND_FORCEPULL ||
+		bs->cur_ps.powerups[PW_PULL] > level.time) ? qtrue : qfalse;
+	if (!pullActive)
 	{
 		return qfalse;
 	}
