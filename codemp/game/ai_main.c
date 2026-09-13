@@ -12049,10 +12049,23 @@ static void NewBotAI_BlockAccidentalSaberSpecialMoves(bot_state_t *bs)
 		return;
 	}
 
-	cmd->rightmove = 0;
-	cmd->upmove = 0;
-	bs->forceMove_Right = 0;
-	bs->forceMove_Up = 0;
+	if (bs->forceMove_Right)
+	{
+		bs->forceMove_Right = 0;
+	}
+	else
+	{
+		cmd->rightmove = 0;
+	}
+
+	if (bs->forceMove_Up)
+	{
+		bs->forceMove_Up = 0;
+	}
+	else
+	{
+		cmd->upmove = 0;
+	}
 }
 
 static int BotGetStrafeFrequencyPercent(void)
@@ -13079,6 +13092,7 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 {
 	vec3_t a_fo;
 	qboolean useTheForce = qfalse;
+	qboolean firedImmediatePull = qfalse;
 	int pushWeight, pullWeight, lightningWeight, drainWeight, gripWeight;//, doNothingWeight;
 	int minWeight = 0;
 	const qboolean drainlockAdvantage = NewBotAI_IsDrainlockAdvantage(bs);
@@ -13142,6 +13156,8 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 				bs->frame_Enemy_Len <= NEWBOTAI_IMMEDIATE_FLIPKICK_RANGE &&
 				NewBotAI_IsFlipkickSetupReady(bs))
 			{
+				trap->EA_ForcePower(bs->client);
+				firedImmediatePull = qtrue;
 				NewBotAI_Flipkick(bs);
 			}
 			break;
@@ -13177,7 +13193,11 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 		if (NewBotAI_IsPullkickOpportunity(bs) &&
 			bs->frame_Enemy_Len <= NEWBOTAI_IMMEDIATE_FLIPKICK_RANGE &&
 			NewBotAI_IsFlipkickSetupReady(bs))
+		{
+			trap->EA_ForcePower(bs->client);
+			firedImmediatePull = qtrue;
 			NewBotAI_Flipkick(bs);
+		}
 
 		//trap->Print("Pulling -- Pull: %i, Push: %i, Drain: %i, Grip: %i\n", pullWeight, pushWeight, drainWeight, gripWeight);
 	}
@@ -13251,7 +13271,9 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 		}
 	}
 
-	if (useTheForce && (level.framenum % 2) && (!bs->currentEnemy->client->invulnerableTimer || (bs->currentEnemy->client->invulnerableTimer <= level.time)))
+	if (!firedImmediatePull &&
+		useTheForce && (level.framenum % 2) &&
+		(!bs->currentEnemy->client->invulnerableTimer || (bs->currentEnemy->client->invulnerableTimer <= level.time)))
 		trap->EA_ForcePower(bs->client);
 }
 
