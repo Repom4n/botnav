@@ -1193,6 +1193,8 @@ void BotResetState(bot_state_t *bs) {
 	bs->entitynum = entitynum;
 	bs->entergame_time = entergame_time;
 	bs->lastWPIndex = -1; //no waypoint memory yet (0 is a valid index, so memset isn't enough)
+	bs->enemyWaypointFallbackIndex = -1;
+	bs->enemyWaypointFallbackEnemyNum = -1;
 	//reset several states
 	if (bs->ms) trap->BotResetMoveState(bs->ms);
 	if (bs->gs) trap->BotResetGoalState(bs->gs);
@@ -1499,6 +1501,61 @@ float TotalTrailDistance(int start, int end, bot_state_t *bs)
 	}
 
 	return distancetotal;
+}
+
+static qboolean NewBotAI_SelectWaypointDirectionTowardTarget(bot_state_t *bs, int fromIndex, int targetIndex)
+{
+	const int forwardIndex = fromIndex + 1;
+	const int backwardIndex = fromIndex - 1;
+	float bestForwardTrail = -1.0f;
+	float bestBackwardTrail = -1.0f;
+	int i;
+	qboolean forwardLinked = qfalse;
+	qboolean backwardLinked = qfalse;
+
+	if (!bs || fromIndex < 0 || fromIndex >= gWPNum || targetIndex < 0 || targetIndex >= gWPNum ||
+		!gWPArray[fromIndex] || !gWPArray[fromIndex]->inuse ||
+		!gWPArray[targetIndex] || !gWPArray[targetIndex]->inuse)
+	{
+		return qfalse;
+	}
+
+	for (i = 0; i < gWPArray[fromIndex]->neighbornum; i++)
+	{
+		const int neighborIndex = gWPArray[fromIndex]->neighbors[i].num;
+		if (neighborIndex == forwardIndex)
+		{
+			forwardLinked = qtrue;
+		}
+		else if (neighborIndex == backwardIndex)
+		{
+			backwardLinked = qtrue;
+		}
+	}
+
+	if (forwardLinked && forwardIndex >= 0 && forwardIndex < gWPNum &&
+		gWPArray[forwardIndex] && gWPArray[forwardIndex]->inuse)
+	{
+		bestForwardTrail = TotalTrailDistance(forwardIndex, targetIndex, bs);
+	}
+	if (backwardLinked && backwardIndex >= 0 && backwardIndex < gWPNum &&
+		gWPArray[backwardIndex] && gWPArray[backwardIndex]->inuse)
+	{
+		bestBackwardTrail = TotalTrailDistance(backwardIndex, targetIndex, bs);
+	}
+
+	if (bestForwardTrail >= 0.0f && (bestBackwardTrail < 0.0f || bestForwardTrail <= bestBackwardTrail))
+	{
+		bs->wpDirection = 0;
+		return qtrue;
+	}
+	if (bestBackwardTrail >= 0.0f)
+	{
+		bs->wpDirection = 1;
+		return qtrue;
+	}
+
+	return qfalse;
 }
 
 //see if there's a route shorter than our current one to get
@@ -6915,6 +6972,7 @@ static qboolean NewBotAI_CanAttemptFlipkick(bot_state_t *bs)
 // grip a short, human-like window to build up speed before any bot mistake-bias escape
 // weighting applies.
 #define NEWBOTAI_GRIP_NO_ESCAPE_WINDOW_MS 100
+#define NEWBOTAI_GRIPKICK_LOOKDOWN_SETTLE_MS 220
 
 //How long (ms) a flipkick attempt keeps toggling fresh jump presses after the initial
 //jump. This was raised from the original 350 to 500, and that extra time outlived the
@@ -7896,15 +7954,14 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 			trap->EA_Move(bs->client, vec3_origin, 0);
 		}
 		else if (targetInFront) {
-			const int gripkickLookDownSettleMs = 220;
 			//Once the target is in the forward kick cone, lock straight to them, look down,
 			//and briefly hold still so grip drag can settle the target into flipkick range.
 			bs->ideal_viewangles[YAW] = a_fo[YAW];
 			bs->ideal_viewangles[PITCH] = 89;
 			trap->EA_Move(bs->client, vec3_origin, 0);
-			if (bs->gripkickLookDownUntil <= level.time)
+			if (bs->gripkickLookDownUntil <= 0)
 			{
-				bs->gripkickLookDownUntil = level.time + gripkickLookDownSettleMs;
+				bs->gripkickLookDownUntil = level.time + NEWBOTAI_GRIPKICK_LOOKDOWN_SETTLE_MS;
 			}
 			if (bs->gripkickLookDownUntil <= level.time && bs->frame_Enemy_Len <= 130)
 			{
@@ -14262,6 +14319,12 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 
 	bs->enemySeenTime = level.time + ENEMY_FORGET_MS;
 	bs->frame_Enemy_Len = NewBotAI_GetDist(bs);
+	if (!bs->currentEnemy || bs->enemyWaypointFallbackEnemyNum != bs->currentEnemy->s.number)
+	{
+		bs->enemyWaypointFallbackIndex = -1;
+		bs->enemyWaypointFallbackTime = 0;
+		bs->enemyWaypointFallbackEnemyNum = bs->currentEnemy ? bs->currentEnemy->s.number : -1;
+	}
 	bs->combatNavHoldUntil = level.time + 1500;
 	if (!(bs->cur_ps.fd.forcePowersActive & (1 << FP_GRIP)))
 	{
@@ -14280,6 +14343,9 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	if (bs->currentEnemy != oldEnemy)
 	{
 		bs->pullKickJumpTime = 0;
+		bs->enemyWaypointFallbackIndex = -1;
+		bs->enemyWaypointFallbackTime = 0;
+		bs->enemyWaypointFallbackEnemyNum = bs->currentEnemy ? bs->currentEnemy->s.number : -1;
 	}
 	if (!bs->cur_ps.saberInFlight)
 		bs->saberThrowStartTime = 0;
@@ -15016,61 +15082,58 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 
 			//If we have a live objective or enemy, keep waypoint direction ordered toward
 			//that target so we don't bounce between a local triangle of nearby points.
-			if (bs->wpDestination && gWPArray[wp] && gWPArray[wp]->inuse)
+			if (bs->wpDestination &&
+				bs->wpDestination->index >= 0 && bs->wpDestination->index < gWPNum &&
+				gWPArray[bs->wpDestination->index] && gWPArray[bs->wpDestination->index]->inuse &&
+				gWPArray[wp] && gWPArray[wp]->inuse)
 			{
-				const int forwardIndex = wp + 1;
-				const int backwardIndex = wp - 1;
-				float forwardTrail = -1.0f;
-				float backwardTrail = -1.0f;
-
-				if (forwardIndex >= 0 && forwardIndex < gWPNum &&
-					gWPArray[forwardIndex] && gWPArray[forwardIndex]->inuse)
-				{
-					forwardTrail = TotalTrailDistance(forwardIndex, bs->wpDestination->index, bs);
-				}
-				if (backwardIndex >= 0 && backwardIndex < gWPNum &&
-					gWPArray[backwardIndex] && gWPArray[backwardIndex]->inuse)
-				{
-					backwardTrail = TotalTrailDistance(backwardIndex, bs->wpDestination->index, bs);
-				}
-
-				if (forwardTrail >= 0.0f && (backwardTrail < 0.0f || forwardTrail <= backwardTrail))
-				{
-					bs->wpDirection = 0;
-				}
-				else if (backwardTrail >= 0.0f)
-				{
-					bs->wpDirection = 1;
-				}
+				NewBotAI_SelectWaypointDirectionTowardTarget(bs, wp, bs->wpDestination->index);
 			}
 			else if (bs->currentEnemy && bs->currentEnemy->client && gWPArray[wp] && gWPArray[wp]->inuse)
 			{
-				const int forwardIndex = wp + 1;
-				const int backwardIndex = wp - 1;
-				float forwardDist = -1.0f;
-				float backwardDist = -1.0f;
-				vec3_t toEnemy;
+				int enemyWP = bs->currentEnemy->waypoint;
+				qboolean selectedDirection = qfalse;
+				if (enemyWP < 0 || enemyWP >= gWPNum || !gWPArray[enemyWP] || !gWPArray[enemyWP]->inuse)
+				{
+					enemyWP = -1;
+				}
+				if (enemyWP != -1)
+				{
+					selectedDirection = NewBotAI_SelectWaypointDirectionTowardTarget(bs, wp, enemyWP);
+				}
+				if (!selectedDirection)
+				{
+					if (bs->enemyWaypointFallbackIndex >= 0 &&
+						(bs->enemyWaypointFallbackIndex >= gWPNum ||
+						 !gWPArray[bs->enemyWaypointFallbackIndex] ||
+						 !gWPArray[bs->enemyWaypointFallbackIndex]->inuse))
+					{
+						bs->enemyWaypointFallbackIndex = -1;
+						bs->enemyWaypointFallbackTime = 0;
+					}
+					else if (bs->enemyWaypointFallbackIndex >= 0)
+					{
+						vec3_t enemyWpDelta;
+						VectorSubtract(gWPArray[bs->enemyWaypointFallbackIndex]->origin, bs->currentEnemy->client->ps.origin, enemyWpDelta);
+						if (VectorLengthSquared(enemyWpDelta) > (512.0f * 512.0f))
+						{
+							bs->enemyWaypointFallbackIndex = -1;
+							bs->enemyWaypointFallbackTime = 0;
+						}
+					}
 
-				if (forwardIndex >= 0 && forwardIndex < gWPNum &&
-					gWPArray[forwardIndex] && gWPArray[forwardIndex]->inuse)
-				{
-					VectorSubtract(gWPArray[forwardIndex]->origin, bs->currentEnemy->client->ps.origin, toEnemy);
-					forwardDist = VectorLengthSquared(toEnemy);
-				}
-				if (backwardIndex >= 0 && backwardIndex < gWPNum &&
-					gWPArray[backwardIndex] && gWPArray[backwardIndex]->inuse)
-				{
-					VectorSubtract(gWPArray[backwardIndex]->origin, bs->currentEnemy->client->ps.origin, toEnemy);
-					backwardDist = VectorLengthSquared(toEnemy);
-				}
+					if (bs->enemyWaypointFallbackTime <= level.time)
+					{
+						bs->enemyWaypointFallbackIndex = GetNearestVisibleWP(bs->currentEnemy->client->ps.origin, bs->currentEnemy->s.number);
+						bs->enemyWaypointFallbackTime = level.time +
+							((bs->enemyWaypointFallbackIndex == -1) ? 3000 : 1500);
+					}
 
-				if (forwardDist >= 0.0f && (backwardDist < 0.0f || forwardDist <= backwardDist))
-				{
-					bs->wpDirection = 0;
-				}
-				else if (backwardDist >= 0.0f)
-				{
-					bs->wpDirection = 1;
+					enemyWP = bs->enemyWaypointFallbackIndex;
+					if (enemyWP != -1)
+					{
+						selectedDirection = NewBotAI_SelectWaypointDirectionTowardTarget(bs, wp, enemyWP);
+					}
 				}
 			}
 

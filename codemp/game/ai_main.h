@@ -416,6 +416,9 @@ typedef struct bot_state_s
 	int					navObstacleUntil; // stay in waypoint nav mode until this time when an obstacle blocks path to enemy
 	int					combatNavHoldUntil; // remain in combat for 1500ms before returning to waypoint navigation
 	int					lastHurtTime;     // level.time when this bot last took damage (set in BotDamageNotification)
+	int					enemyWaypointFallbackIndex; // cached nearest visible waypoint for currentEnemy when enemy->waypoint is unavailable
+	int					enemyWaypointFallbackTime; // when enemyWaypointFallbackIndex should be refreshed
+	int					enemyWaypointFallbackEnemyNum; // enemy entity number associated with enemyWaypointFallbackIndex
 	vec3_t				combatStuckOrigin; // sampled combat position used to detect failing to make meaningful progress toward a target
 	int					combatStuckSince; // when combatStuckOrigin was sampled/reset
 	int					nextHopTime;      // level.time the next bot_hopfrequency-gated hop may fire (ambient/random or discretionary combat hop) - set to -1 after firing so the interval re-rolls only once we land again
