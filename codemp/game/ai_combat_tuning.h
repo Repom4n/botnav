@@ -69,9 +69,9 @@ static inline int NewBotAI_GetSaberThrowPTKBonus(
 }
 
 static inline int NewBotAI_GetPulledTowardEnemyPTKBonus(
-	int freePullkickWindow, float enemyDistance, int enemyHasSaber)
+	int freePullkickWindow, float enemyDistance)
 {
-	if (!enemyHasSaber || enemyDistance > 220.0f)
+	if (enemyDistance > 220.0f)
 	{
 		return 0;
 	}
@@ -95,14 +95,14 @@ static inline float NewBotAI_GetViewAngleAxisFactor(float factor, int isYawAxis,
 }
 
 static inline float NewBotAI_GetViewAngleAxisMaxChange(
-	float maxchange, float thinktime, int isYawAxis, int escapeYawOverrideActive)
+	float defaultAxisMaxchange, float thinktime, int isYawAxis, int escapeYawOverrideActive)
 {
 	if (isYawAxis && escapeYawOverrideActive)
 	{
 		return NEWBOTAI_TUNING_ESCAPE_YAW_SPEED * thinktime;
 	}
 
-	return maxchange * thinktime;
+	return defaultAxisMaxchange;
 }
 
 // Drainlock policy: the "drain" half comes first. Before the enemy is actually below the

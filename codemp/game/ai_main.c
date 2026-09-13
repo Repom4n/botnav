@@ -732,7 +732,8 @@ void BotChangeViewAngles(bot_state_t *bs, float thinktime) {
 	for (i = 0; i < 2; i++) {
 		const qboolean escapeYawOverrideActive = (i == YAW && bs->escapeYawOverrideUntil > level.time) ? qtrue : qfalse;
 		float axisFactor = NewBotAI_GetViewAngleAxisFactor(factor, i == YAW, escapeYawOverrideActive);
-		float axisMaxchange = NewBotAI_GetViewAngleAxisMaxChange(maxchange, thinktime, i == YAW, escapeYawOverrideActive);
+		const float defaultAxisMaxchange = maxchange * thinktime;
+		float axisMaxchange = NewBotAI_GetViewAngleAxisMaxChange(defaultAxisMaxchange, thinktime, i == YAW, escapeYawOverrideActive);
 
 		bs->viewangles[i] = AngleMod(bs->viewangles[i]);
 		bs->ideal_viewangles[i] = AngleMod(bs->ideal_viewangles[i]);
@@ -9563,25 +9564,9 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 		}
 		else
 		{
-		bs->combatAction = BOT_COMBAT_ACTION_RETREAT_DEFENSE;
-		if (bs->randomStrafeEndTime <= level.time)
-		{
-			NewBotAI_RollRandomStrafeOverlay(bs, 200, 600, qtrue);
-			bs->randomStrafeMode = 0;
-		}
-		if (bs->randomStrafeDir < 0)
-		{
-			NewBotAI_RetreatDiagonal(bs, qtrue);
-		}
-		else if (bs->randomStrafeDir > 0)
-		{
-			NewBotAI_RetreatDiagonal(bs, qfalse);
-		}
-		else
-		{
-			NewBotAI_RetreatStraight(bs);
-		}
-		return;
+			bs->combatAction = BOT_COMBAT_ACTION_RETREAT_DEFENSE;
+			NewBotAI_RetreatDiagonal(bs, (level.framenum & 1) ? qtrue : qfalse);
+			return;
 		}
 	}
 	else if (bs->conserveNextRollTime <= level.time)
@@ -11222,8 +11207,7 @@ static int NewBotAI_GetPTKWeight(bot_state_t *bs)
 	{
 		weight += NewBotAI_GetPulledTowardEnemyPTKBonus(
 			freePullkickWindow ? 1 : 0,
-			bs->frame_Enemy_Len,
-			1);
+			bs->frame_Enemy_Len);
 	}
 
 	//Pressed forward past our own thrown saber and now the closer, saberless one -
