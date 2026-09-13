@@ -13272,7 +13272,9 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 	}
 
 	if (!firedImmediatePull &&
-		useTheForce && (level.framenum % 2) &&
+		useTheForce &&
+		bs->currentEnemy && bs->currentEnemy->client &&
+		(level.framenum % 2) &&
 		(!bs->currentEnemy->client->invulnerableTimer || (bs->currentEnemy->client->invulnerableTimer <= level.time)))
 		trap->EA_ForcePower(bs->client);
 }

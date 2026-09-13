@@ -92,4 +92,9 @@ static inline int NewBotAI_ShouldBlockOrthogonalSaberSpecialInput(
 	return 1;
 }
 
+static inline int NewBotAI_ShouldIgnoreBotSaberLoss(int isBot, int noSaberDropEnabled)
+{
+	return (isBot && noSaberDropEnabled) ? 1 : 0;
+}
+
 #endif

@@ -23,6 +23,7 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
 #include "g_local.h"
 #include "bg_local.h"
 #include "w_saber.h"
+#include "ai_combat_tuning.h"
 #include "ai_main.h"
 #include "ghoul2/G2.h"
 
@@ -6873,8 +6874,9 @@ static qboolean BotShouldIgnoreSaberLoss(gentity_t *saberOwner)
 {
 	return (saberOwner &&
 		saberOwner->inuse &&
-		(saberOwner->r.svFlags & SVF_BOT) &&
-		bot_nosaberdrop.integer) ? qtrue : qfalse;
+		NewBotAI_ShouldIgnoreBotSaberLoss(
+			(saberOwner->r.svFlags & SVF_BOT) != 0,
+			bot_nosaberdrop.integer)) ? qtrue : qfalse;
 }
 
 void WP_SaberRemoveG2Model( gentity_t *saberent )
