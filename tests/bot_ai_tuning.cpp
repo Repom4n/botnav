@@ -20,7 +20,7 @@ BOOST_AUTO_TEST_CASE( drainlock_force_choice_prefers_pull_when_it_matches_or_bea
 		NewBotAI_GetDrainlockForceChoice( { 0, 1, 0, 70, 70, 40 } ),
 		NEWBOTAI_DRAINLOCK_FORCE_PULL );
 	BOOST_CHECK_EQUAL(
-		NewBotAI_GetDrainlockForceChoice( { 0, 0, 1, 90, 80, 10 } ),
+		NewBotAI_GetDrainlockForceChoice( { 0, 0, 1, 80, 80, 10 } ),
 		NEWBOTAI_DRAINLOCK_FORCE_PULL );
 }
 
@@ -31,7 +31,18 @@ BOOST_AUTO_TEST_CASE( drainlock_force_choice_falls_back_to_drain_when_pull_loses
 		NEWBOTAI_DRAINLOCK_FORCE_DRAIN );
 	BOOST_CHECK_EQUAL(
 		NewBotAI_GetDrainlockForceChoice( { 0, 0, 1, 90, 60, 40 } ),
-		NEWBOTAI_DRAINLOCK_FORCE_NONE );
+		NEWBOTAI_DRAINLOCK_FORCE_DRAIN );
+	BOOST_CHECK_EQUAL(
+		NewBotAI_GetDrainlockForceChoice( { 0, 0, 1, 90, 80, 10 } ),
+		NEWBOTAI_DRAINLOCK_FORCE_DRAIN );
+}
+
+BOOST_AUTO_TEST_CASE( saber_throw_immediate_hop_thresholds_match_tuning )
+{
+	BOOST_CHECK( NewBotAI_ShouldForceImmediateSaberThrowHop( 55.0f, 40.0f, 0, 3.0f ) );
+	BOOST_CHECK( !NewBotAI_ShouldForceImmediateSaberThrowHop( 75.0f, 20.0f, 1, 3.0f ) );
+	BOOST_CHECK( NewBotAI_ShouldForceImmediateSaberThrowHop( 75.0f, 20.0f, 1, 6.0f ) );
+	BOOST_CHECK( !NewBotAI_ShouldForceImmediateSaberThrowHop( 95.0f, 30.0f, 0, 8.0f ) );
 }
 
 BOOST_AUTO_TEST_CASE( accidental_special_guard_uses_effective_inputs )

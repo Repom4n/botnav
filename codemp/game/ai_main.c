@@ -744,8 +744,13 @@ void BotChangeViewAngles(bot_state_t *bs, float thinktime) {
 		diff = AngleDifference(bs->viewangles[i], bs->ideal_viewangles[i]);
 		disired_speed = diff * axisFactor;
 		bs->viewanglespeed[i] += (bs->viewanglespeed[i] - disired_speed);
-		if (bs->viewanglespeed[i] > axisMaxchange) bs->viewanglespeed[i] = axisMaxchange;
-		if (bs->viewanglespeed[i] < -axisMaxchange) bs->viewanglespeed[i] = -axisMaxchange;
+		if (bs->viewanglespeed[i] > 180) bs->viewanglespeed[i] = axisMaxchange;
+		if (bs->viewanglespeed[i] < -180) bs->viewanglespeed[i] = -axisMaxchange;
+		if (i == YAW && bs->escapeYawOverrideUntil > level.time)
+		{
+			if (bs->viewanglespeed[i] > axisMaxchange) bs->viewanglespeed[i] = axisMaxchange;
+			if (bs->viewanglespeed[i] < -axisMaxchange) bs->viewanglespeed[i] = -axisMaxchange;
+		}
 		anglespeed = bs->viewanglespeed[i];
 		if (anglespeed > axisMaxchange) anglespeed = axisMaxchange;
 		if (anglespeed < -axisMaxchange) anglespeed = -axisMaxchange;
@@ -11867,13 +11872,8 @@ static qboolean NewBotAI_ShouldJumpDrainVsSaberThrow(bot_state_t *bs)
 	}
 
 	timeToImpactMs = (forwardDist / saberSpeed) * 1000.0f;
-	forceImmediateHop = (timeToImpactMs <= 60.0f ||
-		forwardDist <= (isReturning ? 12.0f : 18.0f)) ? qtrue : qfalse;
-	if (bs->settings.skill >= 6.0f)
-	{
-		forceImmediateHop = (timeToImpactMs <= 80.0f ||
-			forwardDist <= (isReturning ? 16.0f : 24.0f)) ? qtrue : forceImmediateHop;
-	}
+	forceImmediateHop = NewBotAI_ShouldForceImmediateSaberThrowHop(
+		timeToImpactMs, forwardDist, isReturning, bs->settings.skill) ? qtrue : qfalse;
 
 	//Healthy bots can afford to keep pressing or repositioning against most throws instead
 	//of bunny-hopping the moment the saber is merely on line; only hop when the impact is

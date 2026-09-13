@@ -99,4 +99,23 @@ static inline int NewBotAI_ShouldIgnoreBotSaberLoss(int isBot, int noSaberDropEn
 	return (isBot && noSaberDropEnabled) ? 1 : 0;
 }
 
+static inline int NewBotAI_ShouldForceImmediateSaberThrowHop(
+	float timeToImpactMs, float forwardDist, int isReturning, float skill)
+{
+	if (timeToImpactMs <= 60.0f ||
+		forwardDist <= (isReturning ? 12.0f : 18.0f))
+	{
+		return 1;
+	}
+
+	if (skill >= 6.0f &&
+		(timeToImpactMs <= 80.0f ||
+		 forwardDist <= (isReturning ? 16.0f : 24.0f)))
+	{
+		return 1;
+	}
+
+	return 0;
+}
+
 #endif
