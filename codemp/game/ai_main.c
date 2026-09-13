@@ -15050,7 +15050,13 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 				useTheForce = 1;
 				forceHostile = 1;
 			}
-			else if ((bs->cur_ps.fd.forcePowersKnown & (1 << FP_LIGHTNING)) && bs->cur_ps.fd.forcePowerLevel[FP_LIGHTNING] == FORCE_LEVEL_2 && bs->frame_Enemy_Len >= BotGetLightningStartDistance() && bs->frame_Enemy_Len <= BotGetLightningMaxDistance() && level.clients[bs->client].ps.fd.forcePower > 50 && InFieldOfVision(bs->viewangles, 50, a_fo))
+			else if ((bs->cur_ps.fd.forcePowersKnown & (1 << FP_LIGHTNING)) &&
+				bs->cur_ps.fd.forcePowerLevel[FP_LIGHTNING] == FORCE_LEVEL_2 &&
+				!(bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB)) &&
+				bs->frame_Enemy_Len >= BotGetLightningStartDistance() &&
+				bs->frame_Enemy_Len <= BotGetLightningMaxDistance() &&
+				level.clients[bs->client].ps.fd.forcePower > 50 &&
+				InFieldOfVision(bs->viewangles, 50, a_fo))
 			{ //only lightning level 2, and only from the configured range out; point-blank zaps waste force on level-3's short arc
 				level.clients[bs->client].ps.fd.forcePowerSelected = FP_LIGHTNING;
 				useTheForce = 1;
