@@ -14238,7 +14238,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	}
 	bs->wasDuelInProgress = bs->cur_ps.duelInProgress;
 
-	if (!someonesHere && !BotTargetModePrefersHumansThenBots(targetMode))
+	if (!someonesHere && targetMode == NEWBOTAI_TARGET_HUMANS_ONLY)
 		return;
 
 	if (targetMode < 0)
