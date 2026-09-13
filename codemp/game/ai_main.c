@@ -12553,7 +12553,8 @@ int NewBotAI_GetGrip(bot_state_t *bs) {
 	if (enemyCommittedSaberThrow &&
 		bs->frame_Enemy_Len <= MAX_GRIP_DISTANCE &&
 		ourHealth > 20 &&
-		ourForce >= 50)
+		ourForce >= 50 &&
+		ourForce > hisForce)
 		return 90 + aggressionBonus;
 
 	if (ourForce > 65 && ourHealth > 55 && hisHealth < 80)
