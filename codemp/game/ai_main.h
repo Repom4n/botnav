@@ -393,7 +393,7 @@ typedef struct bot_state_s
 	int					gripkickKickCount;
 	int					gripkickJerkDirection;
 	float				gripkickJerkYawOffset; // yaw offset (relative to facing the gripped target directly) applied by the jerk - clamped so it never pushes us outside the force-grip's own InFront cone and auto-breaks the grip early
-	float				gripkickJerkPitch; // pitch (negative = up) of the current upward jerk, rolled per jerk in the -45 to -80 range
+	float				gripkickJerkPitch; // pitch (negative = up) of the current upward jerk, rolled from the active gripkick pitch variant
 	qboolean			gripkickActive;
 	int					gripkickAttemptTime; // level.time of the most recent gripkick flipkick attempt (success window is measured from this)
 	int					gripkickDwellUntil; // while > level.time, gripkick holds the target with aim-down/forward-only movement before the next kick approach
@@ -419,6 +419,10 @@ typedef struct bot_state_s
 	int					enemyWaypointFallbackIndex; // cached nearest visible waypoint for currentEnemy when enemy->waypoint is unavailable
 	int					enemyWaypointFallbackTime; // when enemyWaypointFallbackIndex should be refreshed
 	int					enemyWaypointFallbackEnemyNum; // enemy entity number associated with enemyWaypointFallbackIndex
+	int					combatInitiatedEnemyNum; // enemy entity number for through-wall combat persistence
+	int					combatInitiatedUntil; // while > level.time, keep combat lock even without direct LOS
+	int					waypointPursuitEnemyNum; // enemy entity number currently latched for linear waypoint pursuit
+	int					waypointPursuitLockUntil; // while > level.time, avoid swapping waypoint pursuit target unless directly seen/engaged
 	vec3_t				combatStuckOrigin; // sampled combat position used to detect failing to make meaningful progress toward a target
 	int					combatStuckSince; // when combatStuckOrigin was sampled/reset
 	int					nextHopTime;      // level.time the next bot_hopfrequency-gated hop may fire (ambient/random or discretionary combat hop) - set to -1 after firing so the interval re-rolls only once we land again
@@ -431,6 +435,7 @@ typedef struct bot_state_s
 	int					gripMistakeNeverEscape; // nonzero (expiry time) when bot_mistakebias rolled that this grip session is never escaped by a pull/push - the bot just kicks and waits the grip out; -1 = rolled, not never-escape (see NewBotAI_GetGripNeverEscapeChance)
 	int					gripMistakeReverseUntil; // level.time until which a confused bot flips its grip escape to push instead of pull, shoving the opponent away instead of pulling free (see NewBotAI_GetGripPushInsteadChance)
 	int					gripSessionStartTime; // level.time this grip session began (set once per fresh session alongside the rolls above) - used by NEWBOTAI_GRIP_NO_ESCAPE_WINDOW_MS to give a human player's grip time to build speed before mistakebias weighting applies
+	int					gripkickPitchVariant; // 0: 20-60 up pitch jerks, 1: 50-90 up pitch jerks
 	//end rww
 } bot_state_t;
 

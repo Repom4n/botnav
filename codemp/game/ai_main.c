@@ -1195,6 +1195,8 @@ void BotResetState(bot_state_t *bs) {
 	bs->lastWPIndex = -1; //no waypoint memory yet (0 is a valid index, so memset isn't enough)
 	bs->enemyWaypointFallbackIndex = -1;
 	bs->enemyWaypointFallbackEnemyNum = -1;
+	bs->combatInitiatedEnemyNum = -1;
+	bs->waypointPursuitEnemyNum = -1;
 	//reset several states
 	if (bs->ms) trap->BotResetMoveState(bs->ms);
 	if (bs->gs) trap->BotResetGoalState(bs->gs);
@@ -7767,6 +7769,7 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 		bs->gripkickJerkDirection = 0;
 		bs->gripkickJerkYawOffset = 0.0f;
 		bs->gripkickJerkPitch = -70.0f;
+		bs->gripkickPitchVariant = Q_irand(0, 1);
 		bs->gripkickAttemptTime = 0;
 		bs->gripkickDwellUntil = 0;
 		bs->gripkickLookDownUntil = 0;
@@ -7926,9 +7929,16 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 			//Each jerk independently rolls its own random yaw direction/magnitude - no
 			//accumulation across jerks within the same phase.
 			bs->gripkickJerkYawOffset = (float)(bs->gripkickJerkDirection * yawMagnitude);
-			//Each upward jerk rolls its own pitch in the 45-80 degree range so the swing
-			//height of the gripped target varies jerk to jerk.
-			bs->gripkickJerkPitch = -(float)Q_irand(45, 80);
+			//Each sequence uses one of two jerk pitch families:
+			//A: 20-60 up, B: 50-90 up.
+			if (bs->gripkickPitchVariant == 0)
+			{
+				bs->gripkickJerkPitch = -(float)Q_irand(20, 60);
+			}
+			else
+			{
+				bs->gripkickJerkPitch = -(float)Q_irand(50, 90);
+			}
 			bs->ideal_viewangles[YAW] = a_fo[YAW] + bs->gripkickJerkYawOffset;
 			bs->ideal_viewangles[PITCH] = bs->gripkickJerkPitch;
 			trap->EA_Move(bs->client, vec3_origin, 0);
@@ -7959,6 +7969,13 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 			bs->ideal_viewangles[YAW] = a_fo[YAW];
 			bs->ideal_viewangles[PITCH] = 89;
 			trap->EA_Move(bs->client, vec3_origin, 0);
+			if (enemyOnTopOfUs || weAreOnTopOfEnemy)
+			{
+				//Resolve vertical stacking before offering the flipkick window.
+				trap->EA_MoveBack(bs->client);
+				bs->gripkickLookDownUntil = 0;
+				goto gripkick_done;
+			}
 			if (bs->gripkickLookDownUntil <= 0)
 			{
 				bs->gripkickLookDownUntil = level.time + NEWBOTAI_GRIPKICK_LOOKDOWN_SETTLE_MS;
@@ -8022,6 +8039,7 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 		}
 	}
 
+gripkick_done:
 	bs->ideal_viewangles[YAW] = AngleNormalize360(bs->ideal_viewangles[YAW]); //Normalize the angles
 	bs->ideal_viewangles[PITCH] = AngleNormalize360(bs->ideal_viewangles[PITCH]);
 
@@ -8884,6 +8902,12 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 			//here - it would otherwise end the hold early even without dropping low.
 			//Check this ahead of, and independent from, the saberMove-gated
 			//single-swing case below.
+			if (bs->fanPhase == FAN_PHASE_DWELL)
+			{
+				//Blue/yellow starts are fanning-only: don't begin/hold attack during dwell
+				//while moving straight; wait for strafe commit phases.
+				return;
+			}
 			if (bs->fanPhase != FAN_PHASE_INACTIVE)
 			{
 				NewBotAI_ApplyHorizontalSwingMove(bs);
@@ -8891,6 +8915,9 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 					trap->EA_Attack(bs->client);
 				return;
 			}
+
+			//No non-fan starts for blue/yellow.
+			return;
 
 			//Mid-swing/transition with the enemy close and closing: keep the attack button
 			//held so the engine's saber combo chains straight into the next swing the
@@ -8905,19 +8932,6 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 				if (!suppressSaberAttack)
 					trap->EA_Attack(bs->client);
 				return;
-			}
-
-			if ((g_entities[bs->client].client->ps.saberMove == LS_NONE || g_entities[bs->client].client->ps.saberMove == LS_READY) && bs->frame_Enemy_Len < 256 && ((NewBotAI_GetTimeToInRange(bs, 75, 800) < 800) || bs->frame_Enemy_Len < 128)) {
-				if (g_entities[bs->client].health > 40) {
-					//See if they can't saberthrow?
-					//Com_Printf("Their torso time is %i\n", bs->currentEnemy->client->ps.torsoTimer);
-					//if ((bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_DRAIN) || (bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB))) || ((bs->frame_Enemy_Len < 70) && (bs->currentEnemy->client->ps.origin[2] - bs->cur_ps.origin[2]) > 50)) {
-						NewBotAI_ApplyHorizontalSwingMove(bs);
-						if (!suppressSaberAttack)
-							trap->EA_Attack(bs->client);
-						return;
-					//}
-				}
 			}
 
 		}
@@ -13864,6 +13878,80 @@ static qboolean NewBotAI_IsCombatProgressStalled(bot_state_t *bs)
 	return (bs->combatStuckSince <= level.time - NEWBOTAI_COMBAT_STUCK_TIME_MS) ? qtrue : qfalse;
 }
 
+static qboolean NewBotAI_IsCombatInitiatedAgainst(bot_state_t *bs, gentity_t *enemy, qboolean enemyVisible)
+{
+	if (!bs || !enemy || !enemy->client)
+	{
+		return qfalse;
+	}
+
+	if (enemyVisible)
+	{
+		return qtrue;
+	}
+
+	if (bs->combatInitiatedEnemyNum == enemy->s.number && bs->combatInitiatedUntil > level.time)
+	{
+		return qtrue;
+	}
+
+	if (bs->lastHurtTime > level.time - 3000 &&
+		g_entities[bs->client].client->ps.persistant[PERS_ATTACKER] == enemy->s.number)
+	{
+		return qtrue;
+	}
+
+	if (bs->lastAttacked == enemy)
+	{
+		return qtrue;
+	}
+
+	if (enemy->client->ps.persistant[PERS_ATTACKER] == bs->client)
+	{
+		return qtrue;
+	}
+
+	return qfalse;
+}
+
+static void NewBotAI_UpdateCombatInitiatedState(bot_state_t *bs)
+{
+	qboolean initiated;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		bs->combatInitiatedEnemyNum = -1;
+		bs->combatInitiatedUntil = 0;
+		return;
+	}
+
+	initiated = NewBotAI_IsCombatInitiatedAgainst(bs, bs->currentEnemy, bs->frame_Enemy_Vis ? qtrue : qfalse);
+	if (initiated)
+	{
+		bs->combatInitiatedEnemyNum = bs->currentEnemy->s.number;
+		bs->combatInitiatedUntil = level.time + 6000;
+	}
+}
+
+static void NewBotAI_MaintainThroughWallAim(bot_state_t *bs)
+{
+	vec3_t headlevel;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return;
+	}
+
+	if (!NewBotAI_IsCombatInitiatedAgainst(bs, bs->currentEnemy, bs->frame_Enemy_Vis ? qtrue : qfalse))
+	{
+		return;
+	}
+
+	VectorCopy(bs->currentEnemy->client->ps.origin, headlevel);
+	headlevel[2] += bs->currentEnemy->client->ps.viewheight - 24;
+	VectorCopy(headlevel, bs->lastEnemySpotted);
+}
+
 static void NewBotAI_RunNavigationOrAlone(bot_state_t *bs, float thinktime)
 {
 	if (bot_navigation.integer)
@@ -14147,6 +14235,7 @@ static qboolean NewBotAI_ShouldFallbackToWaypoints(bot_state_t *bs)
 	trace_t tr;
 	const float targetDistanceLimit = BotGetTargetDistanceLimit();
 	const qboolean progressStalled = NewBotAI_IsCombatProgressStalled(bs);
+	const qboolean combatInitiated = NewBotAI_IsCombatInitiatedAgainst(bs, bs->currentEnemy, bs->frame_Enemy_Vis ? qtrue : qfalse);
 
 	if (!bs->currentEnemy || !bs->currentEnemy->client)
 	{
@@ -14159,7 +14248,7 @@ static qboolean NewBotAI_ShouldFallbackToWaypoints(bot_state_t *bs)
 		return qtrue;
 	}
 
-	if (!bs->frame_Enemy_Vis)
+	if (!bs->frame_Enemy_Vis && !combatInitiated)
 	{
 		return qtrue;
 	}
@@ -14185,7 +14274,7 @@ static qboolean NewBotAI_ShouldFallbackToWaypoints(bot_state_t *bs)
 
 	if (tr.fraction < 1.0f && tr.entityNum != bs->currentEnemy->s.number)
 	{
-		return qtrue;
+		return (combatInitiated && !progressStalled) ? qfalse : qtrue;
 	}
 
 	return progressStalled;
@@ -14255,6 +14344,16 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 			closestID = -1;
 	}
 
+	if (closestID != -1 && bs->currentEnemy && bs->currentEnemy->client &&
+		bs->waypointPursuitEnemyNum == bs->currentEnemy->s.number &&
+		bs->waypointPursuitLockUntil > level.time &&
+		closestID != bs->currentEnemy->s.number &&
+		!OrgVisible(bs->eye, g_entities[closestID].client->ps.origin, bs->client) &&
+		!NewBotAI_IsCombatInitiatedAgainst(bs, &g_entities[closestID], qfalse))
+	{
+		closestID = bs->currentEnemy->s.number;
+	}
+
 	if (g_movementStyle.integer == MV_TRIBES) { //&& CAPPING?
 		if (closestID == -1 && (!g_entities[bs->client].client || !g_entities[bs->client].client->pers.activeCapRoute)) { //if we have no active route and no1 near, suicid
 			if ((redRouteList[0].length && g_entities[bs->client].client->sess.sessionTeam == TEAM_RED) || (blueRouteList[0].length && g_entities[bs->client].client->sess.sessionTeam == TEAM_BLUE)) { //only if the map actually has cap routes do we behave like they have cap routes
@@ -14319,6 +14418,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 
 	bs->enemySeenTime = level.time + ENEMY_FORGET_MS;
 	bs->frame_Enemy_Len = NewBotAI_GetDist(bs);
+	NewBotAI_UpdateCombatInitiatedState(bs);
 	if (!bs->currentEnemy || bs->enemyWaypointFallbackEnemyNum != bs->currentEnemy->s.number)
 	{
 		bs->enemyWaypointFallbackIndex = -1;
@@ -14334,6 +14434,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		bs->gripkickKickCount = 0;
 		bs->gripkickJerkDirection = 0;
 		bs->gripkickJerkPitch = 0.0f;
+		bs->gripkickPitchVariant = 0;
 		bs->gripkickAttemptTime = 0;
 		bs->gripkickDwellUntil = 0;
 		bs->gripkickLookDownUntil = 0;
@@ -14346,6 +14447,13 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		bs->enemyWaypointFallbackIndex = -1;
 		bs->enemyWaypointFallbackTime = 0;
 		bs->enemyWaypointFallbackEnemyNum = bs->currentEnemy ? bs->currentEnemy->s.number : -1;
+		bs->waypointPursuitEnemyNum = bs->currentEnemy ? bs->currentEnemy->s.number : -1;
+		bs->waypointPursuitLockUntil = level.time + 4000;
+	}
+	else if (bs->currentEnemy && NewBotAI_IsCombatInitiatedAgainst(bs, bs->currentEnemy, bs->frame_Enemy_Vis ? qtrue : qfalse))
+	{
+		bs->waypointPursuitEnemyNum = bs->currentEnemy->s.number;
+		bs->waypointPursuitLockUntil = level.time + 4000;
 	}
 	if (!bs->cur_ps.saberInFlight)
 		bs->saberThrowStartTime = 0;
@@ -14418,6 +14526,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 			// navigates around the obstacle rather than flickering back to direct
 			// combat movement every frame
 			bs->navObstacleUntil = level.time + 2000;
+			NewBotAI_MaintainThroughWallAim(bs);
 			StandardBotAI(bs, thinktime);
 			return;
 		}
@@ -14439,6 +14548,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		}
 		else
 		{
+			NewBotAI_MaintainThroughWallAim(bs);
 			StandardBotAI(bs, thinktime);
 			return;
 		}
@@ -15145,15 +15255,28 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 		}
 	}
 
-	if (bs->enemySeenTime < level.time || !bs->frame_Enemy_Vis || !bs->currentEnemy ||
-		(bs->currentEnemy /*&& bs->cur_ps.weapon == WP_SABER && bs->frame_Enemy_Len > 300*/))
+	if (bs->enemySeenTime < level.time || !bs->currentEnemy || (!bs->frame_Enemy_Vis && bs->enemySeenTime < level.time + 500))
 	{
 		enemy = ScanForEnemies(bs);
 
 		if (enemy != -1)
 		{
-			bs->currentEnemy = &g_entities[enemy];
-			bs->enemySeenTime = level.time + ENEMY_FORGET_MS;
+			if (bs->currentEnemy && bs->currentEnemy->client &&
+				enemy != bs->currentEnemy->s.number &&
+				bs->waypointPursuitEnemyNum == bs->currentEnemy->s.number &&
+				bs->waypointPursuitLockUntil > level.time &&
+				!OrgVisible(bs->eye, g_entities[enemy].client->ps.origin, bs->client) &&
+				!NewBotAI_IsCombatInitiatedAgainst(bs, &g_entities[enemy], qfalse))
+			{
+				//keep pursuing the currently latched waypoint target linearly
+			}
+			else
+			{
+				bs->currentEnemy = &g_entities[enemy];
+				bs->enemySeenTime = level.time + ENEMY_FORGET_MS;
+				bs->waypointPursuitEnemyNum = enemy;
+				bs->waypointPursuitLockUntil = level.time + 4000;
+			}
 		}
 	}
 
@@ -15262,6 +15385,11 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 	if (bs->frame_Enemy_Vis)
 	{
 		bs->enemySeenTime = level.time + ENEMY_FORGET_MS;
+		if (bs->currentEnemy)
+		{
+			bs->waypointPursuitEnemyNum = bs->currentEnemy->s.number;
+			bs->waypointPursuitLockUntil = level.time + 4000;
+		}
 	}
 
 	if (bs->wpCurrent)
