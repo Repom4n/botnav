@@ -13962,6 +13962,10 @@ int NewBotAI_ScanForEnemies(bot_state_t* bs) {
 			hasEnemyDist = VectorLength(a);
 			normalizedHealth = 0.25f + (bs->currentEnemy->health - 1) * (1.0f - 0.25f) / (100.0f - 1.0f);
 			normalizedHealth += (100 - ourHealth) * 0.005f;
+			if (normalizedHealth < 0.25f)
+			{
+				normalizedHealth = 0.25f;
+			}
 			if (normalizedHealth > 1.0f)
 			{
 				normalizedHealth = 1.0f;
@@ -15215,7 +15219,9 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 		}
 	}
 
-	if (bs->enemySeenTime < level.time || !bs->frame_Enemy_Vis || !bs->currentEnemy)
+	if (bs->enemySeenTime < level.time || !bs->frame_Enemy_Vis || !bs->currentEnemy ||
+		(bs->frame_Enemy_Vis && bs->currentEnemy &&
+		 ((level.time + (bs->client * 73)) % 750) < FRAMETIME))
 	{
 		enemy = ScanForEnemies(bs);
 
