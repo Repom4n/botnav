@@ -197,6 +197,8 @@ static void NewBotAI_StartEscapeYawOverride(bot_state_t *bs, int durationMs);
 #define NEWBOTAI_COMBAT_WAYPOINT_SEPARATION 512.0f
 #define NEWBOTAI_COMBAT_WAYPOINT_SEPARATION_SQ (NEWBOTAI_COMBAT_WAYPOINT_SEPARATION * NEWBOTAI_COMBAT_WAYPOINT_SEPARATION)
 #define NEWBOTAI_TARGET_COMMIT_DISTANCE 768.0f
+#define NEWBOTAI_ESCAPE_YAW_SPEED 333.0f
+#define NEWBOTAI_ESCAPE_YAW_OVERRIDE_MS 250
 static qboolean NewBotAI_HandleRecoveryRollForcepower(bot_state_t *bs);
 static qboolean NewBotAI_IsBetweenOwnSaberAndEnemy(bot_state_t *bs);
 static qboolean NewBotAI_ShouldCloseGapVsEnemySaberThrow(bot_state_t *bs);
@@ -7038,8 +7040,6 @@ static qboolean NewBotAI_CanAttemptFlipkick(bot_state_t *bs)
 #define NEWBOTAI_FLIPKICK_PREFERRED_RANGE 180.0f
 #define NEWBOTAI_IMMEDIATE_FLIPKICK_RANGE 135.0f
 #define NEWBOTAI_IMMEDIATE_FLIPKICK_CONTACT_RANGE 90.0f
-#define NEWBOTAI_ESCAPE_YAW_SPEED 333.0f
-#define NEWBOTAI_ESCAPE_YAW_OVERRIDE_MS 250
 
 // Item 4: for this long after a fresh grip session begins, levels 1-9 never successfully
 // pull/push free of the grip (see NewBotAI_ReactToBeingGripped) - giving a human player's
