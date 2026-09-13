@@ -12500,6 +12500,14 @@ int NewBotAI_GetGrip(bot_state_t *bs) {
 	#define NEWBOTAI_GRIPKICK_DOMINANT_HEALTH 80
 	#define NEWBOTAI_GRIPKICK_DOMINANT_FORCE_LEAD 50
 	const int ourHealth = g_entities[bs->client].health, hisHealth = bs->currentEnemy->health, ourForce = bs->cur_ps.fd.forcePower, hisForce = bs->currentEnemy->client->ps.fd.forcePower;
+	const int enemySaberEntNum = bs->currentEnemy->client->ps.saberEntityNum;
+	const qboolean enemyCommittedSaberThrow = (bs->currentEnemy->client->ps.saberInFlight &&
+		enemySaberEntNum > 0 &&
+		enemySaberEntNum < ENTITYNUM_WORLD &&
+		g_entities[enemySaberEntNum].inuse &&
+		g_entities[enemySaberEntNum].r.ownerNum == bs->currentEnemy->s.number &&
+		g_entities[enemySaberEntNum].s.eType == ET_MISSILE &&
+		bs->currentEnemy->client->saberKnockedTime <= level.time) ? qtrue : qfalse;
 	int weight = 100;
 	const float gripkickBias = BotGetChanceBiasPercent(bot_gripkickbias.value);
 	const int aggressionBonus = BotGetAggressionWeightedBonus(bs, gripkickBias, 35, qtrue);
@@ -12541,10 +12549,7 @@ int NewBotAI_GetGrip(bot_state_t *bs) {
 	//An enemy who has already committed their saber to a throw is wide open to a gripkick.
 	//As long as they are still inside grip range and we are healthy enough to risk it,
 	//weight the counter heavily instead of waiting for the old dominant-health threshold.
-	if (bs->currentEnemy->client->ps.saberInFlight &&
-		bs->currentEnemy->client->ps.saberEntityNum > 0 &&
-		bs->currentEnemy->client->ps.saberEntityNum < ENTITYNUM_WORLD &&
-		bs->currentEnemy->client->saberKnockedTime <= level.time &&
+	if (enemyCommittedSaberThrow &&
 		bs->frame_Enemy_Len <= MAX_GRIP_DISTANCE &&
 		ourHealth > 20 &&
 		ourForce >= 50)
@@ -12678,10 +12683,8 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 		//A knocked-down opponent is the best saber-throw punish; bias heavily toward it,
 		//especially when they are already under 31 raw health and the throw can cash the
 		//knockdown in immediately instead of letting them recover.
-		if (enemyHealth > 0 && enemyHealth < knockdownHeavyRawHealthThreshold) {
-			weight = knockdownHeavyWeight;
-		}
-		else if (enemyTotalHealth >= knockdownFinishMinHealth && enemyTotalHealth <= knockdownFinishMaxHealth) {
+		if ((enemyHealth > 0 && enemyHealth < knockdownHeavyRawHealthThreshold) ||
+			(enemyTotalHealth >= knockdownFinishMinHealth && enemyTotalHealth <= knockdownFinishMaxHealth)) {
 			weight = knockdownHeavyWeight;
 		}
 		else if (ourForce >= knockdownHeavyForceThreshold &&
