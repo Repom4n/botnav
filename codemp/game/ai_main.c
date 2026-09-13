@@ -13127,7 +13127,7 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 				NewBotAI_Flipkick(bs);
 			}
 		}
-		else if (drainWeight > minWeight && pullkickDrainWindow)
+		else if (drainWeight > minWeight && drainlockAdvantage)
 		{
 			level.clients[bs->client].ps.fd.forcePowerSelected = FP_DRAIN;
 			useTheForce = qtrue;
