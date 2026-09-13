@@ -9487,6 +9487,10 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 				trap->EA_Jump(bs->client);
 				trap->EA_MoveBack(bs->client);
 			}
+			else if (bs->frame_Enemy_Len <= 96.0f)
+			{
+				NewBotAI_GetGroundDodge(bs);
+			}
 			else
 			{
 				NewBotAI_RetreatDiagonal(bs, (level.framenum & 1) ? qtrue : qfalse);
@@ -12594,6 +12598,7 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 	const int knockdownBaseForceThreshold = 30;
 	const int knockdownHeavyForceThreshold = 40;
 	const int knockdownHeavyHealthThreshold = 50;
+	const int knockdownHeavyRawHealthThreshold = 31;
 	const int knockdownHeavyWeight = 100;
 	const int knockdownPressureWeight = 90;
 	const int knockdownBaseWeight = 85;
@@ -12662,7 +12667,7 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 		//A knocked-down opponent is the best saber-throw punish; bias heavily toward it,
 		//especially when they are already under 31 raw health and the throw can cash the
 		//knockdown in immediately instead of letting them recover.
-		if (enemyHealth > 0 && enemyHealth < 31) {
+		if (enemyHealth > 0 && enemyHealth < knockdownHeavyRawHealthThreshold) {
 			weight = knockdownHeavyWeight;
 		}
 		else if (enemyTotalHealth >= knockdownFinishMinHealth && enemyTotalHealth <= knockdownFinishMaxHealth) {
