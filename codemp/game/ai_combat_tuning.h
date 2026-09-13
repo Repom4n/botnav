@@ -2,6 +2,8 @@
 #define AI_COMBAT_TUNING_H
 
 #define NEWBOTAI_TUNING_ESCAPE_YAW_SPEED 333.0f
+#define NEWBOTAI_JUMP_ATTACK_GATE_MS 40
+#define NEWBOTAI_BOT_DUEL_OFFER_THROTTLE_MS 120000
 
 typedef enum
 {
@@ -149,6 +151,64 @@ static inline int NewBotAI_ShouldBlockOrthogonalSaberSpecialInput(
 	}
 
 	return 1;
+}
+
+static inline int NewBotAI_ShouldSuppressJumpSaberAttack(
+	int isSaberWeapon, int hasJumpAction, int jumpAttackSuppressUntil, int time)
+{
+	if (!isSaberWeapon)
+	{
+		return 0;
+	}
+
+	if (hasJumpAction)
+	{
+		return 1;
+	}
+
+	return (jumpAttackSuppressUntil > time) ? 1 : 0;
+}
+
+static inline int NewBotAI_ShouldStayGroundedVsSaberThrow(
+	int enemyForce, int canFlipkickNow)
+{
+	if (enemyForce >= 20)
+	{
+		return 0;
+	}
+
+	return canFlipkickNow ? 0 : 1;
+}
+
+static inline int NewBotAI_ShouldSkipPullForClosePTK(
+	int ptkWeight, int canAttemptFlipkick, float enemyDistance, float timeToKickRangeMs)
+{
+	if (ptkWeight <= 0 || !canAttemptFlipkick)
+	{
+		return 0;
+	}
+
+	if (enemyDistance <= 170.0f)
+	{
+		return 1;
+	}
+
+	if (timeToKickRangeMs >= 0.0f && timeToKickRangeMs <= 220.0f)
+	{
+		return 1;
+	}
+
+	return 0;
+}
+
+static inline int NewBotAI_GetBotDuelChallengeThrottleMs(int targetMode, int enemyIsBot)
+{
+	if (!enemyIsBot)
+	{
+		return 0;
+	}
+
+	return (targetMode == -3 || targetMode == -4) ? NEWBOTAI_BOT_DUEL_OFFER_THROTTLE_MS : 0;
 }
 
 static inline int NewBotAI_ShouldIgnoreBotSaberLoss(int isBot, int noSaberDropEnabled)

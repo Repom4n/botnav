@@ -83,6 +83,37 @@ BOOST_AUTO_TEST_CASE( accidental_special_guard_uses_effective_inputs )
 	BOOST_CHECK( !NewBotAI_ShouldBlockOrthogonalSaberSpecialInput( 1, 0, 0, 1, 0, 1 ) );
 }
 
+BOOST_AUTO_TEST_CASE( jump_attack_gate_suppresses_saber_attack_on_and_after_jump )
+{
+	BOOST_CHECK( NewBotAI_ShouldSuppressJumpSaberAttack( 1, 1, 0, 1000 ) );
+	BOOST_CHECK( NewBotAI_ShouldSuppressJumpSaberAttack( 1, 0, 1040, 1000 ) );
+	BOOST_CHECK( !NewBotAI_ShouldSuppressJumpSaberAttack( 1, 0, 1000, 1000 ) );
+	BOOST_CHECK( !NewBotAI_ShouldSuppressJumpSaberAttack( 0, 1, 1040, 1000 ) );
+}
+
+BOOST_AUTO_TEST_CASE( low_enemy_force_keeps_saber_throw_defense_grounded_unless_flipkick_is_live )
+{
+	BOOST_CHECK( NewBotAI_ShouldStayGroundedVsSaberThrow( 19, 0 ) );
+	BOOST_CHECK( !NewBotAI_ShouldStayGroundedVsSaberThrow( 19, 1 ) );
+	BOOST_CHECK( !NewBotAI_ShouldStayGroundedVsSaberThrow( 20, 0 ) );
+}
+
+BOOST_AUTO_TEST_CASE( close_ptk_window_skips_pull_when_flipkick_can_land_without_it )
+{
+	BOOST_CHECK( NewBotAI_ShouldSkipPullForClosePTK( 50, 1, 160.0f, -1.0f ) );
+	BOOST_CHECK( NewBotAI_ShouldSkipPullForClosePTK( 50, 1, 260.0f, 180.0f ) );
+	BOOST_CHECK( !NewBotAI_ShouldSkipPullForClosePTK( 0, 1, 160.0f, 180.0f ) );
+	BOOST_CHECK( !NewBotAI_ShouldSkipPullForClosePTK( 50, 0, 160.0f, 180.0f ) );
+}
+
+BOOST_AUTO_TEST_CASE( prefer_humans_duel_modes_throttle_bot_duel_offers_for_two_minutes )
+{
+	BOOST_CHECK_EQUAL( NewBotAI_GetBotDuelChallengeThrottleMs( -3, 1 ), NEWBOTAI_BOT_DUEL_OFFER_THROTTLE_MS );
+	BOOST_CHECK_EQUAL( NewBotAI_GetBotDuelChallengeThrottleMs( -4, 1 ), NEWBOTAI_BOT_DUEL_OFFER_THROTTLE_MS );
+	BOOST_CHECK_EQUAL( NewBotAI_GetBotDuelChallengeThrottleMs( -3, 0 ), 0 );
+	BOOST_CHECK_EQUAL( NewBotAI_GetBotDuelChallengeThrottleMs( -1, 1 ), 0 );
+}
+
 BOOST_AUTO_TEST_CASE( bot_saber_loss_guard_respects_cvar )
 {
 	BOOST_CHECK( NewBotAI_ShouldIgnoreBotSaberLoss( 1, 1 ) );

@@ -344,9 +344,9 @@ XCVAR_DEF( bot_forgimmick,				"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_honorableduelacceptance, "0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_pvstype,				"1",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( g_newBotAI,					"0",			NULL,				CVAR_ARCHIVE,									qtrue )
-// -1: default target selection, -2: human targets only, -3: prefer humans then allow bots,
-// -4: same as -3 but also biases bots toward issuing/accepting duel challenges against each
-// other (to build ELO) once no humans are active, >=0: force client index
+// -1: default target selection, -2: human targets only, -3/-4: prefer humans first and
+// throttle bot-vs-bot duel offers to once every 2 minutes so human duel opportunities stay
+// available; -4 also uses the force-duel-only approach while not already dueling, >=0: force client index
 XCVAR_DEF( g_newBotAITarget,			"-1",			NULL,				CVAR_ARCHIVE,									qfalse )
 XCVAR_DEF( bot_targetdistance,			"4096",		NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( g_newBotAITargetDistance,	"4096",		NULL,				CVAR_ARCHIVE,									qtrue )

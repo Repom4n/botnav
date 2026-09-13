@@ -383,6 +383,7 @@ typedef struct bot_state_s
 	int					lastFlipkickAttemptTime;
 	int					flipkickInputTime;
 	qboolean			flipkickJumpHeld;
+	int					jumpAttackSuppressUntil; // while > level.time, strip saber +attack around jump usercmds to avoid accidental specials
 	int					lastSaberContactTime; // level.time of the most recent confirmed saber contact on currentEnemy; used to gate fan-chain -> flipkick combo timing
 	int					lastSaberContactTargetNum; // enemy clientNum for lastSaberContactTime; fan-chain combo gate only accepts contact on currentEnemy
 	int					lastEnemyDurability; // previous think's tracked enemy HP+armor snapshot for saber-contact confirmation
@@ -410,6 +411,7 @@ typedef struct bot_state_s
 
 	int					conserveUntil; // while > level.time, bot disengages (no force power use) to regen FP - see bot_conservation
 	int					conserveNextRollTime; // debounce between chances to start a new conservation window
+	int					botDuelChallengeThrottleUntil; // while > level.time, suppress bot-initiated bot-vs-bot duel offers in -3/-4 modes
 
 	int					saberRetrieveSpamTime; // level.time through which the next attack-toggle press is held while recalling a knocked-away saber
 	qboolean			saberRetrieveSpamHeld; // whether the current attack-toggle press is the held or released half
