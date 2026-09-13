@@ -9568,8 +9568,18 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 		{
 			NewBotAI_RollRandomStrafeOverlay(bs, 200, 600, qtrue);
 		}
-		NewBotAI_ApplyRandomStrafePattern(bs);
-		NewBotAI_RetreatDiagonal(bs, bs->randomStrafeDir <= 0);
+		if (bs->randomStrafeDir < 0)
+		{
+			NewBotAI_RetreatDiagonal(bs, qtrue);
+		}
+		else if (bs->randomStrafeDir > 0)
+		{
+			NewBotAI_RetreatDiagonal(bs, qfalse);
+		}
+		else
+		{
+			NewBotAI_RetreatStraight(bs);
+		}
 		return;
 		}
 	}
@@ -12267,6 +12277,7 @@ static void NewBotAI_ClearRandomStrafeOverlay(bot_state_t *bs)
 static void NewBotAI_RollRandomStrafeOverlay(bot_state_t *bs, int minDuration, int maxDuration, qboolean retreating)
 {
 	int diagonalRoll;
+	int lateralRoll;
 
 	if (!bs)
 	{
@@ -12282,7 +12293,19 @@ static void NewBotAI_RollRandomStrafeOverlay(bot_state_t *bs, int minDuration, i
 		maxDuration = minDuration;
 	}
 
-	bs->randomStrafeDir = Q_irand(0, 1) ? 1 : -1;
+	lateralRoll = Q_irand(1, 100);
+	if (lateralRoll <= 45)
+	{
+		bs->randomStrafeDir = -1;
+	}
+	else if (lateralRoll <= 90)
+	{
+		bs->randomStrafeDir = 1;
+	}
+	else
+	{
+		bs->randomStrafeDir = 0;
+	}
 	bs->randomStrafeEndTime = level.time + Q_irand(minDuration, maxDuration);
 	diagonalRoll = Q_irand(1, 100);
 	if (diagonalRoll <= 60)

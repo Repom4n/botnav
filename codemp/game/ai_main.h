@@ -414,7 +414,7 @@ typedef struct bot_state_s
 	int					saberRetrieveSpamTime; // level.time through which the next attack-toggle press is held while recalling a knocked-away saber
 	qboolean			saberRetrieveSpamHeld; // whether the current attack-toggle press is the held or released half
 	int					drainRollYawStart; // level.time when the knocked-down drain+sideways-roll 90-degree yaw-away blend began (0 = not blending)
-	int					escapeYawOverrideUntil; // while > level.time, yaw escapes/rolls use the fixed NEWBOTAI_ESCAPE_YAW_SPEED turn rate
+	int					escapeYawOverrideUntil; // while > level.time, yaw escapes/rolls use the fixed NEWBOTAI_TUNING_ESCAPE_YAW_SPEED turn rate
 	int					lastGripkickSuccessTime; // level.time of the most recent confirmed gripkick hit/knockdown, used to weight pullkick follow-ups
 
 	int					navObstacleUntil; // stay in waypoint nav mode until this time when an obstacle blocks path to enemy
