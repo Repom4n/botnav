@@ -8,6 +8,13 @@ typedef enum
 	NEWBOTAI_DRAINLOCK_FORCE_DRAIN
 } newbotai_drainlock_force_choice_t;
 
+enum
+{
+	NEWBOTAI_PTK_ARMOR_NO_LEAD_PENALTY = 60,
+	NEWBOTAI_PTK_ARMOR_SMALL_LEAD_PENALTY = 35,
+	NEWBOTAI_PTK_ARMOR_STRONG_LEAD_BONUS = 10
+};
+
 static inline int NewBotAI_GetEffectiveMoveInput(int cmdMove, int forcedMove)
 {
 	return forcedMove ? forcedMove : cmdMove;
@@ -22,15 +29,15 @@ static inline int NewBotAI_AdjustPTKWeightForArmor(int weight, int enemyArmor, i
 
 	if (forceLead < 1)
 	{
-		return weight - 60;
+		return weight - NEWBOTAI_PTK_ARMOR_NO_LEAD_PENALTY;
 	}
 
 	if (forceLead < 20)
 	{
-		return weight - 35;
+		return weight - NEWBOTAI_PTK_ARMOR_SMALL_LEAD_PENALTY;
 	}
 
-	return weight + 10;
+	return weight + NEWBOTAI_PTK_ARMOR_STRONG_LEAD_BONUS;
 }
 
 static inline newbotai_drainlock_force_choice_t NewBotAI_GetDrainlockForceChoice(
