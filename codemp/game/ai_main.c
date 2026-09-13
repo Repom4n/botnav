@@ -13113,7 +13113,8 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 
 	if (drainlockAdvantage || pullkickDrainWindow)
 	{
-		if (pullWeight > minWeight && bs->currentEnemy->client->ps.fd.forcePower < 20)
+		if (pullWeight > minWeight &&
+			(bs->currentEnemy->client->ps.fd.forcePower < 20 || pullWeight >= drainWeight))
 		{
 			level.clients[bs->client].ps.fd.forcePowerSelected = FP_PULL;
 			NewBotAI_ApplyPullMistake(bs);
