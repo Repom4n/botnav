@@ -9469,6 +9469,7 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 		// const float speed = NewBotAI_GetSpeedTowardsEnemy(bs);
 		gentity_t *saber;
 		qboolean crouch = qfalse;
+		const qboolean enemySaberThreatImminent = NewBotAI_IsEnemySaberThreatImminent(bs);
 
 		bs->runningLikeASissy = 0;
 		bs->forceMove_Forward = 0;
@@ -9486,7 +9487,7 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 			{
 				//keep driving the escape route immediately when no waypoints are available
 			}
-			else if (NewBotAI_TouchingWallNotEnemy(bs))
+			else if (!enemySaberThreatImminent && NewBotAI_TouchingWallNotEnemy(bs))
 			{
 				trap->EA_Jump(bs->client);
 				trap->EA_MoveBack(bs->client);
@@ -9500,7 +9501,7 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 				NewBotAI_RetreatDiagonal(bs, (level.framenum & 1) ? qtrue : qfalse);
 			}
 		}
-		else if (NewBotAI_IsEnemySaberThreatImminent(bs))
+		else if (enemySaberThreatImminent)
 		{
 			const int totalHealthDelta = NewBotAI_GetTotalHealthDelta(bs);
 
@@ -12541,6 +12542,8 @@ int NewBotAI_GetGrip(bot_state_t *bs) {
 	//As long as they are still inside grip range and we are healthy enough to risk it,
 	//weight the counter heavily instead of waiting for the old dominant-health threshold.
 	if (bs->currentEnemy->client->ps.saberInFlight &&
+		bs->currentEnemy->client->ps.saberEntityNum &&
+		bs->currentEnemy->client->saberKnockedTime <= level.time &&
 		bs->frame_Enemy_Len <= MAX_GRIP_DISTANCE &&
 		ourHealth > 20 &&
 		ourForce >= 50)
