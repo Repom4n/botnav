@@ -11743,7 +11743,8 @@ static qboolean NewBotAI_ShouldJumpDrainVsSaberThrow(bot_state_t *bs)
 		forwardDist <= (isReturning ? 16.0f : 24.0f)) ? qtrue : qfalse;
 	if (bs->settings.skill >= 6.0f)
 	{
-		forceImmediateHop = qtrue;
+		forceImmediateHop = (timeToImpactMs <= 105.0f ||
+			forwardDist <= (isReturning ? 20.0f : 32.0f)) ? qtrue : forceImmediateHop;
 	}
 
 	//Healthy bots can afford to keep pressing or repositioning against most throws instead
