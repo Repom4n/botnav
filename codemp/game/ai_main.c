@@ -14781,12 +14781,6 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		{
 			bs->timeToReact = level.time + responseDelay;
 		}
-		if (bs->settings.skill >= 6.0f &&
-			NewBotAI_IsEnemySaberThreatImminent(bs))
-		{
-			bs->timeToReact = level.time;
-		}
-
 		if (bs->timeToReact > level.time)
 		{
 			bs->doAttack = 0;
