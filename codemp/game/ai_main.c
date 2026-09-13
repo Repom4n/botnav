@@ -12556,6 +12556,7 @@ int NewBotAI_GetGrip(bot_state_t *bs) {
 	//weight the counter heavily instead of waiting for the old dominant-health threshold.
 	if (!enemyKnockedDown &&
 		enemyCommittedSaberThrow &&
+		!bs->cur_ps.saberInFlight &&
 		!NewBotAI_HasDroppedOwnSaber(bs) &&
 		bs->frame_Enemy_Len <= MAX_GRIP_DISTANCE &&
 		ourHealth > 20 &&
