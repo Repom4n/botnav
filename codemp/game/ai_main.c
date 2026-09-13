@@ -184,9 +184,8 @@ static void NewBotAI_ApplySidewaysDrainRoll(bot_state_t *bs, qboolean moveBack);
 
 #define NEWBOTAI_DRAIN_TICK_MSEC 100
 #define NEWBOTAI_COMBAT_DISENGAGE_COOLDOWN_MS 2500
-#define NEWBOTAI_COMBAT_RECENT_HURT_MS 2000
-#define NEWBOTAI_COMBAT_ENGAGE_DISTANCE 384.0f
 #define NEWBOTAI_COMBAT_WAYPOINT_SEPARATION 512.0f
+#define NEWBOTAI_COMBAT_WAYPOINT_SEPARATION_SQ (NEWBOTAI_COMBAT_WAYPOINT_SEPARATION * NEWBOTAI_COMBAT_WAYPOINT_SEPARATION)
 #define NEWBOTAI_TARGET_COMMIT_DISTANCE 768.0f
 static qboolean NewBotAI_HandleRecoveryRollForcepower(bot_state_t *bs);
 static qboolean NewBotAI_IsBetweenOwnSaberAndEnemy(bot_state_t *bs);
@@ -14313,12 +14312,19 @@ static qboolean NewBotAI_ShouldFallbackToWaypoints(bot_state_t *bs)
 
 static qboolean NewBotAI_CanUseWaypointFallbackInCombat(bot_state_t *bs)
 {
+	vec3_t enemyDelta;
+	vec3_t enemyOrigin;
+
 	if (!bs)
 	{
 		return qfalse;
 	}
 
-	if (!bs->currentEnemy || !bs->currentEnemy->client)
+	if (!bs->currentEnemy)
+	{
+		return qtrue;
+	}
+	if (!bs->currentEnemy->client)
 	{
 		return qtrue;
 	}
@@ -14329,7 +14335,10 @@ static qboolean NewBotAI_CanUseWaypointFallbackInCombat(bot_state_t *bs)
 	{
 		return qfalse;
 	}
-	if (bs->lastHurtTime > level.time - NEWBOTAI_COMBAT_RECENT_HURT_MS)
+	if (bs->doAttack || bs->doAltAttack ||
+		bs->cur_ps.weaponstate == WEAPON_FIRING ||
+		bs->cur_ps.weaponstate == WEAPON_CHARGING ||
+		bs->cur_ps.weaponstate == WEAPON_CHARGING_ALT)
 	{
 		return qfalse;
 	}
@@ -14337,7 +14346,13 @@ static qboolean NewBotAI_CanUseWaypointFallbackInCombat(bot_state_t *bs)
 	{
 		return qfalse;
 	}
-	if (bs->frame_Enemy_Len <= NEWBOTAI_COMBAT_WAYPOINT_SEPARATION)
+	VectorCopy(bs->currentEnemy->r.currentOrigin, enemyOrigin);
+	if (!enemyOrigin[0] && !enemyOrigin[1] && !enemyOrigin[2])
+	{
+		VectorCopy(bs->currentEnemy->client->ps.origin, enemyOrigin);
+	}
+	VectorSubtract(enemyOrigin, bs->origin, enemyDelta);
+	if (VectorLengthSquared(enemyDelta) <= NEWBOTAI_COMBAT_WAYPOINT_SEPARATION_SQ)
 	{
 		return qfalse;
 	}
@@ -14479,11 +14494,22 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		bs->enemyWaypointFallbackTime = 0;
 		bs->enemyWaypointFallbackEnemyNum = bs->currentEnemy ? bs->currentEnemy->s.number : -1;
 	}
-	if (bs->frame_Enemy_Vis ||
-		bs->frame_Enemy_Len <= NEWBOTAI_COMBAT_ENGAGE_DISTANCE ||
-		bs->lastHurtTime > level.time - NEWBOTAI_COMBAT_RECENT_HURT_MS)
+	if (bs->currentEnemy && bs->currentEnemy->client)
 	{
-		bs->combatNavHoldUntil = level.time + NEWBOTAI_COMBAT_DISENGAGE_COOLDOWN_MS;
+		qboolean activeCombatIntent;
+		const qboolean recentlyHurt = (bs->lastHurtTime > level.time - 750) ? qtrue : qfalse;
+
+		activeCombatIntent = (bs->frame_Enemy_Vis ||
+			bs->doAttack || bs->doAltAttack ||
+			bs->cur_ps.weaponstate == WEAPON_FIRING ||
+			bs->cur_ps.weaponstate == WEAPON_CHARGING ||
+			bs->cur_ps.weaponstate == WEAPON_CHARGING_ALT ||
+			recentlyHurt) ? qtrue : qfalse;
+
+		if (activeCombatIntent)
+		{
+			bs->combatNavHoldUntil = level.time + NEWBOTAI_COMBAT_DISENGAGE_COOLDOWN_MS;
+		}
 	}
 	if (!(bs->cur_ps.fd.forcePowersActive & (1 << FP_GRIP)))
 	{
