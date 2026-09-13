@@ -7254,7 +7254,7 @@ static qboolean NewBotAI_TouchingWallNotEnemy(bot_state_t *bs)
 static qboolean NewBotAI_ShouldWallrunAgainstWalls(bot_state_t *bs)
 {
 	return (bs->combatAction == BOT_COMBAT_ACTION_RETREAT_DEFENSE &&
-		(g_entities[bs->client].health < 49 || NewBotAI_HasDroppedOwnSaber(bs))) ? qtrue : qfalse;
+		g_entities[bs->client].health < 49) ? qtrue : qfalse;
 }
 
 //Diagonal wallruns start from lateral+forward inputs followed by a jump while already
