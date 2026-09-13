@@ -2242,8 +2242,11 @@ void BotDamageNotification(gclient_t *bot, gentity_t *attacker)
 	if (bs_a)
 	{ //if the client attacking us is a bot as well
 		bs_a->lastAttacked = &g_entities[bot->ps.clientNum];
-		bs_a->combatInitiatedEnemyNum = bot->ps.clientNum;
-		bs_a->combatInitiatedUntil = level.time + 6000;
+		if (!bs_a->currentEnemy || bs_a->currentEnemy->s.number == bot->ps.clientNum)
+		{
+			bs_a->combatInitiatedEnemyNum = bot->ps.clientNum;
+			bs_a->combatInitiatedUntil = level.time + 6000;
+		}
 		i = 0;
 
 		while (i < MAX_CLIENTS)
@@ -2283,8 +2286,11 @@ void BotDamageNotification(gclient_t *bot, gentity_t *attacker)
 
 	bs->lastHurt = attacker;
 	bs->lastHurtTime = level.time;
-	bs->combatInitiatedEnemyNum = attacker->s.number;
-	bs->combatInitiatedUntil = level.time + 6000;
+	if (!bs->currentEnemy || bs->currentEnemy->s.number == attacker->s.number)
+	{
+		bs->combatInitiatedEnemyNum = attacker->s.number;
+		bs->combatInitiatedUntil = level.time + 6000;
+	}
 
 	if (bs->currentEnemy)
 	{ //we don't care about the guy attacking us if we have an enemy already
