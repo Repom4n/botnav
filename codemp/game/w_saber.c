@@ -6871,7 +6871,10 @@ void saberKnockDown(gentity_t *saberent, gentity_t *saberOwner, gentity_t *other
 
 static qboolean BotShouldIgnoreSaberLoss(gentity_t *saberOwner)
 {
-	return (saberOwner && saberOwner->inuse && (saberOwner->r.svFlags & SVF_BOT)) ? qtrue : qfalse;
+	return (saberOwner &&
+		saberOwner->inuse &&
+		(saberOwner->r.svFlags & SVF_BOT) &&
+		bot_nosaberdrop.integer) ? qtrue : qfalse;
 }
 
 void WP_SaberRemoveG2Model( gentity_t *saberent )
