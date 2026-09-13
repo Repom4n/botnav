@@ -12533,7 +12533,7 @@ int NewBotAI_GetGrip(bot_state_t *bs) {
 	//As long as they are still inside grip range and we are healthy enough to risk it,
 	//weight the counter heavily instead of waiting for the old dominant-health threshold.
 	if (bs->currentEnemy->client->ps.saberInFlight && bs->frame_Enemy_Len <= MAX_GRIP_DISTANCE && ourHealth > 20)
-		return 90 + aggressionBonus;
+		return 100 + aggressionBonus;
 
 	if (ourForce > 65 && ourHealth > 55 && hisHealth < 80)
 		return 45 + aggressionBonus;
@@ -12662,7 +12662,7 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 		//A knocked-down opponent is the best saber-throw punish; bias heavily toward it,
 		//especially when they are already under 31 raw health and the throw can cash the
 		//knockdown in immediately instead of letting them recover.
-		if (enemyHealth > 0 && enemyHealth <= knockdownFinishMaxHealth) {
+		if (enemyHealth > 0 && enemyHealth < 31) {
 			weight = knockdownHeavyWeight;
 		}
 		else if (enemyTotalHealth >= knockdownFinishMinHealth && enemyTotalHealth <= knockdownFinishMaxHealth) {
