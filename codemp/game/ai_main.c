@@ -6931,14 +6931,13 @@ void NewBotAI_Getup(bot_state_t *bs)
 	}
 	else if (!useTheForce && jumpDrainThreat)
 	{
-		const qboolean pullActive = (bs->cur_ps.forceHandExtend == HANDEXTEND_FORCEPULL ||
-			bs->cur_ps.powerups[PW_PULL] > level.time) ? qtrue : qfalse;
-		if (pullActive && NewBotAI_ShouldUseSafePushWindowWhilePulled(bs))
+		if (NewBotAI_ShouldUseSafePushWindowWhilePulled(bs))
 		{
 			level.clients[bs->client].ps.fd.forcePowerSelected = FP_PUSH;
 			useTheForce = qtrue;
 		}
-		else if (pullActive &&
+		else if ((bs->cur_ps.forceHandExtend == HANDEXTEND_FORCEPULL ||
+			bs->cur_ps.powerups[PW_PULL] > level.time) &&
 			!(g_forcePowerDisable.integer & (1 << FP_DRAIN)) &&
 			(bs->cur_ps.fd.forcePowersKnown & (1 << FP_DRAIN)) &&
 			bs->cur_ps.fd.forcePower >= 20)
@@ -10832,7 +10831,7 @@ static int NewBotAI_GetAntiDrainWeight(bot_state_t *bs)
 
 static float BotGetLightningMaxDistance(void)
 {
-	return 2048.0f; //FP_LIGHTNING levels 1-2 use line trace to 2048 (see w_force.c)
+	return 2048.0f; // Bots force FP_LIGHTNING level 2 and should use its full beam range.
 }
 
 static float BotGetLightningStartDistance(void)
@@ -14353,21 +14352,19 @@ static void NewBotAI_RunForceDuelOnly(bot_state_t *bs)
 	NewBotAI_RetreatDiagonal(bs, (level.framenum & 1) ? qtrue : qfalse);
 }
 
-static qboolean NewBotAI_ShouldFallbackToWaypoints(bot_state_t *bs)
+static qboolean NewBotAI_IsDirectPathToEnemyBlocked(bot_state_t *bs)
 {
 	vec3_t toEnemy, trTo, mins, maxs;
 	trace_t tr;
-	const qboolean progressStalled = NewBotAI_IsCombatProgressStalled(bs);
 
 	if (!bs->currentEnemy || !bs->currentEnemy->client)
 	{
-		bs->combatStuckSince = 0;
-		return qtrue;
+		return qfalse;
 	}
 
 	if (!bs->frame_Enemy_Vis)
 	{
-		return qtrue;
+		return qfalse;
 	}
 
 	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->origin, toEnemy);
@@ -14390,6 +14387,29 @@ static qboolean NewBotAI_ShouldFallbackToWaypoints(bot_state_t *bs)
 	JP_Trace(&tr, bs->origin, mins, maxs, trTo, bs->client, MASK_PLAYERSOLID, qfalse, 0, 0);
 
 	if (tr.fraction < 1.0f && tr.entityNum != bs->currentEnemy->s.number)
+	{
+		return qtrue;
+	}
+
+	return qfalse;
+}
+
+static qboolean NewBotAI_ShouldFallbackToWaypoints(bot_state_t *bs)
+{
+	const qboolean progressStalled = NewBotAI_IsCombatProgressStalled(bs);
+
+	if (!bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		bs->combatStuckSince = 0;
+		return qtrue;
+	}
+
+	if (!bs->frame_Enemy_Vis)
+	{
+		return qtrue;
+	}
+
+	if (NewBotAI_IsDirectPathToEnemyBlocked(bs))
 	{
 		return qtrue;
 	}
@@ -14454,7 +14474,7 @@ static qboolean NewBotAI_CanUseWaypointFallbackInCombat(bot_state_t *bs)
 		return qtrue;
 	}
 
-	return NewBotAI_ShouldFallbackToWaypoints(bs);
+	return NewBotAI_IsDirectPathToEnemyBlocked(bs) || NewBotAI_IsCombatProgressStalled(bs);
 }
 
 void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
