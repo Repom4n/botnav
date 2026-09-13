@@ -379,6 +379,7 @@ typedef struct bot_state_s
 	int					healDrainlockTargetNum; // enemy clientNum associated with healDrainlockActive
 	int					randomStrafeDir;
 	int					randomStrafeEndTime;
+	int					randomStrafeMode; // 1 = forward diagonal, -1 = backward diagonal, 0 = rare pure lateral strafe
 	int					lastFlipkickAttemptTime;
 	int					flipkickInputTime;
 	qboolean			flipkickJumpHeld;
@@ -399,6 +400,7 @@ typedef struct bot_state_s
 	int					gripkickAttemptTime; // level.time of the most recent gripkick flipkick attempt (success window is measured from this)
 	int					gripkickDwellUntil; // while > level.time, gripkick holds the target with aim-down/forward-only movement before the next kick approach
 	int					gripkickLookDownUntil; // while > level.time, gripkick holds aim-down and waits for grip drag before attempting flipkick
+	int					gripkickRestackDir; // latched forward/back direction used to keep restacking movement stable until vertical overlap is resolved
 
 	qboolean			wasDuelInProgress; // previous-think duelInProgress, used to count completed duels
 	int					duelCompletedCount; // duels finished since the last explore window - see bot_duelcountmax
@@ -412,6 +414,7 @@ typedef struct bot_state_s
 	int					saberRetrieveSpamTime; // level.time through which the next attack-toggle press is held while recalling a knocked-away saber
 	qboolean			saberRetrieveSpamHeld; // whether the current attack-toggle press is the held or released half
 	int					drainRollYawStart; // level.time when the knocked-down drain+sideways-roll 90-degree yaw-away blend began (0 = not blending)
+	int					escapeYawOverrideUntil; // while > level.time, yaw escapes/rolls use the fixed NEWBOTAI_TUNING_ESCAPE_YAW_SPEED turn rate
 	int					lastGripkickSuccessTime; // level.time of the most recent confirmed gripkick hit/knockdown, used to weight pullkick follow-ups
 
 	int					navObstacleUntil; // stay in waypoint nav mode until this time when an obstacle blocks path to enemy

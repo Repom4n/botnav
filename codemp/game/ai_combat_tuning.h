@@ -1,6 +1,8 @@
 #ifndef AI_COMBAT_TUNING_H
 #define AI_COMBAT_TUNING_H
 
+#define NEWBOTAI_TUNING_ESCAPE_YAW_SPEED 333.0f
+
 typedef enum
 {
 	NEWBOTAI_DRAINLOCK_FORCE_NONE = 0,
@@ -50,10 +52,63 @@ static inline int NewBotAI_AdjustPTKWeightForArmor(int weight, int enemyArmor, i
 	return weight + NEWBOTAI_PTK_ARMOR_STRONG_LEAD_BONUS;
 }
 
-// Drainlock policy: once either the sustained drainlock advantage or the immediate
-// pullkick-drain window is active, keep pull available as the first-choice finisher when it
-// meets the minimum weight and either the enemy is already below the free-pull threshold or
-// pull ties/exceeds drain. Otherwise, only a real drainlock advantage may fall back to drain.
+static inline int NewBotAI_GetSaberThrowPTKBonus(
+	int freePullkickWindow, int enemySaberReturning, int ourHealth, int ourForce, int hisForce)
+{
+	if (freePullkickWindow)
+	{
+		if (enemySaberReturning)
+		{
+			return (ourHealth > 30 && ourForce > hisForce) ? 120 : 75;
+		}
+
+		return (ourHealth > 30 && ourForce > hisForce) ? 80 : 40;
+	}
+
+	return enemySaberReturning ? 20 : 10;
+}
+
+static inline int NewBotAI_GetPulledTowardEnemyPTKBonus(
+	int freePullkickWindow, float enemyDistance)
+{
+	if (enemyDistance > 220.0f)
+	{
+		return 0;
+	}
+
+	return freePullkickWindow ? 140 : 90;
+}
+
+static inline float NewBotAI_GetImmediateFlipkickYawTolerance(int immediateContact)
+{
+	return immediateContact ? 60.0f : 35.0f;
+}
+
+static inline float NewBotAI_GetViewAngleAxisFactor(float factor, int isYawAxis, int escapeYawOverrideActive)
+{
+	if (isYawAxis && escapeYawOverrideActive)
+	{
+		return 1.0f;
+	}
+
+	return factor;
+}
+
+static inline float NewBotAI_GetViewAngleAxisMaxChange(
+	float defaultAxisMaxchange, float thinktime, int isYawAxis, int escapeYawOverrideActive)
+{
+	if (isYawAxis && escapeYawOverrideActive)
+	{
+		return NEWBOTAI_TUNING_ESCAPE_YAW_SPEED * thinktime;
+	}
+
+	return defaultAxisMaxchange;
+}
+
+// Drainlock policy: the "drain" half comes first. Before the enemy is actually below the
+// free-pull threshold, a pullkick-drain window keeps choosing drain. Once the free-pull
+// finisher is live, preserve the existing pull-vs-drain weight comparison so the chosen
+// action still reflects the computed scores.
 static inline newbotai_drainlock_force_choice_t NewBotAI_GetDrainlockForceChoice(
 	newbotai_drainlock_force_context_t context)
 {
@@ -62,13 +117,17 @@ static inline newbotai_drainlock_force_choice_t NewBotAI_GetDrainlockForceChoice
 		return NEWBOTAI_DRAINLOCK_FORCE_NONE;
 	}
 
-	if (context.pullWeight >= context.minWeight &&
-		(context.enemyForce < 20 || context.pullWeight >= context.drainWeight))
+	// Once the enemy is truly below the free-pull threshold, preserve the legacy tie-break:
+	// equal pull/drain weights still resolve to pull so the finisher can fire immediately.
+	if (context.enemyForce < 20 &&
+		context.pullWeight >= context.minWeight &&
+		context.pullWeight >= context.drainWeight)
 	{
 		return NEWBOTAI_DRAINLOCK_FORCE_PULL;
 	}
 
-	if (context.drainlockAdvantage && context.drainWeight > context.minWeight)
+	if ((context.drainlockAdvantage || context.pullkickDrainWindow) &&
+		context.drainWeight > context.minWeight)
 	{
 		return NEWBOTAI_DRAINLOCK_FORCE_DRAIN;
 	}
@@ -95,6 +154,25 @@ static inline int NewBotAI_ShouldBlockOrthogonalSaberSpecialInput(
 static inline int NewBotAI_ShouldIgnoreBotSaberLoss(int isBot, int noSaberDropEnabled)
 {
 	return (isBot && noSaberDropEnabled) ? 1 : 0;
+}
+
+static inline int NewBotAI_ShouldForceImmediateSaberThrowHop(
+	float timeToImpactMs, float forwardDist, int isReturning, float skill)
+{
+	if (timeToImpactMs <= 60.0f ||
+		forwardDist <= (isReturning ? 12.0f : 18.0f))
+	{
+		return 1;
+	}
+
+	if (skill >= 6.0f &&
+		(timeToImpactMs <= 80.0f ||
+		 forwardDist <= (isReturning ? 16.0f : 24.0f)))
+	{
+		return 1;
+	}
+
+	return 0;
 }
 
 #endif

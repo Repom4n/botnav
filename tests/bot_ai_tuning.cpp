@@ -20,7 +20,7 @@ BOOST_AUTO_TEST_CASE( drainlock_force_choice_prefers_pull_when_it_matches_or_bea
 		NewBotAI_GetDrainlockForceChoice( { 0, 1, 0, 70, 70, 40 } ),
 		NEWBOTAI_DRAINLOCK_FORCE_PULL );
 	BOOST_CHECK_EQUAL(
-		NewBotAI_GetDrainlockForceChoice( { 0, 0, 1, 90, 80, 10 } ),
+		NewBotAI_GetDrainlockForceChoice( { 0, 0, 1, 80, 80, 10 } ),
 		NEWBOTAI_DRAINLOCK_FORCE_PULL );
 }
 
@@ -31,7 +31,48 @@ BOOST_AUTO_TEST_CASE( drainlock_force_choice_falls_back_to_drain_when_pull_loses
 		NEWBOTAI_DRAINLOCK_FORCE_DRAIN );
 	BOOST_CHECK_EQUAL(
 		NewBotAI_GetDrainlockForceChoice( { 0, 0, 1, 90, 60, 40 } ),
-		NEWBOTAI_DRAINLOCK_FORCE_NONE );
+		NEWBOTAI_DRAINLOCK_FORCE_DRAIN );
+	BOOST_CHECK_EQUAL(
+		NewBotAI_GetDrainlockForceChoice( { 0, 0, 1, 90, 80, 10 } ),
+		NEWBOTAI_DRAINLOCK_FORCE_DRAIN );
+}
+
+BOOST_AUTO_TEST_CASE( saber_throw_immediate_hop_thresholds_match_tuning )
+{
+	BOOST_CHECK( NewBotAI_ShouldForceImmediateSaberThrowHop( 55.0f, 40.0f, 0, 3.0f ) );
+	BOOST_CHECK( !NewBotAI_ShouldForceImmediateSaberThrowHop( 75.0f, 20.0f, 1, 3.0f ) );
+	BOOST_CHECK( NewBotAI_ShouldForceImmediateSaberThrowHop( 75.0f, 20.0f, 1, 6.0f ) );
+	BOOST_CHECK( !NewBotAI_ShouldForceImmediateSaberThrowHop( 95.0f, 30.0f, 0, 8.0f ) );
+}
+
+BOOST_AUTO_TEST_CASE( saber_throw_ptk_bonus_stays_low_until_free_pull_window )
+{
+	BOOST_CHECK_EQUAL( NewBotAI_GetSaberThrowPTKBonus( 0, 0, 100, 50, 40 ), 10 );
+	BOOST_CHECK_EQUAL( NewBotAI_GetSaberThrowPTKBonus( 0, 1, 100, 50, 40 ), 20 );
+	BOOST_CHECK_EQUAL( NewBotAI_GetSaberThrowPTKBonus( 1, 0, 100, 60, 20 ), 80 );
+	BOOST_CHECK_EQUAL( NewBotAI_GetSaberThrowPTKBonus( 1, 1, 100, 60, 20 ), 120 );
+	BOOST_CHECK_EQUAL( NewBotAI_GetSaberThrowPTKBonus( 1, 1, 20, 20, 40 ), 75 );
+}
+
+BOOST_AUTO_TEST_CASE( being_pulled_ptk_bonus_stays_heavy_only_in_exposed_window )
+{
+	BOOST_CHECK_EQUAL( NewBotAI_GetPulledTowardEnemyPTKBonus( 0, 180.0f ), 90 );
+	BOOST_CHECK_EQUAL( NewBotAI_GetPulledTowardEnemyPTKBonus( 1, 180.0f ), 140 );
+	BOOST_CHECK_EQUAL( NewBotAI_GetPulledTowardEnemyPTKBonus( 1, 240.0f ), 0 );
+}
+
+BOOST_AUTO_TEST_CASE( immediate_flipkick_contact_widens_yaw_tolerance )
+{
+	BOOST_CHECK_EQUAL( NewBotAI_GetImmediateFlipkickYawTolerance( 0 ), 35.0f );
+	BOOST_CHECK_EQUAL( NewBotAI_GetImmediateFlipkickYawTolerance( 1 ), 60.0f );
+}
+
+BOOST_AUTO_TEST_CASE( escape_yaw_override_forces_fixed_turn_rate )
+{
+	BOOST_CHECK_EQUAL( NewBotAI_GetViewAngleAxisFactor( 0.35f, 1, 1 ), 1.0f );
+	BOOST_CHECK_EQUAL( NewBotAI_GetViewAngleAxisFactor( 0.35f, 0, 1 ), 0.35f );
+	BOOST_CHECK_EQUAL( NewBotAI_GetViewAngleAxisMaxChange( 90.0f, 0.05f, 1, 1 ), NEWBOTAI_TUNING_ESCAPE_YAW_SPEED * 0.05f );
+	BOOST_CHECK_EQUAL( NewBotAI_GetViewAngleAxisMaxChange( 90.0f, 0.05f, 1, 0 ), 90.0f );
 }
 
 BOOST_AUTO_TEST_CASE( accidental_special_guard_uses_effective_inputs )
