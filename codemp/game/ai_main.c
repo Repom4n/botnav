@@ -2242,6 +2242,8 @@ void BotDamageNotification(gclient_t *bot, gentity_t *attacker)
 	if (bs_a)
 	{ //if the client attacking us is a bot as well
 		bs_a->lastAttacked = &g_entities[bot->ps.clientNum];
+		bs_a->combatInitiatedEnemyNum = bot->ps.clientNum;
+		bs_a->combatInitiatedUntil = level.time + 6000;
 		i = 0;
 
 		while (i < MAX_CLIENTS)
@@ -2281,6 +2283,8 @@ void BotDamageNotification(gclient_t *bot, gentity_t *attacker)
 
 	bs->lastHurt = attacker;
 	bs->lastHurtTime = level.time;
+	bs->combatInitiatedEnemyNum = attacker->s.number;
+	bs->combatInitiatedUntil = level.time + 6000;
 
 	if (bs->currentEnemy)
 	{ //we don't care about the guy attacking us if we have an enemy already
@@ -13901,16 +13905,6 @@ static qboolean NewBotAI_IsCombatInitiatedAgainst(bot_state_t *bs, gentity_t *en
 		return qtrue;
 	}
 
-	if (bs->lastAttacked == enemy)
-	{
-		return qtrue;
-	}
-
-	if (enemy->client->ps.persistant[PERS_ATTACKER] == bs->client)
-	{
-		return qtrue;
-	}
-
 	return qfalse;
 }
 
@@ -15255,7 +15249,7 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 		}
 	}
 
-	if (bs->enemySeenTime < level.time || !bs->currentEnemy)
+	if (bs->enemySeenTime < level.time || !bs->currentEnemy || !bs->frame_Enemy_Vis)
 	{
 		enemy = ScanForEnemies(bs);
 
