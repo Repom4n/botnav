@@ -6962,10 +6962,19 @@ void NewBotAI_Getup(bot_state_t *bs)
 	}
 }
 
+static int NewBotAI_GetEnemyTotalHealth(bot_state_t *bs)
+{
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return 0;
+	}
+
+	return bs->currentEnemy->health + bs->currentEnemy->client->ps.stats[STAT_ARMOR];
+}
+
 static int NewBotAI_GetTotalHealthDelta(bot_state_t *bs)
 {
 	int ourTotalHealth;
-	int enemyTotalHealth;
 
 	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
 	{
@@ -6973,9 +6982,8 @@ static int NewBotAI_GetTotalHealthDelta(bot_state_t *bs)
 	}
 
 	ourTotalHealth = g_entities[bs->client].health + bs->cur_ps.stats[STAT_ARMOR];
-	enemyTotalHealth = bs->currentEnemy->health + bs->currentEnemy->client->ps.stats[STAT_ARMOR];
 
-	return ourTotalHealth - enemyTotalHealth;
+	return ourTotalHealth - NewBotAI_GetEnemyTotalHealth(bs);
 }
 
 static qboolean NewBotAI_CanAttemptFlipkick(bot_state_t *bs)
@@ -8241,8 +8249,7 @@ void NewBotAI_SaberThrowing(bot_state_t* bs)
 	const int enemyHealth = bs->currentEnemy ? bs->currentEnemy->health : 0;
 	const int enemyForce = bs->currentEnemy && bs->currentEnemy->client ?
 		bs->currentEnemy->client->ps.fd.forcePower : 0;
-	const int enemyTotalHealth = bs->currentEnemy && bs->currentEnemy->client ?
-		(bs->currentEnemy->health + bs->currentEnemy->client->ps.stats[STAT_ARMOR]) : 0;
+	const int enemyTotalHealth = NewBotAI_GetEnemyTotalHealth(bs);
 
 	if (bs->saberThrowStartTime <= 0)
 		bs->saberThrowStartTime = level.time;
@@ -12046,6 +12053,7 @@ static void NewBotAI_BlockAccidentalSaberSpecialMoves(bot_state_t *bs)
 
 	cmd->rightmove = 0;
 	cmd->upmove = 0;
+	bs->forceMove_Forward = 0;
 	bs->forceMove_Right = 0;
 	bs->forceMove_Up = 0;
 }
@@ -12940,7 +12948,7 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 	const int hisForce = bs->currentEnemy->client->ps.fd.forcePower;
 	const int enemyHealth = bs->currentEnemy->health;
 	const int enemyArmor = bs->currentEnemy->client->ps.stats[STAT_ARMOR];
-	const int enemyTotalHealth = bs->currentEnemy->health + enemyArmor;
+	const int enemyTotalHealth = NewBotAI_GetEnemyTotalHealth(bs);
 	const int forceLead = ourForce - hisForce;
 	const qboolean enemyKnockedDown = BG_InKnockDown(bs->currentEnemy->client->ps.legsAnim) ? qtrue : qfalse;
 	const float saberthrowBias = BotGetChanceBiasPercent(bot_saberthrowbias.value);
