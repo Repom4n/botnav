@@ -62,6 +62,20 @@ BOOST_AUTO_TEST_CASE( being_pulled_ptk_bonus_stays_heavy_only_in_exposed_window 
 	BOOST_CHECK_EQUAL( NewBotAI_GetPulledTowardEnemyPTKBonus( 1, 180.0f, 0 ), 0 );
 }
 
+BOOST_AUTO_TEST_CASE( immediate_flipkick_contact_widens_yaw_tolerance )
+{
+	BOOST_CHECK_EQUAL( NewBotAI_GetImmediateFlipkickYawTolerance( 0 ), 35.0f );
+	BOOST_CHECK_EQUAL( NewBotAI_GetImmediateFlipkickYawTolerance( 1 ), 60.0f );
+}
+
+BOOST_AUTO_TEST_CASE( escape_yaw_override_forces_fixed_turn_rate )
+{
+	BOOST_CHECK_EQUAL( NewBotAI_GetViewAngleAxisFactor( 0.35f, 1, 1 ), 1.0f );
+	BOOST_CHECK_EQUAL( NewBotAI_GetViewAngleAxisFactor( 0.35f, 0, 1 ), 0.35f );
+	BOOST_CHECK_EQUAL( NewBotAI_GetViewAngleAxisMaxChange( 1800.0f, 0.05f, 1, 1 ), NEWBOTAI_TUNING_ESCAPE_YAW_SPEED * 0.05f );
+	BOOST_CHECK_EQUAL( NewBotAI_GetViewAngleAxisMaxChange( 1800.0f, 0.05f, 1, 0 ), 90.0f );
+}
+
 BOOST_AUTO_TEST_CASE( accidental_special_guard_uses_effective_inputs )
 {
 	BOOST_CHECK( NewBotAI_ShouldBlockOrthogonalSaberSpecialInput( 1, -1, 0, 1, 0, 1 ) );

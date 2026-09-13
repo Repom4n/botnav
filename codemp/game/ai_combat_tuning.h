@@ -1,6 +1,8 @@
 #ifndef AI_COMBAT_TUNING_H
 #define AI_COMBAT_TUNING_H
 
+#define NEWBOTAI_TUNING_ESCAPE_YAW_SPEED 333.0f
+
 typedef enum
 {
 	NEWBOTAI_DRAINLOCK_FORCE_NONE = 0,
@@ -75,6 +77,32 @@ static inline int NewBotAI_GetPulledTowardEnemyPTKBonus(
 	}
 
 	return freePullkickWindow ? 140 : 90;
+}
+
+static inline float NewBotAI_GetImmediateFlipkickYawTolerance(int immediateContact)
+{
+	return immediateContact ? 60.0f : 35.0f;
+}
+
+static inline float NewBotAI_GetViewAngleAxisFactor(float factor, int isYawAxis, int escapeYawOverrideActive)
+{
+	if (isYawAxis && escapeYawOverrideActive)
+	{
+		return 1.0f;
+	}
+
+	return factor;
+}
+
+static inline float NewBotAI_GetViewAngleAxisMaxChange(
+	float maxchange, float thinktime, int isYawAxis, int escapeYawOverrideActive)
+{
+	if (isYawAxis && escapeYawOverrideActive)
+	{
+		return NEWBOTAI_TUNING_ESCAPE_YAW_SPEED * thinktime;
+	}
+
+	return maxchange * thinktime;
 }
 
 // Drainlock policy: the "drain" half comes first. Before the enemy is actually below the

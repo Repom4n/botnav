@@ -197,7 +197,7 @@ static void NewBotAI_StartEscapeYawOverride(bot_state_t *bs, int durationMs);
 #define NEWBOTAI_COMBAT_WAYPOINT_SEPARATION 512.0f
 #define NEWBOTAI_COMBAT_WAYPOINT_SEPARATION_SQ (NEWBOTAI_COMBAT_WAYPOINT_SEPARATION * NEWBOTAI_COMBAT_WAYPOINT_SEPARATION)
 #define NEWBOTAI_TARGET_COMMIT_DISTANCE 768.0f
-#define NEWBOTAI_ESCAPE_YAW_SPEED 333.0f
+#define NEWBOTAI_ESCAPE_YAW_SPEED NEWBOTAI_TUNING_ESCAPE_YAW_SPEED
 #define NEWBOTAI_ESCAPE_YAW_OVERRIDE_MS 250
 static qboolean NewBotAI_HandleRecoveryRollForcepower(bot_state_t *bs);
 static qboolean NewBotAI_IsBetweenOwnSaberAndEnemy(bot_state_t *bs);
@@ -730,14 +730,9 @@ void BotChangeViewAngles(bot_state_t *bs, float thinktime) {
 
 	maxchange = BotGetAimSpeedMaxChange(bs, maxchange);
 	for (i = 0; i < 2; i++) {
-		float axisFactor = factor;
-		float axisMaxchange = maxchange * thinktime;
-
-		if (i == YAW && bs->escapeYawOverrideUntil > level.time)
-		{
-			axisFactor = 1.0f;
-			axisMaxchange = NEWBOTAI_ESCAPE_YAW_SPEED * thinktime;
-		}
+		const qboolean escapeYawOverrideActive = (i == YAW && bs->escapeYawOverrideUntil > level.time) ? qtrue : qfalse;
+		float axisFactor = NewBotAI_GetViewAngleAxisFactor(factor, i == YAW, escapeYawOverrideActive);
+		float axisMaxchange = NewBotAI_GetViewAngleAxisMaxChange(maxchange, thinktime, i == YAW, escapeYawOverrideActive);
 
 		bs->viewangles[i] = AngleMod(bs->viewangles[i]);
 		bs->ideal_viewangles[i] = AngleMod(bs->ideal_viewangles[i]);
@@ -746,7 +741,7 @@ void BotChangeViewAngles(bot_state_t *bs, float thinktime) {
 		bs->viewanglespeed[i] += (bs->viewanglespeed[i] - disired_speed);
 		if (bs->viewanglespeed[i] > 180) bs->viewanglespeed[i] = axisMaxchange;
 		if (bs->viewanglespeed[i] < -180) bs->viewanglespeed[i] = -axisMaxchange;
-		if (i == YAW && bs->escapeYawOverrideUntil > level.time)
+		if (escapeYawOverrideActive)
 		{
 			if (bs->viewanglespeed[i] > axisMaxchange) bs->viewanglespeed[i] = axisMaxchange;
 			if (bs->viewanglespeed[i] < -axisMaxchange) bs->viewanglespeed[i] = -axisMaxchange;
@@ -7238,7 +7233,8 @@ static qboolean NewBotAI_IsFlipkickSetupReady(bot_state_t *bs)
 	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, a_fo);
 	vectoangles(a_fo, a_fo);
 	yawDiff = AngleDifference(a_fo[YAW], bs->viewangles[YAW]);
-	yawTolerance = NewBotAI_IsImmediateFlipkickContact(bs) ? 60.0f : 35.0f;
+	yawTolerance = NewBotAI_GetImmediateFlipkickYawTolerance(
+		NewBotAI_IsImmediateFlipkickContact(bs) ? 1 : 0);
 
 	return (yawDiff <= yawTolerance && yawDiff >= -yawTolerance) ? qtrue : qfalse;
 }
