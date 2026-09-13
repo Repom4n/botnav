@@ -48,6 +48,7 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
 #include "botlib/be_ai_weap.h"
 //
 #include "ai_main.h"
+#include "ai_combat_tuning.h"
 #include "w_saber.h"
 //
 #include "chars.h"
@@ -11033,21 +11034,7 @@ static int NewBotAI_GetPTKWeight(bot_state_t *bs)
 		weight += 15;
 	}
 
-	if (enemyArmor > 0)
-	{
-		if (forceLead < 1)
-		{
-			weight -= 60;
-		}
-		else if (forceLead < 20)
-		{
-			weight -= 35;
-		}
-		else
-		{
-			weight += 10;
-		}
-	}
+	weight = NewBotAI_AdjustPTKWeightForArmor(weight, enemyArmor, forceLead);
 
 	if (ourHealth > 70)
 	{
@@ -12026,6 +12013,11 @@ static void NewBotAI_TrySaberThrowDefenseBreak(bot_state_t *bs)
 static void NewBotAI_BlockAccidentalSaberSpecialMoves(bot_state_t *bs)
 {
 	usercmd_t *cmd;
+	int effectiveRightMove;
+	int effectiveForwardMove;
+	int effectiveUpMove;
+	qboolean saberBusy;
+	qboolean attackPressed;
 
 	if (!bs || bs->cur_ps.weapon != WP_SABER)
 	{
@@ -12033,20 +12025,21 @@ static void NewBotAI_BlockAccidentalSaberSpecialMoves(bot_state_t *bs)
 	}
 
 	cmd = &level.clients[bs->client].pers.cmd;
-	if (cmd->upmove <= 0 || cmd->rightmove == 0 || cmd->forwardmove != 0)
-	{
-		return;
-	}
-
-	if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE ||
-		BG_SaberInAttack(bs->cur_ps.saberMove) ||
+	effectiveRightMove = NewBotAI_GetEffectiveMoveInput(cmd->rightmove, bs->forceMove_Right);
+	effectiveForwardMove = NewBotAI_GetEffectiveMoveInput(cmd->forwardmove, bs->forceMove_Forward);
+	effectiveUpMove = NewBotAI_GetEffectiveMoveInput(cmd->upmove, bs->forceMove_Up);
+	saberBusy = (BG_SaberInAttack(bs->cur_ps.saberMove) ||
 		PM_SaberInStart(bs->cur_ps.saberMove) ||
-		PM_SaberInTransition(bs->cur_ps.saberMove))
-	{
-		return;
-	}
+		PM_SaberInTransition(bs->cur_ps.saberMove)) ? qtrue : qfalse;
+	attackPressed = (bs->doAttack || (cmd->buttons & BUTTON_ATTACK)) ? qtrue : qfalse;
 
-	if (!(bs->doAttack || (cmd->buttons & BUTTON_ATTACK)))
+	if (!NewBotAI_ShouldBlockOrthogonalSaberSpecialInput(
+		effectiveUpMove,
+		effectiveRightMove,
+		effectiveForwardMove,
+		bs->cur_ps.groundEntityNum != ENTITYNUM_NONE,
+		saberBusy,
+		attackPressed))
 	{
 		return;
 	}
@@ -13122,27 +13115,32 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 	lightningWeight = NewBotAI_GetLightningWeight(bs);
 	//doNothingWeight = NewBotAI_GetWait(bs);
 
-	if (drainlockAdvantage || pullkickDrainWindow)
+	switch (NewBotAI_GetDrainlockForceChoice(
+		minWeight,
+		drainlockAdvantage,
+		pullkickDrainWindow,
+		drainWeight,
+		pullWeight,
+		bs->currentEnemy->client->ps.fd.forcePower))
 	{
-		if (pullWeight > minWeight &&
-			(bs->currentEnemy->client->ps.fd.forcePower < 20 || pullWeight >= drainWeight))
+	case NEWBOTAI_DRAINLOCK_FORCE_PULL:
+		level.clients[bs->client].ps.fd.forcePowerSelected = FP_PULL;
+		NewBotAI_ApplyPullMistake(bs);
+		useTheForce = qtrue;
+		NewBotAI_SchedulePullkickJump(bs);
+		if (NewBotAI_IsPullkickOpportunity(bs) &&
+			bs->frame_Enemy_Len <= NEWBOTAI_IMMEDIATE_FLIPKICK_RANGE &&
+			NewBotAI_IsFlipkickSetupReady(bs))
 		{
-			level.clients[bs->client].ps.fd.forcePowerSelected = FP_PULL;
-			NewBotAI_ApplyPullMistake(bs);
-			useTheForce = qtrue;
-			NewBotAI_SchedulePullkickJump(bs);
-			if (NewBotAI_IsPullkickOpportunity(bs) &&
-				bs->frame_Enemy_Len <= NEWBOTAI_IMMEDIATE_FLIPKICK_RANGE &&
-				NewBotAI_IsFlipkickSetupReady(bs))
-			{
-				NewBotAI_Flipkick(bs);
-			}
+			NewBotAI_Flipkick(bs);
 		}
-		else if (drainWeight > minWeight && drainlockAdvantage)
-		{
-			level.clients[bs->client].ps.fd.forcePowerSelected = FP_DRAIN;
-			useTheForce = qtrue;
-		}
+		break;
+	case NEWBOTAI_DRAINLOCK_FORCE_DRAIN:
+		level.clients[bs->client].ps.fd.forcePowerSelected = FP_DRAIN;
+		useTheForce = qtrue;
+		break;
+	default:
+		break;
 	}
 
 	if (!useTheForce && gripWeight > minWeight &&

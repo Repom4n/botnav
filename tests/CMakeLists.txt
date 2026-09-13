@@ -23,6 +23,7 @@ endif(NOT InOpenJK)
 
 set(TestFiles
 	"main.cpp"
+	"bot_ai_tuning.cpp"
 	"safe/string.cpp"
 	"safe/limited_vector.cpp"
 	"${SharedDir}/qcommon/safe/string.cpp"
@@ -48,6 +49,7 @@ set(TestIncludeDirectories
 	"${Boost_INCLUDE_DIRS}"
 	"${SharedDir}"
 	"${GSLIncludeDirectory}"
+	"${CMAKE_SOURCE_DIR}/codemp/game"
 	)
 set(TestDefines "${SharedDefines}")
 
