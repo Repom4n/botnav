@@ -12916,7 +12916,7 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 
 	if (gripWeight > minWeight &&
 		gripWeight >= pushWeight && gripWeight >= drainWeight &&
-		(gripWeight >= pullWeight || (gripWeight + 15 >= pullWeight)))
+		gripWeight >= pullWeight)
 	{
 		level.clients[bs->client].ps.fd.forcePowerSelected = FP_GRIP;
 		useTheForce = qtrue;
@@ -13959,7 +13959,7 @@ int NewBotAI_ScanForEnemies(bot_state_t* bs) {
 		lowHangingFruitDistance > 0.0f) ? qtrue : qfalse;
 
 	if (bs->currentEnemy) { //only switch to a new enemy if he's significantly closer
-		if (PassStandardEnemyChecks(bs, bs->currentEnemy))
+		if (bs->currentEnemy->client && PassStandardEnemyChecks(bs, bs->currentEnemy))
 		{
 			const int currentEnemyHealth = Com_Clampi(1, (int)nominalFullHealth, bs->currentEnemy->health);
 			float normalizedHealth;
@@ -15227,8 +15227,10 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 	}
 
 	{
+		const float targetDistanceLimit = BotGetTargetDistanceLimit();
+		const float rescanDistanceThreshold = (targetDistanceLimit > 0.0f) ? targetDistanceLimit : 300.0f;
 		const qboolean shouldRescanForCloserTarget =
-			(bs->currentEnemy && bs->frame_Enemy_Vis && bs->frame_Enemy_Len > 300.0f) ? qtrue : qfalse;
+			(bs->currentEnemy && bs->frame_Enemy_Vis && bs->frame_Enemy_Len > rescanDistanceThreshold) ? qtrue : qfalse;
 		if (bs->enemySeenTime < level.time || !bs->frame_Enemy_Vis || !bs->currentEnemy || shouldRescanForCloserTarget)
 		{
 			enemy = ScanForEnemies(bs);
