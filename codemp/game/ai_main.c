@@ -14403,7 +14403,6 @@ static void NewBotAI_MaintainWaypointFallbackEnemyLock(bot_state_t *bs)
 		return;
 	}
 
-	bs->wpDestination = bs->currentEnemy;
 	bs->enemySeenTime = level.time + ENEMY_FORGET_MS;
 	if (bs->frame_Enemy_Vis)
 	{
