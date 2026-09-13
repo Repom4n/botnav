@@ -32,6 +32,7 @@ extern void G_VehicleSetDamageLocFlags( gentity_t *veh, int impactDir, int death
 extern void G_VehUpdateShields( gentity_t *targ );
 extern void G_LetGoOfWall( gentity_t *ent );
 extern void BG_ClearRocketLock( playerState_t *ps );
+extern qboolean SpotWouldTelefrag3( vec3_t spot );
 //rww - pd
 void BotDamageNotification(gclient_t *bot, gentity_t *attacker);
 //end rww
@@ -2184,6 +2185,87 @@ extern void saberBackToOwner(gentity_t *saberent);
 #if _GRAPPLE
 void Weapon_HookFree (gentity_t *ent);
 #endif
+
+static qboolean G_CalcDuelNearOpponentRespawn(gentity_t *attacker, vec3_t outOrigin, float *outYaw)
+{
+	static const float radii[] = {96.0f, 128.0f, 160.0f};
+	static const float yawOffsets[] = {90.0f, -90.0f, 135.0f, -135.0f, 45.0f, -45.0f, 180.0f, 0.0f};
+	vec3_t mins = {-15.0f, -15.0f, DEFAULT_MINS_2};
+	vec3_t maxs = {15.0f, 15.0f, DEFAULT_MAXS_2};
+	vec3_t baseOrigin, candidate, start, end, toOpponent, candidateAngles;
+	float baseYaw;
+	trace_t tr;
+	int i, j;
+
+	if (!attacker || !attacker->client)
+	{
+		return qfalse;
+	}
+
+	VectorCopy(attacker->client->ps.origin, baseOrigin);
+	baseYaw = attacker->client->ps.viewangles[YAW];
+
+	for (i = 0; i < ARRAY_LEN(radii); i++)
+	{
+		for (j = 0; j < ARRAY_LEN(yawOffsets); j++)
+		{
+			vec3_t forward;
+			vec3_t yawAngles;
+			vec3_t occupancyProbe;
+			vec3_t feetProbe;
+			vec3_t headProbe;
+
+			VectorSet(yawAngles, 0.0f, AngleNormalize360(baseYaw + yawOffsets[j]), 0.0f);
+			AngleVectors(yawAngles, forward, NULL, NULL);
+
+			VectorMA(baseOrigin, radii[i], forward, candidate);
+			candidate[2] = baseOrigin[2];
+
+			VectorCopy(candidate, start);
+			start[2] += 32.0f;
+			VectorCopy(candidate, end);
+			end[2] -= 128.0f;
+
+			trap->Trace(&tr, start, mins, maxs, end, ENTITYNUM_NONE, MASK_PLAYERSOLID, qfalse, 0, 0);
+			if (tr.allsolid || tr.startsolid || tr.fraction >= 1.0f)
+			{
+				continue;
+			}
+			VectorCopy(tr.endpos, candidate);
+			candidate[2] -= mins[2];
+
+			VectorCopy(candidate, occupancyProbe);
+			occupancyProbe[2] += 1.0f;
+			trap->Trace(&tr, candidate, mins, maxs, occupancyProbe, ENTITYNUM_NONE, MASK_PLAYERSOLID, qfalse, 0, 0);
+			if (tr.allsolid || tr.startsolid || tr.fraction < 1.0f)
+			{
+				continue;
+			}
+			VectorCopy(candidate, feetProbe);
+			feetProbe[2] += 1.0f;
+			VectorCopy(candidate, headProbe);
+			headProbe[2] += maxs[2] - 1.0f;
+			if ((trap->PointContents(feetProbe, ENTITYNUM_NONE) & MASK_PLAYERSOLID) ||
+				(trap->PointContents(headProbe, ENTITYNUM_NONE) & MASK_PLAYERSOLID))
+			{
+				continue;
+			}
+			if (SpotWouldTelefrag3(candidate))
+			{
+				continue;
+			}
+
+			VectorCopy(candidate, outOrigin);
+			VectorSubtract(baseOrigin, candidate, toOpponent);
+			vectoangles(toOpponent, candidateAngles);
+			*outYaw = candidateAngles[YAW];
+			return qtrue;
+		}
+	}
+
+	return qfalse;
+}
+
 void player_die( gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int damage, int meansOfDeath ) {
 	gentity_t	*ent;
 	int			anim;
@@ -2211,8 +2293,26 @@ void player_die( gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int
 		return;
 
 	if (g_duelRespawn.integer && level.gametype == GT_FFA && self->client->ps.duelInProgress && !self->client->pers.noDuelTele && (meansOfDeath != MOD_SUICIDE) && (meansOfDeath != MOD_TEAM_CHANGE)) {
-		VectorCopy(self->client->ps.origin, self->client->pers.respawnLocation);
-		self->client->pers.respawnAngle = self->client->ps.viewangles[YAW];
+		gentity_t *duelOpponent = NULL;
+		float respawnYaw = 0.0f;
+		if (self->client->ps.duelIndex >= 0 && self->client->ps.duelIndex < MAX_CLIENTS)
+		{
+			duelOpponent = &g_entities[self->client->ps.duelIndex];
+		}
+
+		if (duelOpponent && duelOpponent != self && duelOpponent->client &&
+			duelOpponent->inuse &&
+			duelOpponent->client->ps.duelInProgress &&
+			duelOpponent->client->ps.duelIndex == self->s.number &&
+			G_CalcDuelNearOpponentRespawn(duelOpponent, self->client->pers.respawnLocation, &respawnYaw))
+		{
+			self->client->pers.respawnAngle = respawnYaw;
+		}
+		else
+		{
+			VectorCopy(self->client->ps.origin, self->client->pers.respawnLocation);
+			self->client->pers.respawnAngle = self->client->ps.viewangles[YAW];
+		}
 	}
 	else {
 		VectorClear(self->client->pers.respawnLocation);
