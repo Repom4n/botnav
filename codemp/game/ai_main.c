@@ -11921,6 +11921,7 @@ static void NewBotAI_ApplySidewaysDrainRoll(bot_state_t *bs, qboolean moveBack)
 		bs->drainRollDir = Q_irand(0, 1) ? 1 : -1;
 		bs->drainRollYawStart = level.time;
 	}
+	NewBotAI_StartEscapeYawOverride(bs, NEWBOTAI_ESCAPE_YAW_OVERRIDE_MS);
 
 	level.clients[bs->client].ps.fd.forcePowerSelected = FP_DRAIN;
 	trap->EA_ForcePower(bs->client);
