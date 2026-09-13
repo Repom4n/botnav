@@ -12052,7 +12052,9 @@ static void NewBotAI_BlockAccidentalSaberSpecialMoves(bot_state_t *bs)
 	}
 
 	cmd->rightmove = 0;
+	cmd->upmove = 0;
 	bs->forceMove_Right = 0;
+	bs->forceMove_Up = 0;
 }
 
 static int BotGetStrafeFrequencyPercent(void)

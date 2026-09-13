@@ -6869,6 +6869,11 @@ void saberKnockDown(gentity_t *saberent, gentity_t *saberOwner, gentity_t *other
 //sort of a silly macro I guess. But if I change anything in here I'll probably want it to be everywhere.
 #define SABERINVALID (!saberent || !saberOwner || !other || !saberent->inuse || !saberOwner->inuse || !other->inuse || !saberOwner->client || !other->client || !saberOwner->client->ps.saberEntityNum || saberOwner->client->ps.saberLockTime > (level.time-100))
 
+static qboolean BotShouldIgnoreSaberLoss(gentity_t *saberOwner)
+{
+	return (saberOwner && saberOwner->inuse && (saberOwner->r.svFlags & SVF_BOT)) ? qtrue : qfalse;
+}
+
 void WP_SaberRemoveG2Model( gentity_t *saberent )
 {
 	if ( saberent->ghoul2 )
@@ -7032,7 +7037,7 @@ qboolean saberCheckKnockdown_DuelLoss(gentity_t *saberent, gentity_t *saberOwner
 			disarmChance += other->client->saber[1].disarmBonus;
 		}
 	}
-	if ((saberOwner->r.svFlags & SVF_BOT))
+	if (BotShouldIgnoreSaberLoss(saberOwner))
 	{
 		return qfalse;
 	}
@@ -7127,7 +7132,7 @@ qboolean saberCheckKnockdown_BrokenParry(gentity_t *saberent, gentity_t *saberOw
 				disarmChance += other->client->saber[1].disarmBonus;
 			}
 		}
-		if ((saberOwner->r.svFlags & SVF_BOT))
+		if (BotShouldIgnoreSaberLoss(saberOwner))
 		{
 			return qfalse;
 		}
@@ -7159,7 +7164,7 @@ qboolean saberCheckKnockdown_Smashed(gentity_t *saberent, gentity_t *saberOwner,
 		&& other->client
 		&& BG_InExtraDefenseSaberMove( other->client->ps.saberMove ) )
 	{ //make sure the blow was strong enough
-		if (saberOwner->r.svFlags & SVF_BOT)
+		if (BotShouldIgnoreSaberLoss(saberOwner))
 		{
 			return qfalse;
 		}
@@ -7169,7 +7174,7 @@ qboolean saberCheckKnockdown_Smashed(gentity_t *saberent, gentity_t *saberOwner,
 
 	if (damage > 10)
 	{ //make sure the blow was strong enough
-		if (saberOwner->r.svFlags & SVF_BOT)
+		if (BotShouldIgnoreSaberLoss(saberOwner))
 		{
 			return qfalse;
 		}
@@ -7210,7 +7215,7 @@ qboolean saberCheckKnockdown_Thrown(gentity_t *saberent, gentity_t *saberOwner, 
 
 	if (tossIt)
 	{
-		if (saberOwner->r.svFlags & SVF_BOT)
+		if (BotShouldIgnoreSaberLoss(saberOwner))
 		{
 			return qfalse;
 		}
