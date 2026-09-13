@@ -23,6 +23,7 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
 #include "g_local.h"
 #include "bg_local.h"
 #include "w_saber.h"
+#include "ai_combat_tuning.h"
 #include "ai_main.h"
 #include "ghoul2/G2.h"
 
@@ -6869,6 +6870,15 @@ void saberKnockDown(gentity_t *saberent, gentity_t *saberOwner, gentity_t *other
 //sort of a silly macro I guess. But if I change anything in here I'll probably want it to be everywhere.
 #define SABERINVALID (!saberent || !saberOwner || !other || !saberent->inuse || !saberOwner->inuse || !other->inuse || !saberOwner->client || !other->client || !saberOwner->client->ps.saberEntityNum || saberOwner->client->ps.saberLockTime > (level.time-100))
 
+static qboolean BotShouldIgnoreSaberLoss(gentity_t *saberOwner)
+{
+	return (saberOwner &&
+		saberOwner->inuse &&
+		NewBotAI_ShouldIgnoreBotSaberLoss(
+			(saberOwner->r.svFlags & SVF_BOT) != 0,
+			bot_nosaberdrop.integer)) ? qtrue : qfalse;
+}
+
 void WP_SaberRemoveG2Model( gentity_t *saberent )
 {
 	if ( saberent->ghoul2 )
@@ -6920,7 +6930,6 @@ qboolean saberKnockOutOfHand(gentity_t *saberent, gentity_t *saberOwner, vec3_t 
 	{
 		return qfalse;
 	}
-
 	saberOwner->client->ps.saberInFlight = qtrue;
 	saberOwner->client->ps.saberEntityState = 1;
 
@@ -7033,6 +7042,10 @@ qboolean saberCheckKnockdown_DuelLoss(gentity_t *saberent, gentity_t *saberOwner
 			disarmChance += other->client->saber[1].disarmBonus;
 		}
 	}
+	if (BotShouldIgnoreSaberLoss(saberOwner))
+	{
+		return qfalse;
+	}
 	if ( Q_irand( 0, disarmChance ) )
 	{
 		return saberKnockOutOfHand(saberent, saberOwner, dif);
@@ -7124,6 +7137,10 @@ qboolean saberCheckKnockdown_BrokenParry(gentity_t *saberent, gentity_t *saberOw
 				disarmChance += other->client->saber[1].disarmBonus;
 			}
 		}
+		if (BotShouldIgnoreSaberLoss(saberOwner))
+		{
+			return qfalse;
+		}
 		if ( Q_irand( 0, disarmChance ) )
 		{
 			return saberKnockOutOfHand(saberent, saberOwner, dif);
@@ -7142,7 +7159,6 @@ qboolean saberCheckKnockdown_Smashed(gentity_t *saberent, gentity_t *saberOwner,
 	{
 		return qfalse;
 	}
-
 	if (!saberOwner->client->ps.saberInFlight)
 	{ //can only do this if the saber is already actually in flight
 		return qfalse;
@@ -7153,12 +7169,20 @@ qboolean saberCheckKnockdown_Smashed(gentity_t *saberent, gentity_t *saberOwner,
 		&& other->client
 		&& BG_InExtraDefenseSaberMove( other->client->ps.saberMove ) )
 	{ //make sure the blow was strong enough
+		if (BotShouldIgnoreSaberLoss(saberOwner))
+		{
+			return qfalse;
+		}
 		saberKnockDown(saberent, saberOwner, other);
 		return qtrue;
 	}
 
 	if (damage > 10)
 	{ //make sure the blow was strong enough
+		if (BotShouldIgnoreSaberLoss(saberOwner))
+		{
+			return qfalse;
+		}
 		saberKnockDown(saberent, saberOwner, other);
 		return qtrue;
 	}
@@ -7178,7 +7202,6 @@ qboolean saberCheckKnockdown_Thrown(gentity_t *saberent, gentity_t *saberOwner, 
 	{
 		return qfalse;
 	}
-
 	if (!SaberSPStyle(saberOwner) && (g_tweakSaber.integer & ST_REDUCE_SABERDROP)) //test..
 		return qfalse; //Dont do saberdrops for idle STs either i guess..
 
@@ -7197,6 +7220,10 @@ qboolean saberCheckKnockdown_Thrown(gentity_t *saberent, gentity_t *saberOwner, 
 
 	if (tossIt)
 	{
+		if (BotShouldIgnoreSaberLoss(saberOwner))
+		{
+			return qfalse;
+		}
 		saberKnockDown(saberent, saberOwner, other);
 		return qtrue;
 	}

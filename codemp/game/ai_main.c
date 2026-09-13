@@ -48,6 +48,7 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
 #include "botlib/be_ai_weap.h"
 //
 #include "ai_main.h"
+#include "ai_combat_tuning.h"
 #include "w_saber.h"
 //
 #include "chars.h"
@@ -6961,10 +6962,35 @@ void NewBotAI_Getup(bot_state_t *bs)
 	}
 }
 
+static int NewBotAI_GetEnemyTotalHealth(bot_state_t *bs)
+{
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return 0;
+	}
+
+	return bs->currentEnemy->health + bs->currentEnemy->client->ps.stats[STAT_ARMOR];
+}
+
+static qboolean NewBotAI_ShouldSuppressDrainlockSaberThrow(bot_state_t *bs)
+{
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return qfalse;
+	}
+
+	if (bs->cur_ps.fd.forceSide != FORCE_DARKSIDE)
+	{
+		return qfalse;
+	}
+
+	return ((NewBotAI_IsPullkickDrainWindow(bs) || NewBotAI_IsDrainlockAdvantage(bs)) &&
+		NewBotAI_GetEnemyTotalHealth(bs) > 24) ? qtrue : qfalse;
+}
+
 static int NewBotAI_GetTotalHealthDelta(bot_state_t *bs)
 {
 	int ourTotalHealth;
-	int enemyTotalHealth;
 
 	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
 	{
@@ -6972,9 +6998,8 @@ static int NewBotAI_GetTotalHealthDelta(bot_state_t *bs)
 	}
 
 	ourTotalHealth = g_entities[bs->client].health + bs->cur_ps.stats[STAT_ARMOR];
-	enemyTotalHealth = bs->currentEnemy->health + bs->currentEnemy->client->ps.stats[STAT_ARMOR];
 
-	return ourTotalHealth - enemyTotalHealth;
+	return ourTotalHealth - NewBotAI_GetEnemyTotalHealth(bs);
 }
 
 static qboolean NewBotAI_CanAttemptFlipkick(bot_state_t *bs)
@@ -8252,6 +8277,11 @@ void NewBotAI_SaberThrowing(bot_state_t* bs)
 		return;
 	}
 
+	if (NewBotAI_ShouldSuppressDrainlockSaberThrow(bs))
+	{
+		return;
+	}
+
 	//Lost the health advantage mid-throw: stop feeding alt-attack so the saber starts
 	//its normal return instead of staying out while we're suddenly the vulnerable one.
 	if (ourHealth < enemyHealth)
@@ -9212,9 +9242,11 @@ static qboolean NewBotAI_CanInitiateFlipkickUnderFanPressure(bot_state_t *bs)
 //same post-attempt cooldown NewBotAI_Flipkick uses (lastFlipkickAttemptTime) to hold off
 //scheduling a fresh jump until that cooldown expires.
 #define NEWBOTAI_PULLKICK_JUMP_DELAY_MS 30
+#define NEWBOTAI_PULLKICK_RANGED_EXTRA_DELAY_MS 120
 static void NewBotAI_SchedulePullkickJump(bot_state_t *bs)
 {
 	const float timeToRange = NewBotAI_GetPullkickTimeToKickRange(bs);
+	int extraDelay = 0;
 
 	if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE)
 	{
@@ -9253,7 +9285,16 @@ static void NewBotAI_SchedulePullkickJump(bot_state_t *bs)
 
 	if (timeToRange >= 0.0f)
 	{
-		bs->pullKickJumpTime = level.time + (int)timeToRange + 150 + NEWBOTAI_PULLKICK_JUMP_DELAY_MS;
+		if (bs->frame_Enemy_Len > NEWBOTAI_IMMEDIATE_FLIPKICK_RANGE)
+		{
+			extraDelay = (int)((bs->frame_Enemy_Len - NEWBOTAI_IMMEDIATE_FLIPKICK_RANGE) * 0.15f);
+			if (extraDelay > NEWBOTAI_PULLKICK_RANGED_EXTRA_DELAY_MS)
+			{
+				extraDelay = NEWBOTAI_PULLKICK_RANGED_EXTRA_DELAY_MS;
+			}
+		}
+		bs->pullKickJumpTime = level.time + (int)timeToRange + 150 +
+			NEWBOTAI_PULLKICK_JUMP_DELAY_MS + extraDelay;
 	}
 	else
 	{
@@ -10941,6 +10982,8 @@ static int NewBotAI_GetPTKWeight(bot_state_t *bs)
 	const int ourForce = bs->cur_ps.fd.forcePower;
 	const int hisHealth = bs->currentEnemy->health;
 	const int hisForce = bs->currentEnemy->client->ps.fd.forcePower;
+	const int enemyArmor = bs->currentEnemy->client->ps.stats[STAT_ARMOR];
+	const int forceLead = ourForce - hisForce;
 	const int fpDifference = ourForce - hisForce;
 	const int hpDifference = ourHealth - hisHealth;
 	const int aggressionWeight = BotGetChanceBiasPercent(bot_ptk_aggressionbias.value);
@@ -11009,6 +11052,8 @@ static int NewBotAI_GetPTKWeight(bot_state_t *bs)
 	{
 		weight += 15;
 	}
+
+	weight = NewBotAI_AdjustPTKWeightForArmor(weight, enemyArmor, forceLead);
 
 	if (ourHealth > 70)
 	{
@@ -11082,6 +11127,11 @@ static int NewBotAI_GetPTKWeight(bot_state_t *bs)
 	if (bs->lastGripkickSuccessTime > level.time - 3000)
 	{
 		weight += 25;
+	}
+
+	if (weight < 0)
+	{
+		weight = 0;
 	}
 
 	return weight;
@@ -11697,6 +11747,11 @@ static qboolean NewBotAI_ShouldJumpDrainVsSaberThrow(bot_state_t *bs)
 	timeToImpactMs = (forwardDist / saberSpeed) * 1000.0f;
 	forceImmediateHop = (timeToImpactMs <= 85.0f ||
 		forwardDist <= (isReturning ? 16.0f : 24.0f)) ? qtrue : qfalse;
+	if (bs->settings.skill >= 6.0f)
+	{
+		forceImmediateHop = (timeToImpactMs <= 105.0f ||
+			forwardDist <= (isReturning ? 20.0f : 32.0f)) ? qtrue : forceImmediateHop;
+	}
 
 	//Healthy bots can afford to keep pressing or repositioning against most throws instead
 	//of bunny-hopping the moment the saber is merely on line; only hop when the impact is
@@ -11971,6 +12026,57 @@ static void NewBotAI_TrySaberThrowDefenseBreak(bot_state_t *bs)
 		{
 			trap->EA_ForcePower(bs->client);
 		}
+	}
+}
+
+static void NewBotAI_BlockAccidentalSaberSpecialMoves(bot_state_t *bs)
+{
+	usercmd_t *cmd;
+	int effectiveRightMove;
+	int effectiveUpMove;
+	qboolean saberBusy;
+	qboolean attackPressed;
+
+	if (!bs || bs->cur_ps.weapon != WP_SABER)
+	{
+		return;
+	}
+
+	cmd = &level.clients[bs->client].pers.cmd;
+	effectiveRightMove = NewBotAI_GetEffectiveMoveInput(cmd->rightmove, bs->forceMove_Right);
+	effectiveUpMove = NewBotAI_GetEffectiveMoveInput(cmd->upmove, bs->forceMove_Up);
+	saberBusy = (BG_SaberInAttack(bs->cur_ps.saberMove) ||
+		PM_SaberInStart(bs->cur_ps.saberMove) ||
+		PM_SaberInTransition(bs->cur_ps.saberMove)) ? qtrue : qfalse;
+	attackPressed = (bs->doAttack || (cmd->buttons & BUTTON_ATTACK)) ? qtrue : qfalse;
+
+	if (!NewBotAI_ShouldBlockOrthogonalSaberSpecialInput(
+		effectiveUpMove,
+		effectiveRightMove,
+		(cmd->forwardmove != 0 || bs->forceMove_Forward != 0),
+		bs->cur_ps.groundEntityNum != ENTITYNUM_NONE,
+		saberBusy,
+		attackPressed))
+	{
+		return;
+	}
+
+	if (bs->forceMove_Right)
+	{
+		bs->forceMove_Right = 0;
+	}
+	else
+	{
+		cmd->rightmove = 0;
+	}
+
+	if (bs->forceMove_Up)
+	{
+		bs->forceMove_Up = 0;
+	}
+	else
+	{
+		cmd->upmove = 0;
 	}
 }
 
@@ -12864,7 +12970,7 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 	const int hisForce = bs->currentEnemy->client->ps.fd.forcePower;
 	const int enemyHealth = bs->currentEnemy->health;
 	const int enemyArmor = bs->currentEnemy->client->ps.stats[STAT_ARMOR];
-	const int enemyTotalHealth = bs->currentEnemy->health + enemyArmor;
+	const int enemyTotalHealth = NewBotAI_GetEnemyTotalHealth(bs);
 	const int forceLead = ourForce - hisForce;
 	const qboolean enemyKnockedDown = BG_InKnockDown(bs->currentEnemy->client->ps.legsAnim) ? qtrue : qfalse;
 	const float saberthrowBias = BotGetChanceBiasPercent(bot_saberthrowbias.value);
@@ -12895,9 +13001,9 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 	//pullkick, or already under the free-pullkick threshold), weight the pullkick over
 	//the saber throw - throwing the saber away just gives up the drainlock's
 	//guaranteed-hit setup for a throw they can dodge/block. The only exception is the
-	//throw that will kill: an opponent with less than 30 total health dies to it, so
-	//take the kill instead of dragging the pullkick loop out.
-	if (NewBotAI_IsDrainlockAdvantage(bs) && enemyTotalHealth >= 30)
+	//throw that is a very clear kill: otherwise keep the saber in hand and cash the
+	//force advantage in with drain taps and pullkicks instead of extending the throw.
+	if (NewBotAI_ShouldSuppressDrainlockSaberThrow(bs))
 	{
 		return 0;
 	}
@@ -12996,8 +13102,11 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 {
 	vec3_t a_fo;
 	qboolean useTheForce = qfalse;
+	qboolean firedImmediatePull = qfalse;
 	int pushWeight, pullWeight, lightningWeight, drainWeight, gripWeight;//, doNothingWeight;
 	int minWeight = 0;
+	const qboolean drainlockAdvantage = NewBotAI_IsDrainlockAdvantage(bs);
+	const qboolean pullkickDrainWindow = NewBotAI_IsPullkickDrainWindow(bs);
 
 	//Disengaged in a bot_conservation window - hold off on spending any force so it regens.
 	if (bs->conserveUntil > level.time)
@@ -13035,20 +13144,56 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 	lightningWeight = NewBotAI_GetLightningWeight(bs);
 	//doNothingWeight = NewBotAI_GetWait(bs);
 
-	if (gripWeight > minWeight &&
+	if (bs->currentEnemy && bs->currentEnemy->client)
+	{
+		newbotai_drainlock_force_context_t drainlockForceContext;
+
+		drainlockForceContext.minWeight = minWeight;
+		drainlockForceContext.drainlockAdvantage = drainlockAdvantage;
+		drainlockForceContext.pullkickDrainWindow = pullkickDrainWindow;
+		drainlockForceContext.drainWeight = drainWeight;
+		drainlockForceContext.pullWeight = pullWeight;
+		drainlockForceContext.enemyForce = bs->currentEnemy->client->ps.fd.forcePower;
+
+		switch (NewBotAI_GetDrainlockForceChoice(drainlockForceContext))
+		{
+		case NEWBOTAI_DRAINLOCK_FORCE_PULL:
+			level.clients[bs->client].ps.fd.forcePowerSelected = FP_PULL;
+			NewBotAI_ApplyPullMistake(bs);
+			useTheForce = qtrue;
+			NewBotAI_SchedulePullkickJump(bs);
+			if (NewBotAI_IsPullkickOpportunity(bs) &&
+				bs->frame_Enemy_Len <= NEWBOTAI_IMMEDIATE_FLIPKICK_RANGE &&
+				NewBotAI_IsFlipkickSetupReady(bs))
+			{
+				trap->EA_ForcePower(bs->client);
+				firedImmediatePull = qtrue;
+				NewBotAI_Flipkick(bs);
+			}
+			break;
+		case NEWBOTAI_DRAINLOCK_FORCE_DRAIN:
+			level.clients[bs->client].ps.fd.forcePowerSelected = FP_DRAIN;
+			useTheForce = qtrue;
+			break;
+		default:
+			break;
+		}
+	}
+
+	if (!useTheForce && gripWeight > minWeight &&
 		gripWeight > pushWeight && gripWeight > drainWeight &&
 		gripWeight > pullWeight)
 	{
 		level.clients[bs->client].ps.fd.forcePowerSelected = FP_GRIP;
 		useTheForce = qtrue;
 	}
-	else if (pushWeight > pullWeight && pushWeight > drainWeight && pushWeight > gripWeight && pushWeight > minWeight) {
+	else if (!useTheForce && pushWeight > pullWeight && pushWeight > drainWeight && pushWeight > gripWeight && pushWeight > minWeight) {
 		level.clients[bs->client].ps.fd.forcePowerSelected = FP_PUSH;
 		useTheForce = qtrue;
 
 		//trap->Print("Pushing -- Pull: %i, Push: %i, Drain: %i, Grip: %i\n", pullWeight, pushWeight, drainWeight, gripWeight);
 	}
-	else if (pullWeight > pushWeight && pullWeight > drainWeight && pullWeight > gripWeight && pullWeight > minWeight) {
+	else if (!useTheForce && pullWeight > pushWeight && pullWeight > drainWeight && pullWeight > gripWeight && pullWeight > minWeight) {
 		level.clients[bs->client].ps.fd.forcePowerSelected = FP_PULL;
 		NewBotAI_ApplyPullMistake(bs);
 		useTheForce = qtrue;
@@ -13058,23 +13203,27 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 		if (NewBotAI_IsPullkickOpportunity(bs) &&
 			bs->frame_Enemy_Len <= NEWBOTAI_IMMEDIATE_FLIPKICK_RANGE &&
 			NewBotAI_IsFlipkickSetupReady(bs))
+		{
+			trap->EA_ForcePower(bs->client);
+			firedImmediatePull = qtrue;
 			NewBotAI_Flipkick(bs);
+		}
 
 		//trap->Print("Pulling -- Pull: %i, Push: %i, Drain: %i, Grip: %i\n", pullWeight, pushWeight, drainWeight, gripWeight);
 	}
-	else if (lightningWeight > pushWeight && lightningWeight > pullWeight && lightningWeight > drainWeight && lightningWeight > gripWeight && lightningWeight > minWeight) {
+	else if (!useTheForce && lightningWeight > pushWeight && lightningWeight > pullWeight && lightningWeight > drainWeight && lightningWeight > gripWeight && lightningWeight > minWeight) {
 		level.clients[bs->client].ps.fd.forcePowerSelected = FP_LIGHTNING;
 		useTheForce = qtrue;
 	}
 	//Explicit tie-break: when drain ties for best weight, prefer drain over grip/push/pull
 	//but not over lightning.
-	else if (drainWeight > lightningWeight && drainWeight >= pushWeight && drainWeight >= pullWeight && drainWeight >= gripWeight && drainWeight > minWeight) {
+	else if (!useTheForce && drainWeight > lightningWeight && drainWeight >= pushWeight && drainWeight >= pullWeight && drainWeight >= gripWeight && drainWeight > minWeight) {
 		level.clients[bs->client].ps.fd.forcePowerSelected = FP_DRAIN;
 		useTheForce = qtrue;
 
 		//trap->Print("Draining -- Pull: %i, Push: %i, Drain: %i, Grip: %i\n", pullWeight, pushWeight, drainWeight, gripWeight);
 	}
-	else if (gripWeight > pushWeight && gripWeight > pullWeight && gripWeight > drainWeight && gripWeight > minWeight) {
+	else if (!useTheForce && gripWeight > pushWeight && gripWeight > pullWeight && gripWeight > drainWeight && gripWeight > minWeight) {
 		level.clients[bs->client].ps.fd.forcePowerSelected = FP_GRIP;
 		useTheForce = qtrue;
 
@@ -13099,7 +13248,9 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 
 	//A free flipkick always beats holding/charging a throw once the enemy has closed
 	//into kick range - otherwise the two bots just collide while we sit on the charge.
-	if (NewBotAI_GetSaberthrow(bs) > minWeight && !NewBotAI_ShouldPreferFlipkickOverThrow(bs)) {
+	if (!NewBotAI_ShouldSuppressDrainlockSaberThrow(bs) &&
+		!drainlockAdvantage && !pullkickDrainWindow &&
+		NewBotAI_GetSaberthrow(bs) > minWeight && !NewBotAI_ShouldPreferFlipkickOverThrow(bs)) {
 		trap->EA_Alt_Attack(bs->client);
 		//Pre-select pull or push so it fires as the saber approaches the target. Pull when
 		//aggressive (PTK setup), push when defensive (break their guard). This runs after the
@@ -13131,7 +13282,11 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 		}
 	}
 
-	if (useTheForce && (level.framenum % 2) && (!bs->currentEnemy->client->invulnerableTimer || (bs->currentEnemy->client->invulnerableTimer <= level.time)))
+	if (!firedImmediatePull &&
+		useTheForce &&
+		bs->currentEnemy && bs->currentEnemy->client &&
+		(level.framenum % 2) &&
+		(!bs->currentEnemy->client->invulnerableTimer || (bs->currentEnemy->client->invulnerableTimer <= level.time)))
 		trap->EA_ForcePower(bs->client);
 }
 
@@ -14681,7 +14836,6 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		{
 			bs->timeToReact = level.time + responseDelay;
 		}
-
 		if (bs->timeToReact > level.time)
 		{
 			bs->doAttack = 0;
@@ -16470,6 +16624,8 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 			bs->doAttack = 0;
 		}
 	}
+
+	NewBotAI_BlockAccidentalSaberSpecialMoves(bs);
 
 	if (bs->doAttack)
 	{

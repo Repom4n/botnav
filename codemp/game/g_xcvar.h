@@ -431,6 +431,9 @@ XCVAR_DEF( bot_ptk_fpdifference,		"20",			NULL,				CVAR_ARCHIVE,									qtrue )
 // old absolute-threshold bot_ptk_enemyhpbias.
 XCVAR_DEF( bot_ptk_hpdifference,		"15",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_ptk_aggressionbias,		"0",			NULL,				CVAR_ARCHIVE,									qtrue )
+// 0: bots use normal saber disarm/drop rules. 1: bots never lose their saber to saber
+// knockdown/disarm paths. Enabled by default to avoid long-standing bot saber-loss issues.
+XCVAR_DEF( bot_nosaberdrop,			"1",			NULL,				CVAR_ARCHIVE,									qtrue )
 // 0-100: how often a bot takes a moment to disengage (wait/move randomly instead of
 // attacking or spending force) to let its force points regenerate. 0 disables the
 // behavior entirely (default, legacy behavior). The chance is weighted heavily by how
