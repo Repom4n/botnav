@@ -2184,6 +2184,60 @@ extern void saberBackToOwner(gentity_t *saberent);
 #if _GRAPPLE
 void Weapon_HookFree (gentity_t *ent);
 #endif
+
+static void G_SetDuelRespawnNearOpponent(gentity_t *self, gentity_t *attacker)
+{
+	vec3_t baseOrigin;
+	vec3_t toVictim;
+	vec3_t dir;
+	vec3_t right;
+	vec3_t spawnCandidate;
+	vec3_t fallbackDir;
+	vec3_t candidates[4];
+	int i;
+
+	VectorCopy(attacker->client->ps.origin, baseOrigin);
+	VectorSubtract(self->client->ps.origin, baseOrigin, toVictim);
+	toVictim[2] = 0.0f;
+	if (VectorNormalize(toVictim) < 0.1f)
+	{
+		AngleVectors(attacker->client->ps.viewangles, fallbackDir, NULL, NULL);
+		fallbackDir[2] = 0.0f;
+		if (VectorNormalize(fallbackDir) < 0.1f)
+		{
+			VectorSet(fallbackDir, 1.0f, 0.0f, 0.0f);
+		}
+		VectorCopy(fallbackDir, toVictim);
+	}
+
+	VectorCopy(toVictim, dir);
+	VectorSet(right, -dir[1], dir[0], 0.0f);
+	if (VectorNormalize(right) < 0.1f)
+	{
+		VectorSet(right, 0.0f, 1.0f, 0.0f);
+	}
+
+	VectorMA(baseOrigin, 96.0f, dir, candidates[0]);
+	VectorMA(baseOrigin, -96.0f, dir, candidates[1]);
+	VectorMA(baseOrigin, 96.0f, right, candidates[2]);
+	VectorMA(baseOrigin, -96.0f, right, candidates[3]);
+
+	VectorCopy(baseOrigin, self->client->pers.respawnLocation);
+	for (i = 0; i < 4; i++)
+	{
+		VectorCopy(candidates[i], spawnCandidate);
+		spawnCandidate[2] = baseOrigin[2] + 8.0f;
+		if (!SpotWouldTelefrag3(spawnCandidate))
+		{
+			VectorCopy(spawnCandidate, self->client->pers.respawnLocation);
+			break;
+		}
+	}
+
+	VectorSubtract(attacker->client->ps.origin, self->client->pers.respawnLocation, dir);
+	self->client->pers.respawnAngle = vectoyaw(dir);
+}
+
 void player_die( gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int damage, int meansOfDeath ) {
 	gentity_t	*ent;
 	int			anim;
@@ -2210,9 +2264,8 @@ void player_die( gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int
 	if ( !attacker )
 		return;
 
-	if (g_duelRespawn.integer && level.gametype == GT_FFA && self->client->ps.duelInProgress && !self->client->pers.noDuelTele && (meansOfDeath != MOD_SUICIDE) && (meansOfDeath != MOD_TEAM_CHANGE)) {
-		VectorCopy(self->client->ps.origin, self->client->pers.respawnLocation);
-		self->client->pers.respawnAngle = self->client->ps.viewangles[YAW];
+	if (g_duelRespawn.integer && level.gametype == GT_FFA && self->client->ps.duelInProgress && !self->client->pers.noDuelTele && attacker->client && (meansOfDeath != MOD_SUICIDE) && (meansOfDeath != MOD_TEAM_CHANGE)) {
+		G_SetDuelRespawnNearOpponent(self, attacker);
 	}
 	else {
 		VectorClear(self->client->pers.respawnLocation);

@@ -180,13 +180,15 @@ static qboolean NewBotAI_IsEnemySaberThreatImminent(bot_state_t *bs);
 static qboolean NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bot_state_t *bs);
 static qboolean NewBotAI_ShouldJumpDrainVsSaberThrow(bot_state_t *bs);
 static qboolean NewBotAI_ShouldEmergencyDrainRollSaberThrow(bot_state_t *bs);
+static qboolean NewBotAI_ShouldHoldOffPullkickVsSaberThrow(bot_state_t *bs);
+static qboolean NewBotAI_ShouldEmergencyPushWhilePulled(bot_state_t *bs);
+static qboolean NewBotAI_ShouldAllowStandingEmergencyRoll(bot_state_t *bs);
 static void NewBotAI_ApplySidewaysDrainRoll(bot_state_t *bs, qboolean moveBack);
 
 #define NEWBOTAI_DRAIN_TICK_MSEC 100
 #define NEWBOTAI_COMBAT_DISENGAGE_COOLDOWN_MS 2500
-#define NEWBOTAI_COMBAT_WAYPOINT_SEPARATION 512.0f
-#define NEWBOTAI_COMBAT_WAYPOINT_SEPARATION_SQ (NEWBOTAI_COMBAT_WAYPOINT_SEPARATION * NEWBOTAI_COMBAT_WAYPOINT_SEPARATION)
 #define NEWBOTAI_TARGET_COMMIT_DISTANCE 768.0f
+#define NEWBOTAI_LIGHTNING_LEVEL2_RANGE 2048.0f
 static qboolean NewBotAI_HandleRecoveryRollForcepower(bot_state_t *bs);
 static qboolean NewBotAI_IsBetweenOwnSaberAndEnemy(bot_state_t *bs);
 static qboolean NewBotAI_ShouldCloseGapVsEnemySaberThrow(bot_state_t *bs);
@@ -9261,6 +9263,10 @@ static qboolean NewBotAI_IsPullkickOpportunity(bot_state_t *bs)
 	{
 		return qfalse;
 	}
+	if (NewBotAI_ShouldHoldOffPullkickVsSaberThrow(bs))
+	{
+		return qfalse;
+	}
 
 	if (BG_InKnockDown(bs->currentEnemy->client->ps.legsAnim) ||
 		BG_InRoll3(bs->currentEnemy->client->ps.legsAnim) ||
@@ -10796,9 +10802,9 @@ static float BotGetLightningStartDistance(void)
 	{
 		startDistance = 0.0f;
 	}
-	if (startDistance > FORCE_LIGHTNING_RADIUS)
+	if (startDistance > NEWBOTAI_LIGHTNING_LEVEL2_RANGE)
 	{
-		startDistance = FORCE_LIGHTNING_RADIUS;
+		startDistance = NEWBOTAI_LIGHTNING_LEVEL2_RANGE;
 	}
 
 	return startDistance;
@@ -10846,7 +10852,7 @@ static int NewBotAI_GetLightningWeight(bot_state_t *bs)
 	aggressionBias = BotGetAggressionBias(bs);
 
 	startDistance = BotGetLightningStartDistance();
-	if (bs->frame_Enemy_Len < startDistance || bs->frame_Enemy_Len > FORCE_LIGHTNING_RADIUS)
+	if (bs->frame_Enemy_Len < startDistance || bs->frame_Enemy_Len > NEWBOTAI_LIGHTNING_LEVEL2_RANGE)
 	{
 		return 0;
 	}
@@ -10858,13 +10864,13 @@ static int NewBotAI_GetLightningWeight(bot_state_t *bs)
 		return 0;
 	}
 
-	if (FORCE_LIGHTNING_RADIUS <= startDistance)
+	if (NEWBOTAI_LIGHTNING_LEVEL2_RANGE <= startDistance)
 	{
 		distanceFactor = 1.0f;
 	}
 	else
 	{
-		distanceFactor = (bs->frame_Enemy_Len - startDistance) / (FORCE_LIGHTNING_RADIUS - startDistance);
+		distanceFactor = (bs->frame_Enemy_Len - startDistance) / (NEWBOTAI_LIGHTNING_LEVEL2_RANGE - startDistance);
 		if (distanceFactor < 0.0f)
 		{
 			distanceFactor = 0.0f;
@@ -10903,6 +10909,10 @@ static int NewBotAI_GetPTKWeight(bot_state_t *bs)
 	int weight = 0;
 
 	if (!NewBotAI_IsEnemyPullable(bs) || !g_flipKick.integer)
+	{
+		return 0;
+	}
+	if (NewBotAI_ShouldHoldOffPullkickVsSaberThrow(bs))
 	{
 		return 0;
 	}
@@ -11611,6 +11621,119 @@ static qboolean NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bot_state_t *bs)
 	return qfalse;
 }
 
+static qboolean NewBotAI_ShouldHoldOffPullkickVsSaberThrow(bot_state_t *bs)
+{
+	int ourHealth;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return qfalse;
+	}
+	ourHealth = g_entities[bs->client].health;
+	if (ourHealth >= 51)
+	{
+		return qfalse;
+	}
+	if (!bs->currentEnemy->client->ps.saberInFlight)
+	{
+		return qfalse;
+	}
+
+	return NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bs);
+}
+
+static qboolean NewBotAI_ShouldEmergencyPushWhilePulled(bot_state_t *bs)
+{
+	qboolean pullActive;
+	qboolean enemyMeleeThreat;
+	int pushCost;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return qfalse;
+	}
+	pullActive = (bs->cur_ps.forceHandExtend == HANDEXTEND_FORCEPULL ||
+		bs->cur_ps.powerups[PW_PULL] > level.time) ? qtrue : qfalse;
+	enemyMeleeThreat = (bs->currentEnemy->client->ps.weapon == WP_SABER &&
+		(BG_SaberInAttack(bs->currentEnemy->client->ps.saberMove) ||
+		 PM_SaberInStart(bs->currentEnemy->client->ps.saberMove) ||
+		 PM_SaberInTransition(bs->currentEnemy->client->ps.saberMove)) &&
+		bs->frame_Enemy_Len < 150.0f) ? qtrue : qfalse;
+	pushCost = forcePowerNeeded[bs->cur_ps.fd.forcePowerLevel[FP_PUSH]][FP_PUSH];
+	if (!pullActive)
+	{
+		return qfalse;
+	}
+	if (bs->cur_ps.fd.forcePower >= 20)
+	{
+		return qfalse;
+	}
+	if (g_forcePowerDisable.integer & (1 << FP_PUSH))
+	{
+		return qfalse;
+	}
+	if (!(bs->cur_ps.fd.forcePowersKnown & (1 << FP_PUSH)))
+	{
+		return qfalse;
+	}
+	if (bs->cur_ps.fd.forcePower < pushCost)
+	{
+		return qfalse;
+	}
+	if (NewBotAI_IsEnemySaberThreatImminent(bs))
+	{
+		return qfalse;
+	}
+	if (enemyMeleeThreat)
+	{
+		return qfalse;
+	}
+	if (bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB))
+	{
+		return qfalse;
+	}
+
+	return qtrue;
+}
+
+static qboolean NewBotAI_ShouldAllowStandingEmergencyRoll(bot_state_t *bs)
+{
+	qboolean drainAvailable;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return qfalse;
+	}
+	drainAvailable =
+		!(g_forcePowerDisable.integer & (1 << FP_DRAIN)) &&
+		(bs->cur_ps.fd.forcePowersKnown & (1 << FP_DRAIN)) &&
+		bs->cur_ps.fd.forcePower >= 25 &&
+		!(bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB));
+	if (bs->cur_ps.forceHandExtend == HANDEXTEND_KNOCKDOWN ||
+		NewBotAI_IsKnockdownRecoveryRoll(bs->cur_ps.legsAnim))
+	{
+		return qtrue;
+	}
+	if (!BG_InRoll3(bs->cur_ps.legsAnim))
+	{
+		return qfalse;
+	}
+	if (g_entities[bs->client].health >= 20)
+	{
+		return qfalse;
+	}
+	if (!NewBotAI_IsEnemySaberThreatImminent(bs))
+	{
+		return qfalse;
+	}
+	if (drainAvailable)
+	{
+		return qfalse;
+	}
+
+	return qtrue;
+}
+
 static qboolean NewBotAI_ShouldJumpDrainVsSaberThrow(bot_state_t *bs)
 {
 	float forwardDist;
@@ -12069,6 +12192,8 @@ int NewBotAI_GetPull(bot_state_t *bs) {
 	if (g_forcePowerDisable.integer & (1 << FP_PULL))
 		return 0;
 	if  (!(bs->cur_ps.fd.forcePowersKnown & (1 << FP_PULL)))
+		return 0;
+	if (NewBotAI_ShouldHoldOffPullkickVsSaberThrow(bs))
 		return 0;
 	if (bs->frame_Enemy_Len > 640) //Check pull range..
 		return 0;
@@ -12638,6 +12763,8 @@ int NewBotAI_GetGrip(bot_state_t *bs) {
 		return 0;
 	if  (!(bs->cur_ps.fd.forcePowersKnown & (1 << FP_GRIP)))
 		return 0;
+	if (BG_InRoll3(bs->cur_ps.legsAnim) && !NewBotAI_ShouldAllowStandingEmergencyRoll(bs))
+		return 0;
 	if (bs->frame_Enemy_Len > MAX_GRIP_DISTANCE)
 		return 0;
 	if (!bs->frame_Enemy_Vis)
@@ -12932,6 +13059,12 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 	}
 	if (NewBotAI_IsEnemySaberThreatImminent(bs))
 	{
+		return;
+	}
+	if (NewBotAI_ShouldEmergencyPushWhilePulled(bs))
+	{
+		level.clients[bs->client].ps.fd.forcePowerSelected = FP_PUSH;
+		trap->EA_ForcePower(bs->client);
 		return;
 	}
 	pullWeight = NewBotAI_GetPull(bs);
@@ -14264,17 +14397,11 @@ static qboolean NewBotAI_ShouldFallbackToWaypoints(bot_state_t *bs)
 {
 	vec3_t toEnemy, trTo, mins, maxs;
 	trace_t tr;
-	const float targetDistanceLimit = BotGetTargetDistanceLimit();
 	const qboolean progressStalled = NewBotAI_IsCombatProgressStalled(bs);
 
 	if (!bs->currentEnemy || !bs->currentEnemy->client)
 	{
 		bs->combatStuckSince = 0;
-		return qtrue;
-	}
-
-	if (targetDistanceLimit > 0.0f && bs->frame_Enemy_Len > targetDistanceLimit)
-	{
 		return qtrue;
 	}
 
@@ -14312,9 +14439,6 @@ static qboolean NewBotAI_ShouldFallbackToWaypoints(bot_state_t *bs)
 
 static qboolean NewBotAI_CanUseWaypointFallbackInCombat(bot_state_t *bs)
 {
-	vec3_t enemyDelta;
-	vec3_t enemyOrigin;
-
 	if (!bs)
 	{
 		return qfalse;
@@ -14342,21 +14466,6 @@ static qboolean NewBotAI_CanUseWaypointFallbackInCombat(bot_state_t *bs)
 	{
 		return qfalse;
 	}
-	if (bs->frame_Enemy_Vis)
-	{
-		return qfalse;
-	}
-	VectorCopy(bs->currentEnemy->r.currentOrigin, enemyOrigin);
-	if (!enemyOrigin[0] && !enemyOrigin[1] && !enemyOrigin[2])
-	{
-		VectorCopy(bs->currentEnemy->client->ps.origin, enemyOrigin);
-	}
-	VectorSubtract(enemyOrigin, bs->origin, enemyDelta);
-	if (VectorLengthSquared(enemyDelta) <= NEWBOTAI_COMBAT_WAYPOINT_SEPARATION_SQ)
-	{
-		return qfalse;
-	}
-
 	return qtrue;
 }
 
@@ -14952,8 +15061,8 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 				useTheForce = 1;
 				forceHostile = 1;
 			}
-			else if ((bs->cur_ps.fd.forcePowersKnown & (1 << FP_LIGHTNING)) && bs->cur_ps.fd.forcePowerLevel[FP_LIGHTNING] <= FORCE_LEVEL_2 && bs->frame_Enemy_Len >= BotGetLightningStartDistance() && bs->frame_Enemy_Len < FORCE_LIGHTNING_RADIUS && level.clients[bs->client].ps.fd.forcePower > 50 && InFieldOfVision(bs->viewangles, 50, a_fo))
-			{ //only lightning level 2, and only from the configured range out; point-blank zaps waste force on level-3's short arc
+			else if ((bs->cur_ps.fd.forcePowersKnown & (1 << FP_LIGHTNING)) && bs->cur_ps.fd.forcePowerLevel[FP_LIGHTNING] <= FORCE_LEVEL_2 && bs->frame_Enemy_Len >= BotGetLightningStartDistance() && bs->frame_Enemy_Len < NEWBOTAI_LIGHTNING_LEVEL2_RANGE && level.clients[bs->client].ps.fd.forcePower > 50 && InFieldOfVision(bs->viewangles, 50, a_fo))
+			{ //only lightning level 2, and only from the configured range out; this uses the long level-2 beam range, not level-3 arc radius
 				level.clients[bs->client].ps.fd.forcePowerSelected = FP_LIGHTNING;
 				useTheForce = 1;
 				forceHostile = 1;
