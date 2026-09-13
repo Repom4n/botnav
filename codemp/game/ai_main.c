@@ -183,6 +183,11 @@ static qboolean NewBotAI_ShouldEmergencyDrainRollSaberThrow(bot_state_t *bs);
 static void NewBotAI_ApplySidewaysDrainRoll(bot_state_t *bs, qboolean moveBack);
 
 #define NEWBOTAI_DRAIN_TICK_MSEC 100
+#define NEWBOTAI_COMBAT_DISENGAGE_COOLDOWN_MS 2500
+#define NEWBOTAI_COMBAT_RECENT_HURT_MS 2000
+#define NEWBOTAI_COMBAT_ENGAGE_DISTANCE 384.0f
+#define NEWBOTAI_COMBAT_WAYPOINT_SEPARATION 512.0f
+#define NEWBOTAI_TARGET_COMMIT_DISTANCE 768.0f
 static qboolean NewBotAI_HandleRecoveryRollForcepower(bot_state_t *bs);
 static qboolean NewBotAI_IsBetweenOwnSaberAndEnemy(bot_state_t *bs);
 static qboolean NewBotAI_ShouldCloseGapVsEnemySaberThrow(bot_state_t *bs);
@@ -5237,6 +5242,7 @@ void BotAimOffsetGoalAngles(bot_state_t *bs)
 {
 	int i;
 	float accVal;
+	qboolean tightenCombatAim = qfalse;
 	i = 0;
 
 	if (bs->skills.perfectaim)
@@ -5312,6 +5318,19 @@ void BotAimOffsetGoalAngles(bot_state_t *bs)
 		}
 	}
 
+	tightenCombatAim = (g_newBotAI.integer &&
+		bs->currentEnemy && bs->frame_Enemy_Vis &&
+		bs->frame_Enemy_Len > 0 && bs->frame_Enemy_Len < NEWBOTAI_TARGET_COMMIT_DISTANCE &&
+		bs->combatNavHoldUntil > level.time) ? qtrue : qfalse;
+	if (tightenCombatAim)
+	{
+		accVal *= 0.35f;
+		if (accVal > 6.0f)
+		{
+			accVal = 6.0f;
+		}
+	}
+
 	if (accVal > 90)
 	{
 		accVal = 90;
@@ -5346,7 +5365,14 @@ void BotAimOffsetGoalAngles(bot_state_t *bs)
 		bs->aimOffsetAmtPitch = -(rand()%(int)accVal);
 	}
 
-	bs->aimOffsetTime = level.time + rand()%500 + 200;
+	if (tightenCombatAim)
+	{
+		bs->aimOffsetTime = level.time + rand()%400 + 500;
+	}
+	else
+	{
+		bs->aimOffsetTime = level.time + rand()%500 + 200;
+	}
 }
 
 //do we want to alt fire with this weapon?
@@ -13958,6 +13984,17 @@ int NewBotAI_ScanForEnemies(bot_state_t* bs) {
 		lowHangingFruitHP > 0 &&
 		lowHangingFruitDistance > 0.0f) ? qtrue : qfalse;
 
+	//While actively engaged with a valid target, keep target commitment stable so
+	//close-range fights don't jitter between nearby candidates every few thinks.
+	if (bs->currentEnemy && bs->currentEnemy->client &&
+		PassStandardEnemyChecks(bs, bs->currentEnemy) &&
+		((bs->frame_Enemy_Vis && bs->frame_Enemy_Len <= NEWBOTAI_TARGET_COMMIT_DISTANCE) ||
+		 bs->lastHurtTime > level.time - 1200 ||
+		 bs->combatNavHoldUntil > level.time))
+	{
+		return bs->currentEnemy->s.number;
+	}
+
 	if (bs->currentEnemy) { //only switch to a new enemy if he's significantly closer
 		if (bs->currentEnemy->client && PassStandardEnemyChecks(bs, bs->currentEnemy))
 		{
@@ -14274,6 +14311,40 @@ static qboolean NewBotAI_ShouldFallbackToWaypoints(bot_state_t *bs)
 	return progressStalled;
 }
 
+static qboolean NewBotAI_CanUseWaypointFallbackInCombat(bot_state_t *bs)
+{
+	if (!bs)
+	{
+		return qfalse;
+	}
+
+	if (!bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return qtrue;
+	}
+
+	//Only permit combat waypoint fallback after we have been disengaged for a short
+	//cooldown and are meaningfully separated from the target.
+	if (bs->combatNavHoldUntil > level.time)
+	{
+		return qfalse;
+	}
+	if (bs->lastHurtTime > level.time - NEWBOTAI_COMBAT_RECENT_HURT_MS)
+	{
+		return qfalse;
+	}
+	if (bs->frame_Enemy_Vis)
+	{
+		return qfalse;
+	}
+	if (bs->frame_Enemy_Len <= NEWBOTAI_COMBAT_WAYPOINT_SEPARATION)
+	{
+		return qfalse;
+	}
+
+	return qtrue;
+}
+
 void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 {
 	int closestID = -1;
@@ -14408,7 +14479,12 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		bs->enemyWaypointFallbackTime = 0;
 		bs->enemyWaypointFallbackEnemyNum = bs->currentEnemy ? bs->currentEnemy->s.number : -1;
 	}
-	bs->combatNavHoldUntil = level.time + 1500;
+	if (bs->frame_Enemy_Vis ||
+		bs->frame_Enemy_Len <= NEWBOTAI_COMBAT_ENGAGE_DISTANCE ||
+		bs->lastHurtTime > level.time - NEWBOTAI_COMBAT_RECENT_HURT_MS)
+	{
+		bs->combatNavHoldUntil = level.time + NEWBOTAI_COMBAT_DISENGAGE_COOLDOWN_MS;
+	}
 	if (!(bs->cur_ps.fd.forcePowersActive & (1 << FP_GRIP)))
 	{
 		bs->gripkickActive = qfalse;
@@ -14489,10 +14565,9 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 
 	if (bot_navigation.integer && NewBotAI_ShouldFallbackToWaypoints(bs))
 	{
-		// If the bot is actively being attacked, don't divert to waypoint nav —
-		// keep full combat logic running so it can defend, dodge, and fight back.
-		if ((bs->combatNavHoldUntil > level.time || bs->lastHurtTime > level.time - 1500) &&
-			!NewBotAI_IsCombatProgressStalled(bs))
+		//During active engagements, keep combat logic in control; waypoint fallback
+		//is only allowed once we have truly disengaged and separated from the target.
+		if (!NewBotAI_CanUseWaypointFallbackInCombat(bs))
 		{
 			bs->navObstacleUntil = 0; // clear any pending hysteresis too
 		}
@@ -14501,7 +14576,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 			// obstacle detected: hold waypoint-nav mode for a period so the bot
 			// navigates around the obstacle rather than flickering back to direct
 			// combat movement every frame
-			bs->navObstacleUntil = level.time + 2000;
+			bs->navObstacleUntil = level.time + 3000;
 			StandardBotAI(bs, thinktime);
 			return;
 		}
@@ -14516,8 +14591,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		// hysteresis: obstacle was recently blocking; keep following waypoints
 		// while StandardBotAI's enemy-aiming code keeps targeting the enemy.
 		// But if we're being actively attacked, override and run combat AI instead.
-		if ((bs->combatNavHoldUntil > level.time || bs->lastHurtTime > level.time - 1500) &&
-			!NewBotAI_IsCombatProgressStalled(bs))
+		if (!NewBotAI_CanUseWaypointFallbackInCombat(bs))
 		{
 			bs->navObstacleUntil = 0;
 		}
