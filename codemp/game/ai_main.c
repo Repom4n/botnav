@@ -13946,6 +13946,10 @@ int NewBotAI_ScanForEnemies(bot_state_t* bs) {
 	int lowHangingFruitHP;
 	float lowHangingFruitDistance;
 	const float targetDistanceLimit = BotGetTargetDistanceLimit();
+	const float targetHealthFloor = 0.25f;
+	const float targetHealthCeil = 1.0f;
+	const float selfLowHealthBiasScale = 0.005f;
+	const float nominalFullHealth = 100.0f;
 
 	targetMode = BotGetNewBotAITargetMode();
 	lowHangingFruitHP = BotGetLowHangingFruitHP();
@@ -13960,19 +13964,21 @@ int NewBotAI_ScanForEnemies(bot_state_t* bs) {
 			float normalizedHealth;
 			VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, a);
 			hasEnemyDist = VectorLength(a);
-			normalizedHealth = 0.25f + (bs->currentEnemy->health - 1) * (1.0f - 0.25f) / (100.0f - 1.0f);
-			normalizedHealth += (100 - ourHealth) * 0.005f;
-			if (normalizedHealth < 0.25f)
+			normalizedHealth = targetHealthFloor +
+				(bs->currentEnemy->health - 1) * (targetHealthCeil - targetHealthFloor) /
+				(nominalFullHealth - 1.0f);
+			normalizedHealth += (nominalFullHealth - ourHealth) * selfLowHealthBiasScale;
+			if (normalizedHealth < targetHealthFloor)
 			{
-				normalizedHealth = 0.25f;
+				normalizedHealth = targetHealthFloor;
 			}
-			if (normalizedHealth > 1.0f)
+			if (normalizedHealth > targetHealthCeil)
 			{
-				normalizedHealth = 1.0f;
+				normalizedHealth = targetHealthCeil;
 			}
 			if (targetMode == NEWBOTAI_TARGET_PREFER_HUMANS)
 			{
-				normalizedHealth = 1.0f;
+				normalizedHealth = targetHealthCeil;
 			}
 			hasEnemyDist *= normalizedHealth;
 		}
@@ -15220,8 +15226,7 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 	}
 
 	if (bs->enemySeenTime < level.time || !bs->frame_Enemy_Vis || !bs->currentEnemy ||
-		(bs->frame_Enemy_Vis && bs->currentEnemy &&
-		 ((level.time + (bs->client * 73)) % 750) < FRAMETIME))
+		(bs->frame_Enemy_Vis && bs->currentEnemy && bs->frame_Enemy_Len > 300.0f))
 	{
 		enemy = ScanForEnemies(bs);
 
