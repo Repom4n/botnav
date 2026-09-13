@@ -124,6 +124,7 @@ static int BotGetAggressionWeightedBonus(bot_state_t *bs, float biasPercent, int
 static int BotGetDrainHoldBiasMs(bot_state_t *bs);
 static int BotGetHealthBiasThreshold(void);
 static int NewBotAI_GetAntiDrainWeight(bot_state_t *bs);
+static float BotGetLightningMaxDistance(void);
 static float BotGetLightningStartDistance(void);
 static int NewBotAI_GetLightningWeight(bot_state_t *bs);
 static int NewBotAI_GetPTKWeight(bot_state_t *bs);
@@ -10829,10 +10830,15 @@ static int NewBotAI_GetAntiDrainWeight(bot_state_t *bs)
 	return 0;
 }
 
+static float BotGetLightningMaxDistance(void)
+{
+	return 2048.0f; //FP_LIGHTNING levels 1-2 use line trace to 2048 (see w_force.c)
+}
+
 static float BotGetLightningStartDistance(void)
 {
 	float startDistance = bot_lightningdistance.value;
-	const float maxDistance = 2048.0f; //FP_LIGHTNING levels 1-2 use line trace to 2048 (see w_force.c)
+	const float maxDistance = BotGetLightningMaxDistance();
 
 	if (startDistance < 0.0f)
 	{
@@ -10853,7 +10859,7 @@ static int NewBotAI_GetLightningWeight(bot_state_t *bs)
 	float startDistance;
 	float distanceFactor;
 	float defensiveFactor;
-	const float maxDistance = 2048.0f; //FP_LIGHTNING levels 1-2 use line trace to 2048 (see w_force.c)
+	const float maxDistance = BotGetLightningMaxDistance();
 	vec3_t a_fo;
 
 	if (g_forcePowerDisable.integer & (1 << FP_LIGHTNING))
@@ -11780,7 +11786,7 @@ static qboolean NewBotAI_ShouldEmergencyPushWhilePulled(bot_state_t *bs)
 	{
 		return qfalse;
 	}
-	if (bs->cur_ps.fd.forcePower > 20)
+	if (bs->cur_ps.fd.forcePower > 25)
 	{
 		return qfalse;
 	}
@@ -15026,7 +15032,7 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 				useTheForce = 1;
 				forceHostile = 1;
 			}
-			else if ((bs->cur_ps.fd.forcePowersKnown & (1 << FP_LIGHTNING)) && bs->cur_ps.fd.forcePowerLevel[FP_LIGHTNING] <= FORCE_LEVEL_2 && bs->frame_Enemy_Len >= BotGetLightningStartDistance() && bs->frame_Enemy_Len < 2048.0f && level.clients[bs->client].ps.fd.forcePower > 50 && InFieldOfVision(bs->viewangles, 50, a_fo))
+			else if ((bs->cur_ps.fd.forcePowersKnown & (1 << FP_LIGHTNING)) && bs->cur_ps.fd.forcePowerLevel[FP_LIGHTNING] <= FORCE_LEVEL_2 && bs->frame_Enemy_Len >= BotGetLightningStartDistance() && bs->frame_Enemy_Len < BotGetLightningMaxDistance() && level.clients[bs->client].ps.fd.forcePower > 50 && InFieldOfVision(bs->viewangles, 50, a_fo))
 			{ //only lightning level 2, and only from the configured range out; point-blank zaps waste force on level-3's short arc
 				level.clients[bs->client].ps.fd.forcePowerSelected = FP_LIGHTNING;
 				useTheForce = 1;
