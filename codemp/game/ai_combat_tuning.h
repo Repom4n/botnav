@@ -117,6 +117,8 @@ static inline newbotai_drainlock_force_choice_t NewBotAI_GetDrainlockForceChoice
 		return NEWBOTAI_DRAINLOCK_FORCE_NONE;
 	}
 
+	// Once the enemy is truly below the free-pull threshold, preserve the legacy tie-break:
+	// equal pull/drain weights still resolve to pull so the finisher can fire immediately.
 	if (context.enemyForce < 20 &&
 		context.pullWeight >= context.minWeight &&
 		context.pullWeight >= context.drainWeight)
