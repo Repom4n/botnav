@@ -50,10 +50,10 @@ static inline int NewBotAI_AdjustPTKWeightForArmor(int weight, int enemyArmor, i
 	return weight + NEWBOTAI_PTK_ARMOR_STRONG_LEAD_BONUS;
 }
 
-// Drainlock policy: the "drain" half comes first. Once the enemy is actually below the
-// free-pull threshold, pull becomes the finisher; before then, even a pullkick-drain
-// window should keep choosing drain until the force advantage has been cashed into a free
-// pullkick.
+// Drainlock policy: the "drain" half comes first. Before the enemy is actually below the
+// free-pull threshold, a pullkick-drain window keeps choosing drain. Once the free-pull
+// finisher is live, preserve the existing pull-vs-drain weight comparison so the chosen
+// action still reflects the computed scores.
 static inline newbotai_drainlock_force_choice_t NewBotAI_GetDrainlockForceChoice(
 	newbotai_drainlock_force_context_t context)
 {
@@ -63,7 +63,8 @@ static inline newbotai_drainlock_force_choice_t NewBotAI_GetDrainlockForceChoice
 	}
 
 	if (context.enemyForce < 20 &&
-		context.pullWeight >= context.minWeight)
+		context.pullWeight >= context.minWeight &&
+		context.pullWeight >= context.drainWeight)
 	{
 		return NEWBOTAI_DRAINLOCK_FORCE_PULL;
 	}
