@@ -15243,11 +15243,6 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 				bs->currentEnemy = &g_entities[enemy];
 				bs->enemySeenTime = level.time + ENEMY_FORGET_MS;
 			}
-			else if (shouldRescanForCloserTarget)
-			{
-				bs->currentEnemy = NULL;
-				bs->enemySeenTime = 0;
-			}
 		}
 	}
 
