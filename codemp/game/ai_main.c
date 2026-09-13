@@ -15254,7 +15254,8 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 		}
 	}
 
-	if (bs->enemySeenTime < level.time || !bs->currentEnemy || !bs->frame_Enemy_Vis)
+	if (bs->enemySeenTime < level.time || !bs->currentEnemy ||
+		(!bs->frame_Enemy_Vis && !NewBotAI_IsCombatInitiatedAgainst(bs, bs->currentEnemy, qfalse)))
 	{
 		enemy = ScanForEnemies(bs);
 
