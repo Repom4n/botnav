@@ -7824,8 +7824,12 @@ static gentity_t *G_KickTrace( gentity_t *ent, vec3_t kickDir, float kickDist, v
 		 ent->client->ps.legsAnim == BOTH_A7_HILT ||
 		 ent->client->ps.torsoAnim == BOTH_JUMPATTACK7 ||
 		 ent->client->ps.legsAnim == BOTH_JUMPATTACK7 ||
+		 ent->client->ps.torsoAnim == BOTH_GETUP_BROLL_B ||
+		 ent->client->ps.legsAnim == BOTH_GETUP_BROLL_B ||
 		 ent->client->ps.torsoAnim == BOTH_GETUP_BROLL_F ||
 		 ent->client->ps.legsAnim == BOTH_GETUP_BROLL_F ||
+		 ent->client->ps.torsoAnim == BOTH_GETUP_FROLL_B ||
+		 ent->client->ps.legsAnim == BOTH_GETUP_FROLL_B ||
 		 ent->client->ps.torsoAnim == BOTH_GETUP_FROLL_F ||
 		 ent->client->ps.legsAnim == BOTH_GETUP_FROLL_F) ? qtrue : qfalse;
 	VectorSet(kickMins, -2.0f, -2.0f, -2.0f);

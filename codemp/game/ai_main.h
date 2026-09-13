@@ -393,7 +393,8 @@ typedef struct bot_state_s
 	int					gripkickKickCount;
 	int					gripkickJerkDirection;
 	float				gripkickJerkYawOffset; // yaw offset (relative to facing the gripped target directly) applied by the jerk - clamped so it never pushes us outside the force-grip's own InFront cone and auto-breaks the grip early
-	float				gripkickJerkPitch; // pitch (negative = up) of the current upward jerk, rolled per jerk in the -45 to -80 range
+	float				gripkickJerkPitch; // pitch (negative = up) of the current upward jerk
+	int					gripkickPitchVariant; // 0: per-sequence upward jerk pitch range 20-60, 1: per-sequence upward jerk pitch range 50-90
 	qboolean			gripkickActive;
 	int					gripkickAttemptTime; // level.time of the most recent gripkick flipkick attempt (success window is measured from this)
 	int					gripkickDwellUntil; // while > level.time, gripkick holds the target with aim-down/forward-only movement before the next kick approach
