@@ -6933,7 +6933,7 @@ void NewBotAI_Getup(bot_state_t *bs)
 	{
 		const qboolean pullActive = (bs->cur_ps.forceHandExtend == HANDEXTEND_FORCEPULL ||
 			bs->cur_ps.powerups[PW_PULL] > level.time) ? qtrue : qfalse;
-		if (pullActive && bs->cur_ps.fd.forcePower <= 25 && NewBotAI_ShouldEmergencyPushWhilePulled(bs))
+		if (pullActive && NewBotAI_ShouldEmergencyPushWhilePulled(bs))
 		{
 			level.clients[bs->client].ps.fd.forcePowerSelected = FP_PUSH;
 			useTheForce = qtrue;
@@ -9692,7 +9692,7 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 			}
 			return;
 		}
-		else if (bs->cur_ps.fd.forcePower <= 25 && NewBotAI_ShouldEmergencyPushWhilePulled(bs))
+		else if (NewBotAI_ShouldEmergencyPushWhilePulled(bs))
 		{
 			bs->combatAction = BOT_COMBAT_ACTION_RETREAT_DEFENSE;
 			NewBotAI_RetreatDiagonal(bs, (level.framenum & 1) ? qtrue : qfalse);
@@ -14414,8 +14414,6 @@ static void NewBotAI_MaintainWaypointFallbackEnemyLock(bot_state_t *bs)
 
 static qboolean NewBotAI_CanUseWaypointFallbackInCombat(bot_state_t *bs)
 {
-	vec3_t enemyDelta, enemyOrigin;
-
 	if (!bs)
 	{
 		return qfalse;
@@ -14440,16 +14438,7 @@ static qboolean NewBotAI_CanUseWaypointFallbackInCombat(bot_state_t *bs)
 		}
 		if (bs->combatNavHoldUntil > level.time)
 		{
-			VectorCopy(bs->currentEnemy->r.currentOrigin, enemyOrigin);
-			if (!enemyOrigin[0] && !enemyOrigin[1] && !enemyOrigin[2])
-			{
-				VectorCopy(bs->currentEnemy->client->ps.origin, enemyOrigin);
-			}
-			VectorSubtract(enemyOrigin, bs->origin, enemyDelta);
-			if (VectorLengthSquared(enemyDelta) <= NEWBOTAI_COMBAT_WAYPOINT_SEPARATION_SQ)
-			{
-				return qfalse;
-			}
+			return qfalse;
 		}
 		return qtrue;
 	}
