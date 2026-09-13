@@ -12504,6 +12504,7 @@ int NewBotAI_GetGrip(bot_state_t *bs) {
 	const int saberThrowCounterMinForceLead = 20;
 	const int ourHealth = g_entities[bs->client].health, hisHealth = bs->currentEnemy->health, ourForce = bs->cur_ps.fd.forcePower, hisForce = bs->currentEnemy->client->ps.fd.forcePower;
 	const int enemySaberEntNum = bs->currentEnemy->client->ps.saberEntityNum;
+	const qboolean enemyKnockedDown = BG_InKnockDown(bs->currentEnemy->client->ps.legsAnim) ? qtrue : qfalse;
 	const qboolean enemyCommittedSaberThrow = (bs->currentEnemy->client->ps.saberInFlight &&
 		enemySaberEntNum > 0 &&
 		enemySaberEntNum < ENTITYNUM_WORLD &&
@@ -12553,7 +12554,8 @@ int NewBotAI_GetGrip(bot_state_t *bs) {
 	//An enemy who has already committed their saber to a throw is wide open to a gripkick.
 	//As long as they are still inside grip range and we are healthy enough to risk it,
 	//weight the counter heavily instead of waiting for the old dominant-health threshold.
-	if (enemyCommittedSaberThrow &&
+	if (!enemyKnockedDown &&
+		enemyCommittedSaberThrow &&
 		!NewBotAI_HasDroppedOwnSaber(bs) &&
 		bs->frame_Enemy_Len <= MAX_GRIP_DISTANCE &&
 		ourHealth > 20 &&
