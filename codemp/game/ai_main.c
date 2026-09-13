@@ -15229,16 +15229,16 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 	{
 		const qboolean shouldRescanForCloserTarget =
 			(bs->currentEnemy && bs->frame_Enemy_Vis && bs->frame_Enemy_Len > 300.0f) ? qtrue : qfalse;
-	if (bs->enemySeenTime < level.time || !bs->frame_Enemy_Vis || !bs->currentEnemy || shouldRescanForCloserTarget)
-	{
-		enemy = ScanForEnemies(bs);
-
-		if (enemy != -1)
+		if (bs->enemySeenTime < level.time || !bs->frame_Enemy_Vis || !bs->currentEnemy || shouldRescanForCloserTarget)
 		{
-			bs->currentEnemy = &g_entities[enemy];
-			bs->enemySeenTime = level.time + ENEMY_FORGET_MS;
+			enemy = ScanForEnemies(bs);
+
+			if (enemy != -1)
+			{
+				bs->currentEnemy = &g_entities[enemy];
+				bs->enemySeenTime = level.time + ENEMY_FORGET_MS;
+			}
 		}
-	}
 	}
 
 	if (!bs->squadLeader && !bs->isSquadLeader)
