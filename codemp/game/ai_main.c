@@ -12266,13 +12266,7 @@ static void NewBotAI_ApplyJumpAttackGate(bot_state_t *bs)
 		bs->cur_ps.velocity[2] > 0.0f) ? qtrue : qfalse;
 	jumpStateActive = (jumpInputActive || airborneRising) ? qtrue : qfalse;
 
-	if (bs->jumpTime > level.time &&
-		bs->jumpTime <= level.time + NEWBOTAI_JUMP_ATTACK_GATE_MS &&
-		bs->jumpTime > bs->jumpAttackGateTime)
-	{
-		bs->jumpAttackGateTime = bs->jumpTime;
-	}
-	else if (jumpStateActive && !bs->jumpAttackGateJumping)
+	if (jumpStateActive && !bs->jumpAttackGateJumping)
 	{
 		bs->jumpAttackGateTime = level.time;
 	}
