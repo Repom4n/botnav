@@ -125,8 +125,8 @@ static int BotGetAggressionWeightedBonus(bot_state_t *bs, float biasPercent, int
 static int BotGetDrainHoldBiasMs(bot_state_t *bs);
 static int BotGetHealthBiasThreshold(void);
 static int NewBotAI_GetAntiDrainWeight(bot_state_t *bs);
-static float BotGetLightningMaxDistance(void);
-static float BotGetLightningStartDistance(void);
+static float BotGetLightningMaxDistance(bot_state_t *bs);
+static float BotGetLightningStartDistance(bot_state_t *bs);
 static qboolean NewBotAI_IsWithinLightningRange(bot_state_t *bs);
 static int NewBotAI_GetLightningWeight(bot_state_t *bs);
 static int NewBotAI_GetPTKWeight(bot_state_t *bs);
@@ -2108,6 +2108,7 @@ static qboolean BotNav_CheckFallingHazard(bot_state_t *bs, vec3_t moveDir, qbool
 {
 	vec3_t start, end, downEnd;
 	trace_t tr;
+	const float cautiousRollDrop = 96.0f;
 
 	if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE)
 	{
@@ -2164,10 +2165,10 @@ static qboolean BotNav_CheckFallingHazard(bot_state_t *bs, vec3_t moveDir, qbool
 		{
 			return qtrue;
 		}
-		if (!inCombat)
+		if (!inCombat && dropHeight >= cautiousRollDrop)
 		{
 			//Trigger a short crouch-hold so movement over safe ledges out of combat tends
-			//to become a roll instead of a plain walk-off.
+			//to become a roll instead of a plain walk-off, but don't do it for tiny bumps.
 			bs->duckTime = level.time + 300;
 		}
 	}
@@ -6167,7 +6168,7 @@ void BotDeathNotify(bot_state_t *bs)
 void StrafeTracing(bot_state_t *bs)
 {
 	vec3_t mins, maxs;
-	vec3_t right, rorg, drorg;
+	vec3_t right, rorg, moveDir;
 	trace_t tr;
 
 	mins[0] = -15;
@@ -6200,14 +6201,11 @@ void StrafeTracing(bot_state_t *bs)
 		bs->meleeStrafeDisable = level.time + Q_irand(500, 1500);
 	}
 
-	VectorCopy(rorg, drorg);
-
-	drorg[2] -= 32;
-
-	JP_Trace(&tr, rorg, NULL, NULL, drorg, bs->client, MASK_SOLID, qfalse, 0, 0);
-
-	if (tr.fraction == 1)
-	{ //this may be a dangerous ledge, so don't strafe over it just in case
+	VectorSubtract(rorg, bs->origin, moveDir);
+	moveDir[2] = 0.0f;
+	if (VectorNormalize(moveDir) > 0.0f &&
+		BotNav_CheckFallingHazard(bs, moveDir, qtrue))
+	{ //Only suppress combat strafes for genuinely dangerous drops, not short ledges.
 		bs->meleeStrafeDisable = level.time + Q_irand(500, 1500);
 	}
 }
@@ -7603,6 +7601,32 @@ static qboolean NewBotAI_ShouldUseWaypointRecoveryNow(bot_state_t *bs)
 	}
 
 	return (bs->navRecoverStuckSince <= level.time - timeoutMs) ? qtrue : qfalse;
+}
+
+static qboolean NewBotAI_IsActivelyEngagedInCombat(bot_state_t *bs)
+{
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return qfalse;
+	}
+
+	if (bs->frame_Enemy_Vis &&
+		(bs->frame_Enemy_Len <= (NEWBOTAI_TARGET_COMMIT_DISTANCE * 1.5f) ||
+		 bs->doAttack || bs->doAltAttack ||
+		 bs->cur_ps.weaponstate == WEAPON_FIRING ||
+		 bs->cur_ps.weaponstate == WEAPON_CHARGING ||
+		 bs->cur_ps.weaponstate == WEAPON_CHARGING_ALT))
+	{
+		return qtrue;
+	}
+
+	if (bs->lastHurtTime > level.time - 1200 ||
+		bs->combatNavHoldUntil > level.time)
+	{
+		return qtrue;
+	}
+
+	return qfalse;
 }
 
 static qboolean NewBotAI_TryDirectRecoveryPursuit(bot_state_t *bs)
@@ -10700,7 +10724,13 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 			}
 			//Break two-wall stalls with a small yaw drift and forward input
 			//instead of lateral obstacle avoidance during combat.
-			bs->ideal_viewangles[YAW] += (level.framenum & 1) ? 5.0f : -5.0f;
+			bs->ideal_viewangles[YAW] += Q_irand(20, 45) * ((level.framenum & 1) ? 1.0f : -1.0f);
+			if (bs->cur_ps.groundEntityNum != ENTITYNUM_NONE &&
+				bs->wallAvoidNextTime <= level.time)
+			{
+				trap->EA_Jump(bs->client);
+				bs->wallAvoidNextTime = level.time + 700;
+			}
 			trap->EA_MoveForward(bs->client);
 		}
 	}
@@ -11608,15 +11638,26 @@ static int NewBotAI_GetAntiDrainWeight(bot_state_t *bs)
 	return weight;
 }
 
-static float BotGetLightningMaxDistance(void)
+static float BotGetLightningMaxDistance(bot_state_t *bs)
 {
-	return 8192.0f; // Lightning level 2 is treated as effectively unlimited range for bots.
+	if (!bs)
+	{
+		return 2048.0f;
+	}
+
+	if (!(bs->cur_ps.fd.forcePowersKnown & (1 << FP_LIGHTNING)) ||
+		bs->cur_ps.fd.forcePowerLevel[FP_LIGHTNING] <= FORCE_LEVEL_0)
+	{
+		return 0.0f;
+	}
+
+	return 2048.0f;
 }
 
-static float BotGetLightningStartDistance(void)
+static float BotGetLightningStartDistance(bot_state_t *bs)
 {
 	float startDistance = bot_lightningdistance.value;
-	const float maxDistance = BotGetLightningMaxDistance();
+	const float maxDistance = BotGetLightningMaxDistance(bs);
 
 	if (startDistance < 0.0f)
 	{
@@ -11632,13 +11673,19 @@ static float BotGetLightningStartDistance(void)
 
 static qboolean NewBotAI_IsWithinLightningRange(bot_state_t *bs)
 {
+	const float maxDistance = BotGetLightningMaxDistance(bs);
+
 	if (!bs)
 	{
 		return qfalse;
 	}
+	if (maxDistance <= 0.0f)
+	{
+		return qfalse;
+	}
 
-	return (bs->frame_Enemy_Len >= BotGetLightningStartDistance() &&
-		bs->frame_Enemy_Len <= BotGetLightningMaxDistance()) ? qtrue : qfalse;
+	return (bs->frame_Enemy_Len >= BotGetLightningStartDistance(bs) &&
+		bs->frame_Enemy_Len <= maxDistance) ? qtrue : qfalse;
 }
 
 static int NewBotAI_GetLightningWeight(bot_state_t *bs)
@@ -11649,7 +11696,7 @@ static int NewBotAI_GetLightningWeight(bot_state_t *bs)
 	float distanceFactor;
 	float defensiveFactor;
 	int weight;
-	const float maxDistance = BotGetLightningMaxDistance();
+	const float maxDistance = BotGetLightningMaxDistance(bs);
 	vec3_t a_fo;
 
 	if (g_forcePowerDisable.integer & (1 << FP_LIGHTNING))
@@ -11660,10 +11707,8 @@ static int NewBotAI_GetLightningWeight(bot_state_t *bs)
 	{
 		return 0;
 	}
-	if (bs->cur_ps.fd.forcePowerLevel[FP_LIGHTNING] != FORCE_LEVEL_2)
+	if (bs->cur_ps.fd.forcePowerLevel[FP_LIGHTNING] <= FORCE_LEVEL_0)
 	{
-		//Bots are configured for level-2 lightning only; keep weighting aligned with
-		//that forced setting and skip other levels.
 		return 0;
 	}
 	if (!bs->frame_Enemy_Vis || bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB))
@@ -11683,7 +11728,7 @@ static int NewBotAI_GetLightningWeight(bot_state_t *bs)
 
 	aggressionBias = BotGetAggressionBias(bs);
 
-	startDistance = BotGetLightningStartDistance();
+	startDistance = BotGetLightningStartDistance(bs);
 	if (!NewBotAI_IsWithinLightningRange(bs))
 	{
 		return 0;
@@ -14141,7 +14186,7 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 	pullWeight = NewBotAI_GetPull(bs);
 	pushWeight = NewBotAI_GetPush(bs);
 	lightningWeight = NewBotAI_GetLightningWeight(bs);
-	longRangeLightningOnly = (bs->frame_Enemy_Len > BotGetLightningStartDistance() &&
+	longRangeLightningOnly = (bs->frame_Enemy_Len > BotGetLightningStartDistance(bs) &&
 		NewBotAI_IsWithinLightningRange(bs)) ? qtrue : qfalse;
 	if (longRangeLightningOnly)
 	{
@@ -15161,6 +15206,27 @@ static qboolean NewBotAI_TryNoWaypointYawEscape(bot_state_t *bs, vec3_t goalOrig
 		return qfalse; //we hit our target, not a wall
 	}
 
+	if (NewBotAI_FindWaypointHeadingPassageGoal(bs, toGoal, trTo))
+	{
+		VectorSubtract(trTo, bs->origin, toGoal);
+		toGoal[2] = 0.0f;
+		if (VectorNormalize(toGoal) > 0.0f)
+		{
+			vectoangles(toGoal, mins);
+			bs->ideal_viewangles[YAW] = mins[YAW];
+			bs->ideal_viewangles[PITCH] = 0.0f;
+			NewBotAI_StartEscapeYawOverride(bs, Com_Clampi(100, 2000, bot_nav_nowp_yawinterval.integer));
+			trap->EA_MoveForward(bs->client);
+			if (bs->cur_ps.groundEntityNum != ENTITYNUM_NONE &&
+				bs->wallAvoidNextTime <= level.time)
+			{
+				trap->EA_Jump(bs->client);
+				bs->wallAvoidNextTime = level.time + 700;
+			}
+			return qtrue;
+		}
+	}
+
 	//Stuck on a wall with no waypoint trail: pick a random slow yaw direction and
 	//keep driving forward to unstick instead of hard 180 reversals.
 	if (bot_nav_nowp_randomyaw.integer)
@@ -15200,6 +15266,12 @@ static qboolean NewBotAI_TryNoWaypointYawEscape(bot_state_t *bs, vec3_t goalOrig
 	NewBotAI_StartEscapeYawOverride(bs, Com_Clampi(100, 2000, bot_nav_nowp_yawinterval.integer));
 	bs->ideal_viewangles[YAW] = AngleNormalize360(bs->ideal_viewangles[YAW] + yawTurn);
 	trap->EA_MoveForward(bs->client);
+	if (bs->cur_ps.groundEntityNum != ENTITYNUM_NONE &&
+		bs->wallAvoidNextTime <= level.time)
+	{
+		trap->EA_Jump(bs->client);
+		bs->wallAvoidNextTime = level.time + 700;
+	}
 	return qtrue;
 }
 
@@ -15283,9 +15355,7 @@ int NewBotAI_ScanForEnemies(bot_state_t* bs) {
 	//close-range fights don't jitter between nearby candidates every few thinks.
 	if (bs->currentEnemy && bs->currentEnemy->client &&
 		PassStandardEnemyChecks(bs, bs->currentEnemy) &&
-		((bs->frame_Enemy_Vis && bs->frame_Enemy_Len <= NEWBOTAI_TARGET_COMMIT_DISTANCE) ||
-		 bs->lastHurtTime > level.time - 1200 ||
-		 bs->combatNavHoldUntil > level.time))
+		NewBotAI_IsActivelyEngagedInCombat(bs))
 	{
 		return bs->currentEnemy->s.number;
 	}
@@ -15952,8 +16022,14 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 
 	if (bot_navigation.integer)
 	{
-		const qboolean canUseWaypointFallback = NewBotAI_CanUseWaypointFallbackInCombat(bs);
-		const qboolean shouldFallbackToWaypoints = NewBotAI_ShouldFallbackToWaypoints(bs);
+		const qboolean engagedCombat = NewBotAI_IsActivelyEngagedInCombat(bs);
+		const qboolean canUseWaypointFallback = engagedCombat ? qfalse : NewBotAI_CanUseWaypointFallbackInCombat(bs);
+		const qboolean shouldFallbackToWaypoints = engagedCombat ? qfalse : NewBotAI_ShouldFallbackToWaypoints(bs);
+
+		if (engagedCombat)
+		{
+			NewBotAI_ResetRecoveryMovement(bs);
+		}
 
 		if (bot_nav_recovery.integer)
 		{
@@ -16381,9 +16457,9 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 				forceHostile = 1;
 			}
 			else if ((bs->cur_ps.fd.forcePowersKnown & (1 << FP_LIGHTNING)) &&
-				bs->cur_ps.fd.forcePowerLevel[FP_LIGHTNING] == FORCE_LEVEL_2 &&
+				bs->cur_ps.fd.forcePowerLevel[FP_LIGHTNING] > FORCE_LEVEL_0 &&
 				!(bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB)) &&
-				bs->frame_Enemy_Len > BotGetLightningStartDistance() &&
+				bs->frame_Enemy_Len > BotGetLightningStartDistance(bs) &&
 				level.clients[bs->client].ps.fd.forcePower > 50 &&
 				!NewBotAI_IsEnemySaberThreatImminent(bs) &&
 				InFieldOfVision(bs->viewangles, 50, a_fo))
@@ -16393,13 +16469,13 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 				forceHostile = 1;
 			}
 			else if ((bs->cur_ps.fd.forcePowersKnown & (1 << FP_LIGHTNING)) &&
-				bs->cur_ps.fd.forcePowerLevel[FP_LIGHTNING] == FORCE_LEVEL_2 &&
+				bs->cur_ps.fd.forcePowerLevel[FP_LIGHTNING] > FORCE_LEVEL_0 &&
 				!(bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB)) &&
-				bs->frame_Enemy_Len >= BotGetLightningStartDistance() &&
-				bs->frame_Enemy_Len <= BotGetLightningMaxDistance() &&
+				bs->frame_Enemy_Len >= BotGetLightningStartDistance(bs) &&
+				bs->frame_Enemy_Len <= BotGetLightningMaxDistance(bs) &&
 				level.clients[bs->client].ps.fd.forcePower > 50 &&
 				InFieldOfVision(bs->viewangles, 50, a_fo))
-			{ //only lightning level 2, and only from the configured range out; point-blank zaps waste force on level-3's short arc
+			{ //Use lightning from the configured range out; point-blank zaps still waste force.
 				level.clients[bs->client].ps.fd.forcePowerSelected = FP_LIGHTNING;
 				useTheForce = 1;
 				forceHostile = 1;

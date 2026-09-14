@@ -39,7 +39,7 @@ BotGetAggressionBias = clamp(bot_aggressionbias + healthComponent*bot_healthbias
 - `BotGetAggressionWeightedBonus(bs, biasPercent, maxBonus, aggressiveOnly)` scales a bonus by `aggressionBias * biasPercent/100 * maxBonus`. Only applies when aggression is positive (for `aggressiveOnly=true`).
 - Retreat thresholds: `hardRetreatHealth = 30 - aggression*25`, `softRetreatHealth = 60 - aggression*35`.
 - Saber throw defense break: `preferPull = (aggression > 0)` — pull when aggressive, push when defensive.
-- Lightning: only fires at/above `bot_lightningdistance` on defensive bias.
+- Lightning: fires at/above `bot_lightningdistance` for bots that know lightning and have a usable lightning level.
 
 ## Combat Behavior Biases
 
@@ -53,7 +53,7 @@ These are all percentage-based (0-100) chance weights that gate specific behavio
 | `bot_drainbias` | `0` | Scales ordinary non-drainlock drain holds. Higher = longer opportunistic drain taps. Feeds `BotGetDrainHoldBiasMs()`. |
 | `bot_drainlockbias` | `0` | Chance weight for committing to long deep-drain taps when the bot has a big FP lead. Separate from that cvar-driven behavior, bots that are behind on HP will keep heal-driven deep drainlocks until topped off unless aggression becomes extremely reckless. Feeds `NewBotAI_ShouldDrainlockDeep()`. |
 | `bot_antidrainbias` | `0` | Weight bonus for attacking drain-users. When enemy can drain and is low HP, bots prioritize killing them. Feeds `NewBotAI_GetAntiDrainWeight()`. |
-| `bot_lightningbias` | `0` | Chance weight for using lightning. Only fires on defensive aggression bias. |
+| `bot_lightningbias` | `0` | Chance weight for using lightning. Applies to bots that know lightning and pass the normal range/visibility/resource checks. |
 | `bot_lightningdistance` | `400` | Minimum range for lightning usage. Bot must be at least this far from the enemy. |
 | `bot_mistakebias` | `0` | Chance weight (0-100) for grip-escape mistakes when the *bot* is being gripped (never limits a player's own push/pull out of a grip). Lower-skill bots miss more: level 10 is unaffected, levels below it scale up to ~1.4x/ down to ~0.6x of the bias. Per grip session the bot rolls a wide range of failures: a random escape delay (0 up to ~3.6s) before it may pull free, missed pulls (aim offset), a fumbled push-instead-of-pull that shoves the gripper away, and occasionally never escaping the grip at all (kick-struggles until the grip ends). |
 
