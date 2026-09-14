@@ -212,6 +212,7 @@ static qboolean BotTargetModeAllowsBotEnemies(int targetMode);
 #define NEWBOTAI_COMBAT_DISENGAGE_COOLDOWN_MS 2500
 #define NEWBOTAI_COMBAT_WAYPOINT_SEPARATION 512.0f
 #define NEWBOTAI_COMBAT_WAYPOINT_SEPARATION_SQ (NEWBOTAI_COMBAT_WAYPOINT_SEPARATION * NEWBOTAI_COMBAT_WAYPOINT_SEPARATION)
+#define NEWBOTAI_LOST_TARGET_GRACE_MS 3000
 #define NEWBOTAI_TARGET_COMMIT_DISTANCE 768.0f
 #define NEWBOTAI_ESCAPE_YAW_SPEED NEWBOTAI_TUNING_ESCAPE_YAW_SPEED
 #define NEWBOTAI_ESCAPE_YAW_OVERRIDE_MS 250
@@ -232,6 +233,7 @@ static qboolean NewBotAI_TryNoWaypointYawEscape(bot_state_t *bs, vec3_t goalOrig
 static qboolean NewBotAI_ShouldSkipPullForNaturalFlipkickPTK(bot_state_t *bs);
 static void NewBotAI_ApplyJumpAttackGate(bot_state_t *bs);
 qboolean NewBotAI_IsEnemyPullable(bot_state_t *bs);
+static qboolean NewBotAI_IsDirectPathToEnemyBlocked(bot_state_t *bs);
 void Cmd_EngageDuel_f(gentity_t *ent, int dueltype);
 extern void DownedSaberThink(gentity_t *saberent);
 
@@ -508,6 +510,7 @@ int BotAI_GetClientState( int clientNum, playerState_t *state ) {
 	if ( !ent->inuse ) {
 		return qfalse;
 	}
+
 	if ( !ent->client ) {
 		return qfalse;
 	}
@@ -2645,41 +2648,8 @@ int ScanForEnemies(bot_state_t* bs)
 
 int WaitingForNow(bot_state_t *bs, vec3_t goalpos)
 { //checks if the bot is doing something along the lines of waiting for an elevator to raise up
-	vec3_t xybot, xywp, a;
-
-	if (!bs->wpCurrent)
-	{
-		return 0;
-	}
-
-	if ((int)goalpos[0] != (int)bs->wpCurrent->origin[0] ||
-		(int)goalpos[1] != (int)bs->wpCurrent->origin[1] ||
-		(int)goalpos[2] != (int)bs->wpCurrent->origin[2])
-	{
-		return 0;
-	}
-
-	VectorCopy(bs->origin, xybot);
-	VectorCopy(bs->wpCurrent->origin, xywp);
-
-	xybot[2] = 0;
-	xywp[2] = 0;
-
-	VectorSubtract(xybot, xywp, a);
-
-	if (VectorLength(a) < 16 && bs->frame_Waypoint_Len > 100)
-	{
-		if (CheckForFunc(bs->origin, bs->client))
-		{
-			return 1; //we're probably standing on an elevator and riding up/down. Or at least we hope so.
-		}
-	}
-	else if (VectorLength(a) < 64 && bs->frame_Waypoint_Len > 64 &&
-		CheckForFunc(bs->origin, bs->client))
-	{
-		bs->noUseTime = level.time + 2000;
-	}
-
+	(void)bs;
+	(void)goalpos;
 	return 0;
 }
 
@@ -7191,6 +7161,11 @@ static int NewBotAI_GetRecoveryStuckTimeoutMs(void)
 	return Com_Clampi(250, 30000, bot_nav_stucktimeout.integer);
 }
 
+static int NewBotAI_GetLightningBurstHoldMs(void)
+{
+	return Q_irand(1000, 2000);
+}
+
 static void NewBotAI_ResetRecoveryMovement(bot_state_t *bs)
 {
 	if (!bs)
@@ -7216,6 +7191,73 @@ static void NewBotAI_ClearLostSightCombatInput(bot_state_t *bs)
 
 	bs->doAttack = 0;
 	bs->doAltAttack = 0;
+}
+
+static void NewBotAI_ClearLightningBurst(bot_state_t *bs)
+{
+	if (!bs)
+	{
+		return;
+	}
+
+	bs->lightningHoldUntil = 0;
+}
+
+static void NewBotAI_StartLightningBurst(bot_state_t *bs)
+{
+	if (!bs)
+	{
+		return;
+	}
+	if (bs->lightningHoldUntil > level.time)
+	{
+		return;
+	}
+
+	bs->lightningHoldUntil = level.time + NewBotAI_GetLightningBurstHoldMs();
+}
+
+static qboolean NewBotAI_CanContinueLightningBurst(bot_state_t *bs)
+{
+	vec3_t a_fo;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return qfalse;
+	}
+	if (bs->lightningHoldUntil <= level.time)
+	{
+		return qfalse;
+	}
+	if (g_forcePowerDisable.integer & (1 << FP_LIGHTNING))
+	{
+		return qfalse;
+	}
+	if (!(bs->cur_ps.fd.forcePowersKnown & (1 << FP_LIGHTNING)) ||
+		bs->cur_ps.fd.forcePowerLevel[FP_LIGHTNING] <= FORCE_LEVEL_0)
+	{
+		return qfalse;
+	}
+	if (!bs->frame_Enemy_Vis ||
+		(bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB)))
+	{
+		return qfalse;
+	}
+	if (bs->cur_ps.fd.forcePower <= 25 ||
+		bs->frame_Enemy_Len < BotGetLightningStartDistance(bs) ||
+		bs->frame_Enemy_Len > BotGetLightningMaxDistance(bs))
+	{
+		return qfalse;
+	}
+
+	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, a_fo);
+	vectoangles(a_fo, a_fo);
+	if (!InFieldOfVision(bs->viewangles, 50, a_fo))
+	{
+		return qfalse;
+	}
+
+	return qtrue;
 }
 
 static qboolean NewBotAI_GetRecoveryHeadingVector(bot_state_t *bs, vec3_t outDir)
@@ -7603,6 +7645,45 @@ static qboolean NewBotAI_ShouldUseWaypointRecoveryNow(bot_state_t *bs)
 	return (bs->navRecoverStuckSince <= level.time - timeoutMs) ? qtrue : qfalse;
 }
 
+static qboolean NewBotAI_ShouldKeepLostSightTargetLock(bot_state_t *bs, qboolean progressStalled)
+{
+	vec3_t enemyOrigin, enemyDelta;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client || bs->frame_Enemy_Vis)
+	{
+		return qfalse;
+	}
+	if (bs->doAttack || bs->doAltAttack ||
+		bs->cur_ps.weaponstate == WEAPON_FIRING ||
+		bs->cur_ps.weaponstate == WEAPON_CHARGING ||
+		bs->cur_ps.weaponstate == WEAPON_CHARGING_ALT)
+	{
+		return qtrue;
+	}
+	if (progressStalled || NewBotAI_ShouldUseWaypointRecoveryNow(bs))
+	{
+		return qfalse;
+	}
+	if (bs->combatNavHoldUntil > level.time)
+	{
+		return qtrue;
+	}
+
+	VectorCopy(bs->currentEnemy->r.currentOrigin, enemyOrigin);
+	if (!enemyOrigin[0] && !enemyOrigin[1] && !enemyOrigin[2])
+	{
+		VectorCopy(bs->currentEnemy->client->ps.origin, enemyOrigin);
+	}
+	VectorSubtract(enemyOrigin, bs->origin, enemyDelta);
+	if (VectorLengthSquared(enemyDelta) <= NEWBOTAI_COMBAT_WAYPOINT_SEPARATION_SQ &&
+		bs->lastVisibleEnemyIndex > level.time - NEWBOTAI_LOST_TARGET_GRACE_MS)
+	{
+		return qtrue;
+	}
+
+	return qfalse;
+}
+
 static qboolean NewBotAI_IsActivelyEngagedInCombat(bot_state_t *bs)
 {
 	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
@@ -7627,6 +7708,20 @@ static qboolean NewBotAI_IsActivelyEngagedInCombat(bot_state_t *bs)
 	}
 
 	return qfalse;
+}
+
+static qboolean NewBotAI_IsRecoveryNavigationContext(bot_state_t *bs)
+{
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return qfalse;
+	}
+	if (!bs->frame_Enemy_Vis)
+	{
+		return qtrue;
+	}
+
+	return NewBotAI_IsDirectPathToEnemyBlocked(bs);
 }
 
 static qboolean NewBotAI_TryDirectRecoveryPursuit(bot_state_t *bs)
@@ -14181,11 +14276,22 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 	}
 	if (NewBotAI_IsEnemySaberThreatImminent(bs))
 	{
+		NewBotAI_ClearLightningBurst(bs);
 		return;
 	}
 	pullWeight = NewBotAI_GetPull(bs);
 	pushWeight = NewBotAI_GetPush(bs);
 	lightningWeight = NewBotAI_GetLightningWeight(bs);
+	if (NewBotAI_CanContinueLightningBurst(bs))
+	{
+		level.clients[bs->client].ps.fd.forcePowerSelected = FP_LIGHTNING;
+		trap->EA_ForcePower(bs->client);
+		return;
+	}
+	if (bs->lightningHoldUntil > 0 && !NewBotAI_CanContinueLightningBurst(bs))
+	{
+		NewBotAI_ClearLightningBurst(bs);
+	}
 	longRangeLightningOnly = (bs->frame_Enemy_Len > BotGetLightningStartDistance(bs) &&
 		NewBotAI_IsWithinLightningRange(bs)) ? qtrue : qfalse;
 	if (longRangeLightningOnly)
@@ -14268,6 +14374,7 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 	}
 	else if (!useTheForce && lightningWeight > pushWeight && lightningWeight > pullWeight && lightningWeight > drainWeight && lightningWeight > gripWeight && lightningWeight > minWeight) {
 		level.clients[bs->client].ps.fd.forcePowerSelected = FP_LIGHTNING;
+		NewBotAI_StartLightningBurst(bs);
 		useTheForce = qtrue;
 	}
 	//Explicit tie-break: when drain ties for best weight, prefer drain over grip/push/pull
@@ -14299,6 +14406,13 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 	if (!useTheForce && NewBotAI_GetTeamEnergize(bs) > minWeight) {
 		level.clients[bs->client].ps.fd.forcePowerSelected = FP_TEAM_FORCE;
 		useTheForce = qtrue;
+	}
+
+	if ((!useTheForce ||
+		level.clients[bs->client].ps.fd.forcePowerSelected != FP_LIGHTNING) &&
+		!(bs->cur_ps.fd.forcePowersActive & (1 << FP_LIGHTNING)))
+	{
+		NewBotAI_ClearLightningBurst(bs);
 	}
 
 	//A free flipkick always beats holding/charging a throw once the enemy has closed
@@ -15677,14 +15791,7 @@ static qboolean NewBotAI_ShouldFallbackToWaypoints(bot_state_t *bs)
 
 	if (!bs->frame_Enemy_Vis)
 	{
-		if (bs->doAttack || bs->doAltAttack ||
-			bs->cur_ps.weaponstate == WEAPON_FIRING ||
-			bs->cur_ps.weaponstate == WEAPON_CHARGING ||
-			bs->cur_ps.weaponstate == WEAPON_CHARGING_ALT)
-		{
-			return qfalse;
-		}
-		if (bs->combatNavHoldUntil > level.time)
+		if (NewBotAI_ShouldKeepLostSightTargetLock(bs, progressStalled))
 		{
 			return qfalse;
 		}
@@ -15694,7 +15801,8 @@ static qboolean NewBotAI_ShouldFallbackToWaypoints(bot_state_t *bs)
 			VectorCopy(bs->currentEnemy->client->ps.origin, enemyOrigin);
 		}
 		VectorSubtract(enemyOrigin, bs->origin, enemyDelta);
-		if (VectorLengthSquared(enemyDelta) <= NEWBOTAI_COMBAT_WAYPOINT_SEPARATION_SQ)
+		if (VectorLengthSquared(enemyDelta) <= NEWBOTAI_COMBAT_WAYPOINT_SEPARATION_SQ &&
+			bs->lastVisibleEnemyIndex > level.time - NEWBOTAI_LOST_TARGET_GRACE_MS)
 		{
 			return qfalse;
 		}
@@ -15726,6 +15834,7 @@ static void NewBotAI_MaintainWaypointFallbackEnemyLock(bot_state_t *bs)
 static qboolean NewBotAI_CanUseWaypointFallbackInCombat(bot_state_t *bs)
 {
 	vec3_t enemyDelta, enemyOrigin;
+	const qboolean progressStalled = NewBotAI_IsCombatProgressStalled(bs);
 
 	if (!bs)
 	{
@@ -15742,14 +15851,7 @@ static qboolean NewBotAI_CanUseWaypointFallbackInCombat(bot_state_t *bs)
 	}
 	if (!bs->frame_Enemy_Vis)
 	{
-		if (bs->doAttack || bs->doAltAttack ||
-			bs->cur_ps.weaponstate == WEAPON_FIRING ||
-			bs->cur_ps.weaponstate == WEAPON_CHARGING ||
-			bs->cur_ps.weaponstate == WEAPON_CHARGING_ALT)
-		{
-			return qfalse;
-		}
-		if (bs->combatNavHoldUntil > level.time)
+		if (NewBotAI_ShouldKeepLostSightTargetLock(bs, progressStalled))
 		{
 			return qfalse;
 		}
@@ -15759,14 +15861,15 @@ static qboolean NewBotAI_CanUseWaypointFallbackInCombat(bot_state_t *bs)
 			VectorCopy(bs->currentEnemy->client->ps.origin, enemyOrigin);
 		}
 		VectorSubtract(enemyOrigin, bs->origin, enemyDelta);
-		if (VectorLengthSquared(enemyDelta) <= NEWBOTAI_COMBAT_WAYPOINT_SEPARATION_SQ)
+		if (VectorLengthSquared(enemyDelta) <= NEWBOTAI_COMBAT_WAYPOINT_SEPARATION_SQ &&
+			bs->lastVisibleEnemyIndex > level.time - NEWBOTAI_LOST_TARGET_GRACE_MS)
 		{
 			return qfalse;
 		}
 		return qtrue;
 	}
 
-	return NewBotAI_IsDirectPathToEnemyBlocked(bs) || NewBotAI_IsCombatProgressStalled(bs);
+	return NewBotAI_IsDirectPathToEnemyBlocked(bs) || progressStalled;
 }
 
 void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
@@ -15899,7 +16002,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		}
 		else {
 			bs->currentEnemy = &g_entities[closestID];
-			if (bs->lastVisibleEnemyIndex < level.time - 10000) { //let him keep going for target for 10s before abandoning
+			if (bs->lastVisibleEnemyIndex < level.time - NEWBOTAI_LOST_TARGET_GRACE_MS) {
 				NewBotAI_RunNavigationOrAlone(bs, thinktime);
 				return;
 			}
@@ -16022,11 +16125,11 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 
 	if (bot_navigation.integer)
 	{
-		const qboolean engagedCombat = NewBotAI_IsActivelyEngagedInCombat(bs);
-		const qboolean canUseWaypointFallback = engagedCombat ? qfalse : NewBotAI_CanUseWaypointFallbackInCombat(bs);
-		const qboolean shouldFallbackToWaypoints = engagedCombat ? qfalse : NewBotAI_ShouldFallbackToWaypoints(bs);
+		const qboolean recoveryContext = NewBotAI_IsRecoveryNavigationContext(bs);
+		const qboolean canUseWaypointFallback = recoveryContext ? NewBotAI_CanUseWaypointFallbackInCombat(bs) : qfalse;
+		const qboolean shouldFallbackToWaypoints = recoveryContext ? NewBotAI_ShouldFallbackToWaypoints(bs) : qfalse;
 
-		if (engagedCombat)
+		if (!recoveryContext)
 		{
 			NewBotAI_ResetRecoveryMovement(bs);
 		}
@@ -16048,7 +16151,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 
 			if (bs->navRecoverMode == NEWBOTAI_NAV_RECOVERY_MODE_HOLD)
 			{
-				if (!canUseWaypointFallback)
+				if (!recoveryContext)
 				{
 					NewBotAI_ResetRecoveryMovement(bs);
 				}
@@ -16069,7 +16172,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 
 			if (bs->navRecoverMode == NEWBOTAI_NAV_RECOVERY_MODE_WAYPOINT &&
 				bs->navRecoverModeUntil > level.time &&
-				canUseWaypointFallback)
+				recoveryContext && canUseWaypointFallback)
 			{
 				NewBotAI_ClearLostSightCombatInput(bs);
 				NewBotAI_MaintainWaypointFallbackEnemyLock(bs);
@@ -16077,7 +16180,8 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 				return;
 			}
 
-			if ((shouldFallbackToWaypoints || NewBotAI_ShouldUseWaypointRecoveryNow(bs)) &&
+			if (recoveryContext &&
+				(shouldFallbackToWaypoints || NewBotAI_ShouldUseWaypointRecoveryNow(bs)) &&
 				canUseWaypointFallback)
 			{
 				bs->navRecoverMode = NEWBOTAI_NAV_RECOVERY_MODE_WAYPOINT;
@@ -16450,7 +16554,13 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 		else if (bs->cur_ps.fd.forceSide == FORCE_DARKSIDE)
 		{ //try dark side powers
 		  //in order of priority top to bottom
-			if ((bs->cur_ps.fd.forcePowersKnown & (1 << FP_GRIP)) && (bs->cur_ps.fd.forcePowersActive & (1 << FP_GRIP)) && InFieldOfVision(bs->viewangles, 50, a_fo))
+			if (NewBotAI_CanContinueLightningBurst(bs))
+			{
+				level.clients[bs->client].ps.fd.forcePowerSelected = FP_LIGHTNING;
+				useTheForce = 1;
+				forceHostile = 1;
+			}
+			else if ((bs->cur_ps.fd.forcePowersKnown & (1 << FP_GRIP)) && (bs->cur_ps.fd.forcePowersActive & (1 << FP_GRIP)) && InFieldOfVision(bs->viewangles, 50, a_fo))
 			{ //already gripping someone, so hold it
 				level.clients[bs->client].ps.fd.forcePowerSelected = FP_GRIP;
 				useTheForce = 1;
@@ -16465,6 +16575,7 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 				InFieldOfVision(bs->viewangles, 50, a_fo))
 			{ //At long range, prioritize lightning regardless of other dark-side options.
 				level.clients[bs->client].ps.fd.forcePowerSelected = FP_LIGHTNING;
+				NewBotAI_StartLightningBurst(bs);
 				useTheForce = 1;
 				forceHostile = 1;
 			}
@@ -16477,6 +16588,7 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 				InFieldOfVision(bs->viewangles, 50, a_fo))
 			{ //Use lightning from the configured range out; point-blank zaps still waste force.
 				level.clients[bs->client].ps.fd.forcePowerSelected = FP_LIGHTNING;
+				NewBotAI_StartLightningBurst(bs);
 				useTheForce = 1;
 				forceHostile = 1;
 			}
@@ -16996,21 +17108,6 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 		if (!bs->wpCurrent)
 		{ //WPConstantRoutine has the ability to nullify the waypoint if it fails certain checks, so..
 			return;
-		}
-
-		if (bs->wpCurrent->flags & WPFLAG_WAITFORFUNC)
-		{
-			if (!CheckForFunc(bs->wpCurrent->origin, -1))
-			{
-				bs->beStill = level.time + 500; //no func brush under.. wait
-			}
-		}
-		if (bs->wpCurrent->flags & WPFLAG_NOMOVEFUNC)
-		{
-			if (CheckForFunc(bs->wpCurrent->origin, -1))
-			{
-				bs->beStill = level.time + 500; //func brush under.. wait
-			}
 		}
 
 		if (bs->frame_Waypoint_Vis || (bs->wpCurrent->flags & WPFLAG_NOVIS))
@@ -17906,6 +18003,13 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 	else if (bs->doAltAttack)
 	{
 		trap->EA_Alt_Attack(bs->client);
+	}
+
+	if ((!useTheForce ||
+		level.clients[bs->client].ps.fd.forcePowerSelected != FP_LIGHTNING) &&
+		!(bs->cur_ps.fd.forcePowersActive & (1 << FP_LIGHTNING)))
+	{
+		NewBotAI_ClearLightningBurst(bs);
 	}
 
 	if (useTheForce)

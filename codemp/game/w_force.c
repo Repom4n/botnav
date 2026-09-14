@@ -1081,6 +1081,10 @@ void WP_ForcePowerStart( gentity_t *self, forcePowers_t forcePower, int override
 		overrideAmt = 0;
 		self->client->ps.fd.forcePowersActive |= ( 1 << forcePower );
 		self->client->ps.activeForcePass = self->client->ps.fd.forcePowerLevel[FP_LIGHTNING];
+		if ((self->r.svFlags & SVF_BOT) && self->client->ps.activeForcePass > FORCE_LEVEL_2)
+		{
+			self->client->ps.activeForcePass = FORCE_LEVEL_2;
+		}
 		break;
 	case FP_RAGE:
 		hearable = qtrue;
@@ -1897,7 +1901,7 @@ void ForceLightningDamage( gentity_t *self, gentity_t *traceEnt, vec3_t dir, vec
 				}
 
 				if ( self->client->ps.weapon == WP_MELEE
-					&& self->client->ps.fd.forcePowerLevel[FP_LIGHTNING] > FORCE_LEVEL_2 )
+					&& self->client->ps.activeForcePass > FORCE_LEVEL_2 )
 				{//2-handed lightning
 					//jackin' 'em up, Palpatine-style
 //[JAPRO - Serverside - Saber - Tweak force lightning - Start]
@@ -1949,7 +1953,7 @@ void ForceShootLightning( gentity_t *self )
 	AngleVectors( self->client->ps.viewangles, forward, NULL, NULL );
 	VectorNormalize( forward );
 
-	if ( self->client->ps.fd.forcePowerLevel[FP_LIGHTNING] > FORCE_LEVEL_2 )
+	if ( self->client->ps.activeForcePass > FORCE_LEVEL_2 )
 	{//arc
 		vec3_t	center, mins, maxs, dir, ent_org, size, v;
 		float	radius = FORCE_LIGHTNING_RADIUS, dot, dist;
