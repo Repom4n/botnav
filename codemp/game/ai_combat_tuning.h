@@ -151,6 +151,18 @@ static inline int NewBotAI_ShouldBlockOrthogonalSaberSpecialInput(
 	return 1;
 }
 
+static inline int NewBotAI_IsJumpAttackSuppressionWindowActive(
+	int currentTime, int jumpEventTime, int windowMs)
+{
+	if (jumpEventTime <= 0 || windowMs < 0)
+	{
+		return 0;
+	}
+
+	return (currentTime >= jumpEventTime - windowMs &&
+		currentTime <= jumpEventTime + windowMs) ? 1 : 0;
+}
+
 static inline int NewBotAI_ShouldIgnoreBotSaberLoss(int isBot, int noSaberDropEnabled)
 {
 	return (isBot && noSaberDropEnabled) ? 1 : 0;
