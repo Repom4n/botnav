@@ -205,6 +205,7 @@ static qboolean NewBotAI_IsDirectRecoveryHazardous(bot_state_t *bs);
 static qboolean NewBotAI_TryDirectRecoveryPursuit(bot_state_t *bs);
 static void NewBotAI_ResetRecoveryMovement(bot_state_t *bs);
 static void NewBotAI_ClearLostSightCombatInput(bot_state_t *bs);
+static void NewBotAI_ClearLightningBurst(bot_state_t *bs);
 static qboolean NewBotAI_StartWaypointHeadingHold(bot_state_t *bs);
 static qboolean NewBotAI_ApplyWaypointHeadingHold(bot_state_t *bs);
 static int BotGetNewBotAITargetMode(void);
