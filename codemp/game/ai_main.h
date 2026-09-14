@@ -432,6 +432,7 @@ typedef struct bot_state_s
 	int					navRecoverMode; // 0 = direct pursuit, 1 = waypoint routing phase, 2 = temporary farthest-reachable traversal
 	int					navRecoverModeUntil; // expiry for navRecoverMode==1
 	int					navHoldUntil; // expiry for navRecoverMode==2 temporary farthest-reachable traversal
+	qboolean			navBuildWaypointTrail; // on maps that start with no waypoints, append a waypoint at each adventure-phase end
 	int					lightningHoldUntil; // keep selecting lightning until this time unless the target closes inside bot_lightningdistance
 	vec3_t				navHoldDirection; // held forward direction captured from waypoint guidance
 	vec3_t				navHoldGoal; // last runtime farthest reachable goal selected while holding heading
