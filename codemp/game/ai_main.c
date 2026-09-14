@@ -197,7 +197,7 @@ static int NewBotAI_GetWallStrafeAwayDir(bot_state_t *bs);
 static int NewBotAI_GetNearestEnemyIgnoringDistance(bot_state_t *bs);
 static float NewBotAI_GetRecoveryYawSpeedDegPerSec(void);
 static int NewBotAI_GetRecoveryWaypointPhaseMs(void);
-static int NewBotAI_GetRecoveryHeadingHoldMs(void);
+static int NewBotAI_GetRecoveryAdventureTimeMs(void);
 static int NewBotAI_GetRecoveryStuckTimeoutMs(void);
 static qboolean NewBotAI_ShouldUseWaypointRecoveryNow(bot_state_t *bs);
 static qboolean NewBotAI_GetDirectRecoveryMoveDir(bot_state_t *bs, vec3_t outDir);
@@ -2165,11 +2165,60 @@ static qboolean BotNav_TouchesInstantKillTrigger(bot_state_t *bs, vec3_t origin)
 //Trace ahead in the movement direction to detect falling hazards (ledges, lava, death pits,
 //and instant-kill trigger_hurt volumes). Returns qtrue if walking in moveDir would lead the
 //bot off a dangerous drop or into one of those hazards.
+static qboolean BotNav_CheckInstantDeathHazardSample(bot_state_t *bs, vec3_t moveDir, float forwardDist, float downTraceDist, float deepPitThreshold)
+{
+	vec3_t start, end;
+	trace_t tr;
+
+	if (!bs)
+	{
+		return qfalse;
+	}
+
+	VectorCopy(bs->origin, start);
+	start[0] += moveDir[0] * forwardDist;
+	start[1] += moveDir[1] * forwardDist;
+
+	if (BotNav_TouchesInstantKillTrigger(bs, start))
+	{
+		return qtrue;
+	}
+
+	VectorCopy(start, end);
+	end[2] -= downTraceDist;
+
+	JP_Trace(&tr, start, NULL, NULL, end, bs->client, MASK_PLAYERSOLID, qfalse, 0, 0);
+
+	if (tr.fraction == 1.0f)
+	{
+		return qtrue;
+	}
+	if (tr.contents & (CONTENTS_LAVA | CONTENTS_NODROP))
+	{
+		return qtrue;
+	}
+	if (BotNav_TouchesInstantKillTrigger(bs, tr.endpos))
+	{
+		return qtrue;
+	}
+	if (deepPitThreshold > 0.0f && (bs->origin[2] - tr.endpos[2]) > deepPitThreshold)
+	{
+		return qtrue;
+	}
+
+	return qfalse;
+}
+
 static qboolean BotNav_CheckFallingHazard(bot_state_t *bs, vec3_t moveDir, qboolean inCombat)
 {
-	vec3_t start, end, downEnd;
+	static const float pitLookAhead[] = {96.0f, 144.0f};
+	vec3_t start, end;
 	trace_t tr;
 	const float cautiousRollDrop = 96.0f;
+	const float extendedPitTrace = 512.0f;
+	float lethalDrop;
+	float deepPitThreshold;
+	int i;
 
 	if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE)
 	{
@@ -2181,7 +2230,7 @@ static qboolean BotNav_CheckFallingHazard(bot_state_t *bs, vec3_t moveDir, qbool
 	start[0] += moveDir[0] * 48.0f;
 	start[1] += moveDir[1] * 48.0f;
 
-	if (BotNav_TouchesInstantKillTrigger(bs, start))
+	if (BotNav_CheckInstantDeathHazardSample(bs, moveDir, 48.0f, 256.0f, 0.0f))
 	{
 		return qtrue;
 	}
@@ -2192,33 +2241,12 @@ static qboolean BotNav_CheckFallingHazard(bot_state_t *bs, vec3_t moveDir, qbool
 
 	JP_Trace(&tr, start, NULL, NULL, end, bs->client, MASK_PLAYERSOLID, qfalse, 0, 0);
 
-	if (tr.fraction == 1.0f)
-	{
-		return qtrue; //no ground within 256 units below our next step - it's a deadly fall
-	}
-
-	//Check if the ground we'd land on is lava or a death pit
-	if (tr.contents & (CONTENTS_LAVA | CONTENTS_NODROP))
-	{
-		return qtrue;
-	}
-	if (BotNav_TouchesInstantKillTrigger(bs, tr.endpos))
-	{
-		return qtrue;
-	}
-
 	//Second check: estimate drop height and apply tunable lethal/safe-drop policy.
-	VectorCopy(bs->origin, start);
-	start[0] += moveDir[0] * 48.0f;
-	start[1] += moveDir[1] * 48.0f;
-	start[2] = tr.endpos[2]; //start from the landing surface
-
-	VectorCopy(start, downEnd);
-	downEnd[2] = bs->origin[2]; //trace back up to our level
+	lethalDrop = Com_Clampi(64, 2048, bot_nav_ledge_lethalheight.integer);
+	deepPitThreshold = (lethalDrop * 2.0f > 320.0f) ? (lethalDrop * 2.0f) : 320.0f;
 
 	{
 		const float dropHeight = bs->origin[2] - tr.endpos[2];
-		const float lethalDrop = Com_Clampi(64, 2048, bot_nav_ledge_lethalheight.integer);
 		const qboolean allowSafeDrop = inCombat ?
 			(bot_nav_ledge_safe_combat.integer ? qtrue : qfalse) :
 			(bot_nav_ledge_safe_noncombat.integer ? qtrue : qfalse);
@@ -2240,6 +2268,16 @@ static qboolean BotNav_CheckFallingHazard(bot_state_t *bs, vec3_t moveDir, qbool
 			//Trigger a short crouch-hold so movement over safe ledges out of combat tends
 			//to become a roll instead of a plain walk-off, but don't do it for tiny bumps.
 			bs->duckTime = level.time + 300;
+		}
+	}
+
+	//Broader hazard awareness: look farther ahead for instant-death pits/lava without
+	//blocking ordinary survivable ledges.
+	for (i = 0; i < ARRAY_LEN(pitLookAhead); i++)
+	{
+		if (BotNav_CheckInstantDeathHazardSample(bs, moveDir, pitLookAhead[i], extendedPitTrace, deepPitThreshold))
+		{
+			return qtrue;
 		}
 	}
 
@@ -7218,9 +7256,9 @@ static int NewBotAI_GetRecoveryWaypointPhaseMs(void)
 	return Com_Clampi(0, 30000, bot_nav_waypointphase.integer);
 }
 
-static int NewBotAI_GetRecoveryHeadingHoldMs(void)
+static int NewBotAI_GetRecoveryAdventureTimeMs(void)
 {
-	return Com_Clampi(0, 30000, bot_nav_headinghold.integer);
+	return Com_Clampi(0, 30000, bot_nav_adventuretime.integer);
 }
 
 static int NewBotAI_GetRecoveryYawIntervalMs(void)
@@ -7399,7 +7437,7 @@ static qboolean NewBotAI_GetRecoveryHeadingVector(bot_state_t *bs, vec3_t outDir
 	return qtrue;
 }
 
-static qboolean NewBotAI_IsPassageGoalTraversable(bot_state_t *bs, vec3_t goalPos)
+static qboolean NewBotAI_IsReachableAdventureGoal(bot_state_t *bs, vec3_t goalPos)
 {
 	vec3_t floorStart, floorEnd;
 	trace_t floorTrace;
@@ -7433,15 +7471,16 @@ static qboolean NewBotAI_IsPassageGoalTraversable(bot_state_t *bs, vec3_t goalPo
 	return qtrue;
 }
 
-static qboolean NewBotAI_FindWaypointHeadingPassageGoal(bot_state_t *bs, vec3_t preferredDir, vec3_t outGoal)
+static qboolean NewBotAI_FindWaypointAdventureGoal(bot_state_t *bs, vec3_t preferredDir, vec3_t outGoal)
 {
-	static const float yawOffsets[] = {0.0f, 18.0f, -18.0f, 36.0f, -36.0f, 54.0f, -54.0f};
-	vec3_t start, probeEnd, dir, dirAngles, candidate, continueStart, continueEnd, right, aheadPos;
+	static const float yawOffsets[] = {0.0f, 12.0f, -12.0f, 24.0f, -24.0f, 36.0f, -36.0f, 48.0f, -48.0f, 60.0f, -60.0f};
+	vec3_t start, probeEnd, dir, dirAngles, candidate;
 	vec3_t mins = {-15.0f, -15.0f, 0.0f};
 	vec3_t maxs = {15.0f, 15.0f, 32.0f};
-	trace_t tr, continueTrace, sideTrace;
+	trace_t tr;
 	float preferredYaw;
-	float bestScore;
+	float bestDist;
+	float bestYawOffsetAbs;
 	int i;
 
 	if (!bs)
@@ -7450,7 +7489,8 @@ static qboolean NewBotAI_FindWaypointHeadingPassageGoal(bot_state_t *bs, vec3_t 
 	}
 
 	preferredYaw = vectoyaw(preferredDir);
-	bestScore = -1.0f;
+	bestDist = -1.0f;
+	bestYawOffsetAbs = 9999.0f;
 
 	VectorCopy(bs->origin, start);
 	start[2] += 24.0f;
@@ -7458,16 +7498,11 @@ static qboolean NewBotAI_FindWaypointHeadingPassageGoal(bot_state_t *bs, vec3_t 
 	for (i = 0; i < ARRAY_LEN(yawOffsets); i++)
 	{
 		float travelDist;
-		float continueDist;
-		float score;
-		float corridorBias;
-		float straightBias;
-		int leftWalls;
-		int rightWalls;
+		float candidateDist;
 
 		VectorClear(dirAngles);
 		dirAngles[YAW] = preferredYaw + yawOffsets[i];
-		AngleVectors(dirAngles, dir, right, NULL);
+		AngleVectors(dirAngles, dir, NULL, NULL);
 		dir[2] = 0.0f;
 		if (VectorNormalize(dir) <= 0.0f)
 		{
@@ -7483,84 +7518,32 @@ static qboolean NewBotAI_FindWaypointHeadingPassageGoal(bot_state_t *bs, vec3_t 
 			continue;
 		}
 
-		if (tr.fraction >= 1.0f)
+		candidateDist = (tr.fraction >= 1.0f) ? 224.0f : (travelDist - 18.0f);
+		for (; candidateDist >= 72.0f; candidateDist -= 32.0f)
 		{
-			VectorMA(bs->origin, 224.0f, dir, candidate);
-		}
-		else
-		{
-			VectorMA(bs->origin, travelDist - 18.0f, dir, candidate);
-		}
-		candidate[2] = bs->origin[2];
-		if (!NewBotAI_IsPassageGoalTraversable(bs, candidate))
-		{
-			continue;
-		}
+			VectorMA(bs->origin, candidateDist, dir, candidate);
+			candidate[2] = bs->origin[2];
+			if (!NewBotAI_IsReachableAdventureGoal(bs, candidate))
+			{
+				continue;
+			}
+			if (BotNav_CheckFallingHazard(bs, dir, qtrue))
+			{
+				continue;
+			}
 
-		VectorCopy(candidate, continueStart);
-		continueStart[2] += 24.0f;
-		VectorMA(candidate, 96.0f, dir, continueEnd);
-		continueEnd[2] += 24.0f;
-		JP_Trace(&continueTrace, continueStart, mins, maxs, continueEnd, bs->client, MASK_PLAYERSOLID, qfalse, 0, 0);
-		continueDist = 96.0f * continueTrace.fraction;
-		if (continueDist < 48.0f)
-		{
-			continue;
-		}
-		VectorMA(candidate, (continueDist > 72.0f) ? 72.0f : continueDist, dir, aheadPos);
-		aheadPos[2] = bs->origin[2];
-		if (!NewBotAI_IsPassageGoalTraversable(bs, aheadPos))
-		{
-			continue;
-		}
-
-		corridorBias = 0.0f;
-		leftWalls = 0;
-		rightWalls = 0;
-		VectorMA(start, 40.0f, right, probeEnd);
-		JP_Trace(&sideTrace, start, NULL, NULL, probeEnd, bs->client, MASK_PLAYERSOLID, qfalse, 0, 0);
-		if (sideTrace.fraction < 1.0f)
-		{
-			rightWalls++;
-			corridorBias += 12.0f;
-		}
-		VectorMA(start, -40.0f, right, probeEnd);
-		JP_Trace(&sideTrace, start, NULL, NULL, probeEnd, bs->client, MASK_PLAYERSOLID, qfalse, 0, 0);
-		if (sideTrace.fraction < 1.0f)
-		{
-			leftWalls++;
-			corridorBias += 12.0f;
-		}
-
-		VectorMA(candidate, 40.0f, right, probeEnd);
-		JP_Trace(&sideTrace, candidate, NULL, NULL, probeEnd, bs->client, MASK_PLAYERSOLID, qfalse, 0, 0);
-		if (sideTrace.fraction < 1.0f)
-		{
-			rightWalls++;
-			corridorBias += 12.0f;
-		}
-		VectorMA(candidate, -40.0f, right, probeEnd);
-		JP_Trace(&sideTrace, candidate, NULL, NULL, probeEnd, bs->client, MASK_PLAYERSOLID, qfalse, 0, 0);
-		if (sideTrace.fraction < 1.0f)
-		{
-			leftWalls++;
-			corridorBias += 12.0f;
-		}
-		if (!leftWalls || !rightWalls)
-		{
-			continue;
-		}
-
-		straightBias = 80.0f - fabsf(yawOffsets[i]);
-		score = travelDist + continueDist + corridorBias + straightBias;
-		if (score > bestScore)
-		{
-			bestScore = score;
-			VectorCopy(candidate, outGoal);
+			if (candidateDist > bestDist ||
+				(candidateDist == bestDist && fabsf(yawOffsets[i]) < bestYawOffsetAbs))
+			{
+				bestDist = candidateDist;
+				bestYawOffsetAbs = fabsf(yawOffsets[i]);
+				VectorCopy(candidate, outGoal);
+			}
+			break;
 		}
 	}
 
-	return (bestScore >= 0.0f) ? qtrue : qfalse;
+	return (bestDist >= 0.0f) ? qtrue : qfalse;
 }
 
 static qboolean NewBotAI_UpdateWaypointHeadingGoal(bot_state_t *bs)
@@ -7580,7 +7563,7 @@ static qboolean NewBotAI_UpdateWaypointHeadingGoal(bot_state_t *bs)
 	{
 		return qfalse;
 	}
-	if (!NewBotAI_FindWaypointHeadingPassageGoal(bs, preferredDir, bs->navHoldGoal))
+	if (!NewBotAI_FindWaypointAdventureGoal(bs, preferredDir, bs->navHoldGoal))
 	{
 		return qfalse;
 	}
@@ -7616,7 +7599,7 @@ static qboolean NewBotAI_StartWaypointHeadingHold(bot_state_t *bs)
 		return qfalse;
 	}
 
-	bs->navHoldUntil = level.time + NewBotAI_GetRecoveryHeadingHoldMs();
+	bs->navHoldUntil = level.time + NewBotAI_GetRecoveryAdventureTimeMs();
 	bs->navRecoverStuckSince = level.time;
 	VectorCopy(bs->origin, bs->navRecoverOrigin);
 	return qtrue;
@@ -7648,7 +7631,7 @@ static qboolean NewBotAI_ApplyWaypointHeadingHold(bot_state_t *bs)
 		return qfalse;
 	}
 	VectorCopy(bs->navHoldGoal, goalPos);
-	if (!NewBotAI_IsPassageGoalTraversable(bs, goalPos))
+	if (!NewBotAI_IsReachableAdventureGoal(bs, goalPos))
 	{
 		return qfalse;
 	}
@@ -15550,7 +15533,7 @@ static qboolean NewBotAI_TryNoWaypointYawEscape(bot_state_t *bs, vec3_t goalOrig
 		return qfalse; //we hit our target, not a wall
 	}
 
-	if (NewBotAI_FindWaypointHeadingPassageGoal(bs, toGoal, trTo))
+	if (NewBotAI_FindWaypointAdventureGoal(bs, toGoal, trTo))
 	{
 		VectorSubtract(trTo, bs->origin, toGoal);
 		toGoal[2] = 0.0f;
