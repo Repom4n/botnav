@@ -208,6 +208,7 @@ static void NewBotAI_ClearLostSightCombatInput(bot_state_t *bs);
 static void NewBotAI_ClearLightningBurst(bot_state_t *bs);
 static qboolean NewBotAI_StartWaypointHeadingHold(bot_state_t *bs);
 static qboolean NewBotAI_ApplyWaypointHeadingHold(bot_state_t *bs);
+static qboolean NewBotAI_UpdateWaypointHeadingGoal(bot_state_t *bs);
 static int BotGetNewBotAITargetMode(void);
 static qboolean BotTargetModeAllowsBotEnemies(int targetMode);
 
@@ -7251,6 +7252,7 @@ static void NewBotAI_ResetRecoveryMovement(bot_state_t *bs)
 	bs->navRecoverStuckSince = 0;
 	VectorClear(bs->navHoldDirection);
 	VectorClear(bs->navHoldGoal);
+	bs->navHoldGoalValid = qfalse;
 }
 
 static void NewBotAI_ClearLostSightCombatInput(bot_state_t *bs)
@@ -7434,7 +7436,7 @@ static qboolean NewBotAI_IsPassageGoalTraversable(bot_state_t *bs, vec3_t goalPo
 static qboolean NewBotAI_FindWaypointHeadingPassageGoal(bot_state_t *bs, vec3_t preferredDir, vec3_t outGoal)
 {
 	static const float yawOffsets[] = {0.0f, 18.0f, -18.0f, 36.0f, -36.0f, 54.0f, -54.0f};
-	vec3_t start, probeEnd, dir, dirAngles, candidate, continueStart, continueEnd, right;
+	vec3_t start, probeEnd, dir, dirAngles, candidate, continueStart, continueEnd, right, aheadPos;
 	vec3_t mins = {-15.0f, -15.0f, 0.0f};
 	vec3_t maxs = {15.0f, 15.0f, 32.0f};
 	trace_t tr, continueTrace, sideTrace;
@@ -7499,6 +7501,16 @@ static qboolean NewBotAI_FindWaypointHeadingPassageGoal(bot_state_t *bs, vec3_t 
 		continueEnd[2] += 24.0f;
 		JP_Trace(&continueTrace, continueStart, mins, maxs, continueEnd, bs->client, MASK_PLAYERSOLID, qfalse, 0, 0);
 		continueDist = 96.0f * continueTrace.fraction;
+		if (continueDist < 48.0f)
+		{
+			continue;
+		}
+		VectorMA(candidate, (continueDist > 72.0f) ? 72.0f : continueDist, dir, aheadPos);
+		aheadPos[2] = bs->origin[2];
+		if (!NewBotAI_IsPassageGoalTraversable(bs, aheadPos))
+		{
+			continue;
+		}
 
 		corridorBias = 0.0f;
 		VectorMA(start, 40.0f, right, probeEnd);
@@ -7526,6 +7538,43 @@ static qboolean NewBotAI_FindWaypointHeadingPassageGoal(bot_state_t *bs, vec3_t 
 	return (bestScore >= 0.0f) ? qtrue : qfalse;
 }
 
+static qboolean NewBotAI_UpdateWaypointHeadingGoal(bot_state_t *bs)
+{
+	vec3_t preferredDir;
+	vec3_t moveDir;
+
+	if (!bs)
+	{
+		return qfalse;
+	}
+	if (bs->navHoldGoalValid)
+	{
+		return qtrue;
+	}
+	if (!NewBotAI_GetRecoveryHeadingVector(bs, preferredDir))
+	{
+		return qfalse;
+	}
+	if (!NewBotAI_FindWaypointHeadingPassageGoal(bs, preferredDir, bs->navHoldGoal))
+	{
+		return qfalse;
+	}
+
+	VectorSubtract(bs->navHoldGoal, bs->origin, moveDir);
+	moveDir[2] = 0.0f;
+	if (VectorNormalize(moveDir) <= 0.0f)
+	{
+		return qfalse;
+	}
+	if (BotNav_CheckFallingHazard(bs, moveDir, qtrue))
+	{
+		return qfalse;
+	}
+
+	bs->navHoldGoalValid = qtrue;
+	return qtrue;
+}
+
 static qboolean NewBotAI_StartWaypointHeadingHold(bot_state_t *bs)
 {
 	if (!bs)
@@ -7537,11 +7586,14 @@ static qboolean NewBotAI_StartWaypointHeadingHold(bot_state_t *bs)
 	{
 		return qfalse;
 	}
+	if (!NewBotAI_UpdateWaypointHeadingGoal(bs))
+	{
+		return qfalse;
+	}
 
 	bs->navHoldUntil = level.time + NewBotAI_GetRecoveryHeadingHoldMs();
 	bs->navRecoverStuckSince = level.time;
 	VectorCopy(bs->origin, bs->navRecoverOrigin);
-	VectorClear(bs->navHoldGoal);
 	return qtrue;
 }
 
@@ -7566,7 +7618,12 @@ static qboolean NewBotAI_ApplyWaypointHeadingHold(bot_state_t *bs)
 	{
 		return qfalse;
 	}
-	if (!NewBotAI_FindWaypointHeadingPassageGoal(bs, bs->navHoldDirection, goalPos))
+	if (!bs->navHoldGoalValid)
+	{
+		return qfalse;
+	}
+	VectorCopy(bs->navHoldGoal, goalPos);
+	if (!NewBotAI_IsPassageGoalTraversable(bs, goalPos))
 	{
 		return qfalse;
 	}
@@ -7591,9 +7648,13 @@ static qboolean NewBotAI_ApplyWaypointHeadingHold(bot_state_t *bs)
 	}
 
 	NewBotAI_ClearLostSightCombatInput(bs);
-	VectorCopy(goalPos, bs->navHoldGoal);
 	VectorCopy(goalPos, bs->goalPosition);
 	VectorSubtract(goalPos, bs->origin, goalDelta);
+	goalDelta[2] = 0.0f;
+	if (VectorNormalize(goalDelta) <= 0.0f)
+	{
+		return qfalse;
+	}
 	if (BotNav_CheckFallingHazard(bs, goalDelta, qtrue))
 	{
 		return qfalse;
@@ -16327,6 +16388,8 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 					bs->navRecoverMode = NEWBOTAI_NAV_RECOVERY_MODE_WAYPOINT;
 					bs->navRecoverModeUntil = level.time + NewBotAI_GetRecoveryWaypointPhaseMs();
 					bs->navRecoverStuckSince = 0;
+					bs->navHoldGoalValid = qfalse;
+					VectorClear(bs->navHoldGoal);
 				}
 			}
 
@@ -16334,6 +16397,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 				bs->navRecoverModeUntil > level.time &&
 				recoveryContext && canUseWaypointFallback)
 			{
+				(void)NewBotAI_UpdateWaypointHeadingGoal(bs);
 				NewBotAI_ClearLostSightCombatInput(bs);
 				NewBotAI_MaintainWaypointFallbackEnemyLock(bs);
 				StandardBotAI(bs, thinktime);
@@ -16349,6 +16413,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 				bs->navHoldUntil = 0;
 				VectorClear(bs->navHoldDirection);
 				VectorClear(bs->navHoldGoal);
+				bs->navHoldGoalValid = qfalse;
 				NewBotAI_ClearLostSightCombatInput(bs);
 				NewBotAI_MaintainWaypointFallbackEnemyLock(bs);
 				StandardBotAI(bs, thinktime);
@@ -17076,48 +17141,13 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 			else if (bs->currentEnemy && bs->currentEnemy->client && gWPArray[wp] && gWPArray[wp]->inuse)
 			{
 				int enemyWP = bs->currentEnemy->waypoint;
-				qboolean selectedDirection = qfalse;
 				if (enemyWP < 0 || enemyWP >= gWPNum || !gWPArray[enemyWP] || !gWPArray[enemyWP]->inuse)
 				{
 					enemyWP = -1;
 				}
 				if (enemyWP != -1)
 				{
-					selectedDirection = NewBotAI_SelectWaypointDirectionTowardTarget(bs, wp, enemyWP);
-				}
-				if (!selectedDirection)
-				{
-					if (bs->enemyWaypointFallbackIndex >= 0 &&
-						(bs->enemyWaypointFallbackIndex >= gWPNum ||
-						 !gWPArray[bs->enemyWaypointFallbackIndex] ||
-						 !gWPArray[bs->enemyWaypointFallbackIndex]->inuse))
-					{
-						bs->enemyWaypointFallbackIndex = -1;
-						bs->enemyWaypointFallbackTime = 0;
-					}
-					else if (bs->enemyWaypointFallbackIndex >= 0)
-					{
-						vec3_t enemyWpDelta;
-						VectorSubtract(gWPArray[bs->enemyWaypointFallbackIndex]->origin, bs->currentEnemy->client->ps.origin, enemyWpDelta);
-						if (VectorLengthSquared(enemyWpDelta) > (512.0f * 512.0f))
-						{
-							bs->enemyWaypointFallbackIndex = -1;
-							bs->enemyWaypointFallbackTime = 0;
-						}
-					}
-
-					if (bs->enemyWaypointFallbackTime <= level.time)
-					{
-						bs->enemyWaypointFallbackIndex = GetNearestVisibleWP(bs->currentEnemy->client->ps.origin, bs->currentEnemy->s.number);
-						bs->enemyWaypointFallbackTime = level.time +
-							((bs->enemyWaypointFallbackIndex == -1) ? 3000 : 1500);
-					}
-
-					enemyWP = bs->enemyWaypointFallbackIndex;
-					if (enemyWP != -1)
-					{
-						selectedDirection = NewBotAI_SelectWaypointDirectionTowardTarget(bs, wp, enemyWP);
-					}
+					NewBotAI_SelectWaypointDirectionTowardTarget(bs, wp, enemyWP);
 				}
 			}
 
@@ -17829,6 +17859,8 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 				bs->navRecoverMode = NEWBOTAI_NAV_RECOVERY_MODE_WAYPOINT;
 				bs->navRecoverModeUntil = level.time + NewBotAI_GetRecoveryWaypointPhaseMs();
 				bs->navRecoverStuckSince = 0;
+				bs->navHoldGoalValid = qfalse;
+				VectorClear(bs->navHoldGoal);
 			}
 			else
 			{

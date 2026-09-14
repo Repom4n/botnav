@@ -435,6 +435,7 @@ typedef struct bot_state_s
 	int					lightningHoldUntil; // keep selecting lightning until this time unless the target closes inside bot_lightningdistance
 	vec3_t				navHoldDirection; // held forward direction captured from waypoint guidance
 	vec3_t				navHoldGoal; // last runtime opening goal selected while holding heading
+	qboolean			navHoldGoalValid; // true after waypoint phase acquires a runtime hallway/doorway goal
 	int					duelNoStrafeUntil; // while > level.time, suppress lateral move input to ease duel acceptance aiming
 	int					nextHopTime;      // level.time the next bot_hopfrequency-gated hop may fire (ambient/random or discretionary combat hop) - set to -1 after firing so the interval re-rolls only once we land again
 	qboolean			hopWasGrounded;   // groundEntityNum state as of the last hop-frequency update - used to detect a fresh landing (from a flipkick/knockdown/etc, not our own hop) so we re-roll instead of firing immediately
