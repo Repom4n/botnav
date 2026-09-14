@@ -7200,9 +7200,9 @@ static float NewBotAI_GetRecoveryYawSpeedDegPerSec(void)
 {
 	float yawSpeed = bot_nav_recoveryyawspeed.value;
 
-	if (yawSpeed < 1.0f)
+	if (yawSpeed < 0.0f)
 	{
-		yawSpeed = 1.0f;
+		yawSpeed = 0.0f;
 	}
 	else if (yawSpeed > 1080.0f)
 	{
@@ -7222,9 +7222,14 @@ static int NewBotAI_GetRecoveryHeadingHoldMs(void)
 	return Com_Clampi(0, 30000, bot_nav_headinghold.integer);
 }
 
+static int NewBotAI_GetRecoveryYawIntervalMs(void)
+{
+	return Com_Clampi(0, 10000, bot_nav_nowp_yawinterval.integer);
+}
+
 static int NewBotAI_GetRecoveryStuckTimeoutMs(void)
 {
-	return Com_Clampi(250, 30000, bot_nav_stucktimeout.integer);
+	return Com_Clampi(0, 30000, bot_nav_stucktimeout.integer);
 }
 
 static int NewBotAI_GetLightningBurstHoldMs(void)
@@ -7258,6 +7263,25 @@ static void NewBotAI_ClearLostSightCombatInput(bot_state_t *bs)
 	bs->doAttack = 0;
 	bs->doAltAttack = 0;
 	bs->drainHoldTime = 0;
+	bs->flipkickInputTime = 0;
+	bs->flipkickJumpHeld = qfalse;
+	bs->pullKickJumpTime = 0;
+	bs->drainRollYawStart = 0;
+	bs->drainRollResetTime = 0;
+	bs->gripkickLookDownUntil = 0;
+	bs->gripkickRestackDir = 0;
+	bs->ideal_viewangles[PITCH] = 0.0f;
+	bs->goalAngles[PITCH] = 0.0f;
+	if (!(bs->cur_ps.fd.forcePowersActive & (1 << FP_GRIP)))
+	{
+		bs->gripkickActive = qfalse;
+		bs->gripkickJerkUntil = 0;
+		bs->gripkickJerkCount = 0;
+		bs->gripkickKickCount = 0;
+		bs->gripkickJerkDirection = 0;
+		bs->gripkickJerkPitch = 0.0f;
+		bs->gripkickDwellUntil = 0;
+	}
 	NewBotAI_ClearLightningBurst(bs);
 }
 
@@ -7528,6 +7552,7 @@ static qboolean NewBotAI_ApplyWaypointHeadingHold(bot_state_t *bs)
 	float horizontalSpeedSquared;
 	const float movedDistanceSq = 96.0f * 96.0f;
 	const float stuckSpeedSq = 900.0f;
+	const int stuckTimeoutMs = NewBotAI_GetRecoveryStuckTimeoutMs();
 
 	if (!bs || bs->navRecoverMode != NEWBOTAI_NAV_RECOVERY_MODE_HOLD)
 	{
@@ -7559,7 +7584,8 @@ static qboolean NewBotAI_ApplyWaypointHeadingHold(bot_state_t *bs)
 		bs->navRecoverStuckSince = level.time;
 		VectorCopy(bs->origin, bs->navRecoverOrigin);
 	}
-	else if (bs->navRecoverStuckSince <= level.time - NewBotAI_GetRecoveryStuckTimeoutMs())
+	else if (stuckTimeoutMs > 0 &&
+		bs->navRecoverStuckSince <= level.time - stuckTimeoutMs)
 	{
 		return qfalse;
 	}
@@ -7568,6 +7594,10 @@ static qboolean NewBotAI_ApplyWaypointHeadingHold(bot_state_t *bs)
 	VectorCopy(goalPos, bs->navHoldGoal);
 	VectorCopy(goalPos, bs->goalPosition);
 	VectorSubtract(goalPos, bs->origin, goalDelta);
+	if (BotNav_CheckFallingHazard(bs, goalDelta, qtrue))
+	{
+		return qfalse;
+	}
 	vectoangles(goalDelta, goalDelta);
 	goalDelta[PITCH] = 0.0f;
 	VectorCopy(goalDelta, bs->goalAngles);
@@ -7665,6 +7695,11 @@ static qboolean NewBotAI_ShouldUseWaypointRecoveryNow(bot_state_t *bs)
 	const int timeoutMs = NewBotAI_GetRecoveryStuckTimeoutMs();
 
 	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client || bs->frame_Enemy_Vis)
+	{
+		bs->navRecoverStuckSince = 0;
+		return qfalse;
+	}
+	if (timeoutMs <= 0)
 	{
 		bs->navRecoverStuckSince = 0;
 		return qfalse;
@@ -15378,9 +15413,11 @@ void NewBotAI_DoAloneStuff(bot_state_t *bs, float thinktime) {
 static qboolean NewBotAI_TryNoWaypointYawEscape(bot_state_t *bs, vec3_t goalOrigin)
 {
 	vec3_t toGoal, trTo, mins, maxs;
+	vec3_t escapeAngles, escapeDir;
 	trace_t tr;
 	float horizontalSpeedSquared;
 	float yawTurn;
+	const int yawIntervalMs = NewBotAI_GetRecoveryYawIntervalMs();
 
 	if (gWPNum > 0)
 	{
@@ -15431,12 +15468,13 @@ static qboolean NewBotAI_TryNoWaypointYawEscape(bot_state_t *bs, vec3_t goalOrig
 	{
 		VectorSubtract(trTo, bs->origin, toGoal);
 		toGoal[2] = 0.0f;
-		if (VectorNormalize(toGoal) > 0.0f)
+		if (VectorNormalize(toGoal) > 0.0f &&
+			!BotNav_CheckFallingHazard(bs, toGoal, qtrue))
 		{
 			vectoangles(toGoal, mins);
 			bs->ideal_viewangles[YAW] = mins[YAW];
 			bs->ideal_viewangles[PITCH] = 0.0f;
-			NewBotAI_StartEscapeYawOverride(bs, Com_Clampi(100, 2000, bot_nav_nowp_yawinterval.integer));
+			NewBotAI_StartEscapeYawOverride(bs, yawIntervalMs);
 			trap->EA_MoveForward(bs->client);
 			if (bs->cur_ps.groundEntityNum != ENTITYNUM_NONE &&
 				bs->wallAvoidNextTime <= level.time)
@@ -15452,10 +15490,16 @@ static qboolean NewBotAI_TryNoWaypointYawEscape(bot_state_t *bs, vec3_t goalOrig
 	//keep driving forward to unstick instead of hard 180 reversals.
 	if (bot_nav_nowp_randomyaw.integer)
 	{
+		const float recoveryYawSpeed = NewBotAI_GetRecoveryYawSpeedDegPerSec();
+
+		if (yawIntervalMs <= 0 || recoveryYawSpeed <= 0.0f)
+		{
+			return qfalse;
+		}
 		if (bs->customNavReverseTime <= level.time)
 		{
-			int rerollMs = Com_Clampi(100, 10000, bot_nav_nowp_yawinterval.integer);
-			float slowTurn = NewBotAI_GetRecoveryYawSpeedDegPerSec() * 0.5f;
+			int rerollMs = yawIntervalMs;
+			float slowTurn = recoveryYawSpeed * 0.5f;
 			if (slowTurn < 15.0f)
 			{
 				slowTurn = 15.0f;
@@ -15465,7 +15509,7 @@ static qboolean NewBotAI_TryNoWaypointYawEscape(bot_state_t *bs, vec3_t goalOrig
 		}
 		else
 		{
-			yawTurn = NewBotAI_GetRecoveryYawSpeedDegPerSec() * 0.25f;
+			yawTurn = recoveryYawSpeed * 0.25f;
 			if (yawTurn < 10.0f)
 			{
 				yawTurn = 10.0f;
@@ -15484,8 +15528,17 @@ static qboolean NewBotAI_TryNoWaypointYawEscape(bot_state_t *bs, vec3_t goalOrig
 			yawTurn = 120.0f;
 		}
 	}
-	NewBotAI_StartEscapeYawOverride(bs, Com_Clampi(100, 2000, bot_nav_nowp_yawinterval.integer));
-	bs->ideal_viewangles[YAW] = AngleNormalize360(bs->ideal_viewangles[YAW] + yawTurn);
+	VectorClear(escapeAngles);
+	escapeAngles[YAW] = AngleNormalize360(bs->ideal_viewangles[YAW] + yawTurn);
+	AngleVectors(escapeAngles, escapeDir, NULL, NULL);
+	escapeDir[2] = 0.0f;
+	if (VectorNormalize(escapeDir) <= 0.0f ||
+		BotNav_CheckFallingHazard(bs, escapeDir, qtrue))
+	{
+		return qfalse;
+	}
+	NewBotAI_StartEscapeYawOverride(bs, yawIntervalMs);
+	bs->ideal_viewangles[YAW] = escapeAngles[YAW];
 	trap->EA_MoveForward(bs->client);
 	if (bs->cur_ps.groundEntityNum != ENTITYNUM_NONE &&
 		bs->wallAvoidNextTime <= level.time)
@@ -16340,6 +16393,12 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		bs->navRecoverMode == NEWBOTAI_NAV_RECOVERY_MODE_DIRECT &&
 		NewBotAI_TryDirectRecoveryPursuit(bs))
 	{
+		return;
+	}
+	if (!bs->frame_Enemy_Vis)
+	{
+		NewBotAI_ClearLostSightCombatInput(bs);
+		NewBotAI_RunNavigationOrAlone(bs, thinktime);
 		return;
 	}
 
