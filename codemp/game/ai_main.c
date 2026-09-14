@@ -202,7 +202,6 @@ static int NewBotAI_GetRecoveryStuckTimeoutMs(void);
 static qboolean NewBotAI_ShouldUseWaypointRecoveryNow(bot_state_t *bs);
 static qboolean NewBotAI_GetDirectRecoveryMoveDir(bot_state_t *bs, vec3_t outDir);
 static qboolean NewBotAI_IsDirectRecoveryHazardous(bot_state_t *bs);
-static qboolean NewBotAI_TryDirectRecoveryPursuit(bot_state_t *bs);
 static void NewBotAI_ResetRecoveryMovement(bot_state_t *bs);
 static void NewBotAI_ClearLostSightCombatInput(bot_state_t *bs);
 static void NewBotAI_ClearLightningBurst(bot_state_t *bs);
@@ -240,6 +239,7 @@ qboolean NewBotAI_IsEnemyPullable(bot_state_t *bs);
 static qboolean NewBotAI_IsDirectPathToEnemyBlocked(bot_state_t *bs);
 void Cmd_EngageDuel_f(gentity_t *ent, int dueltype);
 extern void DownedSaberThink(gentity_t *saberent);
+extern void CreateNewWP(vec3_t origin, int flags);
 
 static qboolean BotHasActiveHumanPlayers(void);
 
@@ -2165,7 +2165,7 @@ static qboolean BotNav_TouchesInstantKillTrigger(bot_state_t *bs, vec3_t origin)
 //Trace ahead in the movement direction to detect falling hazards (ledges, lava, death pits,
 //and instant-kill trigger_hurt volumes). Returns qtrue if walking in moveDir would lead the
 //bot off a dangerous drop or into one of those hazards.
-static qboolean BotNav_CheckInstantDeathHazardSample(bot_state_t *bs, vec3_t moveDir, float forwardDist, float downTraceDist, float deepPitThreshold)
+static qboolean BotNav_CheckInstantDeathHazardSample(bot_state_t *bs, vec3_t moveDir, float forwardDist, float downTraceDist)
 {
 	vec3_t start, end;
 	trace_t tr;
@@ -2189,10 +2189,6 @@ static qboolean BotNav_CheckInstantDeathHazardSample(bot_state_t *bs, vec3_t mov
 
 	JP_Trace(&tr, start, NULL, NULL, end, bs->client, MASK_PLAYERSOLID, qfalse, 0, 0);
 
-	if (tr.fraction == 1.0f)
-	{
-		return qtrue;
-	}
 	if (tr.contents & (CONTENTS_LAVA | CONTENTS_NODROP))
 	{
 		return qtrue;
@@ -2201,11 +2197,6 @@ static qboolean BotNav_CheckInstantDeathHazardSample(bot_state_t *bs, vec3_t mov
 	{
 		return qtrue;
 	}
-	if (deepPitThreshold > 0.0f && (bs->origin[2] - tr.endpos[2]) > deepPitThreshold)
-	{
-		return qtrue;
-	}
-
 	return qfalse;
 }
 
@@ -2214,11 +2205,10 @@ static qboolean BotNav_CheckFallingHazard(bot_state_t *bs, vec3_t moveDir, qbool
 	static const float pitLookAhead[] = {96.0f, 144.0f};
 	vec3_t start, end;
 	trace_t tr;
-	const float cautiousRollDrop = 96.0f;
 	const float extendedPitTrace = 512.0f;
-	float lethalDrop;
-	float deepPitThreshold;
 	int i;
+
+	(void)inCombat;
 
 	if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE)
 	{
@@ -2230,63 +2220,31 @@ static qboolean BotNav_CheckFallingHazard(bot_state_t *bs, vec3_t moveDir, qbool
 	start[0] += moveDir[0] * 48.0f;
 	start[1] += moveDir[1] * 48.0f;
 
-	if (BotNav_CheckInstantDeathHazardSample(bs, moveDir, 48.0f, 256.0f, 0.0f))
+	if (BotNav_CheckInstantDeathHazardSample(bs, moveDir, 48.0f, 256.0f))
 	{
 		return qtrue;
 	}
 
-	//First check: is there ground ahead at all?
 	VectorCopy(start, end);
-	end[2] -= 256.0f; //trace down looking for floor
+	end[2] -= 256.0f;
 
 	JP_Trace(&tr, start, NULL, NULL, end, bs->client, MASK_PLAYERSOLID, qfalse, 0, 0);
 
-	//Second check: estimate drop height and apply tunable lethal/safe-drop policy.
-	lethalDrop = Com_Clampi(64, 2048, bot_nav_ledge_lethalheight.integer);
-	deepPitThreshold = (lethalDrop * 2.0f > 320.0f) ? (lethalDrop * 2.0f) : 320.0f;
-
-	{
-		const float dropHeight = bs->origin[2] - tr.endpos[2];
-		const qboolean allowSafeDrop = inCombat ?
-			(bot_nav_ledge_safe_combat.integer ? qtrue : qfalse) :
-			(bot_nav_ledge_safe_noncombat.integer ? qtrue : qfalse);
-
-		if (dropHeight <= 0.0f)
-		{
-			return qfalse;
-		}
-		if (dropHeight > lethalDrop)
-		{
-			return qtrue;
-		}
-		if (!allowSafeDrop)
-		{
-			return qtrue;
-		}
-		if (!inCombat && dropHeight >= cautiousRollDrop)
-		{
-			//Trigger a short crouch-hold so movement over safe ledges out of combat tends
-			//to become a roll instead of a plain walk-off, but don't do it for tiny bumps.
-			bs->duckTime = level.time + 300;
-		}
-	}
-
-	//Broader hazard awareness: look farther ahead for instant-death pits/lava without
-	//blocking ordinary survivable ledges.
-	for (i = 0; i < ARRAY_LEN(pitLookAhead); i++)
-	{
-		if (BotNav_CheckInstantDeathHazardSample(bs, moveDir, pitLookAhead[i], extendedPitTrace, deepPitThreshold))
-		{
-			return qtrue;
-		}
-	}
-
-	//Ordinary non-lethal ledges are allowed when enabled; environmental hazards are
-	//already filtered above.
-	if (!inCombat && (bs->origin[2] - tr.endpos[2]) > 200.0f &&
-		(!bot_nav_ledge_safe_noncombat.integer))
+	//All ordinary ledges are treated as safe; only explicit instant-death hazards should stop movement.
+	if (tr.fraction < 1.0f &&
+		((tr.contents & (CONTENTS_LAVA | CONTENTS_NODROP)) ||
+		 BotNav_TouchesInstantKillTrigger(bs, tr.endpos)))
 	{
 		return qtrue;
+	}
+
+	//Broader hazard awareness: check farther ahead only for explicit instant-death hazards.
+	for (i = 0; i < ARRAY_LEN(pitLookAhead); i++)
+	{
+		if (BotNav_CheckInstantDeathHazardSample(bs, moveDir, pitLookAhead[i], extendedPitTrace))
+		{
+			return qtrue;
+		}
 	}
 
 	return qfalse;
@@ -7293,6 +7251,26 @@ static void NewBotAI_ResetRecoveryMovement(bot_state_t *bs)
 	bs->navHoldGoalValid = qfalse;
 }
 
+static void NewBotAI_CreateRecoveryTrailWaypoint(bot_state_t *bs)
+{
+	vec3_t delta;
+
+	if (!bs || !bs->navBuildWaypointTrail || bs->cur_ps.groundEntityNum == ENTITYNUM_NONE)
+	{
+		return;
+	}
+	if (gWPNum > 0 && gWPArray[gWPNum - 1] && gWPArray[gWPNum - 1]->inuse)
+	{
+		VectorSubtract(bs->origin, gWPArray[gWPNum - 1]->origin, delta);
+		if (VectorLengthSquared(delta) < (96.0f * 96.0f))
+		{
+			return;
+		}
+	}
+
+	CreateNewWP(bs->origin, 0);
+}
+
 static void NewBotAI_ClearLostSightCombatInput(bot_state_t *bs)
 {
 	if (!bs || bs->frame_Enemy_Vis)
@@ -7588,6 +7566,10 @@ static qboolean NewBotAI_StartWaypointHeadingHold(bot_state_t *bs)
 	if (!bs)
 	{
 		return qfalse;
+	}
+	if (gWPNum <= 0)
+	{
+		bs->navBuildWaypointTrail = qtrue;
 	}
 
 	if (!NewBotAI_GetRecoveryHeadingVector(bs, bs->navHoldDirection))
@@ -7928,34 +7910,6 @@ static qboolean NewBotAI_IsRecoveryNavigationContext(bot_state_t *bs)
 
 	return (NewBotAI_IsDirectPathToEnemyBlocked(bs) ||
 		NewBotAI_IsDirectRecoveryHazardous(bs)) ? qtrue : qfalse;
-}
-
-static qboolean NewBotAI_TryDirectRecoveryPursuit(bot_state_t *bs)
-{
-	vec3_t moveDir, look;
-
-	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client || bs->frame_Enemy_Vis)
-	{
-		return qfalse;
-	}
-
-	if (!NewBotAI_GetDirectRecoveryMoveDir(bs, moveDir))
-	{
-		return qfalse;
-	}
-	if (BotNav_CheckFallingHazard(bs, moveDir, qtrue))
-	{
-		NewBotAI_ClearLostSightCombatInput(bs);
-		return qfalse;
-	}
-
-	vectoangles(moveDir, look);
-	bs->ideal_viewangles[YAW] = look[YAW];
-	bs->ideal_viewangles[PITCH] = 0.0f;
-	NewBotAI_ClearLostSightCombatInput(bs);
-	NewBotAI_StartEscapeYawOverride(bs, 200);
-	trap->EA_MoveForward(bs->client);
-	return qtrue;
 }
 
 //"Barely moving" despite trying to move - roughly 30 units/sec (30*30). Shared by the
@@ -16401,6 +16355,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 				}
 				else
 				{
+					NewBotAI_CreateRecoveryTrailWaypoint(bs);
 					bs->navRecoverMode = NEWBOTAI_NAV_RECOVERY_MODE_WAYPOINT;
 					bs->navRecoverModeUntil = level.time + NewBotAI_GetRecoveryWaypointPhaseMs();
 					bs->navRecoverStuckSince = 0;
@@ -16421,7 +16376,6 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 			}
 
 			if (recoveryContext &&
-				(shouldFallbackToWaypoints || NewBotAI_ShouldUseWaypointRecoveryNow(bs)) &&
 				canUseWaypointFallback)
 			{
 				bs->navRecoverMode = NEWBOTAI_NAV_RECOVERY_MODE_WAYPOINT;
@@ -16472,8 +16426,19 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 
 	if (bot_nav_recovery.integer &&
 		bs->navRecoverMode == NEWBOTAI_NAV_RECOVERY_MODE_DIRECT &&
-		NewBotAI_TryDirectRecoveryPursuit(bs))
+		NewBotAI_IsRecoveryNavigationContext(bs) &&
+		NewBotAI_CanUseWaypointFallbackInCombat(bs))
 	{
+		bs->navRecoverMode = NEWBOTAI_NAV_RECOVERY_MODE_WAYPOINT;
+		bs->navRecoverModeUntil = level.time + NewBotAI_GetRecoveryWaypointPhaseMs();
+		bs->navRecoverStuckSince = 0;
+		bs->navHoldUntil = 0;
+		VectorClear(bs->navHoldDirection);
+		VectorClear(bs->navHoldGoal);
+		bs->navHoldGoalValid = qfalse;
+		NewBotAI_ClearLostSightCombatInput(bs);
+		NewBotAI_MaintainWaypointFallbackEnemyLock(bs);
+		StandardBotAI(bs, thinktime);
 		return;
 	}
 	if (!bs->frame_Enemy_Vis)
@@ -17872,6 +17837,7 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 		{
 			if (bot_nav_recovery.integer && NewBotAI_CanUseWaypointFallbackInCombat(bs))
 			{
+				NewBotAI_CreateRecoveryTrailWaypoint(bs);
 				bs->navRecoverMode = NEWBOTAI_NAV_RECOVERY_MODE_WAYPOINT;
 				bs->navRecoverModeUntil = level.time + NewBotAI_GetRecoveryWaypointPhaseMs();
 				bs->navRecoverStuckSince = 0;
