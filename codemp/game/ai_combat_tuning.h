@@ -159,7 +159,7 @@ static inline int NewBotAI_IsJumpAttackSuppressionWindowActive(
 		return 0;
 	}
 
-	return (currentTime >= jumpEventTime - windowMs &&
+	return (currentTime >= jumpEventTime &&
 		currentTime <= jumpEventTime + windowMs) ? 1 : 0;
 }
 

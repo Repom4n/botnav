@@ -83,10 +83,10 @@ BOOST_AUTO_TEST_CASE( accidental_special_guard_uses_effective_inputs )
 	BOOST_CHECK( !NewBotAI_ShouldBlockOrthogonalSaberSpecialInput( 1, 0, 0, 1, 0, 1 ) );
 }
 
-BOOST_AUTO_TEST_CASE( jump_attack_gate_covers_plus_minus_window )
+BOOST_AUTO_TEST_CASE( jump_attack_gate_covers_post_jump_window )
 {
 	BOOST_CHECK( NewBotAI_IsJumpAttackSuppressionWindowActive( 1000, 1000, 40 ) );
-	BOOST_CHECK( NewBotAI_IsJumpAttackSuppressionWindowActive( 960, 1000, 40 ) );
+	BOOST_CHECK( !NewBotAI_IsJumpAttackSuppressionWindowActive( 960, 1000, 40 ) );
 	BOOST_CHECK( NewBotAI_IsJumpAttackSuppressionWindowActive( 1040, 1000, 40 ) );
 	BOOST_CHECK( !NewBotAI_IsJumpAttackSuppressionWindowActive( 959, 1000, 40 ) );
 	BOOST_CHECK( !NewBotAI_IsJumpAttackSuppressionWindowActive( 1041, 1000, 40 ) );
