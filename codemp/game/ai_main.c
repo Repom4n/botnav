@@ -127,6 +127,7 @@ static int BotGetHealthBiasThreshold(void);
 static int NewBotAI_GetAntiDrainWeight(bot_state_t *bs);
 static float BotGetLightningMaxDistance(void);
 static float BotGetLightningStartDistance(void);
+static qboolean NewBotAI_IsWithinLightningRange(bot_state_t *bs);
 static int NewBotAI_GetLightningWeight(bot_state_t *bs);
 static int NewBotAI_GetPTKWeight(bot_state_t *bs);
 static qboolean NewBotAI_IsKnockdownRecoveryRoll(int anim);
@@ -9441,7 +9442,15 @@ static qboolean NewBotAI_IsPullkickOpportunity(bot_state_t *bs)
 
 static qboolean NewBotAI_ShouldSkipPullForNaturalFlipkickPTK(bot_state_t *bs)
 {
-	const float timeToRange = NewBotAI_GetPullkickTimeToKickRange(bs);
+	float timeToRange;
+	const qboolean pullUsable = (bs &&
+		!(g_forcePowerDisable.integer & (1 << FP_PULL)) &&
+		(bs->cur_ps.fd.forcePowersKnown & (1 << FP_PULL)) &&
+		bs->cur_ps.fd.forcePower >= 20 &&
+		bs->cur_ps.groundEntityNum != ENTITYNUM_NONE &&
+		bs->frame_Enemy_Vis &&
+		bs->currentEnemy && bs->currentEnemy->client &&
+		!(bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB))) ? qtrue : qfalse;
 
 	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client || !g_flipKick.integer)
 	{
@@ -9453,19 +9462,14 @@ static qboolean NewBotAI_ShouldSkipPullForNaturalFlipkickPTK(bot_state_t *bs)
 		return qfalse;
 	}
 
-	if (NewBotAI_IsFlipkickSetupReady(bs))
-	{
-		return qtrue;
-	}
-
-	if (bs->frame_Enemy_Len <= 220.0f &&
-		timeToRange >= 0.0f &&
-		timeToRange <= 350.0f)
-	{
-		return qtrue;
-	}
-
-	return qfalse;
+	timeToRange = NewBotAI_GetPullkickTimeToKickRange(bs);
+	return NewBotAI_ShouldSkipPullForNaturalFlipkick(
+		pullUsable ? 1 : 0,
+		1,
+		1,
+		NewBotAI_IsFlipkickSetupReady(bs) ? 1 : 0,
+		bs->frame_Enemy_Len,
+		timeToRange) ? qtrue : qfalse;
 }
 
 // Saber-duel deadlock fix: when flipkick isn't available (g_flipkick disabled, or the duel type
@@ -10456,10 +10460,12 @@ static qboolean NewBotAI_TryIssueBotDuelChallenge(bot_state_t *bs, int targetMod
 	Cmd_EngageDuel_f(&g_entities[bs->client], duelType);
 
 	VectorCopy(oldViewAngles, g_entities[bs->client].client->ps.viewangles);
-	bs->botChallengingTime = level.time +
-		((bs->currentEnemy->r.svFlags & SVF_BOT) ?
-			NEWBOTAI_DUEL_REQUEST_BOT_VS_BOT_COOLDOWN_MS :
-			NEWBOTAI_DUEL_REQUEST_COOLDOWN_MS);
+	bs->botChallengingTime = level.time + NewBotAI_GetDuelRequestCooldownMs(
+		NEWBOTAI_DUEL_REQUEST_COOLDOWN_MS,
+		NEWBOTAI_DUEL_REQUEST_BOT_VS_BOT_COOLDOWN_MS,
+		BotTargetModeAllowsBotDuelChallenges(targetMode) ? 1 : 0,
+		(g_entities[bs->client].r.svFlags & SVF_BOT) ? 1 : 0,
+		(bs->currentEnemy->r.svFlags & SVF_BOT) ? 1 : 0);
 	bs->beStill = level.time + 250;
 	bs->doAttack = 0;
 	bs->doAltAttack = 0;
@@ -10993,6 +10999,7 @@ static int NewBotAI_GetAntiDrainWeight(bot_state_t *bs)
 	const int enemyForce = bs->currentEnemy->client->ps.fd.forcePower;
 	const int ourForce = bs->cur_ps.fd.forcePower;
 	const int forceDisadvantage = enemyForce - ourForce;
+	const qboolean lowForceAntiDrain = (ourForce <= 25 && enemyForce >= 20) ? qtrue : qfalse;
 	const qboolean enemyCanDrain = ((bs->currentEnemy->client->ps.fd.forcePowersKnown & (1 << FP_DRAIN)) ||
 		(bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_DRAIN))) ? qtrue : qfalse;
 	int weight;
@@ -11004,7 +11011,8 @@ static int NewBotAI_GetAntiDrainWeight(bot_state_t *bs)
 
 	//Antidrain is for situations where we can spend force to deny enemy healing while
 	//we still hold a sizeable health edge despite losing the force economy.
-	if (forceDisadvantage < 20 || totalHealthDelta < 30 || ourForce < 20)
+	if (!lowForceAntiDrain &&
+		(forceDisadvantage < 20 || totalHealthDelta < 30 || ourForce < 20))
 	{
 		return 0;
 	}
@@ -11018,8 +11026,7 @@ static int NewBotAI_GetAntiDrainWeight(bot_state_t *bs)
 	{
 		weight += 10;
 	}
-	if (bs->frame_Enemy_Len >= BotGetLightningStartDistance() &&
-		bs->frame_Enemy_Len <= BotGetLightningMaxDistance())
+	if (NewBotAI_IsWithinLightningRange(bs))
 	{
 		weight += 30;
 	}
@@ -11056,6 +11063,17 @@ static float BotGetLightningStartDistance(void)
 	}
 
 	return startDistance;
+}
+
+static qboolean NewBotAI_IsWithinLightningRange(bot_state_t *bs)
+{
+	if (!bs)
+	{
+		return qfalse;
+	}
+
+	return (bs->frame_Enemy_Len >= BotGetLightningStartDistance() &&
+		bs->frame_Enemy_Len <= BotGetLightningMaxDistance()) ? qtrue : qfalse;
 }
 
 static int NewBotAI_GetLightningWeight(bot_state_t *bs)
@@ -11101,7 +11119,7 @@ static int NewBotAI_GetLightningWeight(bot_state_t *bs)
 	aggressionBias = BotGetAggressionBias(bs);
 
 	startDistance = BotGetLightningStartDistance();
-	if (bs->frame_Enemy_Len < startDistance || bs->frame_Enemy_Len > maxDistance)
+	if (!NewBotAI_IsWithinLightningRange(bs))
 	{
 		return 0;
 	}
@@ -11143,9 +11161,13 @@ static int NewBotAI_GetLightningWeight(bot_state_t *bs)
 	weight = (int)(defensiveFactor * distanceFactor * (lightningBias / 100.0f) * 400.0f);
 
 	//Antidrain at long range should primarily channel into lightning pressure.
-	if (bs->frame_Enemy_Len >= startDistance)
+	if (NewBotAI_IsWithinLightningRange(bs))
 	{
 		weight += NewBotAI_GetAntiDrainWeight(bs) * 2;
+	}
+	if (weight > 100)
+	{
+		weight = 100;
 	}
 
 	return weight;
@@ -11930,7 +11952,9 @@ static qboolean NewBotAI_ShouldJumpDrainVsSaberThrow(bot_state_t *bs)
 
 	//If the thrower is already near death, they cannot break saber defense with a pull.
 	//Stay grounded for normal advance/retreat defense unless we're ready to cash a flipkick.
-	if (bs->currentEnemy->health < 20 && !NewBotAI_IsFlipkickSetupReady(bs))
+	if (bs->currentEnemy->client->ps.saberInFlight &&
+		bs->currentEnemy->health < 20 &&
+		!NewBotAI_IsFlipkickSetupReady(bs))
 	{
 		return qfalse;
 	}
@@ -12226,6 +12250,7 @@ static void NewBotAI_ApplyJumpAttackGate(bot_state_t *bs)
 	usercmd_t *cmd;
 	qboolean jumpInputActive;
 	qboolean airborneRising;
+	qboolean jumpStateActive;
 
 	if (!bs || bs->cur_ps.weapon != WP_SABER)
 	{
@@ -12239,19 +12264,26 @@ static void NewBotAI_ApplyJumpAttackGate(bot_state_t *bs)
 		bs->flipkickInputTime > level.time) ? qtrue : qfalse;
 	airborneRising = (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE &&
 		bs->cur_ps.velocity[2] > 0.0f) ? qtrue : qfalse;
+	jumpStateActive = (jumpInputActive || airborneRising) ? qtrue : qfalse;
 
-	if (jumpInputActive || airborneRising)
+	if (bs->jumpTime > level.time &&
+		bs->jumpTime <= level.time + NEWBOTAI_JUMP_ATTACK_GATE_MS &&
+		bs->jumpTime > bs->jumpAttackGateTime)
+	{
+		bs->jumpAttackGateTime = bs->jumpTime;
+	}
+	else if (jumpStateActive && !bs->jumpAttackGateJumping)
 	{
 		bs->jumpAttackGateTime = level.time;
 	}
+	bs->jumpAttackGateJumping = jumpStateActive;
 
 	if (NewBotAI_IsJumpAttackSuppressionWindowActive(
 		level.time,
 		bs->jumpAttackGateTime,
 		NEWBOTAI_JUMP_ATTACK_GATE_MS))
 	{
-		bs->doAttack = 0;
-		bs->doAltAttack = 0;
+		NewBotAI_ApplyJumpAttackSuppression(1, &bs->doAttack, &bs->doAltAttack);
 	}
 }
 
@@ -12325,46 +12357,29 @@ static int BotGetStrafeFrequencyPercent(void)
 static int NewBotAI_GetContextualStrafeFrequencyPercent(bot_state_t *bs)
 {
 	int frequency = BotGetStrafeFrequencyPercent();
+	int activeNonSpeedPowers;
 
 	if (!bs)
 	{
 		return frequency;
 	}
 
-	if (bs->conserveUntil > level.time)
-	{
-		frequency += 30;
-	}
+	activeNonSpeedPowers = bs->cur_ps.fd.forcePowersActive &
+		((1 << FP_GRIP) |
+		 (1 << FP_DRAIN) |
+		 (1 << FP_PULL) |
+		 (1 << FP_PUSH) |
+		 (1 << FP_LIGHTNING) |
+		 (1 << FP_HEAL) |
+		 (1 << FP_TEAM_HEAL) |
+		 (1 << FP_TEAM_FORCE));
 
-	if (bs->cur_ps.weapon == WP_SABER)
-	{
-		frequency += 10;
-	}
-	else
-	{
-		frequency -= 20;
-	}
-
-	if (bs->doAttack || bs->doAltAttack)
-	{
-		frequency -= 15;
-	}
-
-	if (bs->cur_ps.fd.forcePowersActive & ~(1 << FP_SPEED))
-	{
-		frequency -= 30;
-	}
-
-	if (frequency < 0)
-	{
-		frequency = 0;
-	}
-	else if (frequency > 100)
-	{
-		frequency = 100;
-	}
-
-	return frequency;
+	return NewBotAI_GetContextualStrafeFrequency(
+		frequency,
+		(bs->conserveUntil > level.time) ? 1 : 0,
+		(bs->cur_ps.weapon == WP_SABER) ? 1 : 0,
+		(bs->doAttack || bs->doAltAttack) ? 1 : 0,
+		activeNonSpeedPowers ? 1 : 0);
 }
 
 static int BotRollStrafeDurationMs(void)
@@ -13496,6 +13511,8 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 	qboolean firedImmediatePull = qfalse;
 	int pushWeight, pullWeight, lightningWeight, drainWeight, gripWeight;//, doNothingWeight;
 	int minWeight = 0;
+	float pushRange = forcePushPullRadius[bs->cur_ps.fd.forcePowerLevel[FP_PUSH]];
+	qboolean longRangeLightningOnly = qfalse;
 	const qboolean drainlockAdvantage = NewBotAI_IsDrainlockAdvantage(bs);
 	const qboolean pullkickDrainWindow = NewBotAI_IsPullkickDrainWindow(bs);
 
@@ -13533,10 +13550,17 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 	pullWeight = NewBotAI_GetPull(bs);
 	pushWeight = NewBotAI_GetPush(bs);
 	lightningWeight = NewBotAI_GetLightningWeight(bs);
-	if (bs->frame_Enemy_Len >= BotGetLightningStartDistance() &&
-		bs->frame_Enemy_Len <= BotGetLightningMaxDistance())
+	longRangeLightningOnly = (NewBotAI_IsWithinLightningRange(bs) &&
+		bs->frame_Enemy_Len > MAX_GRIP_DISTANCE &&
+		bs->frame_Enemy_Len > MAX_DRAIN_DISTANCE &&
+		bs->frame_Enemy_Len > pushRange &&
+		!drainlockAdvantage &&
+		!pullkickDrainWindow &&
+		!(bs->cur_ps.fd.forcePowersActive & (1 << FP_DRAIN))) ? qtrue : qfalse;
+	if (longRangeLightningOnly)
 	{
-		//Long range is a lightning-only force window: disable competing force picks.
+		//Beyond the effective range of pull/push/grip/drain, force selection should be
+		//lightning-only.
 		pullWeight = 0;
 		pushWeight = 0;
 		gripWeight = 0;
@@ -13544,7 +13568,7 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 	}
 	//doNothingWeight = NewBotAI_GetWait(bs);
 
-	if (bs->currentEnemy && bs->currentEnemy->client)
+	if (!longRangeLightningOnly && bs->currentEnemy && bs->currentEnemy->client)
 	{
 		newbotai_drainlock_force_context_t drainlockForceContext;
 
