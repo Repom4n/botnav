@@ -200,6 +200,8 @@ static int NewBotAI_GetRecoveryWaypointPhaseMs(void);
 static int NewBotAI_GetRecoveryHeadingHoldMs(void);
 static int NewBotAI_GetRecoveryStuckTimeoutMs(void);
 static qboolean NewBotAI_ShouldUseWaypointRecoveryNow(bot_state_t *bs);
+static qboolean NewBotAI_GetDirectRecoveryMoveDir(bot_state_t *bs, vec3_t outDir);
+static qboolean NewBotAI_IsDirectRecoveryHazardous(bot_state_t *bs);
 static qboolean NewBotAI_TryDirectRecoveryPursuit(bot_state_t *bs);
 static void NewBotAI_ResetRecoveryMovement(bot_state_t *bs);
 static void NewBotAI_ClearLostSightCombatInput(bot_state_t *bs);
@@ -2105,8 +2107,62 @@ int BotTrace_Duck(bot_state_t *bs, vec3_t traceto)
 	return 0;
 }
 
-//Trace ahead in the movement direction to detect falling hazards (ledges, lava, death pits).
-//Returns qtrue if walking in moveDir would lead the bot off a dangerous drop or into lava.
+static qboolean BotNav_IsInstantKillTrigger(gentity_t *ent)
+{
+	if (!ent || !ent->classname || !(ent->r.contents & CONTENTS_TRIGGER) ||
+		!ent->r.linked || (ent->flags & FL_INACTIVE))
+	{
+		return qfalse;
+	}
+
+	if (Q_stricmp(ent->classname, "trigger_hurt"))
+	{
+		return qfalse;
+	}
+
+	return (ent->damage == -1 || ent->damage >= 1000) ? qtrue : qfalse;
+}
+
+static qboolean BotNav_TouchesInstantKillTrigger(bot_state_t *bs, vec3_t origin)
+{
+	static vec3_t playerMins = {-15.0f, -15.0f, DEFAULT_MINS_2};
+	static vec3_t playerMaxs = {15.0f, 15.0f, DEFAULT_MAXS_2};
+	int touch[MAX_GENTITIES];
+	vec3_t mins, maxs;
+	int num;
+	int i;
+
+	if (!bs)
+	{
+		return qfalse;
+	}
+
+	VectorAdd(origin, playerMins, mins);
+	VectorAdd(origin, playerMaxs, maxs);
+	num = trap->EntitiesInBox(mins, maxs, touch, MAX_GENTITIES);
+
+	for (i = 0; i < num; i++)
+	{
+		gentity_t *hit = &g_entities[touch[i]];
+
+		if (!BotNav_IsInstantKillTrigger(hit))
+		{
+			continue;
+		}
+		if (!trap->EntityContact(mins, maxs, (sharedEntity_t *)hit, qfalse))
+		{
+			continue;
+		}
+
+		return qtrue;
+	}
+
+	return qfalse;
+}
+
+//Trace ahead in the movement direction to detect falling hazards (ledges, lava, death pits,
+//and instant-kill trigger_hurt volumes). Returns qtrue if walking in moveDir would lead the
+//bot off a dangerous drop or into one of those hazards.
 static qboolean BotNav_CheckFallingHazard(bot_state_t *bs, vec3_t moveDir, qboolean inCombat)
 {
 	vec3_t start, end, downEnd;
@@ -2123,6 +2179,11 @@ static qboolean BotNav_CheckFallingHazard(bot_state_t *bs, vec3_t moveDir, qbool
 	start[0] += moveDir[0] * 48.0f;
 	start[1] += moveDir[1] * 48.0f;
 
+	if (BotNav_TouchesInstantKillTrigger(bs, start))
+	{
+		return qtrue;
+	}
+
 	//First check: is there ground ahead at all?
 	VectorCopy(start, end);
 	end[2] -= 256.0f; //trace down looking for floor
@@ -2136,6 +2197,10 @@ static qboolean BotNav_CheckFallingHazard(bot_state_t *bs, vec3_t moveDir, qbool
 
 	//Check if the ground we'd land on is lava or a death pit
 	if (tr.contents & (CONTENTS_LAVA | CONTENTS_NODROP))
+	{
+		return qtrue;
+	}
+	if (BotNav_TouchesInstantKillTrigger(bs, tr.endpos))
 	{
 		return qtrue;
 	}
@@ -7191,6 +7256,8 @@ static void NewBotAI_ClearLostSightCombatInput(bot_state_t *bs)
 
 	bs->doAttack = 0;
 	bs->doAltAttack = 0;
+	bs->drainHoldTime = 0;
+	NewBotAI_ClearLightningBurst(bs);
 }
 
 static void NewBotAI_ClearLightningBurst(bot_state_t *bs)
@@ -7645,6 +7712,39 @@ static qboolean NewBotAI_ShouldUseWaypointRecoveryNow(bot_state_t *bs)
 	return (bs->navRecoverStuckSince <= level.time - timeoutMs) ? qtrue : qfalse;
 }
 
+static qboolean NewBotAI_GetDirectRecoveryMoveDir(bot_state_t *bs, vec3_t outDir)
+{
+	vec3_t enemyOrigin;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return qfalse;
+	}
+
+	VectorCopy(bs->currentEnemy->r.currentOrigin, enemyOrigin);
+	if (!enemyOrigin[0] && !enemyOrigin[1] && !enemyOrigin[2])
+	{
+		VectorCopy(bs->currentEnemy->client->ps.origin, enemyOrigin);
+	}
+
+	VectorSubtract(enemyOrigin, bs->origin, outDir);
+	outDir[2] = 0.0f;
+
+	return (VectorNormalize(outDir) >= 64.0f) ? qtrue : qfalse;
+}
+
+static qboolean NewBotAI_IsDirectRecoveryHazardous(bot_state_t *bs)
+{
+	vec3_t moveDir;
+
+	if (!NewBotAI_GetDirectRecoveryMoveDir(bs, moveDir))
+	{
+		return qfalse;
+	}
+
+	return BotNav_CheckFallingHazard(bs, moveDir, qtrue);
+}
+
 static qboolean NewBotAI_ShouldKeepLostSightTargetLock(bot_state_t *bs, qboolean progressStalled)
 {
 	vec3_t enemyOrigin, enemyDelta;
@@ -7721,27 +7821,33 @@ static qboolean NewBotAI_IsRecoveryNavigationContext(bot_state_t *bs)
 		return qtrue;
 	}
 
-	return NewBotAI_IsDirectPathToEnemyBlocked(bs);
+	return (NewBotAI_IsDirectPathToEnemyBlocked(bs) ||
+		NewBotAI_IsDirectRecoveryHazardous(bs)) ? qtrue : qfalse;
 }
 
 static qboolean NewBotAI_TryDirectRecoveryPursuit(bot_state_t *bs)
 {
-	vec3_t toEnemy, look;
+	vec3_t moveDir, look;
 
 	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client || bs->frame_Enemy_Vis)
 	{
 		return qfalse;
 	}
 
-	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->origin, toEnemy);
-	if (VectorNormalize(toEnemy) < 64.0f)
+	if (!NewBotAI_GetDirectRecoveryMoveDir(bs, moveDir))
 	{
 		return qfalse;
 	}
+	if (BotNav_CheckFallingHazard(bs, moveDir, qtrue))
+	{
+		NewBotAI_ClearLostSightCombatInput(bs);
+		return qfalse;
+	}
 
-	vectoangles(toEnemy, look);
+	vectoangles(moveDir, look);
 	bs->ideal_viewangles[YAW] = look[YAW];
-	bs->ideal_viewangles[PITCH] = look[PITCH];
+	bs->ideal_viewangles[PITCH] = 0.0f;
+	NewBotAI_ClearLostSightCombatInput(bs);
 	NewBotAI_StartEscapeYawOverride(bs, 200);
 	trap->EA_MoveForward(bs->client);
 	return qtrue;
