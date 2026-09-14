@@ -7462,6 +7462,8 @@ static qboolean NewBotAI_FindWaypointHeadingPassageGoal(bot_state_t *bs, vec3_t 
 		float score;
 		float corridorBias;
 		float straightBias;
+		int leftWalls;
+		int rightWalls;
 
 		VectorClear(dirAngles);
 		dirAngles[YAW] = preferredYaw + yawOffsets[i];
@@ -7513,17 +7515,40 @@ static qboolean NewBotAI_FindWaypointHeadingPassageGoal(bot_state_t *bs, vec3_t 
 		}
 
 		corridorBias = 0.0f;
+		leftWalls = 0;
+		rightWalls = 0;
 		VectorMA(start, 40.0f, right, probeEnd);
 		JP_Trace(&sideTrace, start, NULL, NULL, probeEnd, bs->client, MASK_PLAYERSOLID, qfalse, 0, 0);
 		if (sideTrace.fraction < 1.0f)
 		{
+			rightWalls++;
 			corridorBias += 12.0f;
 		}
 		VectorMA(start, -40.0f, right, probeEnd);
 		JP_Trace(&sideTrace, start, NULL, NULL, probeEnd, bs->client, MASK_PLAYERSOLID, qfalse, 0, 0);
 		if (sideTrace.fraction < 1.0f)
 		{
+			leftWalls++;
 			corridorBias += 12.0f;
+		}
+
+		VectorMA(candidate, 40.0f, right, probeEnd);
+		JP_Trace(&sideTrace, candidate, NULL, NULL, probeEnd, bs->client, MASK_PLAYERSOLID, qfalse, 0, 0);
+		if (sideTrace.fraction < 1.0f)
+		{
+			rightWalls++;
+			corridorBias += 12.0f;
+		}
+		VectorMA(candidate, -40.0f, right, probeEnd);
+		JP_Trace(&sideTrace, candidate, NULL, NULL, probeEnd, bs->client, MASK_PLAYERSOLID, qfalse, 0, 0);
+		if (sideTrace.fraction < 1.0f)
+		{
+			leftWalls++;
+			corridorBias += 12.0f;
+		}
+		if (!leftWalls || !rightWalls)
+		{
+			continue;
 		}
 
 		straightBias = 80.0f - fabsf(yawOffsets[i]);
@@ -16363,6 +16388,14 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 				if (canUseWaypointFallback && NewBotAI_StartWaypointHeadingHold(bs))
 				{
 					bs->navRecoverMode = NEWBOTAI_NAV_RECOVERY_MODE_HOLD;
+				}
+				else if (canUseWaypointFallback)
+				{
+					bs->navRecoverMode = NEWBOTAI_NAV_RECOVERY_MODE_WAYPOINT;
+					bs->navRecoverModeUntil = level.time + NewBotAI_GetRecoveryWaypointPhaseMs();
+					bs->navRecoverStuckSince = 0;
+					bs->navHoldGoalValid = qfalse;
+					VectorClear(bs->navHoldGoal);
 				}
 				else
 				{
