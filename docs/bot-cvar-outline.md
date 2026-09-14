@@ -106,7 +106,7 @@ These are all percentage-based (0-100) chance weights that gate specific behavio
 Notes:
 - `-4` bots fight normally once a duel actually starts (`duelInProgress`); the force-duel-only approach only applies while finding/challenging.
 - `-3` bots target the true nearest enemy (no health weighting), like `-1`, while still issuing/accepting duels.
-- Bots throttle their own duel requests to one every 7 seconds, so a declined/expired challenge is not immediately re-issued.
+- Bots throttle self-initiated duel requests to one every 7 seconds by default, but bot-vs-bot offers in `-3`/`-4` are throttled to once every 2 minutes so human duel opportunities are not crowded out.
 
 ## Miscellaneous
 

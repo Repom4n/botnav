@@ -383,6 +383,8 @@ typedef struct bot_state_s
 	int					lastFlipkickAttemptTime;
 	int					flipkickInputTime;
 	qboolean			flipkickJumpHeld;
+	int					jumpAttackGateTime; // level.time of the most recent jump/takeoff event used for post-jump saber attack suppression
+	qboolean			jumpAttackGateJumping; // whether jump input/takeoff is currently active (edge detector for jumpAttackGateTime)
 	int					lastSaberContactTime; // level.time of the most recent confirmed saber contact on currentEnemy; used to gate fan-chain -> flipkick combo timing
 	int					lastSaberContactTargetNum; // enemy clientNum for lastSaberContactTime; fan-chain combo gate only accepts contact on currentEnemy
 	int					lastEnemyDurability; // previous think's tracked enemy HP+armor snapshot for saber-contact confirmation

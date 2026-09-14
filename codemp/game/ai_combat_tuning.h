@@ -151,6 +151,122 @@ static inline int NewBotAI_ShouldBlockOrthogonalSaberSpecialInput(
 	return 1;
 }
 
+static inline int NewBotAI_IsJumpAttackSuppressionWindowActive(
+	int currentTime, int jumpEventTime, int windowMs)
+{
+	if (jumpEventTime <= 0 || windowMs < 0)
+	{
+		return 0;
+	}
+
+	return (currentTime >= jumpEventTime &&
+		currentTime <= jumpEventTime + windowMs) ? 1 : 0;
+}
+
+static inline void NewBotAI_ApplyJumpAttackSuppression(
+	int suppressionActive, int *doAttack, int *doAltAttack)
+{
+	if (!suppressionActive)
+	{
+		return;
+	}
+
+	if (doAttack)
+	{
+		*doAttack = 0;
+	}
+	if (doAltAttack)
+	{
+		*doAltAttack = 0;
+	}
+}
+
+static inline int NewBotAI_GetContextualStrafeFrequency(
+	int baseFrequency, int conservingForce, int saberWeapon, int attacking, int nonSpeedForceActive)
+{
+	int frequency = baseFrequency;
+
+	if (frequency < 0)
+	{
+		frequency = 0;
+	}
+	else if (frequency > 100)
+	{
+		frequency = 100;
+	}
+
+	if (conservingForce)
+	{
+		frequency += 30;
+	}
+
+	if (saberWeapon)
+	{
+		frequency += 10;
+	}
+	else
+	{
+		frequency -= 20;
+	}
+
+	if (attacking)
+	{
+		frequency -= 15;
+	}
+
+	if (nonSpeedForceActive)
+	{
+		frequency -= 30;
+	}
+
+	if (frequency < 0)
+	{
+		frequency = 0;
+	}
+	else if (frequency > 100)
+	{
+		frequency = 100;
+	}
+
+	return frequency;
+}
+
+static inline int NewBotAI_ShouldSkipPullForNaturalFlipkick(
+	int pullUsable, int pullkickOpportunity, int canAttemptFlipkick, int flipkickSetupReady,
+	float enemyDistance, float timeToRangeMs)
+{
+	if (!pullUsable || !pullkickOpportunity || !canAttemptFlipkick)
+	{
+		return 0;
+	}
+
+	if (flipkickSetupReady)
+	{
+		return 1;
+	}
+
+	if (enemyDistance <= 220.0f &&
+		timeToRangeMs >= 0.0f &&
+		timeToRangeMs <= 350.0f)
+	{
+		return 1;
+	}
+
+	return 0;
+}
+
+static inline int NewBotAI_GetDuelRequestCooldownMs(
+	int defaultCooldownMs, int botVsBotCooldownMs, int extendedModeEnabled,
+	int challengerIsBot, int targetIsBot)
+{
+	if (extendedModeEnabled && challengerIsBot && targetIsBot)
+	{
+		return botVsBotCooldownMs;
+	}
+
+	return defaultCooldownMs;
+}
+
 static inline int NewBotAI_ShouldIgnoreBotSaberLoss(int isBot, int noSaberDropEnabled)
 {
 	return (isBot && noSaberDropEnabled) ? 1 : 0;
