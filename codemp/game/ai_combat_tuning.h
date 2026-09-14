@@ -256,10 +256,10 @@ static inline int NewBotAI_ShouldSkipPullForNaturalFlipkick(
 }
 
 static inline int NewBotAI_GetDuelRequestCooldownMs(
-	int defaultCooldownMs, int botVsBotCooldownMs, int targetModeAllowsBotDuelChallenges,
+	int defaultCooldownMs, int botVsBotCooldownMs, int extendedModeEnabled,
 	int challengerIsBot, int targetIsBot)
 {
-	if (targetModeAllowsBotDuelChallenges && challengerIsBot && targetIsBot)
+	if (extendedModeEnabled && challengerIsBot && targetIsBot)
 	{
 		return botVsBotCooldownMs;
 	}

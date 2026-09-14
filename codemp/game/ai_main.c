@@ -10327,6 +10327,12 @@ static qboolean BotTargetModeAllowsBotDuelChallenges(int targetMode)
 		targetMode == NEWBOTAI_TARGET_PREFER_HUMANS_DUEL);
 }
 
+static qboolean BotTargetModeUsesExtendedBotDuelCooldown(int targetMode)
+{
+	return (targetMode == NEWBOTAI_TARGET_PREFER_HUMANS ||
+		targetMode == NEWBOTAI_TARGET_PREFER_HUMANS_DUEL);
+}
+
 static qboolean BotTargetModeIsForceDuelOnly(int targetMode)
 {
 	return (targetMode == NEWBOTAI_TARGET_PREFER_HUMANS_DUEL);
@@ -10463,7 +10469,7 @@ static qboolean NewBotAI_TryIssueBotDuelChallenge(bot_state_t *bs, int targetMod
 	bs->botChallengingTime = level.time + NewBotAI_GetDuelRequestCooldownMs(
 		NEWBOTAI_DUEL_REQUEST_COOLDOWN_MS,
 		NEWBOTAI_DUEL_REQUEST_BOT_VS_BOT_COOLDOWN_MS,
-		BotTargetModeAllowsBotDuelChallenges(targetMode) ? 1 : 0,
+		BotTargetModeUsesExtendedBotDuelCooldown(targetMode) ? 1 : 0,
 		(g_entities[bs->client].r.svFlags & SVF_BOT) ? 1 : 0,
 		(bs->currentEnemy->r.svFlags & SVF_BOT) ? 1 : 0);
 	bs->beStill = level.time + 250;
