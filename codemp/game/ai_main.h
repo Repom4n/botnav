@@ -427,6 +427,11 @@ typedef struct bot_state_s
 	int					enemyWaypointFallbackEnemyNum; // enemy entity number associated with enemyWaypointFallbackIndex
 	vec3_t				combatStuckOrigin; // sampled combat position used to detect failing to make meaningful progress toward a target
 	int					combatStuckSince; // when combatStuckOrigin was sampled/reset
+	vec3_t				navRecoverOrigin; // sampled position while in direct recovery movement
+	int					navRecoverStuckSince; // when navRecoverOrigin was last refreshed
+	int					navRecoverMode; // 0 = direct pursuit, 1 = waypoint routing phase
+	int					navRecoverModeUntil; // expiry for navRecoverMode==1
+	int					duelNoStrafeUntil; // while > level.time, suppress lateral move input to ease duel acceptance aiming
 	int					nextHopTime;      // level.time the next bot_hopfrequency-gated hop may fire (ambient/random or discretionary combat hop) - set to -1 after firing so the interval re-rolls only once we land again
 	qboolean			hopWasGrounded;   // groundEntityNum state as of the last hop-frequency update - used to detect a fresh landing (from a flipkick/knockdown/etc, not our own hop) so we re-roll instead of firing immediately
 	int					pullKickJumpTime; // level.time a scheduled pk/ptk flipkick jump should fire (0 = none pending, -1 = hold until the enemy closes)

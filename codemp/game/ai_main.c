@@ -192,6 +192,16 @@ static void NewBotAI_ClearRandomStrafeOverlay(bot_state_t *bs);
 static void NewBotAI_RollRandomStrafeOverlay(bot_state_t *bs, int minDuration, int maxDuration, qboolean retreating);
 static void NewBotAI_ApplyRandomStrafePattern(bot_state_t *bs);
 static void NewBotAI_StartEscapeYawOverride(bot_state_t *bs, int durationMs);
+static qboolean NewBotAI_IsDuelStrafeSuppressed(bot_state_t *bs);
+static int NewBotAI_GetWallStrafeAwayDir(bot_state_t *bs);
+static int NewBotAI_GetNearestEnemyIgnoringDistance(bot_state_t *bs);
+static float NewBotAI_GetRecoveryYawSpeedDegPerSec(void);
+static int NewBotAI_GetRecoveryWaypointPhaseMs(void);
+static int NewBotAI_GetRecoveryStuckTimeoutMs(void);
+static qboolean NewBotAI_ShouldUseWaypointRecoveryNow(bot_state_t *bs);
+static qboolean NewBotAI_TryDirectRecoveryPursuit(bot_state_t *bs);
+static int BotGetNewBotAITargetMode(void);
+static qboolean BotTargetModeAllowsBotEnemies(int targetMode);
 
 #define NEWBOTAI_DRAIN_TICK_MSEC 100
 #define NEWBOTAI_COMBAT_DISENGAGE_COOLDOWN_MS 2500
@@ -201,6 +211,8 @@ static void NewBotAI_StartEscapeYawOverride(bot_state_t *bs, int durationMs);
 #define NEWBOTAI_ESCAPE_YAW_SPEED NEWBOTAI_TUNING_ESCAPE_YAW_SPEED
 #define NEWBOTAI_ESCAPE_YAW_OVERRIDE_MS 250
 #define NEWBOTAI_JUMP_ATTACK_GATE_MS 40
+#define NEWBOTAI_NAV_RECOVERY_MODE_DIRECT 0
+#define NEWBOTAI_NAV_RECOVERY_MODE_WAYPOINT 1
 static qboolean NewBotAI_HandleRecoveryRollForcepower(bot_state_t *bs);
 static qboolean NewBotAI_IsBetweenOwnSaberAndEnemy(bot_state_t *bs);
 static qboolean NewBotAI_ShouldCloseGapVsEnemySaberThrow(bot_state_t *bs);
@@ -738,6 +750,11 @@ void BotChangeViewAngles(bot_state_t *bs, float thinktime) {
 		float axisFactor = NewBotAI_GetViewAngleAxisFactor(factor, i == YAW, escapeYawOverrideActive);
 		const float defaultAxisMaxchange = maxchange * thinktime;
 		float axisMaxchange = NewBotAI_GetViewAngleAxisMaxChange(defaultAxisMaxchange, thinktime, i == YAW, escapeYawOverrideActive);
+
+		if (i == YAW && escapeYawOverrideActive)
+		{
+			axisMaxchange = NewBotAI_GetRecoveryYawSpeedDegPerSec() * thinktime;
+		}
 
 		bs->viewangles[i] = AngleMod(bs->viewangles[i]);
 		bs->ideal_viewangles[i] = AngleMod(bs->ideal_viewangles[i]);
@@ -2113,8 +2130,7 @@ static qboolean BotNav_CheckFallingHazard(bot_state_t *bs, vec3_t moveDir, qbool
 		return qtrue;
 	}
 
-	//Second check: trace down from our current position to see how far the drop is.
-	//If the landing point is far below and the fall would kill us, avoid it.
+	//Second check: estimate drop height and apply tunable lethal/safe-drop policy.
 	VectorCopy(bs->origin, start);
 	start[0] += moveDir[0] * 48.0f;
 	start[1] += moveDir[1] * 48.0f;
@@ -2123,9 +2139,37 @@ static qboolean BotNav_CheckFallingHazard(bot_state_t *bs, vec3_t moveDir, qbool
 	VectorCopy(start, downEnd);
 	downEnd[2] = bs->origin[2]; //trace back up to our level
 
-	//Ordinary ledges are acceptable during combat; retain protection from actual
-	//environmental hazards above.
-	if (!inCombat && (bs->origin[2] - tr.endpos[2]) > 200.0f)
+	{
+		const float dropHeight = bs->origin[2] - tr.endpos[2];
+		const float lethalDrop = Com_Clampi(64, 2048, bot_nav_ledge_lethalheight.integer);
+		const qboolean allowSafeDrop = inCombat ?
+			(bot_nav_ledge_safe_combat.integer ? qtrue : qfalse) :
+			(bot_nav_ledge_safe_noncombat.integer ? qtrue : qfalse);
+
+		if (dropHeight <= 0.0f)
+		{
+			return qfalse;
+		}
+		if (dropHeight > lethalDrop)
+		{
+			return qtrue;
+		}
+		if (!allowSafeDrop)
+		{
+			return qtrue;
+		}
+		if (!inCombat)
+		{
+			//Trigger a short crouch-hold so movement over safe ledges out of combat tends
+			//to become a roll instead of a plain walk-off.
+			bs->duckTime = level.time + 300;
+		}
+	}
+
+	//Ordinary non-lethal ledges are allowed when enabled; environmental hazards are
+	//already filtered above.
+	if (!inCombat && (bs->origin[2] - tr.endpos[2]) > 200.0f &&
+		(!bot_nav_ledge_safe_noncombat.integer))
 	{
 		return qtrue;
 	}
@@ -5675,7 +5719,30 @@ int BotFallbackNavigation(bot_state_t *bs)
 	}
 	else
 	{
-		if (bs->customNavReverseTime < level.time)
+		if (bot_nav_nowp_randomyaw.integer && gWPNum <= 0)
+		{
+			if (bs->navRecoverStuckSince <= 0)
+			{
+				bs->navRecoverStuckSince = level.time;
+			}
+			if (bs->customNavReverseTime < level.time ||
+				bs->navRecoverStuckSince <= level.time - NewBotAI_GetRecoveryStuckTimeoutMs())
+			{
+				const int rerollMs = Com_Clampi(100, 10000, bot_nav_nowp_yawinterval.integer);
+				const float baseTurn = NewBotAI_GetRecoveryYawSpeedDegPerSec() * 0.5f;
+				float turn = baseTurn;
+				if (turn < 20.0f)
+				{
+					turn = 20.0f;
+				}
+				turn *= (Q_irand(0, 1) ? 1.0f : -1.0f);
+				bs->goalAngles[YAW] = AngleNormalize360(bs->goalAngles[YAW] + turn);
+				bs->customNavReverseTime = level.time + rerollMs;
+				bs->navRecoverStuckSince = level.time;
+				NewBotAI_StartEscapeYawOverride(bs, rerollMs);
+			}
+		}
+		else if (bs->customNavReverseTime < level.time)
 		{
 			bs->goalAngles[YAW] = AngleNormalize360(bs->goalAngles[YAW] + 180.0f);
 			bs->customNavReverseTime = level.time + 1000;
@@ -7089,6 +7156,194 @@ static void NewBotAI_StartEscapeYawOverride(bot_state_t *bs, int durationMs)
 	bs->escapeYawOverrideUntil = level.time + durationMs;
 }
 
+static float NewBotAI_GetRecoveryYawSpeedDegPerSec(void)
+{
+	float yawSpeed = bot_nav_recoveryyawspeed.value;
+
+	if (yawSpeed < 1.0f)
+	{
+		yawSpeed = 1.0f;
+	}
+	else if (yawSpeed > 1080.0f)
+	{
+		yawSpeed = 1080.0f;
+	}
+
+	return yawSpeed;
+}
+
+static int NewBotAI_GetRecoveryWaypointPhaseMs(void)
+{
+	return Com_Clampi(0, 30000, bot_nav_waypointphase.integer);
+}
+
+static int NewBotAI_GetRecoveryStuckTimeoutMs(void)
+{
+	return Com_Clampi(250, 30000, bot_nav_stucktimeout.integer);
+}
+
+static qboolean NewBotAI_IsDuelStrafeSuppressed(bot_state_t *bs)
+{
+	return (bs && bs->duelNoStrafeUntil > level.time) ? qtrue : qfalse;
+}
+
+static int NewBotAI_GetWallStrafeAwayDir(bot_state_t *bs)
+{
+	vec3_t right, start, end;
+	trace_t trLeft, trRight;
+
+	if (!bs || !bot_nav_wallstrafe_away.integer || bs->cur_ps.groundEntityNum == ENTITYNUM_NONE)
+	{
+		return 0;
+	}
+
+	AngleVectors(bs->viewangles, NULL, right, NULL);
+	VectorCopy(bs->origin, start);
+	start[2] += 24.0f;
+
+	VectorMA(start, 40.0f, right, end);
+	JP_Trace(&trRight, start, NULL, NULL, end, bs->client, MASK_PLAYERSOLID, qfalse, 0, 0);
+
+	VectorMA(start, -40.0f, right, end);
+	JP_Trace(&trLeft, start, NULL, NULL, end, bs->client, MASK_PLAYERSOLID, qfalse, 0, 0);
+
+	if (trRight.fraction < 1.0f && trLeft.fraction >= 1.0f)
+	{
+		return -1;
+	}
+	if (trLeft.fraction < 1.0f && trRight.fraction >= 1.0f)
+	{
+		return 1;
+	}
+
+	return 0;
+}
+
+static int NewBotAI_GetNearestEnemyIgnoringDistance(bot_state_t *bs)
+{
+	int i;
+	int best = -1;
+	float bestDistSq = 0.0f;
+
+	if (!bs)
+	{
+		return -1;
+	}
+
+	for (i = 0; i < MAX_CLIENTS; i++)
+	{
+		gentity_t *ent = &g_entities[i];
+		vec3_t delta;
+		float distSq;
+
+		if (!ent->inuse || !ent->client || i == bs->client)
+		{
+			continue;
+		}
+		if (ent->health < 1 || ent->client->pers.connected != CON_CONNECTED)
+		{
+			continue;
+		}
+		if (OnSameTeam(&g_entities[bs->client], ent))
+		{
+			continue;
+		}
+		if (!BotTargetModeAllowsBotEnemies(BotGetNewBotAITargetMode()) && (ent->r.svFlags & SVF_BOT))
+		{
+			continue;
+		}
+
+		VectorSubtract(ent->client->ps.origin, bs->origin, delta);
+		distSq = VectorLengthSquared(delta);
+		if (best == -1 || distSq < bestDistSq)
+		{
+			best = i;
+			bestDistSq = distSq;
+		}
+	}
+
+	return best;
+}
+
+static qboolean NewBotAI_ShouldUseWaypointRecoveryNow(bot_state_t *bs)
+{
+	vec3_t toEnemy, trTo, mins, maxs;
+	trace_t tr;
+	float horizontalSpeedSquared;
+	const int timeoutMs = NewBotAI_GetRecoveryStuckTimeoutMs();
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client || bs->frame_Enemy_Vis)
+	{
+		bs->navRecoverStuckSince = 0;
+		return qfalse;
+	}
+
+	horizontalSpeedSquared = bs->cur_ps.velocity[0] * bs->cur_ps.velocity[0] +
+		bs->cur_ps.velocity[1] * bs->cur_ps.velocity[1];
+	if (horizontalSpeedSquared > 900.0f)
+	{
+		VectorCopy(bs->origin, bs->navRecoverOrigin);
+		bs->navRecoverStuckSince = level.time;
+		return qfalse;
+	}
+
+	if (!bs->navRecoverStuckSince)
+	{
+		VectorCopy(bs->origin, bs->navRecoverOrigin);
+		bs->navRecoverStuckSince = level.time;
+		return qfalse;
+	}
+
+	if (DistanceSquared(bs->origin, bs->navRecoverOrigin) > (96.0f * 96.0f))
+	{
+		VectorCopy(bs->origin, bs->navRecoverOrigin);
+		bs->navRecoverStuckSince = level.time;
+		return qfalse;
+	}
+
+	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->origin, toEnemy);
+	if (VectorNormalize(toEnemy) < 64.0f)
+	{
+		return qfalse;
+	}
+
+	trTo[0] = bs->origin[0] + toEnemy[0] * 48.0f;
+	trTo[1] = bs->origin[1] + toEnemy[1] * 48.0f;
+	trTo[2] = bs->origin[2] + toEnemy[2] * 48.0f;
+	mins[0] = -15; mins[1] = -15; mins[2] = 0;
+	maxs[0] = 15; maxs[1] = 15; maxs[2] = 32;
+	JP_Trace(&tr, bs->origin, mins, maxs, trTo, bs->client, MASK_PLAYERSOLID, qfalse, 0, 0);
+	if (tr.fraction >= 1.0f || (bs->currentEnemy && tr.entityNum == bs->currentEnemy->s.number))
+	{
+		return qfalse;
+	}
+
+	return (bs->navRecoverStuckSince <= level.time - timeoutMs) ? qtrue : qfalse;
+}
+
+static qboolean NewBotAI_TryDirectRecoveryPursuit(bot_state_t *bs)
+{
+	vec3_t toEnemy, look;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client || bs->frame_Enemy_Vis)
+	{
+		return qfalse;
+	}
+
+	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->origin, toEnemy);
+	if (VectorNormalize(toEnemy) < 64.0f)
+	{
+		return qfalse;
+	}
+
+	vectoangles(toEnemy, look);
+	bs->ideal_viewangles[YAW] = look[YAW];
+	bs->ideal_viewangles[PITCH] = look[PITCH];
+	NewBotAI_StartEscapeYawOverride(bs, 200);
+	trap->EA_MoveForward(bs->client);
+	return qtrue;
+}
+
 //"Barely moving" despite trying to move - roughly 30 units/sec (30*30). Shared by the
 //retreat wall-avoid jump and the no-waypoint yaw escape to detect a genuinely stuck bot.
 #define NEWBOTAI_WALLAVOID_STUCK_SPEED_SQ 900.0f
@@ -7156,6 +7411,25 @@ static void NewBotAI_DrainRollEscape(bot_state_t *bs)
 
 static void NewBotAI_RetreatDiagonal(bot_state_t *bs, qboolean moveLeft)
 {
+	if (NewBotAI_IsDuelStrafeSuppressed(bs))
+	{
+		trap->EA_MoveBack(bs->client);
+		return;
+	}
+
+	if (bot_nav_wallstrafe_away.integer && bs->currentEnemy && bs->frame_Enemy_Vis)
+	{
+		int awayDir = NewBotAI_GetWallStrafeAwayDir(bs);
+		if (awayDir < 0)
+		{
+			moveLeft = qtrue;
+		}
+		else if (awayDir > 0)
+		{
+			moveLeft = qfalse;
+		}
+	}
+
 	trap->EA_MoveBack(bs->client);
 	if (moveLeft)
 		trap->EA_MoveLeft(bs->client);
@@ -10472,6 +10746,7 @@ static qboolean NewBotAI_TryIssueBotDuelChallenge(bot_state_t *bs, int targetMod
 		BotTargetModeUsesExtendedBotDuelCooldown(targetMode) ? 1 : 0,
 		(g_entities[bs->client].r.svFlags & SVF_BOT) ? 1 : 0,
 		(bs->currentEnemy->r.svFlags & SVF_BOT) ? 1 : 0);
+	bs->duelNoStrafeUntil = level.time + Com_Clampi(0, 10000, bot_duel_nostrafetime.integer);
 	bs->beStill = level.time + 250;
 	bs->doAttack = 0;
 	bs->doAltAttack = 0;
@@ -11051,7 +11326,7 @@ static int NewBotAI_GetAntiDrainWeight(bot_state_t *bs)
 
 static float BotGetLightningMaxDistance(void)
 {
-	return 2048.0f; // Bots force FP_LIGHTNING level 2 and should use its full beam range.
+	return 8192.0f; // Lightning level 2 is treated as effectively unlimited range for bots.
 }
 
 static float BotGetLightningStartDistance(void)
@@ -12374,12 +12649,23 @@ static int NewBotAI_GetContextualStrafeFrequencyPercent(bot_state_t *bs)
 		 (1 << FP_TEAM_HEAL) |
 		 (1 << FP_TEAM_FORCE));
 
-	return NewBotAI_GetContextualStrafeFrequency(
+	frequency = NewBotAI_GetContextualStrafeFrequency(
 		frequency,
 		(bs->conserveUntil > level.time) ? 1 : 0,
 		(bs->cur_ps.weapon == WP_SABER) ? 1 : 0,
 		(bs->doAttack || bs->doAltAttack) ? 1 : 0,
 		activeNonSpeedPowers ? 1 : 0);
+
+	if (bs->cur_ps.fd.forcePowersActive & (1 << FP_LIGHTNING))
+	{
+		frequency += Com_Clampi(0, 100, bot_lightningstrafebonus.integer);
+		if (frequency > 100)
+		{
+			frequency = 100;
+		}
+	}
+
+	return frequency;
 }
 
 static int BotRollStrafeDurationMs(void)
@@ -12449,6 +12735,11 @@ static void NewBotAI_RollRandomStrafeOverlay(bot_state_t *bs, int minDuration, i
 	{
 		maxDuration = minDuration;
 	}
+	if (NewBotAI_IsDuelStrafeSuppressed(bs))
+	{
+		NewBotAI_ClearRandomStrafeOverlay(bs);
+		return;
+	}
 
 	lateralRoll = Q_irand(1, 100);
 	if (lateralRoll <= 45)
@@ -12462,6 +12753,14 @@ static void NewBotAI_RollRandomStrafeOverlay(bot_state_t *bs, int minDuration, i
 	else
 	{
 		bs->randomStrafeDir = 0;
+	}
+	if (bot_nav_wallstrafe_away.integer && bs->currentEnemy && bs->frame_Enemy_Vis)
+	{
+		int awayDir = NewBotAI_GetWallStrafeAwayDir(bs);
+		if (awayDir)
+		{
+			bs->randomStrafeDir = awayDir;
+		}
 	}
 	bs->randomStrafeEndTime = level.time + Q_irand(minDuration, maxDuration);
 	if (bs->randomStrafeEndTime <= level.time)
@@ -12494,6 +12793,10 @@ static void NewBotAI_ApplyRandomStrafePattern(bot_state_t *bs)
 	{
 		return;
 	}
+	if (NewBotAI_IsDuelStrafeSuppressed(bs))
+	{
+		return;
+	}
 
 	if (bs->randomStrafeMode > 0)
 	{
@@ -12519,6 +12822,11 @@ static void NewBotAI_ApplyRandomStrafeOverlay(bot_state_t *bs)
 	int frequency;
 
 	if (!bs->currentEnemy || bs->beStill > level.time || bs->doingFallback)
+	{
+		NewBotAI_ClearRandomStrafeOverlay(bs);
+		return;
+	}
+	if (NewBotAI_IsDuelStrafeSuppressed(bs))
 	{
 		NewBotAI_ClearRandomStrafeOverlay(bs);
 		return;
@@ -13511,7 +13819,6 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 	qboolean firedImmediatePull = qfalse;
 	int pushWeight, pullWeight, lightningWeight, drainWeight, gripWeight;//, doNothingWeight;
 	int minWeight = 0;
-	float pushRange = forcePushPullRadius[bs->cur_ps.fd.forcePowerLevel[FP_PUSH]];
 	qboolean longRangeLightningOnly = qfalse;
 	const qboolean drainlockAdvantage = NewBotAI_IsDrainlockAdvantage(bs);
 	const qboolean pullkickDrainWindow = NewBotAI_IsPullkickDrainWindow(bs);
@@ -13550,13 +13857,8 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 	pullWeight = NewBotAI_GetPull(bs);
 	pushWeight = NewBotAI_GetPush(bs);
 	lightningWeight = NewBotAI_GetLightningWeight(bs);
-	longRangeLightningOnly = (NewBotAI_IsWithinLightningRange(bs) &&
-		bs->frame_Enemy_Len > MAX_GRIP_DISTANCE &&
-		bs->frame_Enemy_Len > MAX_DRAIN_DISTANCE &&
-		bs->frame_Enemy_Len > pushRange &&
-		!drainlockAdvantage &&
-		!pullkickDrainWindow &&
-		!(bs->cur_ps.fd.forcePowersActive & (1 << FP_DRAIN))) ? qtrue : qfalse;
+	longRangeLightningOnly = (bs->frame_Enemy_Len > BotGetLightningStartDistance() &&
+		NewBotAI_IsWithinLightningRange(bs)) ? qtrue : qfalse;
 	if (longRangeLightningOnly)
 	{
 		//Beyond the effective range of pull/push/grip/drain, force selection should be
@@ -13672,7 +13974,8 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 
 	//A free flipkick always beats holding/charging a throw once the enemy has closed
 	//into kick range - otherwise the two bots just collide while we sit on the charge.
-	if (!NewBotAI_ShouldSuppressDrainlockSaberThrow(bs) &&
+	if (!longRangeLightningOnly &&
+		!NewBotAI_ShouldSuppressDrainlockSaberThrow(bs) &&
 		!drainlockAdvantage && !pullkickDrainWindow &&
 		NewBotAI_GetSaberthrow(bs) > minWeight && !NewBotAI_ShouldPreferFlipkickOverThrow(bs)) {
 		trap->EA_Alt_Attack(bs->client);
@@ -14574,14 +14877,43 @@ static qboolean NewBotAI_TryNoWaypointYawEscape(bot_state_t *bs, vec3_t goalOrig
 		return qfalse; //we hit our target, not a wall
 	}
 
-	//Stuck on a wall with no waypoint trail to route around: swing the yaw off the
-	//wall so we slide around it and keep closing on the target.
-	yawTurn = bot_yawswitch.value;
-	if (yawTurn < 45.0f)
+	//Stuck on a wall with no waypoint trail: pick a random slow yaw direction and
+	//keep driving forward to unstick instead of hard 180 reversals.
+	if (bot_nav_nowp_randomyaw.integer)
 	{
-		yawTurn = 120.0f;
+		if (bs->customNavReverseTime <= level.time)
+		{
+			int rerollMs = Com_Clampi(100, 10000, bot_nav_nowp_yawinterval.integer);
+			float slowTurn = NewBotAI_GetRecoveryYawSpeedDegPerSec() * 0.5f;
+			if (slowTurn < 15.0f)
+			{
+				slowTurn = 15.0f;
+			}
+			yawTurn = slowTurn * (Q_irand(0, 1) ? 1.0f : -1.0f);
+			bs->customNavReverseTime = level.time + rerollMs;
+		}
+		else
+		{
+			yawTurn = NewBotAI_GetRecoveryYawSpeedDegPerSec() * 0.25f;
+			if (yawTurn < 10.0f)
+			{
+				yawTurn = 10.0f;
+			}
+			if (level.framenum & 1)
+			{
+				yawTurn = -yawTurn;
+			}
+		}
 	}
-	NewBotAI_StartEscapeYawOverride(bs, NEWBOTAI_ESCAPE_YAW_OVERRIDE_MS);
+	else
+	{
+		yawTurn = bot_yawswitch.value;
+		if (yawTurn < 45.0f)
+		{
+			yawTurn = 120.0f;
+		}
+	}
+	NewBotAI_StartEscapeYawOverride(bs, Com_Clampi(100, 2000, bot_nav_nowp_yawinterval.integer));
 	bs->ideal_viewangles[YAW] = AngleNormalize360(bs->ideal_viewangles[YAW] + yawTurn);
 	trap->EA_MoveForward(bs->client);
 	return qtrue;
@@ -14894,6 +15226,7 @@ static qboolean BotTryAcceptAnyDuelChallenge(bot_state_t *bs, int targetMode)
 		bs->doAttack = 0;
 		bs->doAltAttack = 0;
 		bs->botChallengingTime = level.time + NEWBOTAI_DUEL_REQUEST_COOLDOWN_MS;
+		bs->duelNoStrafeUntil = level.time + Com_Clampi(0, 10000, bot_duel_nostrafetime.integer);
 		bs->beStill = level.time + 2500;
 		return qtrue;
 	}
@@ -15158,6 +15491,17 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	}
 
 	if (closestID == -1) {//Its just us, or they are too far away.
+		if (bot_nav_recovery.integer)
+		{
+			int nearestAny = NewBotAI_GetNearestEnemyIgnoringDistance(bs);
+			if (nearestAny != -1)
+			{
+				closestID = nearestAny;
+			}
+		}
+	}
+
+	if (closestID == -1) {//Its just us, or they are too far away.
 		if (NewBotAI_InFFAExploreWindow(bs, targetMode)) {
 			//Exploring after a few duels: keep roaming instead of dropping out of the
 			//FFA window just because nobody is in range this think.
@@ -15310,35 +15654,90 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		}
 		bs->ideal_viewangles[YAW] = AngleNormalize360(bs->ideal_viewangles[YAW] + 24);
 	}
-
-	if (bot_navigation.integer && NewBotAI_ShouldFallbackToWaypoints(bs))
+	if (NewBotAI_IsDuelStrafeSuppressed(bs))
 	{
-		//Combat waypoint fallback is restricted to target-lost or blocked/stalled cases.
-		if (!NewBotAI_CanUseWaypointFallbackInCombat(bs))
+		NewBotAI_GetAim(bs);
+		bs->doAttack = 0;
+		bs->doAltAttack = 0;
+		if (bs->frame_Enemy_Vis && bs->frame_Enemy_Len > 96.0f)
 		{
-			bs->navObstacleUntil = 0; // clear any pending hysteresis too
+			trap->EA_MoveForward(bs->client);
 		}
-		else
+		return;
+	}
+
+	if (bot_navigation.integer)
+	{
+		const qboolean canUseWaypointFallback = NewBotAI_CanUseWaypointFallbackInCombat(bs);
+		const qboolean shouldFallbackToWaypoints = NewBotAI_ShouldFallbackToWaypoints(bs);
+
+		if (bot_nav_recovery.integer)
 		{
-			// obstacle detected: hold waypoint-nav mode for a period so the bot
-			// navigates around the obstacle rather than flickering back to direct
-			// combat movement every frame
-			bs->navObstacleUntil = level.time + 3000;
-			NewBotAI_MaintainWaypointFallbackEnemyLock(bs);
-			StandardBotAI(bs, thinktime);
-			return;
+			if (bs->navRecoverMode == NEWBOTAI_NAV_RECOVERY_MODE_WAYPOINT &&
+				bs->navRecoverModeUntil > level.time)
+			{
+				if (canUseWaypointFallback)
+				{
+					NewBotAI_MaintainWaypointFallbackEnemyLock(bs);
+					StandardBotAI(bs, thinktime);
+					return;
+				}
+				bs->navRecoverMode = NEWBOTAI_NAV_RECOVERY_MODE_DIRECT;
+				bs->navRecoverModeUntil = 0;
+			}
+
+			if (shouldFallbackToWaypoints && canUseWaypointFallback)
+			{
+				bs->navRecoverMode = NEWBOTAI_NAV_RECOVERY_MODE_WAYPOINT;
+				bs->navRecoverModeUntil = level.time + NewBotAI_GetRecoveryWaypointPhaseMs();
+				NewBotAI_MaintainWaypointFallbackEnemyLock(bs);
+				StandardBotAI(bs, thinktime);
+				return;
+			}
+
+			if (bs->navRecoverMode == NEWBOTAI_NAV_RECOVERY_MODE_WAYPOINT &&
+				bs->navRecoverModeUntil <= level.time)
+			{
+				bs->navRecoverMode = NEWBOTAI_NAV_RECOVERY_MODE_DIRECT;
+				bs->navRecoverModeUntil = 0;
+				bs->navRecoverStuckSince = 0;
+			}
+
+			if (bs->navRecoverMode == NEWBOTAI_NAV_RECOVERY_MODE_DIRECT &&
+				NewBotAI_ShouldUseWaypointRecoveryNow(bs) &&
+				canUseWaypointFallback)
+			{
+				bs->navRecoverMode = NEWBOTAI_NAV_RECOVERY_MODE_WAYPOINT;
+				bs->navRecoverModeUntil = level.time + NewBotAI_GetRecoveryWaypointPhaseMs();
+				NewBotAI_MaintainWaypointFallbackEnemyLock(bs);
+				StandardBotAI(bs, thinktime);
+				return;
+			}
+		}
+		else if (shouldFallbackToWaypoints)
+		{
+			if (!canUseWaypointFallback)
+			{
+				bs->navObstacleUntil = 0; // clear any pending hysteresis too
+			}
+			else
+			{
+				bs->navObstacleUntil = level.time + 3000;
+				NewBotAI_MaintainWaypointFallbackEnemyLock(bs);
+				StandardBotAI(bs, thinktime);
+				return;
+			}
 		}
 	}
-	else if (!bot_navigation.integer)
+	else
 	{
 		bs->navObstacleUntil = 0;
+		bs->navRecoverMode = NEWBOTAI_NAV_RECOVERY_MODE_DIRECT;
+		bs->navRecoverModeUntil = 0;
 	}
 
-	if (bs->navObstacleUntil > level.time)
+	if (!bot_nav_recovery.integer && bs->navObstacleUntil > level.time)
 	{
-		// hysteresis: obstacle was recently blocking; keep following waypoints
-		// while StandardBotAI's enemy-aiming code keeps targeting the enemy.
-		// But if we're being actively attacked, override and run combat AI instead.
 		if (!NewBotAI_CanUseWaypointFallbackInCombat(bs))
 		{
 			bs->navObstacleUntil = 0;
@@ -15349,6 +15748,13 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 			StandardBotAI(bs, thinktime);
 			return;
 		}
+	}
+
+	if (bot_nav_recovery.integer &&
+		bs->navRecoverMode == NEWBOTAI_NAV_RECOVERY_MODE_DIRECT &&
+		NewBotAI_TryDirectRecoveryPursuit(bs))
+	{
+		return;
 	}
 
 	if (!bs->frame_Enemy_Vis && bs->frame_Enemy_Len > 8096) {
@@ -15672,6 +16078,18 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 			if ((bs->cur_ps.fd.forcePowersKnown & (1 << FP_GRIP)) && (bs->cur_ps.fd.forcePowersActive & (1 << FP_GRIP)) && InFieldOfVision(bs->viewangles, 50, a_fo))
 			{ //already gripping someone, so hold it
 				level.clients[bs->client].ps.fd.forcePowerSelected = FP_GRIP;
+				useTheForce = 1;
+				forceHostile = 1;
+			}
+			else if ((bs->cur_ps.fd.forcePowersKnown & (1 << FP_LIGHTNING)) &&
+				bs->cur_ps.fd.forcePowerLevel[FP_LIGHTNING] == FORCE_LEVEL_2 &&
+				!(bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB)) &&
+				bs->frame_Enemy_Len > BotGetLightningStartDistance() &&
+				level.clients[bs->client].ps.fd.forcePower > 50 &&
+				!NewBotAI_IsEnemySaberThreatImminent(bs) &&
+				InFieldOfVision(bs->viewangles, 50, a_fo))
+			{ //At long range, prioritize lightning regardless of other dark-side options.
+				level.clients[bs->client].ps.fd.forcePowerSelected = FP_LIGHTNING;
 				useTheForce = 1;
 				forceHostile = 1;
 			}
@@ -16781,13 +17199,31 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 			StrafeTracing(bs);
 		}
 
-		if (bs->meleeStrafeDir && meleestrafe && bs->meleeStrafeDisable < level.time)
+		if (!NewBotAI_IsDuelStrafeSuppressed(bs) &&
+			bs->meleeStrafeDir && meleestrafe && bs->meleeStrafeDisable < level.time)
 		{
-			trap->EA_MoveRight(bs->client);
+			int awayDir = NewBotAI_GetWallStrafeAwayDir(bs);
+			if (awayDir < 0)
+			{
+				trap->EA_MoveLeft(bs->client);
+			}
+			else
+			{
+				trap->EA_MoveRight(bs->client);
+			}
 		}
-		else if (meleestrafe && bs->meleeStrafeDisable < level.time)
+		else if (!NewBotAI_IsDuelStrafeSuppressed(bs) &&
+			meleestrafe && bs->meleeStrafeDisable < level.time)
 		{
-			trap->EA_MoveLeft(bs->client);
+			int awayDir = NewBotAI_GetWallStrafeAwayDir(bs);
+			if (awayDir > 0)
+			{
+				trap->EA_MoveRight(bs->client);
+			}
+			else
+			{
+				trap->EA_MoveLeft(bs->client);
+			}
 		}
 
 		if (BotTrace_Jump(bs, bs->goalPosition))
@@ -16806,11 +17242,11 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 			//bot to stutter and glitch about walls instead of focusing on the fight.
 			int strafeAround = BotTrace_Strafe(bs, bs->goalPosition);
 
-			if (strafeAround == STRAFEAROUND_RIGHT)
+			if (!NewBotAI_IsDuelStrafeSuppressed(bs) && strafeAround == STRAFEAROUND_RIGHT)
 			{
 				trap->EA_MoveRight(bs->client);
 			}
-			else if (strafeAround == STRAFEAROUND_LEFT)
+			else if (!NewBotAI_IsDuelStrafeSuppressed(bs) && strafeAround == STRAFEAROUND_LEFT)
 			{
 				trap->EA_MoveLeft(bs->client);
 			}
