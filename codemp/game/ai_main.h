@@ -432,6 +432,7 @@ typedef struct bot_state_s
 	int					navRecoverMode; // 0 = direct pursuit, 1 = waypoint routing phase, 2 = heading-hold traversal
 	int					navRecoverModeUntil; // expiry for navRecoverMode==1
 	int					navHoldUntil; // expiry for navRecoverMode==2 heading-hold traversal
+	int					lightningHoldUntil; // keep selecting lightning until this time unless the target closes inside bot_lightningdistance
 	vec3_t				navHoldDirection; // held forward direction captured from waypoint guidance
 	vec3_t				navHoldGoal; // last runtime opening goal selected while holding heading
 	int					duelNoStrafeUntil; // while > level.time, suppress lateral move input to ease duel acceptance aiming
