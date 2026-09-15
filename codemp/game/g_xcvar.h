@@ -399,6 +399,9 @@ XCVAR_DEF( bot_recovery,				"1",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_nav_waypointphase,		"4000",		NULL,				CVAR_ARCHIVE,									qtrue )
 // How long (ms) recovery mode should keep walking its chosen adventure heading after leaving waypoint order.
 XCVAR_DEF( bot_nav_adventuretime,		"2500",		NULL,				CVAR_ARCHIVE,									qtrue )
+// How long (ms) the bot waits after a wall reaction (redirect/jump/turn) before allowing
+// another wall reaction attempt. Higher values reduce tight-space reaction loops.
+XCVAR_DEF( bot_redirectcooldown,		"800",		NULL,				CVAR_ARCHIVE,									qtrue )
 // Extra strafe frequency (0-100) while lightning is active, helping avoid incoming lightning.
 XCVAR_DEF( bot_lightningstrafebonus,	"20",			NULL,				CVAR_ARCHIVE,									qtrue )
 // Suppress bot strafe input for this many ms after offering/accepting a duel.
