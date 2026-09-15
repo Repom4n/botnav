@@ -7251,7 +7251,7 @@ static int NewBotAI_GetRecoveryYawIntervalMs(void)
 
 static int NewBotAI_GetWallAvoidCooldownMs(void)
 {
-	return NewBotAI_GetRecoveryYawIntervalMs();
+	return Com_Clampi(0, 30000, bot_redirectcooldown.integer);
 }
 
 static float NewBotAI_GetWallEscapeTurnAngle(void)
@@ -7339,6 +7339,25 @@ static void NewBotAI_ClearLostSightCombatInput(bot_state_t *bs)
 		bs->gripkickDwellUntil = 0;
 	}
 	NewBotAI_ClearLightningBurst(bs);
+}
+
+static qboolean NewBotAI_HasValidCurrentEnemy(bot_state_t *bs)
+{
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return qfalse;
+	}
+	if (bs->currentEnemy->health < 1)
+	{
+		return qfalse;
+	}
+	if (bs->currentEnemy->client->pers.connected != CON_CONNECTED &&
+		bs->currentEnemy->client->pers.connected != CON_CONNECTING)
+	{
+		return qfalse;
+	}
+
+	return qtrue;
 }
 
 static void NewBotAI_ClearLightningBurst(bot_state_t *bs)
@@ -11421,7 +11440,7 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 				bs->wallAvoidNextTime <= level.time)
 			{
 				trap->EA_Jump(bs->client);
-				bs->wallAvoidNextTime = level.time + 700;
+				bs->wallAvoidNextTime = level.time + NewBotAI_GetWallAvoidCooldownMs();
 			}
 			trap->EA_MoveForward(bs->client);
 		}
@@ -15991,7 +16010,7 @@ static qboolean NewBotAI_TryNoWaypointYawEscape(bot_state_t *bs, vec3_t goalOrig
 		bs->wallAvoidNextTime <= level.time)
 	{
 		trap->EA_Jump(bs->client);
-		bs->wallAvoidNextTime = level.time + 700;
+		bs->wallAvoidNextTime = level.time + NewBotAI_GetWallAvoidCooldownMs();
 	}
 	return qtrue;
 }
@@ -16390,10 +16409,10 @@ static qboolean NewBotAI_ShouldFallbackToWaypoints(bot_state_t *bs)
 	vec3_t enemyOrigin, enemyDelta;
 	const qboolean progressStalled = NewBotAI_IsCombatProgressStalled(bs);
 
-	if (!bs->currentEnemy || !bs->currentEnemy->client)
+	if (!NewBotAI_HasValidCurrentEnemy(bs))
 	{
 		bs->combatStuckSince = 0;
-		return qtrue;
+		return qfalse;
 	}
 
 	if (!bs->frame_Enemy_Vis)
@@ -16452,13 +16471,9 @@ static qboolean NewBotAI_CanUseWaypointFallbackInCombat(bot_state_t *bs)
 		return qfalse;
 	}
 
-	if (!bs->currentEnemy)
+	if (!NewBotAI_HasValidCurrentEnemy(bs))
 	{
-		return qtrue;
-	}
-	if (!bs->currentEnemy->client)
-	{
-		return qtrue;
+		return qfalse;
 	}
 	if (!bs->frame_Enemy_Vis)
 	{
@@ -16812,7 +16827,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 			(void)NewBotAI_UpdateWaypointHeadingGoal(bs);
 			NewBotAI_ClearLostSightCombatInput(bs);
 			NewBotAI_MaintainWaypointFallbackEnemyLock(bs);
-			if (bs->frame_Enemy_Vis)
+			if (bs->frame_Enemy_Vis && NewBotAI_HasValidCurrentEnemy(bs))
 			{
 				StandardBotAI(bs, thinktime);
 			}
@@ -16837,7 +16852,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 			bs->navHoldGoalValid = qfalse;
 			NewBotAI_ClearLostSightCombatInput(bs);
 			NewBotAI_MaintainWaypointFallbackEnemyLock(bs);
-			if (bs->frame_Enemy_Vis)
+			if (bs->frame_Enemy_Vis && NewBotAI_HasValidCurrentEnemy(bs))
 			{
 				StandardBotAI(bs, thinktime);
 			}
@@ -16872,7 +16887,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		bs->navHoldGoalValid = qfalse;
 		NewBotAI_ClearLostSightCombatInput(bs);
 		NewBotAI_MaintainWaypointFallbackEnemyLock(bs);
-		if (bs->frame_Enemy_Vis)
+		if (bs->frame_Enemy_Vis && NewBotAI_HasValidCurrentEnemy(bs))
 		{
 			StandardBotAI(bs, thinktime);
 		}
@@ -16886,6 +16901,15 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		bs->goalAngles[ROLL] = 0.0f;
 		return;
 	}
+
+	if (!NewBotAI_HasValidCurrentEnemy(bs))
+	{
+		bs->frame_Enemy_Vis = 0;
+		NewBotAI_ClearLostSightCombatInput(bs);
+		NewBotAI_RunNavigationOrAlone(bs, thinktime);
+		return;
+	}
+
 	if (!bs->frame_Enemy_Vis &&
 		bs->navRecoverMode != NEWBOTAI_NAV_RECOVERY_MODE_HOLD)
 	{

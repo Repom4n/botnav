@@ -89,6 +89,7 @@ These are all percentage-based (0-100) chance weights that gate specific behavio
 | `bot_strafeOffset` | `0` | Legacy strafe offset. |
 | `bot_hopfrequency` | `0` | Scales how often the bot schedules its next hop while close to a saber enemy, covering both random ambient hops and non-emergency combat hops such as saber-throw counter jumps. The interval is only re-rolled once the bot lands from its previous hop, and is a random 0.5-8 second wait divided by this value as a percentage (100 = 0.5-8s; higher = longer/less frequent hops, lower = shorter/more frequent, 0 = disables discretionary hops). The wide range makes most hops occasional singles while an occasional short roll chains one hop straight into the next, keeping the bot unpredictable. |
 | `bot_recovery` | `1` | Recovery navigation mode. 0 = disable combat waypoint/adventure recovery. 1 = after waypoint phase, keep walking the last recovered heading in a straight line while yaw can track threats. 2 = after waypoint phase, keep steering toward projected hallway/doorway goals. |
+| `bot_redirectcooldown` | `800` | Cooldown (ms) after a wall-triggered redirect reaction (jump/turn/hop) before another wall reaction can fire. This reduces tight-space wall loops and repeated reaction hopping. |
 
 ## Gripkick Tuning
 
@@ -172,7 +173,7 @@ g_newBotAI (master switch)
   |     +-- bot_strafefrequency / bot_strafeduration
   |     +-- bot_hopfrequency
   |     +-- bot_navigation
-  |     +-- bot_recovery / bot_nav_waypointphase / bot_nav_adventuretime
+  |     +-- bot_recovery / bot_nav_waypointphase / bot_nav_adventuretime / bot_redirectcooldown
   |
   +-- Gripkick
   |     +-- bot_gripkickdwell
