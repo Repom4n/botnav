@@ -429,14 +429,14 @@ typedef struct bot_state_s
 	int					combatStuckSince; // when combatStuckOrigin was sampled/reset
 	vec3_t				navRecoverOrigin; // sampled position while in direct recovery movement
 	int					navRecoverStuckSince; // when navRecoverOrigin was last refreshed
-	int					navRecoverMode; // 0 = direct pursuit, 1 = waypoint routing phase, 2 = temporary farthest-reachable traversal
+	int					navRecoverMode; // 0 = direct pursuit, 1 = waypoint routing phase, 2 = temporary walk-forward traversal
 	int					navRecoverModeUntil; // expiry for navRecoverMode==1
-	int					navHoldUntil; // expiry for navRecoverMode==2 temporary farthest-reachable traversal
+	int					navHoldUntil; // expiry for navRecoverMode==2 temporary walk-forward traversal
 	qboolean			navBuildWaypointTrail; // on maps that start with no waypoints, append a waypoint at each adventure-phase end
 	int					lightningHoldUntil; // keep selecting lightning until this time unless the target closes inside bot_lightningdistance
-	vec3_t				navHoldDirection; // held forward direction captured from waypoint guidance
-	vec3_t				navHoldGoal; // last runtime farthest reachable goal selected while holding heading
-	qboolean			navHoldGoalValid; // true after waypoint phase acquires a runtime farthest reachable goal
+	vec3_t				navHoldDirection; // held walk-forward direction captured from waypoint guidance
+	vec3_t				navHoldGoal; // runtime forward target projected from navHoldDirection
+	qboolean			navHoldGoalValid; // true after waypoint phase acquires a walk-forward direction
 	int					duelNoStrafeUntil; // while > level.time, suppress lateral move input to ease duel acceptance aiming
 	int					nextHopTime;      // level.time the next bot_hopfrequency-gated hop may fire (ambient/random or discretionary combat hop) - set to -1 after firing so the interval re-rolls only once we land again
 	qboolean			hopWasGrounded;   // groundEntityNum state as of the last hop-frequency update - used to detect a fresh landing (from a flipkick/knockdown/etc, not our own hop) so we re-roll instead of firing immediately

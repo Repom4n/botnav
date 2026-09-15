@@ -396,7 +396,7 @@ XCVAR_DEF( bot_lightningdistance,		"400",		NULL,				CVAR_ARCHIVE,									qtrue 
 XCVAR_DEF( bot_nav_recovery,			"1",			NULL,				CVAR_ARCHIVE,									qtrue )
 // How long (ms) recovery mode should stay in waypoint routing before forcing direct pursuit.
 XCVAR_DEF( bot_nav_waypointphase,		"4000",		NULL,				CVAR_ARCHIVE,									qtrue )
-// How long (ms) recovery mode should keep moving toward the farthest reachable in-view point after leaving waypoint order.
+// How long (ms) recovery mode should keep walking a chosen adventure heading after leaving waypoint order.
 XCVAR_DEF( bot_nav_adventuretime,		"2500",		NULL,				CVAR_ARCHIVE,									qtrue )
 // How long (ms) a bot can stay stuck/touching walls in recovery mode before returning to waypoint routing.
 XCVAR_DEF( bot_nav_stucktimeout,		"5000",		NULL,				CVAR_ARCHIVE,									qtrue )
