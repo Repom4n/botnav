@@ -7524,6 +7524,33 @@ static qboolean NewBotAI_FindWaypointAdventureDirection(bot_state_t *bs, vec3_t 
 	return (bestTravelDist >= 0.0f) ? qtrue : qfalse;
 }
 
+static qboolean NewBotAI_FindWaypointAdventureGoal(bot_state_t *bs, vec3_t preferredDir, vec3_t outGoal)
+{
+	vec3_t adventureDir;
+	float candidateDist;
+
+	if (!bs || !outGoal)
+	{
+		return qfalse;
+	}
+	if (!NewBotAI_FindWaypointAdventureDirection(bs, preferredDir, adventureDir))
+	{
+		return qfalse;
+	}
+
+	for (candidateDist = 224.0f; candidateDist >= 72.0f; candidateDist -= 32.0f)
+	{
+		VectorMA(bs->origin, candidateDist, adventureDir, outGoal);
+		outGoal[2] = bs->origin[2];
+		if (NewBotAI_IsReachableAdventureGoal(bs, outGoal))
+		{
+			return qtrue;
+		}
+	}
+
+	return qfalse;
+}
+
 static qboolean NewBotAI_UpdateWaypointHeadingGoal(bot_state_t *bs)
 {
 	vec3_t moveDir;
