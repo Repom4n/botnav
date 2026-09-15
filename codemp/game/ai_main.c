@@ -7449,7 +7449,7 @@ static qboolean NewBotAI_IsReachableAdventureGoal(bot_state_t *bs, vec3_t goalPo
 	return qtrue;
 }
 
-static qboolean NewBotAI_FindWaypointAdventureGoal(bot_state_t *bs, vec3_t preferredDir, vec3_t outGoal)
+static qboolean NewBotAI_FindWaypointAdventureDirection(bot_state_t *bs, vec3_t preferredDir, vec3_t outDir)
 {
 	static const float yawOffsets[] = {0.0f, 12.0f, -12.0f, 24.0f, -24.0f, 36.0f, -36.0f, 48.0f, -48.0f, 60.0f, -60.0f};
 	vec3_t start, probeEnd, dir, dirAngles, candidate;
@@ -7457,7 +7457,7 @@ static qboolean NewBotAI_FindWaypointAdventureGoal(bot_state_t *bs, vec3_t prefe
 	vec3_t maxs = {15.0f, 15.0f, 32.0f};
 	trace_t tr;
 	float preferredYaw;
-	float bestDist;
+	float bestTravelDist;
 	float bestYawOffsetAbs;
 	int i;
 
@@ -7467,7 +7467,7 @@ static qboolean NewBotAI_FindWaypointAdventureGoal(bot_state_t *bs, vec3_t prefe
 	}
 
 	preferredYaw = vectoyaw(preferredDir);
-	bestDist = -1.0f;
+	bestTravelDist = -1.0f;
 	bestYawOffsetAbs = 9999.0f;
 
 	VectorCopy(bs->origin, start);
@@ -7510,42 +7510,40 @@ static qboolean NewBotAI_FindWaypointAdventureGoal(bot_state_t *bs, vec3_t prefe
 				continue;
 			}
 
-			if (candidateDist > bestDist ||
-				(candidateDist == bestDist && fabsf(yawOffsets[i]) < bestYawOffsetAbs))
+			if (travelDist > bestTravelDist ||
+				(travelDist == bestTravelDist && fabsf(yawOffsets[i]) < bestYawOffsetAbs))
 			{
-				bestDist = candidateDist;
+				bestTravelDist = travelDist;
 				bestYawOffsetAbs = fabsf(yawOffsets[i]);
-				VectorCopy(candidate, outGoal);
+				VectorCopy(dir, outDir);
 			}
 			break;
 		}
 	}
 
-	return (bestDist >= 0.0f) ? qtrue : qfalse;
+	return (bestTravelDist >= 0.0f) ? qtrue : qfalse;
 }
 
 static qboolean NewBotAI_UpdateWaypointHeadingGoal(bot_state_t *bs)
 {
-	vec3_t preferredDir;
 	vec3_t moveDir;
+	const float holdProbeDistance = 128.0f;
 
 	if (!bs)
 	{
 		return qfalse;
 	}
-	if (bs->navHoldGoalValid)
-	{
-		return qtrue;
-	}
-	if (!NewBotAI_GetRecoveryHeadingVector(bs, preferredDir))
+	if (!bs->navHoldGoalValid)
 	{
 		return qfalse;
 	}
-	if (!NewBotAI_FindWaypointAdventureGoal(bs, preferredDir, bs->navHoldGoal))
+	if (VectorNormalize(bs->navHoldDirection) <= 0.0f)
 	{
 		return qfalse;
 	}
 
+	VectorMA(bs->origin, holdProbeDistance, bs->navHoldDirection, bs->navHoldGoal);
+	bs->navHoldGoal[2] = bs->origin[2];
 	VectorSubtract(bs->navHoldGoal, bs->origin, moveDir);
 	moveDir[2] = 0.0f;
 	if (VectorNormalize(moveDir) <= 0.0f)
@@ -7563,6 +7561,9 @@ static qboolean NewBotAI_UpdateWaypointHeadingGoal(bot_state_t *bs)
 
 static qboolean NewBotAI_StartWaypointHeadingHold(bot_state_t *bs)
 {
+	vec3_t preferredDir;
+	vec3_t adventureDir;
+
 	if (!bs)
 	{
 		return qfalse;
@@ -7572,12 +7573,19 @@ static qboolean NewBotAI_StartWaypointHeadingHold(bot_state_t *bs)
 		bs->navBuildWaypointTrail = qtrue;
 	}
 
-	if (!NewBotAI_GetRecoveryHeadingVector(bs, bs->navHoldDirection))
+	if (!NewBotAI_GetRecoveryHeadingVector(bs, preferredDir))
 	{
 		return qfalse;
 	}
+	if (!NewBotAI_FindWaypointAdventureDirection(bs, preferredDir, adventureDir))
+	{
+		return qfalse;
+	}
+	VectorCopy(adventureDir, bs->navHoldDirection);
+	bs->navHoldGoalValid = qtrue;
 	if (!NewBotAI_UpdateWaypointHeadingGoal(bs))
 	{
+		bs->navHoldGoalValid = qfalse;
 		return qfalse;
 	}
 
@@ -7608,7 +7616,7 @@ static qboolean NewBotAI_ApplyWaypointHeadingHold(bot_state_t *bs)
 	{
 		return qfalse;
 	}
-	if (!bs->navHoldGoalValid)
+	if (!bs->navHoldGoalValid || !NewBotAI_UpdateWaypointHeadingGoal(bs))
 	{
 		return qfalse;
 	}
@@ -9072,6 +9080,14 @@ void NewBotAI_Draining(bot_state_t *bs)
 	NewBotAI_UpdateHealDrainlockState(bs);
 	drainTapTargetTicks = NewBotAI_GetDrainTapTargetTicks(bs);
 	healDrainlock = NewBotAI_ShouldHealDrainlock(bs);
+
+	if (!enemyVisible)
+	{
+		bs->drainHoldTime = 0;
+		level.clients[bs->client].ps.fd.forcePowerSelected = FP_DRAIN;
+		trap->EA_ForcePower(bs->client);
+		return;
+	}
 
 	if ((ourHealth < 100 || maintainDrainlockTaps) && hisForce && enemyVisible)
 	{
