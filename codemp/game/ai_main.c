@@ -9081,6 +9081,14 @@ void NewBotAI_Draining(bot_state_t *bs)
 	drainTapTargetTicks = NewBotAI_GetDrainTapTargetTicks(bs);
 	healDrainlock = NewBotAI_ShouldHealDrainlock(bs);
 
+	if (!enemyVisible)
+	{
+		bs->drainHoldTime = 0;
+		level.clients[bs->client].ps.fd.forcePowerSelected = FP_DRAIN;
+		trap->EA_ForcePower(bs->client);
+		return;
+	}
+
 	if ((ourHealth < 100 || maintainDrainlockTaps) && hisForce && enemyVisible)
 	{
 		//Ordinary health-biased bots just want minimal drain taps to top their own health off,
