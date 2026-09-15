@@ -7385,6 +7385,14 @@ static qboolean NewBotAI_GetRecoveryHeadingVector(bot_state_t *bs, vec3_t outDir
 		return qfalse;
 	}
 
+	VectorCopy(bs->goalMovedir, dir);
+	dir[2] = 0;
+	if (VectorNormalize(dir) > 0.0f)
+	{
+		VectorCopy(dir, outDir);
+		return qtrue;
+	}
+
 	if (bs->wpCurrent)
 	{
 		goalWPIndex = bs->wpDirection ? (bs->wpCurrent->index - 1) : (bs->wpCurrent->index + 1);
@@ -7582,6 +7590,7 @@ static qboolean NewBotAI_FindWaypointAdventureGoal(bot_state_t *bs, vec3_t prefe
 static qboolean NewBotAI_UpdateWaypointHeadingGoal(bot_state_t *bs)
 {
 	vec3_t moveDir;
+	vec3_t preferredDir;
 	const float holdProbeDistance = 128.0f;
 
 	if (!bs)
@@ -7592,13 +7601,19 @@ static qboolean NewBotAI_UpdateWaypointHeadingGoal(bot_state_t *bs)
 	{
 		return qfalse;
 	}
-	if (VectorNormalize(bs->navHoldDirection) <= 0.0f)
+	VectorCopy(bs->navHoldDirection, preferredDir);
+	preferredDir[2] = 0.0f;
+	if (VectorNormalize(preferredDir) <= 0.0f)
 	{
 		return qfalse;
 	}
 
-	VectorMA(bs->origin, holdProbeDistance, bs->navHoldDirection, bs->navHoldGoal);
-	bs->navHoldGoal[2] = bs->origin[2];
+	if (!NewBotAI_FindWaypointAdventureGoal(bs, preferredDir, bs->navHoldGoal))
+	{
+		VectorMA(bs->origin, holdProbeDistance, preferredDir, bs->navHoldGoal);
+		bs->navHoldGoal[2] = bs->origin[2];
+	}
+
 	VectorSubtract(bs->navHoldGoal, bs->origin, moveDir);
 	moveDir[2] = 0.0f;
 	if (VectorNormalize(moveDir) <= 0.0f)
@@ -7610,6 +7625,7 @@ static qboolean NewBotAI_UpdateWaypointHeadingGoal(bot_state_t *bs)
 		return qfalse;
 	}
 
+	VectorCopy(moveDir, bs->navHoldDirection);
 	bs->navHoldGoalValid = qtrue;
 	return qtrue;
 }
@@ -7644,6 +7660,10 @@ static qboolean NewBotAI_StartWaypointHeadingHold(bot_state_t *bs)
 		return qfalse;
 	}
 
+	bs->goalAngles[PITCH] = 0.0f;
+	bs->goalAngles[ROLL] = 0.0f;
+	bs->ideal_viewangles[PITCH] = 0.0f;
+	bs->ideal_viewangles[ROLL] = 0.0f;
 	bs->navHoldUntil = level.time + NewBotAI_GetRecoveryAdventureTimeMs();
 	bs->navRecoverStuckSince = level.time;
 	VectorCopy(bs->origin, bs->navRecoverOrigin);
@@ -7697,7 +7717,13 @@ static qboolean NewBotAI_ApplyWaypointHeadingHold(bot_state_t *bs)
 	else if (stuckTimeoutMs > 0 &&
 		bs->navRecoverStuckSince <= level.time - stuckTimeoutMs)
 	{
-		return qfalse;
+		if (!NewBotAI_UpdateWaypointHeadingGoal(bs))
+		{
+			return qfalse;
+		}
+		VectorCopy(bs->navHoldGoal, goalPos);
+		bs->navRecoverStuckSince = level.time;
+		VectorCopy(bs->origin, bs->navRecoverOrigin);
 	}
 
 	NewBotAI_ClearLostSightCombatInput(bs);
@@ -7715,6 +7741,9 @@ static qboolean NewBotAI_ApplyWaypointHeadingHold(bot_state_t *bs)
 	vectoangles(goalDelta, goalDelta);
 	goalDelta[PITCH] = 0.0f;
 	VectorCopy(goalDelta, bs->goalAngles);
+	bs->goalAngles[ROLL] = 0.0f;
+	bs->ideal_viewangles[PITCH] = 0.0f;
+	bs->ideal_viewangles[ROLL] = 0.0f;
 	return qtrue;
 }
 
@@ -16409,15 +16438,6 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 			{
 				NewBotAI_ClearLostSightCombatInput(bs);
 				NewBotAI_MaintainWaypointFallbackEnemyLock(bs);
-				if (bs->frame_Enemy_Vis)
-				{
-					StandardBotAI(bs, thinktime);
-				}
-				else
-				{
-					NewBotAI_RunNavigationOrAlone(bs, thinktime);
-				}
-				return;
 			}
 			else
 			{
@@ -16498,7 +16518,8 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		}
 		return;
 	}
-	if (!bs->frame_Enemy_Vis)
+	if (!bs->frame_Enemy_Vis &&
+		bs->navRecoverMode != NEWBOTAI_NAV_RECOVERY_MODE_HOLD)
 	{
 		NewBotAI_ClearLostSightCombatInput(bs);
 		NewBotAI_RunNavigationOrAlone(bs, thinktime);
