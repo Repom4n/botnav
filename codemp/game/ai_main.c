@@ -16524,6 +16524,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 
 	if (bot_navigation.integer)
 	{
+		const qboolean preserveRecoveryHeadingYaw = (NewBotAI_GetRecoveryMode() >= 2) ? qtrue : qfalse;
 		const qboolean recoveryContext = NewBotAI_IsRecoveryNavigationContext(bs);
 		const qboolean canUseWaypointFallback = (recoveryContext && NewBotAI_GetRecoveryMode() > 0) ? NewBotAI_CanUseWaypointFallbackInCombat(bs) : qfalse;
 		const qboolean shouldFallbackToWaypoints = recoveryContext ? NewBotAI_ShouldFallbackToWaypoints(bs) : qfalse;
@@ -16588,7 +16589,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 			NewBotAI_ClearLostSightCombatInput(bs);
 			NewBotAI_MaintainWaypointFallbackEnemyLock(bs);
 			NewBotAI_RunNavigationOrAlone(bs, thinktime);
-			NewBotAI_ApplyRecoveryViewLock(bs, qtrue);
+			NewBotAI_ApplyRecoveryViewLock(bs, preserveRecoveryHeadingYaw);
 			return;
 		}
 
@@ -16603,7 +16604,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 			NewBotAI_ClearLostSightCombatInput(bs);
 			NewBotAI_MaintainWaypointFallbackEnemyLock(bs);
 			NewBotAI_RunNavigationOrAlone(bs, thinktime);
-			NewBotAI_ApplyRecoveryViewLock(bs, qtrue);
+			NewBotAI_ApplyRecoveryViewLock(bs, preserveRecoveryHeadingYaw);
 			return;
 		}
 	}
@@ -16628,7 +16629,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		NewBotAI_ClearLostSightCombatInput(bs);
 		NewBotAI_MaintainWaypointFallbackEnemyLock(bs);
 		NewBotAI_RunNavigationOrAlone(bs, thinktime);
-		NewBotAI_ApplyRecoveryViewLock(bs, qtrue);
+		NewBotAI_ApplyRecoveryViewLock(bs, preserveRecoveryHeadingYaw);
 		return;
 	}
 	if (!bs->frame_Enemy_Vis &&
