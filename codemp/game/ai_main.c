@@ -16604,7 +16604,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 			NewBotAI_ClearLostSightCombatInput(bs);
 			NewBotAI_MaintainWaypointFallbackEnemyLock(bs);
 			NewBotAI_RunNavigationOrAlone(bs, thinktime);
-			NewBotAI_ApplyRecoveryViewLock(bs, preserveRecoveryHeadingYaw);
+			NewBotAI_ApplyRecoveryViewLock(bs, (NewBotAI_GetRecoveryMode() >= 2) ? qtrue : qfalse);
 			return;
 		}
 	}
