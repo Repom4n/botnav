@@ -209,7 +209,7 @@ static void NewBotAI_ClearLostSightCombatInput(bot_state_t *bs);
 static void NewBotAI_ClearLightningBurst(bot_state_t *bs);
 static qboolean NewBotAI_IsRecoveryMovementActive(bot_state_t *bs);
 static qboolean NewBotAI_HasExclusiveFlipkickMovement(bot_state_t *bs);
-static void NewBotAI_ApplyRecoveryViewLock(bot_state_t *bs, qboolean preserveHeadingYaw);
+static void NewBotAI_ApplyRecoveryViewLock(bot_state_t *bs, qboolean allowEnemyYawTracking);
 static qboolean NewBotAI_RunWaypointHeadingHold(bot_state_t *bs);
 static qboolean NewBotAI_StartWaypointHeadingHold(bot_state_t *bs);
 static qboolean NewBotAI_ApplyWaypointHeadingHold(bot_state_t *bs);
@@ -7355,14 +7355,14 @@ static qboolean NewBotAI_HasExclusiveFlipkickMovement(bot_state_t *bs)
 	return (bs && (bs->flipkickInputTime > level.time || bs->pullKickJumpTime != 0)) ? qtrue : qfalse;
 }
 
-static void NewBotAI_ApplyRecoveryViewLock(bot_state_t *bs, qboolean preserveHeadingYaw)
+static void NewBotAI_ApplyRecoveryViewLock(bot_state_t *bs, qboolean allowEnemyYawTracking)
 {
 	if (!bs)
 	{
 		return;
 	}
 
-	if (!preserveHeadingYaw && bs->frame_Enemy_Vis && bs->currentEnemy && bs->currentEnemy->client)
+	if (allowEnemyYawTracking && bs->frame_Enemy_Vis && bs->currentEnemy && bs->currentEnemy->client)
 	{
 		vec3_t enemyAngles;
 
@@ -7737,7 +7737,7 @@ static qboolean NewBotAI_StartWaypointHeadingHold(bot_state_t *bs)
 		bs->navHoldGoal[2] = bs->origin[2];
 	}
 
-	NewBotAI_ApplyRecoveryViewLock(bs, (recoveryMode >= 2) ? qtrue : qfalse);
+	NewBotAI_ApplyRecoveryViewLock(bs, (recoveryMode >= 2) ? qfalse : qtrue);
 	bs->navHoldUntil = level.time + NewBotAI_GetRecoveryAdventureTimeMs();
 	bs->navRecoverStuckSince = level.time;
 	VectorCopy(bs->origin, bs->navRecoverOrigin);
@@ -7848,7 +7848,7 @@ static qboolean NewBotAI_ApplyWaypointHeadingHold(bot_state_t *bs)
 		goalDelta[PITCH] = 0.0f;
 		VectorCopy(goalDelta, bs->goalAngles);
 	}
-	NewBotAI_ApplyRecoveryViewLock(bs, goalOrientedRecovery);
+	NewBotAI_ApplyRecoveryViewLock(bs, goalOrientedRecovery ? qfalse : qtrue);
 	return qtrue;
 }
 
@@ -16230,7 +16230,7 @@ static void NewBotAI_MaintainWaypointFallbackEnemyLock(bot_state_t *bs)
 	bs->enemySeenTime = level.time + ENEMY_FORGET_MS;
 	if (NewBotAI_IsRecoveryMovementActive(bs))
 	{
-		NewBotAI_ApplyRecoveryViewLock(bs, qfalse);
+		NewBotAI_ApplyRecoveryViewLock(bs, qtrue);
 	}
 	else if (bs->frame_Enemy_Vis)
 	{
@@ -16573,8 +16573,19 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 				{
 					return;
 				}
-				NewBotAI_ClearLostSightCombatInput(bs);
-				NewBotAI_MaintainWaypointFallbackEnemyLock(bs);
+				if (canUseWaypointFallback)
+				{
+					NewBotAI_CreateRecoveryTrailWaypoint(bs);
+					bs->navRecoverMode = NEWBOTAI_NAV_RECOVERY_MODE_WAYPOINT;
+					bs->navRecoverModeUntil = level.time + NewBotAI_GetRecoveryWaypointPhaseMs();
+					bs->navRecoverStuckSince = 0;
+					bs->navHoldGoalValid = qfalse;
+					VectorClear(bs->navHoldGoal);
+				}
+				else
+				{
+					NewBotAI_ResetRecoveryMovement(bs);
+				}
 			}
 			else
 			{
