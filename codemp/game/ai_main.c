@@ -4782,13 +4782,13 @@ void MeleeCombatHandling(bot_state_t *bs)
 
 	if (bs->meleeStrafeTime < level.time)
 	{
-		if (bs->meleeStrafeDir)
+		if (bs->meleeStrafeDir < 0)
 		{
-			bs->meleeStrafeDir = 0;
+			bs->meleeStrafeDir = 1;
 		}
 		else
 		{
-			bs->meleeStrafeDir = 1;
+			bs->meleeStrafeDir = -1;
 		}
 
 		bs->meleeStrafeTime = level.time + Q_irand(500, 1800);
@@ -4867,13 +4867,13 @@ void SaberCombatHandling(bot_state_t *bs)
 
 	if (bs->meleeStrafeTime < level.time)
 	{
-		if (bs->meleeStrafeDir)
+		if (bs->meleeStrafeDir < 0)
 		{
-			bs->meleeStrafeDir = 0;
+			bs->meleeStrafeDir = 1;
 		}
 		else
 		{
-			bs->meleeStrafeDir = 1;
+			bs->meleeStrafeDir = -1;
 		}
 
 		bs->meleeStrafeTime = level.time + Q_irand(500, 1800);
@@ -6220,7 +6220,7 @@ void StrafeTracing(bot_state_t *bs)
 
 	AngleVectors(bs->viewangles, NULL, right, NULL);
 
-	if (bs->meleeStrafeDir)
+	if (bs->meleeStrafeDir < 0)
 	{
 		rorg[0] = bs->origin[0] - right[0]*32;
 		rorg[1] = bs->origin[1] - right[1]*32;
@@ -16573,11 +16573,14 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 				{
 					return;
 				}
-				if (canUseWaypointFallback)
+				if (NewBotAI_GetRecoveryMode() >= 2 && canUseWaypointFallback &&
+					shouldFallbackToWaypoints &&
+					NewBotAI_GetRecoveryWaypointPhaseMs() > 0)
 				{
 					NewBotAI_CreateRecoveryTrailWaypoint(bs);
 					bs->navRecoverMode = NEWBOTAI_NAV_RECOVERY_MODE_WAYPOINT;
 					bs->navRecoverModeUntil = level.time + NewBotAI_GetRecoveryWaypointPhaseMs();
+					bs->navHoldUntil = 0;
 					bs->navRecoverStuckSince = 0;
 					bs->navHoldGoalValid = qfalse;
 					VectorClear(bs->navHoldGoal);
@@ -18128,11 +18131,11 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 			!NewBotAI_HasExclusiveFlipkickMovement(bs) &&
 			meleestrafe && bs->meleeStrafeDisable < level.time)
 		{
-			if (bs->meleeStrafeDir)
+			if (bs->meleeStrafeDir < 0)
 			{
 				trap->EA_MoveLeft(bs->client);
 			}
-			else
+			else if (bs->meleeStrafeDir > 0)
 			{
 				trap->EA_MoveRight(bs->client);
 			}
