@@ -430,7 +430,7 @@ typedef struct bot_state_s
 	int					combatStuckSince; // when combatStuckOrigin was sampled/reset
 	vec3_t				navRecoverOrigin; // sampled position while in direct recovery movement
 	int					navRecoverStuckSince; // when navRecoverOrigin was last refreshed
-	int					navRecoverMode; // 0 = direct pursuit, 1 = waypoint routing phase, 2 = temporary walk-forward traversal
+	int					navRecoverMode; // 0 = direct pursuit, 1 = waypoint routing phase, 2 = temporary recovery/adventure traversal
 	int					navRecoverModeUntil; // expiry for navRecoverMode==1
 	int					navHoldUntil; // expiry for navRecoverMode==2 temporary walk-forward traversal
 	qboolean			navBuildWaypointTrail; // on maps that start with no waypoints, append a waypoint at each adventure-phase end

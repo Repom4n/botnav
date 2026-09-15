@@ -392,9 +392,12 @@ XCVAR_DEF( bot_drainbias,				"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_drainlockbias,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_lightningbias,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_lightningdistance,		"400",		NULL,				CVAR_ARCHIVE,									qtrue )
-// How long (ms) recovery mode should stay in waypoint routing before forcing direct pursuit.
+// Recovery navigation mode: 0 = off, 1 = hold the leftover waypoint heading during adventure
+// time, 2 = goal-oriented adventure heading toward open hallway/doorway space.
+XCVAR_DEF( bot_recovery,				"1",			NULL,				CVAR_ARCHIVE,									qtrue )
+// How long (ms) recovery mode should stay in waypoint routing before forcing adventure travel.
 XCVAR_DEF( bot_nav_waypointphase,		"4000",		NULL,				CVAR_ARCHIVE,									qtrue )
-// How long (ms) recovery mode should keep walking a chosen adventure heading after leaving waypoint order.
+// How long (ms) recovery mode should keep walking its chosen adventure heading after leaving waypoint order.
 XCVAR_DEF( bot_nav_adventuretime,		"2500",		NULL,				CVAR_ARCHIVE,									qtrue )
 // Extra strafe frequency (0-100) while lightning is active, helping avoid incoming lightning.
 XCVAR_DEF( bot_lightningstrafebonus,	"20",			NULL,				CVAR_ARCHIVE,									qtrue )
