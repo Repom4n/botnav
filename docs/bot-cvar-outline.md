@@ -88,8 +88,10 @@ These are all percentage-based (0-100) chance weights that gate specific behavio
 | `bot_strafeduration` | `50` | Duration scale (0-100) for random strafes. 50 = 80-2500ms range. |
 | `bot_strafeOffset` | `0` | Legacy strafe offset. |
 | `bot_hopfrequency` | `0` | Scales how often the bot schedules its next hop while close to a saber enemy, covering both random ambient hops and non-emergency combat hops such as saber-throw counter jumps. The interval is only re-rolled once the bot lands from its previous hop, and is a random 0.5-8 second wait divided by this value as a percentage (100 = 0.5-8s; higher = longer/less frequent hops, lower = shorter/more frequent, 0 = disables discretionary hops). The wide range makes most hops occasional singles while an occasional short roll chains one hop straight into the next, keeping the bot unpredictable. |
-| `bot_recovery` | `1` | Recovery navigation mode. 0 = disable combat waypoint/adventure recovery. 1 = after waypoint phase, keep walking the last recovered heading in a straight line while yaw can track threats. 2 = after waypoint phase, keep steering toward projected hallway/doorway goals. |
-| `bot_redirectcooldown` | `800` | Cooldown (ms) after a wall-triggered redirect reaction (jump/turn/hop) before another wall reaction can fire. This reduces tight-space wall loops and repeated reaction hopping. |
+| `bot_recovery` | `1` | Recovery navigation mode. 0 = disable the new waypoint/adventure recovery overlay. 1 = alternate waypoint travel with adventure time that keeps walking the last recovered heading while yaw can still track threats. 2 = alternate waypoint travel with goal-oriented adventure time that steers toward projected hallway/doorway goals. |
+| `bot_nav_waypointphase` | `4000` | Length of each waypoint phase (ms) while recovery is active, before the bot swaps into the adventure phase. |
+| `bot_nav_adventuretime` | `2500` | Length of each adventure phase (ms) while recovery is active, before the bot returns to waypoint navigation. |
+| `bot_redirectcooldown` | `800` | Cooldown (ms) after a wall-triggered redirect reaction. During this window the bot keeps the chosen redirect heading instead of immediately rerolling another wall reaction, reducing tight-space spin loops and repeated reaction hopping. |
 
 ## Gripkick Tuning
 
