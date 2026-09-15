@@ -104,9 +104,14 @@ static qboolean BotTargetModeAllowsBotEnemies(int targetMode);
 static qboolean BotTargetModePassesScanFilter(int targetMode, gentity_t *ent, qboolean preferredHumansOnly);
 static qboolean BotTargetModeIsForceDuelOnly(int targetMode);
 static qboolean NewBotAI_InFFAExploreWindow(bot_state_t *bs, int targetMode);
+static qboolean NewBotAI_ClassifyForwardObstacle(bot_state_t *bs, const vec3_t moveDir, qboolean *requiresHopOut);
+static qboolean NewBotAI_HasForwardWallObstacle(bot_state_t *bs, const vec3_t moveDir);
 static qboolean NewBotAI_TouchingWallNotEnemy(bot_state_t *bs);
+static qboolean NewBotAI_HandleClimbableForwardObstacle(bot_state_t *bs, const vec3_t moveDir);
 static qboolean NewBotAI_ShouldWallrunAgainstWalls(bot_state_t *bs);
 static qboolean NewBotAI_ShouldAvoidDiagonalWallrun(bot_state_t *bs);
+static int NewBotAI_GetWallAvoidCooldownMs(void);
+static float NewBotAI_GetWallEscapeTurnAngle(void);
 static void NewBotAI_RetreatDiagonal(bot_state_t *bs, qboolean moveLeft);
 static int BotGetLowHangingFruitHP(void);
 static float BotGetLowHangingFruitDistance(void);
@@ -5790,8 +5795,9 @@ int BotFallbackNavigation(bot_state_t *bs)
 		}
 		else if (bs->customNavReverseTime < level.time)
 		{
-			bs->goalAngles[YAW] = AngleNormalize360(bs->goalAngles[YAW] + 180.0f);
-			bs->customNavReverseTime = level.time + 1000;
+			const int rerollMs = NewBotAI_GetWallAvoidCooldownMs();
+			bs->goalAngles[YAW] = AngleNormalize360(bs->goalAngles[YAW] + NewBotAI_GetWallEscapeTurnAngle());
+			bs->customNavReverseTime = level.time + rerollMs;
 		}
 		trto[0] = bs->origin[0] - fwd[0]*48;
 		trto[1] = bs->origin[1] - fwd[1]*48;
@@ -7174,6 +7180,8 @@ static qboolean NewBotAI_CanAttemptFlipkick(bot_state_t *bs)
 #define NEWBOTAI_RECOVERY_YAW_SPEED_DEG_PER_SEC 50.0f
 #define NEWBOTAI_RECOVERY_YAW_INTERVAL_MS 800
 #define NEWBOTAI_RECOVERY_STUCK_TIMEOUT_MS 5000
+#define NEWBOTAI_WALL_ESCAPE_TURN_MIN_DEG 125
+#define NEWBOTAI_WALL_ESCAPE_TURN_MAX_DEG 145
 
 //How long (ms) a flipkick attempt keeps toggling fresh jump presses after the initial
 //jump. This was raised from the original 350 to 500, and that extra time outlived the
@@ -7236,6 +7244,18 @@ static int NewBotAI_GetRecoveryMode(void)
 static int NewBotAI_GetRecoveryYawIntervalMs(void)
 {
 	return NEWBOTAI_RECOVERY_YAW_INTERVAL_MS;
+}
+
+static int NewBotAI_GetWallAvoidCooldownMs(void)
+{
+	return NewBotAI_GetRecoveryYawIntervalMs();
+}
+
+static float NewBotAI_GetWallEscapeTurnAngle(void)
+{
+	const float yawTurn = (float)Q_irand(NEWBOTAI_WALL_ESCAPE_TURN_MIN_DEG, NEWBOTAI_WALL_ESCAPE_TURN_MAX_DEG);
+
+	return (Q_irand(0, 1) ? yawTurn : -yawTurn);
 }
 
 static int NewBotAI_GetRecoveryStuckTimeoutMs(void)
@@ -8471,25 +8491,43 @@ static void NewBotAI_TryRandomHop(bot_state_t *bs)
 	bs->hopWasGrounded = isGrounded;
 }
 
-//True while a short player-sized trace from the bot hits a solid wall and whatever
-//we hit is not our current enemy - i.e. we are making contact with map geometry
-//rather than an opponent's body (opponent contact stays kickable/wallrunnable).
-static qboolean NewBotAI_TouchingWallNotEnemy(bot_state_t *bs)
+static qboolean NewBotAI_ClassifyForwardObstacle(bot_state_t *bs, const vec3_t moveDir, qboolean *requiresHopOut)
 {
 	trace_t tr;
-	vec3_t mins, maxs, traceto;
+	trace_t stepTrace;
+	trace_t hopTrace;
+	vec3_t dir, end, stepStart, stepEnd, hopStart, hopEnd;
+	vec3_t mins, maxs;
+	const float probeDistance = 24.0f;
+	const float stepHeight = 18.0f;
+	const float hopHeight = 48.0f;
 
-	VectorCopy(bs->cur_ps.origin, traceto);
-	traceto[2] += 24;
+	if (requiresHopOut)
+	{
+		*requiresHopOut = qfalse;
+	}
 
-	mins[0] = -36;
-	mins[1] = -36;
+	if (!bs)
+	{
+		return qfalse;
+	}
+
+	VectorCopy(moveDir, dir);
+	dir[2] = 0.0f;
+	if (VectorNormalize(dir) <= 0.0f)
+	{
+		return qfalse;
+	}
+
+	mins[0] = -15;
+	mins[1] = -15;
 	mins[2] = 0;
-	maxs[0] = 36;
-	maxs[1] = 36;
-	maxs[2] = 12;
+	maxs[0] = 15;
+	maxs[1] = 15;
+	maxs[2] = 32;
 
-	JP_Trace(&tr, bs->cur_ps.origin, mins, maxs, traceto, bs->cur_ps.clientNum, CONTENTS_SOLID, qfalse, 0, 0);
+	VectorMA(bs->cur_ps.origin, probeDistance, dir, end);
+	JP_Trace(&tr, bs->cur_ps.origin, mins, maxs, end, bs->cur_ps.clientNum, CONTENTS_SOLID, qfalse, 0, 0);
 
 	if (tr.fraction >= 1.0f)
 	{
@@ -8501,7 +8539,119 @@ static qboolean NewBotAI_TouchingWallNotEnemy(bot_state_t *bs)
 		return qfalse;
 	}
 
+	VectorCopy(bs->cur_ps.origin, stepStart);
+	VectorCopy(end, stepEnd);
+	stepStart[2] += stepHeight;
+	stepEnd[2] += stepHeight;
+	JP_Trace(&stepTrace, stepStart, mins, maxs, stepEnd, bs->cur_ps.clientNum, CONTENTS_SOLID, qfalse, 0, 0);
+	if (stepTrace.fraction >= 1.0f)
+	{
+		return qtrue;
+	}
+
+	if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE ||
+		BotNav_CheckFallingHazard(bs, dir, qtrue))
+	{
+		return qfalse;
+	}
+
+	VectorCopy(bs->cur_ps.origin, hopStart);
+	VectorCopy(end, hopEnd);
+	hopStart[2] += hopHeight;
+	hopEnd[2] += hopHeight;
+	JP_Trace(&hopTrace, hopStart, mins, maxs, hopEnd, bs->cur_ps.clientNum, CONTENTS_SOLID, qfalse, 0, 0);
+	if (hopTrace.fraction >= 1.0f)
+	{
+		if (requiresHopOut)
+		{
+			*requiresHopOut = qtrue;
+		}
+		return qtrue;
+	}
+
+	return qfalse;
+}
+
+//True while a short player-sized trace from the bot hits a solid wall and whatever
+//we hit is not our current enemy - i.e. we are making contact with map geometry
+//rather than an opponent's body (opponent contact stays kickable/wallrunnable).
+static qboolean NewBotAI_TouchingWallNotEnemy(bot_state_t *bs)
+{
+	vec3_t moveAngles, moveDir;
+
+	if (!bs)
+	{
+		return qfalse;
+	}
+
+	VectorClear(moveAngles);
+	moveAngles[YAW] = bs->ideal_viewangles[YAW];
+	AngleVectors(moveAngles, moveDir, NULL, NULL);
+
+	return NewBotAI_HasForwardWallObstacle(bs, moveDir);
+}
+
+static qboolean NewBotAI_HandleClimbableForwardObstacle(bot_state_t *bs, const vec3_t moveDir)
+{
+	qboolean requiresHop = qfalse;
+
+	if (!NewBotAI_ClassifyForwardObstacle(bs, moveDir, &requiresHop))
+	{
+		return qfalse;
+	}
+
+	trap->EA_MoveForward(bs->client);
+	if (requiresHop &&
+		bs->cur_ps.groundEntityNum != ENTITYNUM_NONE &&
+		bs->wallAvoidNextTime <= level.time)
+	{
+		trap->EA_Jump(bs->client);
+		bs->wallAvoidNextTime = level.time + NewBotAI_GetWallAvoidCooldownMs();
+	}
+
 	return qtrue;
+}
+
+static qboolean NewBotAI_HasForwardWallObstacle(bot_state_t *bs, const vec3_t moveDir)
+{
+	trace_t tr;
+	vec3_t dir, end;
+	vec3_t mins, maxs;
+	const float probeDistance = 24.0f;
+
+	if (!bs)
+	{
+		return qfalse;
+	}
+
+	VectorCopy(moveDir, dir);
+	dir[2] = 0.0f;
+	if (VectorNormalize(dir) <= 0.0f)
+	{
+		return qfalse;
+	}
+
+	mins[0] = -15;
+	mins[1] = -15;
+	mins[2] = 0;
+	maxs[0] = 15;
+	maxs[1] = 15;
+	maxs[2] = 32;
+
+	VectorMA(bs->cur_ps.origin, probeDistance, dir, end);
+	JP_Trace(&tr, bs->cur_ps.origin, mins, maxs, end, bs->cur_ps.clientNum, CONTENTS_SOLID, qfalse, 0, 0);
+
+	if (tr.fraction >= 1.0f)
+	{
+		return qfalse;
+	}
+
+	if (bs->currentEnemy && tr.entityNum == bs->currentEnemy->s.number)
+	{
+		return qfalse;
+	}
+
+	return NewBotAI_ClassifyForwardObstacle(bs, dir, NULL) ? qfalse : qtrue;
 }
 
 //Vertical wallruns (repeat jump inputs while making wall contact) are only wanted as
@@ -11036,20 +11186,26 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 				maxs[1] = 36;
 				maxs[2] = 12;
 			
-				JP_Trace(&trace, bs->cur_ps.origin, mins, maxs, traceto, bs->cur_ps.clientNum, CONTENTS_SOLID|CONTENTS_BODY, qfalse, 0, 0 );
+			JP_Trace(&trace, bs->cur_ps.origin, mins, maxs, traceto, bs->cur_ps.clientNum, CONTENTS_SOLID|CONTENTS_BODY, qfalse, 0, 0 );
 
-				if ( trace.fraction < 1.0f && actuallyStuck && bs->wallAvoidNextTime <= level.time ) { //Touching wall and genuinely blocked?
-					float GroundDist = BS_GroundDistance(bs);
+			if ( trace.fraction < 1.0f && actuallyStuck && bs->wallAvoidNextTime <= level.time ) { //Touching wall and genuinely blocked?
+				vec3_t moveAngles, moveDir;
+				float GroundDist = BS_GroundDistance(bs);
+				VectorClear(moveAngles);
+				moveAngles[YAW] = bs->ideal_viewangles[YAW];
+				AngleVectors(moveAngles, moveDir, NULL, NULL);
+				if (NewBotAI_HandleClimbableForwardObstacle(bs, moveDir))
+				{
+					wallRun = qfalse;
+				}
+				else
+				{
 					wallRun = qtrue;
-					bs->wallAvoidNextTime = level.time + 600; //withhold repeat jump/turn attempts for a bit
+					bs->wallAvoidNextTime = level.time + NewBotAI_GetWallAvoidCooldownMs(); //withhold repeat jump/turn attempts for a bit
 
 					//Com_Printf("Touching Wall\n");
-					//180 somehow
-					if (level.framenum % 2)
-						bs->ideal_viewangles[YAW] += 150;
-					else
-						bs->ideal_viewangles[YAW] += 210;
-					bs->ideal_viewangles[YAW] = AngleNormalize360(bs->ideal_viewangles[YAW]);
+					bs->ideal_viewangles[YAW] = AngleNormalize360(bs->ideal_viewangles[YAW] + NewBotAI_GetWallEscapeTurnAngle());
+					NewBotAI_StartEscapeYawOverride(bs, NewBotAI_GetWallAvoidCooldownMs());
 
 
 					trap->EA_MoveForward(bs->client);
@@ -11064,7 +11220,6 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 						if (1) { //Jump at end of wallrun
 
 						}
-
 					}
 				}
 			}
@@ -15732,7 +15887,7 @@ static qboolean NewBotAI_TryNoWaypointYawEscape(bot_state_t *bs, vec3_t goalOrig
 				bs->wallAvoidNextTime <= level.time)
 			{
 				trap->EA_Jump(bs->client);
-				bs->wallAvoidNextTime = level.time + 700;
+				bs->wallAvoidNextTime = level.time + NewBotAI_GetWallAvoidCooldownMs();
 			}
 			return qtrue;
 		}
@@ -15770,6 +15925,10 @@ static qboolean NewBotAI_TryNoWaypointYawEscape(bot_state_t *bs, vec3_t goalOrig
 				yawTurn = -yawTurn;
 			}
 		}
+	}
+	if (NewBotAI_HandleClimbableForwardObstacle(bs, toGoal))
+	{
+		return qtrue;
 	}
 	VectorClear(escapeAngles);
 	escapeAngles[YAW] = AngleNormalize360(bs->ideal_viewangles[YAW] + yawTurn);
