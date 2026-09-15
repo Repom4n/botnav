@@ -104,8 +104,8 @@ static qboolean BotTargetModeAllowsBotEnemies(int targetMode);
 static qboolean BotTargetModePassesScanFilter(int targetMode, gentity_t *ent, qboolean preferredHumansOnly);
 static qboolean BotTargetModeIsForceDuelOnly(int targetMode);
 static qboolean NewBotAI_InFFAExploreWindow(bot_state_t *bs, int targetMode);
-static qboolean NewBotAI_ClassifyForwardObstacle(bot_state_t *bs, const vec3_t moveDir, qboolean *requiresHopOut);
-static qboolean NewBotAI_HasForwardWallObstacle(bot_state_t *bs, const vec3_t moveDir);
+static qboolean NewBotAI_ClassifyForwardObstacle(bot_state_t *bs, const vec3_t moveDir, qboolean *requiresHopOut, int *hitEntityOut);
+static qboolean NewBotAI_HasReachableFloorAtProbe(bot_state_t *bs, const vec3_t probeOrigin, float dropHeight, float *floorZOut);
 static qboolean NewBotAI_TouchingWallNotEnemy(bot_state_t *bs);
 static qboolean NewBotAI_HandleClimbableForwardObstacle(bot_state_t *bs, const vec3_t moveDir);
 static qboolean NewBotAI_ShouldWallrunAgainstWalls(bot_state_t *bs);
@@ -7182,6 +7182,9 @@ static qboolean NewBotAI_CanAttemptFlipkick(bot_state_t *bs)
 #define NEWBOTAI_RECOVERY_STUCK_TIMEOUT_MS 5000
 #define NEWBOTAI_WALL_ESCAPE_TURN_MIN_DEG 125
 #define NEWBOTAI_WALL_ESCAPE_TURN_MAX_DEG 145
+#define NEWBOTAI_WALL_CONTACT_PROBE_DISTANCE 24.0f
+#define NEWBOTAI_WALL_STEP_HEIGHT 18.0f
+#define NEWBOTAI_WALL_HOP_HEIGHT 48.0f
 
 //How long (ms) a flipkick attempt keeps toggling fresh jump presses after the initial
 //jump. This was raised from the original 350 to 500, and that extra time outlived the
@@ -8491,20 +8494,22 @@ static void NewBotAI_TryRandomHop(bot_state_t *bs)
 	bs->hopWasGrounded = isGrounded;
 }
 
-static qboolean NewBotAI_ClassifyForwardObstacle(bot_state_t *bs, const vec3_t moveDir, qboolean *requiresHopOut)
+static qboolean NewBotAI_ClassifyForwardObstacle(bot_state_t *bs, const vec3_t moveDir, qboolean *requiresHopOut, int *hitEntityOut)
 {
 	trace_t tr;
 	trace_t stepTrace;
 	trace_t hopTrace;
+	float stepFloorZ = 0.0f;
 	vec3_t dir, end, stepStart, stepEnd, hopStart, hopEnd;
 	vec3_t mins, maxs;
-	const float probeDistance = 24.0f;
-	const float stepHeight = 18.0f;
-	const float hopHeight = 48.0f;
 
 	if (requiresHopOut)
 	{
 		*requiresHopOut = qfalse;
+	}
+	if (hitEntityOut)
+	{
+		*hitEntityOut = ENTITYNUM_NONE;
 	}
 
 	if (!bs)
@@ -8526,25 +8531,37 @@ static qboolean NewBotAI_ClassifyForwardObstacle(bot_state_t *bs, const vec3_t m
 	maxs[1] = 15;
 	maxs[2] = 32;
 
-	VectorMA(bs->cur_ps.origin, probeDistance, dir, end);
+	VectorMA(bs->cur_ps.origin, NEWBOTAI_WALL_CONTACT_PROBE_DISTANCE, dir, end);
 	JP_Trace(&tr, bs->cur_ps.origin, mins, maxs, end, bs->cur_ps.clientNum, CONTENTS_SOLID, qfalse, 0, 0);
 
 	if (tr.fraction >= 1.0f)
 	{
 		return qfalse;
 	}
+	if (hitEntityOut)
+	{
+		*hitEntityOut = tr.entityNum;
+	}
 
 	if (bs->currentEnemy && tr.entityNum == bs->currentEnemy->s.number)
+	{
+		return qfalse;
+	}
+	if (tr.plane.normal[2] > 0.5f)
 	{
 		return qfalse;
 	}
 
 	VectorCopy(bs->cur_ps.origin, stepStart);
 	VectorCopy(end, stepEnd);
-	stepStart[2] += stepHeight;
-	stepEnd[2] += stepHeight;
+	stepStart[2] += NEWBOTAI_WALL_STEP_HEIGHT;
+	stepEnd[2] += NEWBOTAI_WALL_STEP_HEIGHT;
 	JP_Trace(&stepTrace, stepStart, mins, maxs, stepEnd, bs->cur_ps.clientNum, CONTENTS_SOLID, qfalse, 0, 0);
-	if (stepTrace.fraction >= 1.0f)
+	if (!stepTrace.startsolid &&
+		!stepTrace.allsolid &&
+		stepTrace.fraction >= 1.0f &&
+		NewBotAI_HasReachableFloorAtProbe(bs, stepTrace.endpos, NEWBOTAI_WALL_STEP_HEIGHT + 8.0f, &stepFloorZ) &&
+		stepFloorZ <= bs->cur_ps.origin[2] + STEPSIZE + 1.0f)
 	{
 		return qtrue;
 	}
@@ -8557,10 +8574,13 @@ static qboolean NewBotAI_ClassifyForwardObstacle(bot_state_t *bs, const vec3_t m
 
 	VectorCopy(bs->cur_ps.origin, hopStart);
 	VectorCopy(end, hopEnd);
-	hopStart[2] += hopHeight;
-	hopEnd[2] += hopHeight;
+	hopStart[2] += NEWBOTAI_WALL_HOP_HEIGHT;
+	hopEnd[2] += NEWBOTAI_WALL_HOP_HEIGHT;
 	JP_Trace(&hopTrace, hopStart, mins, maxs, hopEnd, bs->cur_ps.clientNum, CONTENTS_SOLID, qfalse, 0, 0);
-	if (hopTrace.fraction >= 1.0f)
+	if (!hopTrace.startsolid &&
+		!hopTrace.allsolid &&
+		hopTrace.fraction >= 1.0f &&
+		NewBotAI_HasReachableFloorAtProbe(bs, hopTrace.endpos, NEWBOTAI_WALL_HOP_HEIGHT + 24.0f, NULL))
 	{
 		if (requiresHopOut)
 		{
@@ -8573,73 +8593,29 @@ static qboolean NewBotAI_ClassifyForwardObstacle(bot_state_t *bs, const vec3_t m
 }
 
 //True while a short player-sized trace from the bot hits a solid wall and whatever
-//we hit is not our current enemy - i.e. we are making contact with map geometry
-//rather than an opponent's body (opponent contact stays kickable/wallrunnable).
+//we hit is not our current enemy. Null bot states and enemy-body contact both return
+//qfalse so callers only treat real map-geometry contact as a wall.
 static qboolean NewBotAI_TouchingWallNotEnemy(bot_state_t *bs)
 {
-	vec3_t moveAngles, moveDir;
-
-	if (!bs)
-	{
-		return qfalse;
-	}
-
-	VectorClear(moveAngles);
-	moveAngles[YAW] = bs->ideal_viewangles[YAW];
-	AngleVectors(moveAngles, moveDir, NULL, NULL);
-
-	return NewBotAI_HasForwardWallObstacle(bs, moveDir);
-}
-
-static qboolean NewBotAI_HandleClimbableForwardObstacle(bot_state_t *bs, const vec3_t moveDir)
-{
-	qboolean requiresHop = qfalse;
-
-	if (!NewBotAI_ClassifyForwardObstacle(bs, moveDir, &requiresHop))
-	{
-		return qfalse;
-	}
-
-	trap->EA_MoveForward(bs->client);
-	if (requiresHop &&
-		bs->cur_ps.groundEntityNum != ENTITYNUM_NONE &&
-		bs->wallAvoidNextTime <= level.time)
-	{
-		trap->EA_Jump(bs->client);
-		bs->wallAvoidNextTime = level.time + NewBotAI_GetWallAvoidCooldownMs();
-	}
-
-	return qtrue;
-}
-
-static qboolean NewBotAI_HasForwardWallObstacle(bot_state_t *bs, const vec3_t moveDir)
-{
 	trace_t tr;
-	vec3_t dir, end;
-	vec3_t mins, maxs;
-	const float probeDistance = 24.0f;
+	vec3_t mins, maxs, traceto;
 
 	if (!bs)
 	{
 		return qfalse;
 	}
 
-	VectorCopy(moveDir, dir);
-	dir[2] = 0.0f;
-	if (VectorNormalize(dir) <= 0.0f)
-	{
-		return qfalse;
-	}
+	VectorCopy(bs->cur_ps.origin, traceto);
+	traceto[2] += 24;
 
-	mins[0] = -15;
-	mins[1] = -15;
+	mins[0] = -36;
+	mins[1] = -36;
 	mins[2] = 0;
-	maxs[0] = 15;
-	maxs[1] = 15;
-	maxs[2] = 32;
+	maxs[0] = 36;
+	maxs[1] = 36;
+	maxs[2] = 12;
 
-	VectorMA(bs->cur_ps.origin, probeDistance, dir, end);
-	JP_Trace(&tr, bs->cur_ps.origin, mins, maxs, end, bs->cur_ps.clientNum, CONTENTS_SOLID, qfalse, 0, 0);
+	JP_Trace(&tr, bs->cur_ps.origin, mins, maxs, traceto, bs->cur_ps.clientNum, CONTENTS_SOLID, qfalse, 0, 0);
 
 	if (tr.fraction >= 1.0f)
 	{
@@ -8651,7 +8627,75 @@ static qboolean NewBotAI_HasForwardWallObstacle(bot_state_t *bs, const vec3_t mo
 		return qfalse;
 	}
 
-	return NewBotAI_ClassifyForwardObstacle(bs, dir, NULL) ? qfalse : qtrue;
+	return qtrue;
+}
+
+static qboolean NewBotAI_HandleClimbableForwardObstacle(bot_state_t *bs, const vec3_t moveDir)
+{
+	qboolean requiresHop = qfalse;
+	int hitEntityNum = ENTITYNUM_NONE;
+
+	if (!NewBotAI_ClassifyForwardObstacle(bs, moveDir, &requiresHop, &hitEntityNum))
+	{
+		return qfalse;
+	}
+	if (hitEntityNum >= 0 &&
+		hitEntityNum < MAX_CLIENTS)
+	{
+		return qfalse;
+	}
+
+	if (requiresHop)
+	{
+		if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE ||
+			bs->wallAvoidNextTime > level.time)
+		{
+			return qfalse;
+		}
+		trap->EA_Jump(bs->client);
+		bs->wallAvoidNextTime = level.time + NewBotAI_GetWallAvoidCooldownMs();
+	}
+	trap->EA_MoveForward(bs->client);
+
+	return qtrue;
+}
+
+static qboolean NewBotAI_HasReachableFloorAtProbe(bot_state_t *bs, const vec3_t probeOrigin, float dropHeight, float *floorZOut)
+{
+	trace_t floorTrace;
+	vec3_t probeEnd;
+	vec3_t mins, maxs;
+
+	if (floorZOut)
+	{
+		*floorZOut = 0.0f;
+	}
+
+	if (!bs || dropHeight <= 0.0f)
+	{
+		return qfalse;
+	}
+
+	mins[0] = -15;
+	mins[1] = -15;
+	mins[2] = 0;
+	maxs[0] = 15;
+	maxs[1] = 15;
+	maxs[2] = 32;
+
+	VectorCopy(probeOrigin, probeEnd);
+	probeEnd[2] -= dropHeight;
+	JP_Trace(&floorTrace, probeOrigin, mins, maxs, probeEnd, bs->cur_ps.clientNum, CONTENTS_SOLID, qfalse, 0, 0);
+
+	if (!floorTrace.startsolid &&
+		!floorTrace.allsolid &&
+		floorTrace.fraction < 1.0f &&
+		floorZOut)
+	{
+		*floorZOut = floorTrace.endpos[2];
+	}
+
+	return (!floorTrace.startsolid && !floorTrace.allsolid && floorTrace.fraction < 1.0f) ? qtrue : qfalse;
 }
 
 //Vertical wallruns (repeat jump inputs while making wall contact) are only wanted as
@@ -11240,6 +11284,7 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 					trap->EA_MoveRight(bs->client);
 			}
 		}
+	}
 		//A scheduled pk/ptk flipkick jump: we pulled (or selected pull during a throw)
 		//and want to leap exactly once the enemy is closing into kick range - not the
 		//instant we pull, which hopped way too soon and missed the kick. A positive time
