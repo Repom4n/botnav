@@ -16228,7 +16228,14 @@ static void NewBotAI_MaintainWaypointFallbackEnemyLock(bot_state_t *bs)
 	}
 
 	bs->enemySeenTime = level.time + ENEMY_FORGET_MS;
-	NewBotAI_ApplyRecoveryViewLock(bs, qfalse);
+	if (NewBotAI_IsRecoveryMovementActive(bs))
+	{
+		NewBotAI_ApplyRecoveryViewLock(bs, qfalse);
+	}
+	else if (bs->frame_Enemy_Vis)
+	{
+		NewBotAI_GetAim(bs);
+	}
 }
 
 static qboolean NewBotAI_CanUseWaypointFallbackInCombat(bot_state_t *bs)
@@ -16524,7 +16531,6 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 
 	if (bot_navigation.integer)
 	{
-		const qboolean preserveRecoveryHeadingYaw = (NewBotAI_GetRecoveryMode() >= 2) ? qtrue : qfalse;
 		const qboolean recoveryContext = NewBotAI_IsRecoveryNavigationContext(bs);
 		const qboolean canUseWaypointFallback = (recoveryContext && NewBotAI_GetRecoveryMode() > 0) ? NewBotAI_CanUseWaypointFallbackInCombat(bs) : qfalse;
 		const qboolean shouldFallbackToWaypoints = recoveryContext ? NewBotAI_ShouldFallbackToWaypoints(bs) : qfalse;
@@ -16588,8 +16594,18 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 			(void)NewBotAI_UpdateWaypointHeadingGoal(bs);
 			NewBotAI_ClearLostSightCombatInput(bs);
 			NewBotAI_MaintainWaypointFallbackEnemyLock(bs);
-			NewBotAI_RunNavigationOrAlone(bs, thinktime);
-			NewBotAI_ApplyRecoveryViewLock(bs, preserveRecoveryHeadingYaw);
+			if (bs->frame_Enemy_Vis)
+			{
+				StandardBotAI(bs, thinktime);
+			}
+			else
+			{
+				NewBotAI_RunNavigationOrAlone(bs, thinktime);
+			}
+			bs->ideal_viewangles[PITCH] = 0.0f;
+			bs->goalAngles[PITCH] = 0.0f;
+			bs->ideal_viewangles[ROLL] = 0.0f;
+			bs->goalAngles[ROLL] = 0.0f;
 			return;
 		}
 
@@ -16603,8 +16619,18 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 			bs->navHoldGoalValid = qfalse;
 			NewBotAI_ClearLostSightCombatInput(bs);
 			NewBotAI_MaintainWaypointFallbackEnemyLock(bs);
-			NewBotAI_RunNavigationOrAlone(bs, thinktime);
-			NewBotAI_ApplyRecoveryViewLock(bs, (NewBotAI_GetRecoveryMode() >= 2) ? qtrue : qfalse);
+			if (bs->frame_Enemy_Vis)
+			{
+				StandardBotAI(bs, thinktime);
+			}
+			else
+			{
+				NewBotAI_RunNavigationOrAlone(bs, thinktime);
+			}
+			bs->ideal_viewangles[PITCH] = 0.0f;
+			bs->goalAngles[PITCH] = 0.0f;
+			bs->ideal_viewangles[ROLL] = 0.0f;
+			bs->goalAngles[ROLL] = 0.0f;
 			return;
 		}
 	}
@@ -16628,8 +16654,18 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		bs->navHoldGoalValid = qfalse;
 		NewBotAI_ClearLostSightCombatInput(bs);
 		NewBotAI_MaintainWaypointFallbackEnemyLock(bs);
-		NewBotAI_RunNavigationOrAlone(bs, thinktime);
-		NewBotAI_ApplyRecoveryViewLock(bs, preserveRecoveryHeadingYaw);
+		if (bs->frame_Enemy_Vis)
+		{
+			StandardBotAI(bs, thinktime);
+		}
+		else
+		{
+			NewBotAI_RunNavigationOrAlone(bs, thinktime);
+		}
+		bs->ideal_viewangles[PITCH] = 0.0f;
+		bs->goalAngles[PITCH] = 0.0f;
+		bs->ideal_viewangles[ROLL] = 0.0f;
+		bs->goalAngles[ROLL] = 0.0f;
 		return;
 	}
 	if (!bs->frame_Enemy_Vis &&
