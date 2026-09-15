@@ -18078,16 +18078,16 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 		if (!NewBotAI_IsDuelStrafeSuppressed(bs) &&
 			!NewBotAI_IsRecoveryMovementActive(bs) &&
 			!NewBotAI_HasExclusiveFlipkickMovement(bs) &&
-			bs->meleeStrafeDir && meleestrafe && bs->meleeStrafeDisable < level.time)
-		{
-			trap->EA_MoveLeft(bs->client);
-		}
-		else if (!NewBotAI_IsDuelStrafeSuppressed(bs) &&
-			!NewBotAI_IsRecoveryMovementActive(bs) &&
-			!NewBotAI_HasExclusiveFlipkickMovement(bs) &&
 			meleestrafe && bs->meleeStrafeDisable < level.time)
 		{
-			trap->EA_MoveRight(bs->client);
+			if (bs->meleeStrafeDir)
+			{
+				trap->EA_MoveLeft(bs->client);
+			}
+			else
+			{
+				trap->EA_MoveRight(bs->client);
+			}
 		}
 
 		if (BotTrace_Jump(bs, bs->goalPosition))
