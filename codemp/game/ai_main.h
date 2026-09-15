@@ -224,6 +224,7 @@ typedef struct bot_state_s
 	vec3_t				lastEnemySpotted;
 	vec3_t				hereWhenSpotted;
 	int					lastVisibleEnemyIndex;
+	int					lastVisibleEnemyTime;
 	int					hitSpotted;
 
 	int				wpDirection;

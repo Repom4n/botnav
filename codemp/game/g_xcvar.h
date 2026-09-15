@@ -392,28 +392,10 @@ XCVAR_DEF( bot_drainbias,				"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_drainlockbias,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_lightningbias,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_lightningdistance,		"400",		NULL,				CVAR_ARCHIVE,									qtrue )
-// Master toggle for NewBotAI recovery navigation cycling between waypoint routing and direct pursuit.
-XCVAR_DEF( bot_nav_recovery,			"1",			NULL,				CVAR_ARCHIVE,									qtrue )
 // How long (ms) recovery mode should stay in waypoint routing before forcing direct pursuit.
 XCVAR_DEF( bot_nav_waypointphase,		"4000",		NULL,				CVAR_ARCHIVE,									qtrue )
 // How long (ms) recovery mode should keep walking a chosen adventure heading after leaving waypoint order.
 XCVAR_DEF( bot_nav_adventuretime,		"2500",		NULL,				CVAR_ARCHIVE,									qtrue )
-// How long (ms) a bot can stay stuck/touching walls in recovery mode before returning to waypoint routing.
-XCVAR_DEF( bot_nav_stucktimeout,		"5000",		NULL,				CVAR_ARCHIVE,									qtrue )
-// Recovery/no-waypoint yaw turn speed in degrees per second when unsticking.
-XCVAR_DEF( bot_nav_recoveryyawspeed,	"50",			NULL,				CVAR_ARCHIVE,									qtrue )
-// Enable random yaw-direction escape behavior when no waypoint trail exists.
-XCVAR_DEF( bot_nav_nowp_randomyaw,		"1",			NULL,				CVAR_ARCHIVE,									qtrue )
-// How often (ms) no-waypoint random yaw direction is rerolled while stuck.
-XCVAR_DEF( bot_nav_nowp_yawinterval,	"800",			NULL,				CVAR_ARCHIVE,									qtrue )
-// Allow non-lethal ledge drops while out of combat.
-XCVAR_DEF( bot_nav_ledge_safe_noncombat, "1",			NULL,				CVAR_ARCHIVE,									qtrue )
-// Allow non-lethal ledge drops while in combat.
-XCVAR_DEF( bot_nav_ledge_safe_combat,	"1",			NULL,				CVAR_ARCHIVE,									qtrue )
-// Treat drops greater than this height (units) as lethal for ledge safety checks.
-XCVAR_DEF( bot_nav_ledge_lethalheight,	"200",			NULL,				CVAR_ARCHIVE,									qtrue )
-// In combat, bias strafe direction away from nearby walls without interrupting combat logic.
-XCVAR_DEF( bot_nav_wallstrafe_away,		"1",			NULL,				CVAR_ARCHIVE,									qtrue )
 // Extra strafe frequency (0-100) while lightning is active, helping avoid incoming lightning.
 XCVAR_DEF( bot_lightningstrafebonus,	"20",			NULL,				CVAR_ARCHIVE,									qtrue )
 // Suppress bot strafe input for this many ms after offering/accepting a duel.
