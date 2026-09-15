@@ -205,6 +205,7 @@ static int NewBotAI_GetRecoveryWaypointPhaseMs(void);
 static int NewBotAI_GetRecoveryAdventureTimeMs(void);
 static int NewBotAI_GetRecoveryMode(void);
 static int NewBotAI_GetRecoveryYawIntervalMs(void);
+static int NewBotAI_GetWallRedirectIntervalMs(void);
 static int NewBotAI_GetRecoveryStuckTimeoutMs(void);
 static qboolean NewBotAI_ShouldUseWaypointRecoveryNow(bot_state_t *bs);
 static qboolean NewBotAI_GetDirectRecoveryMoveDir(bot_state_t *bs, vec3_t outDir);
@@ -219,6 +220,7 @@ static qboolean NewBotAI_RunWaypointHeadingHold(bot_state_t *bs);
 static qboolean NewBotAI_StartWaypointHeadingHold(bot_state_t *bs);
 static qboolean NewBotAI_ApplyWaypointHeadingHold(bot_state_t *bs);
 static qboolean NewBotAI_UpdateWaypointHeadingGoal(bot_state_t *bs);
+static qboolean NewBotAI_FindWaypointAdventureGoal(bot_state_t *bs, vec3_t preferredDir, vec3_t outGoal);
 static int BotGetNewBotAITargetMode(void);
 static qboolean BotTargetModeAllowsBotEnemies(int targetMode);
 
@@ -5772,14 +5774,42 @@ int BotFallbackNavigation(bot_state_t *bs)
 	{
 		if (gWPNum <= 0)
 		{
+			vec3_t adventureDir;
+
 			if (bs->navRecoverStuckSince <= 0)
 			{
 				bs->navRecoverStuckSince = level.time;
 			}
-			if (bs->customNavReverseTime < level.time ||
-				bs->navRecoverStuckSince <= level.time - NewBotAI_GetRecoveryStuckTimeoutMs())
+			VectorCopy(fwd, adventureDir);
+			adventureDir[2] = 0.0f;
+			if (VectorNormalize(adventureDir) > 0.0f &&
+				NewBotAI_FindWaypointAdventureGoal(bs, adventureDir, trto))
 			{
-				const int rerollMs = NewBotAI_GetRecoveryYawIntervalMs();
+				VectorSubtract(trto, bs->origin, adventureDir);
+				adventureDir[2] = 0.0f;
+				if (VectorNormalize(adventureDir) > 0.0f)
+				{
+					vectoangles(adventureDir, b_angle);
+					bs->goalAngles[YAW] = AngleNormalize360(b_angle[YAW]);
+					bs->goalAngles[PITCH] = 0.0f;
+					bs->goalAngles[ROLL] = 0.0f;
+					if (bs->wallAvoidNextTime <= level.time)
+					{
+						const int rerollMs = NewBotAI_GetWallRedirectIntervalMs();
+
+						bs->wallAvoidNextTime = level.time + rerollMs;
+						bs->customNavReverseTime = level.time + rerollMs;
+						NewBotAI_StartEscapeYawOverride(bs, rerollMs);
+					}
+					VectorCopy(trto, bs->goalPosition);
+					return 1;
+				}
+			}
+			if (bs->wallAvoidNextTime <= level.time &&
+				(bs->customNavReverseTime < level.time ||
+				bs->navRecoverStuckSince <= level.time - NewBotAI_GetRecoveryStuckTimeoutMs()))
+			{
+				const int rerollMs = NewBotAI_GetWallRedirectIntervalMs();
 				const float baseTurn = NewBotAI_GetRecoveryYawSpeedDegPerSec() * 0.5f;
 				float turn = baseTurn;
 				if (turn < 20.0f)
@@ -5789,9 +5819,17 @@ int BotFallbackNavigation(bot_state_t *bs)
 				turn *= (Q_irand(0, 1) ? 1.0f : -1.0f);
 				bs->goalAngles[YAW] = AngleNormalize360(bs->goalAngles[YAW] + turn);
 				bs->customNavReverseTime = level.time + rerollMs;
+				bs->wallAvoidNextTime = level.time + rerollMs;
 				bs->navRecoverStuckSince = level.time;
 				NewBotAI_StartEscapeYawOverride(bs, rerollMs);
 			}
+			VectorCopy(bs->goalAngles, b_angle);
+			AngleVectors(b_angle, fwd, NULL, NULL);
+			trto[0] = bs->origin[0] + fwd[0]*96;
+			trto[1] = bs->origin[1] + fwd[1]*96;
+			trto[2] = bs->origin[2];
+			VectorCopy(trto, bs->goalPosition);
+			return 1;
 		}
 		else if (bs->customNavReverseTime < level.time)
 		{
@@ -7254,6 +7292,18 @@ static int NewBotAI_GetWallAvoidCooldownMs(void)
 	return Com_Clampi(0, 30000, bot_redirectcooldown.integer);
 }
 
+static int NewBotAI_GetWallRedirectIntervalMs(void)
+{
+	const int cooldownMs = NewBotAI_GetWallAvoidCooldownMs();
+
+	if (cooldownMs > 0)
+	{
+		return cooldownMs;
+	}
+
+	return NewBotAI_GetRecoveryYawIntervalMs();
+}
+
 static float NewBotAI_GetWallEscapeTurnAngle(void)
 {
 	const float yawTurn = (float)Q_irand(NEWBOTAI_WALL_ESCAPE_TURN_MIN_DEG, NEWBOTAI_WALL_ESCAPE_TURN_MAX_DEG);
@@ -8572,7 +8622,8 @@ static qboolean NewBotAI_ClassifyForwardObstacle(bot_state_t *bs, const vec3_t m
 	}
 
 	VectorCopy(bs->cur_ps.origin, stepStart);
-	VectorCopy(end, stepEnd);
+	VectorCopy(tr.endpos, stepEnd);
+	VectorMA(stepEnd, 8.0f, dir, stepEnd);
 	stepStart[2] += NEWBOTAI_WALL_STEP_HEIGHT;
 	stepEnd[2] += NEWBOTAI_WALL_STEP_HEIGHT;
 	JP_Trace(&stepTrace, stepStart, mins, maxs, stepEnd, bs->cur_ps.clientNum, CONTENTS_SOLID, qfalse, 0, 0);
@@ -8592,7 +8643,8 @@ static qboolean NewBotAI_ClassifyForwardObstacle(bot_state_t *bs, const vec3_t m
 	}
 
 	VectorCopy(bs->cur_ps.origin, hopStart);
-	VectorCopy(end, hopEnd);
+	VectorCopy(tr.endpos, hopEnd);
+	VectorMA(hopEnd, NEWBOTAI_WALL_CONTACT_PROBE_DISTANCE, dir, hopEnd);
 	hopStart[2] += NEWBOTAI_WALL_HOP_HEIGHT;
 	hopEnd[2] += NEWBOTAI_WALL_HOP_HEIGHT;
 	JP_Trace(&hopTrace, hopStart, mins, maxs, hopEnd, bs->cur_ps.clientNum, CONTENTS_SOLID, qfalse, 0, 0);
@@ -11268,6 +11320,10 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 
 					//Com_Printf("Touching Wall\n");
 					bs->ideal_viewangles[YAW] = AngleNormalize360(bs->ideal_viewangles[YAW] + NewBotAI_GetWallEscapeTurnAngle());
+					bs->ideal_viewangles[PITCH] = 0.0f;
+					bs->goalAngles[PITCH] = 0.0f;
+					bs->ideal_viewangles[ROLL] = 0.0f;
+					bs->goalAngles[ROLL] = 0.0f;
 					NewBotAI_StartEscapeYawOverride(bs, NewBotAI_GetWallAvoidCooldownMs());
 
 
@@ -11436,6 +11492,10 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 			//Break two-wall stalls with a small yaw drift and forward input
 			//instead of lateral obstacle avoidance during combat.
 			bs->ideal_viewangles[YAW] += Q_irand(20, 45) * ((level.framenum & 1) ? 1.0f : -1.0f);
+			bs->ideal_viewangles[PITCH] = 0.0f;
+			bs->goalAngles[PITCH] = 0.0f;
+			bs->ideal_viewangles[ROLL] = 0.0f;
+			bs->goalAngles[ROLL] = 0.0f;
 			if (bs->cur_ps.groundEntityNum != ENTITYNUM_NONE &&
 				bs->wallAvoidNextTime <= level.time)
 			{
@@ -15888,7 +15948,8 @@ static qboolean NewBotAI_TryNoWaypointYawEscape(bot_state_t *bs, vec3_t goalOrig
 	trace_t tr;
 	float horizontalSpeedSquared;
 	float yawTurn;
-	const int yawIntervalMs = NewBotAI_GetRecoveryYawIntervalMs();
+	qboolean startedRedirect = qfalse;
+	const int redirectHoldMs = NewBotAI_GetWallRedirectIntervalMs();
 
 	if (gWPNum > 0)
 	{
@@ -15942,10 +16003,21 @@ static qboolean NewBotAI_TryNoWaypointYawEscape(bot_state_t *bs, vec3_t goalOrig
 		if (VectorNormalize(toGoal) > 0.0f &&
 			!BotNav_CheckFallingHazard(bs, toGoal, qtrue))
 		{
+			const qboolean startRedirect = (bs->wallAvoidNextTime <= level.time) ? qtrue : qfalse;
+
 			vectoangles(toGoal, mins);
 			bs->ideal_viewangles[YAW] = mins[YAW];
 			bs->ideal_viewangles[PITCH] = 0.0f;
-			NewBotAI_StartEscapeYawOverride(bs, yawIntervalMs);
+			bs->goalAngles[YAW] = mins[YAW];
+			bs->goalAngles[PITCH] = 0.0f;
+			bs->ideal_viewangles[ROLL] = 0.0f;
+			bs->goalAngles[ROLL] = 0.0f;
+			if (startRedirect)
+			{
+				bs->wallAvoidNextTime = level.time + redirectHoldMs;
+				bs->customNavReverseTime = level.time + redirectHoldMs;
+				NewBotAI_StartEscapeYawOverride(bs, redirectHoldMs);
+			}
 			trap->EA_MoveForward(bs->client);
 			if (bs->cur_ps.groundEntityNum != ENTITYNUM_NONE &&
 				bs->wallAvoidNextTime <= level.time)
@@ -15962,13 +16034,17 @@ static qboolean NewBotAI_TryNoWaypointYawEscape(bot_state_t *bs, vec3_t goalOrig
 	{
 		const float recoveryYawSpeed = NewBotAI_GetRecoveryYawSpeedDegPerSec();
 
-		if (yawIntervalMs <= 0 || recoveryYawSpeed <= 0.0f)
+		if (redirectHoldMs <= 0 || recoveryYawSpeed <= 0.0f)
 		{
 			return qfalse;
 		}
-		if (bs->customNavReverseTime <= level.time)
+		if (bs->wallAvoidNextTime > level.time)
 		{
-			int rerollMs = yawIntervalMs;
+			yawTurn = 0.0f;
+		}
+		else if (bs->customNavReverseTime <= level.time)
+		{
+			int rerollMs = redirectHoldMs;
 			float slowTurn = recoveryYawSpeed * 0.5f;
 			if (slowTurn < 15.0f)
 			{
@@ -15976,18 +16052,12 @@ static qboolean NewBotAI_TryNoWaypointYawEscape(bot_state_t *bs, vec3_t goalOrig
 			}
 			yawTurn = slowTurn * (Q_irand(0, 1) ? 1.0f : -1.0f);
 			bs->customNavReverseTime = level.time + rerollMs;
+			bs->wallAvoidNextTime = level.time + rerollMs;
+			startedRedirect = qtrue;
 		}
 		else
 		{
-			yawTurn = recoveryYawSpeed * 0.25f;
-			if (yawTurn < 10.0f)
-			{
-				yawTurn = 10.0f;
-			}
-			if (level.framenum & 1)
-			{
-				yawTurn = -yawTurn;
-			}
+			yawTurn = 0.0f;
 		}
 	}
 	if (NewBotAI_HandleClimbableForwardObstacle(bs, toGoal))
@@ -16003,8 +16073,16 @@ static qboolean NewBotAI_TryNoWaypointYawEscape(bot_state_t *bs, vec3_t goalOrig
 	{
 		return qfalse;
 	}
-	NewBotAI_StartEscapeYawOverride(bs, yawIntervalMs);
+	bs->ideal_viewangles[PITCH] = 0.0f;
+	bs->goalAngles[PITCH] = 0.0f;
+	bs->ideal_viewangles[ROLL] = 0.0f;
+	bs->goalAngles[ROLL] = 0.0f;
+	if (startedRedirect)
+	{
+		NewBotAI_StartEscapeYawOverride(bs, redirectHoldMs);
+	}
 	bs->ideal_viewangles[YAW] = escapeAngles[YAW];
+	bs->goalAngles[YAW] = escapeAngles[YAW];
 	trap->EA_MoveForward(bs->client);
 	if (bs->cur_ps.groundEntityNum != ENTITYNUM_NONE &&
 		bs->wallAvoidNextTime <= level.time)
