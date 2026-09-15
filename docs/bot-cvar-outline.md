@@ -114,7 +114,7 @@ Notes:
 | Cvar | Default | Description |
 |------|---------|-------------|
 | `bot_nochat` | `0` | Disable bot chat. |
-| `bot_yawswitch` | `10` | Waypoint yaw switch threshold. |
+| `bot_yawswitch` | `10` | Legacy/unused cvar; current wall-escape yaw behavior is hardcoded in `ai_main.c`. |
 | `bot_forcepowers` | `1` | Enable bots using force powers. |
 | `bot_forgimmick` | `0` | Force gimmick mode. |
 | `bot_honorableduelacceptance` | `0` | Accept duel challenges honorably. |
