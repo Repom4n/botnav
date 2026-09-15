@@ -7394,6 +7394,27 @@ static void NewBotAI_ClearLostSightCombatInput(bot_state_t *bs)
 	NewBotAI_ClearLightningBurst(bs);
 }
 
+static void NewBotAI_ClearRecoveryLoopInputs(bot_state_t *bs)
+{
+	if (!bs)
+	{
+		return;
+	}
+
+	bs->doAttack = 0;
+	bs->doAltAttack = 0;
+	bs->doForcePush = 0;
+	bs->drainHoldTime = 0;
+	bs->flipkickInputTime = 0;
+	bs->flipkickJumpHeld = qfalse;
+	bs->pullKickJumpTime = 0;
+	bs->gripkickLookDownUntil = 0;
+	bs->gripkickRestackDir = 0;
+	bs->gripkickDwellUntil = 0;
+	bs->gripkickAttemptTime = 0;
+	bs->nextHopTime = 0;
+}
+
 static qboolean NewBotAI_HasValidCurrentEnemy(bot_state_t *bs)
 {
 	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
@@ -8579,7 +8600,7 @@ static qboolean NewBotAI_ClassifyForwardObstacle(bot_state_t *bs, const vec3_t m
 	trace_t hopTrace;
 	float stepFloorZ = 0.0f;
 	vec3_t dir, end, thinStart, thinEnd, stepStart, stepEnd, hopStart, hopEnd;
-	vec3_t mins, maxs;
+	vec3_t mins, maxs, thinMins, thinMaxs;
 
 	if (requiresHopOut)
 	{
@@ -8608,6 +8629,12 @@ static qboolean NewBotAI_ClassifyForwardObstacle(bot_state_t *bs, const vec3_t m
 	maxs[0] = 15;
 	maxs[1] = 15;
 	maxs[2] = 32;
+	thinMins[0] = -2.0f;
+	thinMins[1] = -2.0f;
+	thinMins[2] = 0.0f;
+	thinMaxs[0] = 2.0f;
+	thinMaxs[1] = 2.0f;
+	thinMaxs[2] = 8.0f;
 
 	VectorMA(bs->cur_ps.origin, NEWBOTAI_WALL_CONTACT_PROBE_DISTANCE, dir, end);
 	JP_Trace(&tr, bs->cur_ps.origin, mins, maxs, end, bs->cur_ps.clientNum, CONTENTS_SOLID, qfalse, 0, 0);
@@ -8631,7 +8658,7 @@ static qboolean NewBotAI_ClassifyForwardObstacle(bot_state_t *bs, const vec3_t m
 	}
 	VectorMA(tr.endpos, -2.0f, dir, thinStart);
 	VectorMA(thinStart, 8.0f, dir, thinEnd);
-	JP_Trace(&thinTrace, thinStart, mins, maxs, thinEnd, bs->cur_ps.clientNum, CONTENTS_SOLID, qfalse, 0, 0);
+	JP_Trace(&thinTrace, thinStart, thinMins, thinMaxs, thinEnd, bs->cur_ps.clientNum, CONTENTS_SOLID, qfalse, 0, 0);
 	if (!thinTrace.startsolid &&
 		!thinTrace.allsolid &&
 		thinTrace.fraction >= 1.0f)
@@ -16604,12 +16631,36 @@ static qboolean NewBotAI_CanUseWaypointFallbackInCombat(bot_state_t *bs)
 	return NewBotAI_IsDirectPathToEnemyBlocked(bs) || progressStalled;
 }
 
+static qboolean NewBotAI_EnterWaypointRecovery(bot_state_t *bs, int durationMs, qboolean createTrailWaypoint)
+{
+	if (!bs || durationMs <= 0)
+	{
+		return qfalse;
+	}
+
+	if (createTrailWaypoint)
+	{
+		NewBotAI_CreateRecoveryTrailWaypoint(bs);
+	}
+	bs->navRecoverMode = NEWBOTAI_NAV_RECOVERY_MODE_WAYPOINT;
+	bs->navRecoverModeUntil = level.time + durationMs;
+	bs->navRecoverStuckSince = 0;
+	bs->navHoldUntil = 0;
+	bs->navBuildWaypointTrail = qfalse;
+	VectorClear(bs->navHoldDirection);
+	bs->navHoldGoalValid = qfalse;
+	VectorClear(bs->navHoldGoal);
+	return qtrue;
+}
+
 static qboolean NewBotAI_ForceRecoverFromStalledNavigation(bot_state_t *bs)
 {
 	const int redirectHoldMs = NewBotAI_GetWallRedirectIntervalMs();
 	float horizontalSpeedSquared;
 	float normalizedPitch;
 	qboolean lookDownOrForceLoop;
+	vec3_t holdAngles;
+	vec3_t holdDir;
 
 	if (!bs || NewBotAI_GetRecoveryMode() <= 0)
 	{
@@ -16623,7 +16674,7 @@ static qboolean NewBotAI_ForceRecoverFromStalledNavigation(bot_state_t *bs)
 		bs->drainHoldTime > level.time ||
 		(bs->cur_ps.fd.forcePowersActive & ((1 << FP_DRAIN) | (1 << FP_GRIP))) ||
 		normalizedPitch >= 70.0f || normalizedPitch <= -70.0f) ? qtrue : qfalse;
-	if (bs->navRecoverMode == NEWBOTAI_NAV_RECOVERY_MODE_DIRECT)
+	if (bs->navRecoverMode != NEWBOTAI_NAV_RECOVERY_MODE_HOLD)
 	{
 		return qfalse;
 	}
@@ -16638,27 +16689,33 @@ static qboolean NewBotAI_ForceRecoverFromStalledNavigation(bot_state_t *bs)
 	{
 		return qfalse;
 	}
+	if (redirectHoldMs <= 0)
+	{
+		return qfalse;
+	}
+	VectorClear(holdAngles);
+	holdAngles[YAW] = bs->ideal_viewangles[YAW];
+	AngleVectors(holdAngles, holdDir, NULL, NULL);
+	holdDir[2] = 0.0f;
+	if (VectorNormalize(holdDir) <= 0.0f)
+	{
+		return qfalse;
+	}
 
 	NewBotAI_ResetRecoveryMovement(bs);
-	bs->doAttack = 0;
-	bs->doAltAttack = 0;
-	bs->doForcePush = 0;
-	bs->drainHoldTime = 0;
-	bs->flipkickInputTime = 0;
-	bs->flipkickJumpHeld = qfalse;
-	bs->pullKickJumpTime = 0;
-	bs->gripkickLookDownUntil = 0;
-	bs->gripkickRestackDir = 0;
-	bs->gripkickDwellUntil = 0;
-	bs->gripkickAttemptTime = 0;
-	bs->nextHopTime = 0;
+	NewBotAI_ClearRecoveryLoopInputs(bs);
 	NewBotAI_ApplyRecoveryViewLock(bs, qtrue);
-	if (redirectHoldMs > 0)
-	{
-		bs->wallAvoidNextTime = level.time + redirectHoldMs;
-		bs->customNavReverseTime = level.time + redirectHoldMs;
-		NewBotAI_StartEscapeYawOverride(bs, redirectHoldMs);
-	}
+	VectorCopy(holdDir, bs->navHoldDirection);
+	bs->navRecoverMode = NEWBOTAI_NAV_RECOVERY_MODE_HOLD;
+	bs->navHoldUntil = level.time + redirectHoldMs;
+	bs->navRecoverStuckSince = level.time;
+	bs->navBuildWaypointTrail = qfalse;
+	VectorCopy(bs->origin, bs->navRecoverOrigin);
+	VectorClear(bs->navHoldGoal);
+	bs->navHoldGoalValid = qfalse;
+	bs->wallAvoidNextTime = level.time + redirectHoldMs;
+	bs->customNavReverseTime = level.time + redirectHoldMs;
+	NewBotAI_StartEscapeYawOverride(bs, redirectHoldMs);
 
 	return qtrue;
 }
@@ -16944,15 +17001,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 			}
 			else if (canUseWaypointFallback)
 			{
-				if (waypointPhaseMs > 0)
-				{
-					bs->navRecoverMode = NEWBOTAI_NAV_RECOVERY_MODE_WAYPOINT;
-					bs->navRecoverModeUntil = level.time + waypointPhaseMs;
-					bs->navRecoverStuckSince = 0;
-					bs->navHoldGoalValid = qfalse;
-					VectorClear(bs->navHoldGoal);
-				}
-				else
+				if (!NewBotAI_EnterWaypointRecovery(bs, waypointPhaseMs, qfalse))
 				{
 					NewBotAI_ResetRecoveryMovement(bs);
 				}
@@ -16979,13 +17028,10 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 					shouldFallbackToWaypoints &&
 					waypointPhaseMs > 0)
 				{
-					NewBotAI_CreateRecoveryTrailWaypoint(bs);
-					bs->navRecoverMode = NEWBOTAI_NAV_RECOVERY_MODE_WAYPOINT;
-					bs->navRecoverModeUntil = level.time + waypointPhaseMs;
-					bs->navHoldUntil = 0;
-					bs->navRecoverStuckSince = 0;
-					bs->navHoldGoalValid = qfalse;
-					VectorClear(bs->navHoldGoal);
+					if (!NewBotAI_EnterWaypointRecovery(bs, waypointPhaseMs, qtrue))
+					{
+						NewBotAI_ResetRecoveryMovement(bs);
+					}
 				}
 				else
 				{
@@ -16994,16 +17040,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 			}
 			else
 			{
-				if (waypointPhaseMs > 0)
-				{
-					NewBotAI_CreateRecoveryTrailWaypoint(bs);
-					bs->navRecoverMode = NEWBOTAI_NAV_RECOVERY_MODE_WAYPOINT;
-					bs->navRecoverModeUntil = level.time + waypointPhaseMs;
-					bs->navRecoverStuckSince = 0;
-					bs->navHoldGoalValid = qfalse;
-					VectorClear(bs->navHoldGoal);
-				}
-				else
+				if (!NewBotAI_EnterWaypointRecovery(bs, waypointPhaseMs, qtrue))
 				{
 					NewBotAI_ResetRecoveryMovement(bs);
 				}
@@ -17034,14 +17071,9 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 
 		if (recoveryContext && canUseWaypointFallback && shouldFallbackToWaypoints)
 		{
-			if (waypointPhaseMs > 0)
+			const int waypointFallbackDuration = (waypointPhaseMs > 0) ? waypointPhaseMs : 1;
+			if (NewBotAI_EnterWaypointRecovery(bs, waypointFallbackDuration, qfalse))
 			{
-				bs->navRecoverMode = NEWBOTAI_NAV_RECOVERY_MODE_WAYPOINT;
-				bs->navRecoverModeUntil = level.time + waypointPhaseMs;
-				bs->navHoldUntil = 0;
-				VectorClear(bs->navHoldDirection);
-				VectorClear(bs->navHoldGoal);
-				bs->navHoldGoalValid = qfalse;
 				NewBotAI_ClearLostSightCombatInput(bs);
 				NewBotAI_MaintainWaypointFallbackEnemyLock(bs);
 				if (bs->frame_Enemy_Vis && NewBotAI_HasValidCurrentEnemy(bs))
@@ -17067,45 +17099,6 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	else
 	{
 		NewBotAI_ResetRecoveryMovement(bs);
-	}
-
-	if (bs->navRecoverMode == NEWBOTAI_NAV_RECOVERY_MODE_DIRECT &&
-		NewBotAI_IsRecoveryNavigationContext(bs) &&
-		NewBotAI_GetRecoveryMode() > 0 &&
-		NewBotAI_CanUseWaypointFallbackInCombat(bs) &&
-		NewBotAI_ShouldFallbackToWaypoints(bs))
-	{
-		const int waypointPhaseMs = NewBotAI_GetRecoveryWaypointPhaseMs();
-
-		if (waypointPhaseMs > 0)
-		{
-			bs->navRecoverMode = NEWBOTAI_NAV_RECOVERY_MODE_WAYPOINT;
-			bs->navRecoverModeUntil = level.time + waypointPhaseMs;
-			bs->navRecoverStuckSince = 0;
-			bs->navHoldUntil = 0;
-			VectorClear(bs->navHoldDirection);
-			VectorClear(bs->navHoldGoal);
-			bs->navHoldGoalValid = qfalse;
-			NewBotAI_ClearLostSightCombatInput(bs);
-			NewBotAI_MaintainWaypointFallbackEnemyLock(bs);
-			if (bs->frame_Enemy_Vis && NewBotAI_HasValidCurrentEnemy(bs))
-			{
-				StandardBotAI(bs, thinktime);
-			}
-			else
-			{
-				NewBotAI_RunNavigationOrAlone(bs, thinktime);
-			}
-			bs->ideal_viewangles[PITCH] = 0.0f;
-			bs->goalAngles[PITCH] = 0.0f;
-			bs->ideal_viewangles[ROLL] = 0.0f;
-			bs->goalAngles[ROLL] = 0.0f;
-			return;
-		}
-		else
-		{
-			NewBotAI_ResetRecoveryMovement(bs);
-		}
 	}
 
 	if (!NewBotAI_HasValidCurrentEnemy(bs))
@@ -18510,27 +18503,20 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 		}
 	}
 
-	if (bs->navRecoverMode == NEWBOTAI_NAV_RECOVERY_MODE_HOLD)
+	if (bs->navRecoverMode == NEWBOTAI_NAV_RECOVERY_MODE_HOLD &&
+		NewBotAI_GetRecoveryMode() > 0)
 	{
-		if (NewBotAI_GetRecoveryMode() <= 0)
-		{
-			NewBotAI_ResetRecoveryMovement(bs);
-		}
-		else if (!NewBotAI_ApplyWaypointHeadingHold(bs))
+		if (!NewBotAI_ApplyWaypointHeadingHold(bs))
 		{
 			if (NewBotAI_CanUseWaypointFallbackInCombat(bs))
 			{
 				const int waypointPhaseMs = NewBotAI_GetRecoveryWaypointPhaseMs();
-				if (waypointPhaseMs > 0)
+				if (waypointPhaseMs > 0 &&
+					!NewBotAI_EnterWaypointRecovery(bs, waypointPhaseMs, qtrue))
 				{
-					NewBotAI_CreateRecoveryTrailWaypoint(bs);
-					bs->navRecoverMode = NEWBOTAI_NAV_RECOVERY_MODE_WAYPOINT;
-					bs->navRecoverModeUntil = level.time + waypointPhaseMs;
-					bs->navRecoverStuckSince = 0;
-					bs->navHoldGoalValid = qfalse;
-					VectorClear(bs->navHoldGoal);
+					NewBotAI_ResetRecoveryMovement(bs);
 				}
-				else
+				else if (waypointPhaseMs <= 0)
 				{
 					NewBotAI_ResetRecoveryMovement(bs);
 				}
@@ -18540,6 +18526,10 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 				NewBotAI_ResetRecoveryMovement(bs);
 			}
 		}
+	}
+	else if (bs->navRecoverMode == NEWBOTAI_NAV_RECOVERY_MODE_HOLD)
+	{
+		NewBotAI_ResetRecoveryMovement(bs);
 	}
 
 	if (bs->beStill < level.time && !WaitingForNow(bs, bs->goalPosition) && !fjHalt)
