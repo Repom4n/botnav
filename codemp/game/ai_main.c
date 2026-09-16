@@ -223,6 +223,10 @@ static qboolean NewBotAI_UpdateWaypointHeadingGoal(bot_state_t *bs);
 static qboolean NewBotAI_FindWaypointAdventureGoal(bot_state_t *bs, vec3_t preferredDir, vec3_t outGoal);
 static int BotGetNewBotAITargetMode(void);
 static qboolean BotTargetModeAllowsBotEnemies(int targetMode);
+static int BotGetTargetTimeoutMs(void);
+static int BotGetWaypointLinearSkipAheadMax(void);
+static qboolean NewBotAI_ShouldRetainLostSightTarget(bot_state_t *bs, gentity_t *enemy);
+static void NewBotAI_ClearCurrentEnemyLock(bot_state_t *bs);
 
 #define NEWBOTAI_DRAIN_TICK_MSEC 100
 #define NEWBOTAI_COMBAT_DISENGAGE_COOLDOWN_MS 2500
@@ -230,8 +234,8 @@ static qboolean BotTargetModeAllowsBotEnemies(int targetMode);
 #define NEWBOTAI_COMBAT_WAYPOINT_SEPARATION_SQ (NEWBOTAI_COMBAT_WAYPOINT_SEPARATION * NEWBOTAI_COMBAT_WAYPOINT_SEPARATION)
 #define NEWBOTAI_LOST_TARGET_GRACE_MS 3000
 #define NEWBOTAI_TARGET_COMMIT_DISTANCE 768.0f
-// Small fixed look-ahead to keep local trail motion linear without skipping too far.
-#define NEWBOTAI_WAYPOINT_LINEAR_SKIP_AHEAD_MAX 3
+// Default look-ahead to keep local trail motion linear without skipping too far.
+#define NEWBOTAI_WAYPOINT_LINEAR_SKIP_AHEAD_DEFAULT 3
 #define NEWBOTAI_ESCAPE_YAW_SPEED NEWBOTAI_TUNING_ESCAPE_YAW_SPEED
 #define NEWBOTAI_ESCAPE_YAW_OVERRIDE_MS 250
 #define NEWBOTAI_JUMP_ATTACK_GATE_MS 40
@@ -11700,6 +11704,57 @@ static float BotGetTargetDistanceLimit(void)
 	return targetDistanceLimit;
 }
 
+static int BotGetTargetTimeoutMs(void)
+{
+	return Com_Clampi(0, 60000, bot_target_timeout.integer);
+}
+
+static int BotGetWaypointLinearSkipAheadMax(void)
+{
+	return Com_Clampi(0, 8, bot_waypointskip.integer);
+}
+
+static qboolean NewBotAI_ShouldRetainLostSightTarget(bot_state_t *bs, gentity_t *enemy)
+{
+	const int targetTimeoutMs = BotGetTargetTimeoutMs();
+
+	if (!bs || !enemy || !enemy->client || bs->frame_Enemy_Vis || targetTimeoutMs <= 0)
+	{
+		return qfalse;
+	}
+	if (enemy->health < 1)
+	{
+		return qfalse;
+	}
+	if (enemy->client->pers.connected != CON_CONNECTED &&
+		enemy->client->pers.connected != CON_CONNECTING)
+	{
+		return qfalse;
+	}
+	if (bs->lastVisibleEnemyIndex != enemy->s.number)
+	{
+		return qfalse;
+	}
+
+	return (bs->lastVisibleEnemyTime > level.time - targetTimeoutMs) ? qtrue : qfalse;
+}
+
+static void NewBotAI_ClearCurrentEnemyLock(bot_state_t *bs)
+{
+	if (!bs)
+	{
+		return;
+	}
+
+	bs->currentEnemy = NULL;
+	bs->enemySeenTime = 0;
+	bs->lastVisibleEnemyIndex = ENTITYNUM_NONE;
+	bs->lastVisibleEnemyTime = 0;
+	bs->enemyWaypointFallbackIndex = -1;
+	bs->enemyWaypointFallbackTime = 0;
+	bs->enemyWaypointFallbackEnemyNum = -1;
+}
+
 enum
 {
 	NEWBOTAI_TARGET_DEFAULT = -1,
@@ -16899,8 +16954,13 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 			bs->lastVisibleEnemyTime = level.time;
 		}
 		else {
-			bs->currentEnemy = &g_entities[closestID];
-			if (bs->lastVisibleEnemyTime < level.time - NEWBOTAI_LOST_TARGET_GRACE_MS) {
+			if (NewBotAI_ShouldRetainLostSightTarget(bs, oldEnemy))
+			{
+				bs->currentEnemy = oldEnemy;
+			}
+			else {
+				NewBotAI_ClearCurrentEnemyLock(bs);
+				NewBotAI_ClearLostSightCombatInput(bs);
 				NewBotAI_RunNavigationOrAlone(bs, thinktime);
 				return;
 			}
@@ -17035,8 +17095,16 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	if (!bs->frame_Enemy_Vis &&
 		bs->navRecoverMode != NEWBOTAI_NAV_RECOVERY_MODE_HOLD)
 	{
+		if (!NewBotAI_ShouldRetainLostSightTarget(bs, bs->currentEnemy))
+		{
+			NewBotAI_ClearCurrentEnemyLock(bs);
+			NewBotAI_ClearLostSightCombatInput(bs);
+			NewBotAI_RunNavigationOrAlone(bs, thinktime);
+			return;
+		}
+
 		NewBotAI_ClearLostSightCombatInput(bs);
-		NewBotAI_RunNavigationOrAlone(bs, thinktime);
+		NewBotAI_GetAim(bs);
 		return;
 	}
 
@@ -17672,6 +17740,7 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 			if (!bs->wpDestination && !bs->currentEnemy &&
 				bs->lastWPIndex >= 0 && gWPArray[bs->lastWPIndex] && gWPArray[bs->lastWPIndex]->inuse)
 			{
+				const int linearSkipAheadMax = BotGetWaypointLinearSkipAheadMax();
 				int step;
 				int aheadIndex = -1;
 				int backIndex  = bs->lastWPDir ? (bs->lastWPIndex + 1) : (bs->lastWPIndex - 1);
@@ -17685,10 +17754,11 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 				}
 				//otherwise prefer a small skip-ahead window (up to 3 waypoints) in the
 				//same direction so linear movement wins over nearest-point backtracking.
-				else
+				else if (linearSkipAheadMax > 0)
 				{
-					for (step = 1; step <= NEWBOTAI_WAYPOINT_LINEAR_SKIP_AHEAD_MAX; step++)
+					for (step = 1; step <= linearSkipAheadMax; step++)
 					{
+						int midStep;
 						int candidate = bs->lastWPDir ? (bs->lastWPIndex - step) : (bs->lastWPIndex + step);
 						if (candidate < 0 || candidate >= gWPNum ||
 							!gWPArray[candidate] || !gWPArray[candidate]->inuse)
@@ -17696,6 +17766,21 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 							continue;
 						}
 						if (!PassWayCheck(bs, candidate))
+						{
+							continue;
+						}
+						for (midStep = 1; midStep < step; midStep++)
+						{
+							int midCandidate = bs->lastWPDir ? (bs->lastWPIndex - midStep) : (bs->lastWPIndex + midStep);
+							if (midCandidate < 0 || midCandidate >= gWPNum ||
+								!gWPArray[midCandidate] || !gWPArray[midCandidate]->inuse ||
+								!PassWayCheck(bs, midCandidate))
+							{
+								candidate = -1;
+								break;
+							}
+						}
+						if (candidate == -1)
 						{
 							continue;
 						}
