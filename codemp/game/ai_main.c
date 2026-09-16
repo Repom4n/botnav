@@ -17792,8 +17792,8 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 					wp = bs->lastWPIndex;
 					bs->wpDirection = bs->lastWPDir;
 				}
-				//otherwise prefer a small skip-ahead window (up to 3 waypoints) in the
-				//same direction so linear movement wins over nearest-point backtracking.
+				//otherwise prefer a small configurable skip-ahead window in the same
+				//direction so linear movement wins over nearest-point backtracking.
 				else if (linearSkipAheadMax > 0)
 				{
 					for (step = 1; step <= linearSkipAheadMax; step++)
