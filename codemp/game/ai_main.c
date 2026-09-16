@@ -8206,17 +8206,17 @@ static qboolean NewBotAI_RunLostSightTargetPursuit(bot_state_t *bs)
 	{
 		return qfalse;
 	}
-	if (!NewBotAI_GetDirectRecoveryMoveDir(bs, moveDir))
-	{
-		return qfalse;
-	}
-
 	NewBotAI_ClearLostSightCombatInput(bs);
 	NewBotAI_ClearRandomStrafeOverlay(bs);
 	NewBotAI_GetAim(bs);
 	VectorCopy(bs->currentEnemy->client->ps.origin, goalPos);
 	goalPos[2] = bs->origin[2];
 	VectorCopy(goalPos, bs->goalPosition);
+
+	if (!NewBotAI_GetDirectRecoveryMoveDir(bs, moveDir))
+	{
+		return qtrue;
+	}
 
 	if (NewBotAI_IsDirectRecoveryHazardous(bs))
 	{
@@ -17164,8 +17164,9 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 
 		if (!NewBotAI_RunLostSightTargetPursuit(bs))
 		{
+			NewBotAI_ClearCurrentEnemyLock(bs);
 			NewBotAI_ClearLostSightCombatInput(bs);
-			NewBotAI_GetAim(bs);
+			NewBotAI_RunNavigationOrAlone(bs, thinktime);
 		}
 		return;
 	}
