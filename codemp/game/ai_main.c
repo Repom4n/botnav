@@ -210,6 +210,7 @@ static int NewBotAI_GetRecoveryStuckTimeoutMs(void);
 static qboolean NewBotAI_ShouldUseWaypointRecoveryNow(bot_state_t *bs);
 static qboolean NewBotAI_GetDirectRecoveryMoveDir(bot_state_t *bs, vec3_t outDir);
 static qboolean NewBotAI_IsDirectRecoveryHazardous(bot_state_t *bs);
+static qboolean NewBotAI_RunLostSightTargetPursuit(bot_state_t *bs);
 static void NewBotAI_ResetRecoveryMovement(bot_state_t *bs);
 static void NewBotAI_ClearLostSightCombatInput(bot_state_t *bs);
 static void NewBotAI_ClearLightningBurst(bot_state_t *bs);
@@ -8179,6 +8180,31 @@ static qboolean NewBotAI_IsDirectRecoveryHazardous(bot_state_t *bs)
 	}
 
 	return BotNav_CheckFallingHazard(bs, moveDir, qtrue);
+}
+
+static qboolean NewBotAI_RunLostSightTargetPursuit(bot_state_t *bs)
+{
+	vec3_t moveDir, goalPos;
+
+	if (!NewBotAI_GetDirectRecoveryMoveDir(bs, moveDir))
+	{
+		return qfalse;
+	}
+
+	NewBotAI_ClearLostSightCombatInput(bs);
+	NewBotAI_ClearRandomStrafeOverlay(bs);
+	NewBotAI_GetAim(bs);
+	VectorCopy(bs->currentEnemy->client->ps.origin, goalPos);
+	goalPos[2] = bs->origin[2];
+	VectorCopy(goalPos, bs->goalPosition);
+
+	if (NewBotAI_IsDirectRecoveryHazardous(bs))
+	{
+		return qtrue;
+	}
+
+	trap->EA_Move(bs->client, moveDir, 5000);
+	return qtrue;
 }
 
 static qboolean NewBotAI_ShouldKeepLostSightTargetLock(bot_state_t *bs, qboolean progressStalled)
@@ -17114,8 +17140,11 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 			return;
 		}
 
-		NewBotAI_ClearLostSightCombatInput(bs);
-		NewBotAI_GetAim(bs);
+		if (!NewBotAI_RunLostSightTargetPursuit(bs))
+		{
+			NewBotAI_ClearLostSightCombatInput(bs);
+			NewBotAI_GetAim(bs);
+		}
 		return;
 	}
 
