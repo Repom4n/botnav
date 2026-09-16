@@ -11726,8 +11726,7 @@ static qboolean NewBotAI_ShouldRetainLostSightTarget(bot_state_t *bs, gentity_t 
 	{
 		return qfalse;
 	}
-	if (enemy->client->pers.connected != CON_CONNECTED &&
-		enemy->client->pers.connected != CON_CONNECTING)
+	if (enemy->client->pers.connected != CON_CONNECTED)
 	{
 		return qfalse;
 	}
@@ -16967,7 +16966,11 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		}
 	}
 
-	if (bs->frame_Enemy_Vis || NewBotAI_ShouldRetainLostSightTarget(bs, bs->currentEnemy))
+	if (bs->frame_Enemy_Vis)
+	{
+		bs->enemySeenTime = level.time + ENEMY_FORGET_MS;
+	}
+	else if (NewBotAI_ShouldRetainLostSightTarget(bs, bs->currentEnemy))
 	{
 		const int targetTimeoutMs = BotGetTargetTimeoutMs();
 		bs->enemySeenTime = level.time + ((targetTimeoutMs > 0) ? targetTimeoutMs : ENEMY_FORGET_MS);
