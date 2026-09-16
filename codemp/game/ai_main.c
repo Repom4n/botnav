@@ -16967,7 +16967,15 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		}
 	}
 
-	bs->enemySeenTime = level.time + ENEMY_FORGET_MS;
+	if (bs->frame_Enemy_Vis || NewBotAI_ShouldRetainLostSightTarget(bs, bs->currentEnemy))
+	{
+		const int targetTimeoutMs = BotGetTargetTimeoutMs();
+		bs->enemySeenTime = level.time + ((targetTimeoutMs > 0) ? targetTimeoutMs : ENEMY_FORGET_MS);
+	}
+	else
+	{
+		bs->enemySeenTime = level.time + ENEMY_FORGET_MS;
+	}
 	bs->frame_Enemy_Len = NewBotAI_GetDist(bs);
 	if (!bs->currentEnemy || bs->enemyWaypointFallbackEnemyNum != bs->currentEnemy->s.number)
 	{
