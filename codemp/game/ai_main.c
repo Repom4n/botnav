@@ -8186,6 +8186,10 @@ static qboolean NewBotAI_RunLostSightTargetPursuit(bot_state_t *bs)
 {
 	vec3_t moveDir, goalPos;
 
+	if (!NewBotAI_HasValidCurrentEnemy(bs))
+	{
+		return qfalse;
+	}
 	if (!NewBotAI_GetDirectRecoveryMoveDir(bs, moveDir))
 	{
 		return qfalse;
@@ -16999,7 +17003,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	else if (NewBotAI_ShouldRetainLostSightTarget(bs, bs->currentEnemy))
 	{
 		const int targetTimeoutMs = BotGetTargetTimeoutMs();
-		bs->enemySeenTime = level.time + ((targetTimeoutMs > 0) ? targetTimeoutMs : ENEMY_FORGET_MS);
+		bs->enemySeenTime = bs->lastVisibleEnemyTime + ((targetTimeoutMs > 0) ? targetTimeoutMs : ENEMY_FORGET_MS);
 	}
 	else
 	{
