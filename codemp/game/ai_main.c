@@ -16652,7 +16652,8 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 				bs->enemySeenTime = 0;
 				bs->lastVisibleEnemyIndex = ENTITYNUM_NONE;
 				bs->lastVisibleEnemyTime = 0;
-				bs->currentEnemy = NULL;
+				bs->pullKickJumpTime = 0;
+				bs->timeToReact = 0;
 				NewBotAI_ClearLostSightCombatInput(bs);
 			}
 		}
