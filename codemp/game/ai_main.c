@@ -230,6 +230,8 @@ static qboolean BotTargetModeAllowsBotEnemies(int targetMode);
 #define NEWBOTAI_COMBAT_WAYPOINT_SEPARATION_SQ (NEWBOTAI_COMBAT_WAYPOINT_SEPARATION * NEWBOTAI_COMBAT_WAYPOINT_SEPARATION)
 #define NEWBOTAI_LOST_TARGET_GRACE_MS 3000
 #define NEWBOTAI_TARGET_COMMIT_DISTANCE 768.0f
+// Small fixed look-ahead to keep local trail motion linear without skipping too far.
+#define NEWBOTAI_WAYPOINT_LINEAR_SKIP_AHEAD_MAX 3
 #define NEWBOTAI_ESCAPE_YAW_SPEED NEWBOTAI_TUNING_ESCAPE_YAW_SPEED
 #define NEWBOTAI_ESCAPE_YAW_OVERRIDE_MS 250
 #define NEWBOTAI_JUMP_ATTACK_GATE_MS 40
@@ -11862,10 +11864,6 @@ static qboolean NewBotAI_ShouldIssueBotDuelChallenge(bot_state_t *bs, int target
 	{
 		return qfalse;
 	}
-	if (NewBotAI_IsBotVsBotDuelCooldownActive(bs, bs->currentEnemy, targetMode))
-	{
-		return qfalse;
-	}
 	if (!bs->frame_Enemy_Vis || bs->frame_Enemy_Len > 220.0f)
 	{
 		return qfalse;
@@ -16767,18 +16765,27 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	{
 		if (oldEnemy && (g_entities[bs->client].r.svFlags & SVF_BOT) && (oldEnemy->r.svFlags & SVF_BOT))
 		{
+			bot_state_t *oldEnemyBS = NULL;
 			const int duelCooldownMs = NewBotAI_GetDuelRequestCooldownMs(
 				NEWBOTAI_DUEL_REQUEST_COOLDOWN_MS,
 				NEWBOTAI_DUEL_REQUEST_BOT_VS_BOT_COOLDOWN_MS,
 				BotTargetModeUsesExtendedBotDuelCooldown(targetMode) ? 1 : 0,
 				1,
 				1);
+			if (oldEnemy->s.number >= 0 && oldEnemy->s.number < MAX_CLIENTS)
+			{
+				oldEnemyBS = botstates[oldEnemy->s.number];
+			}
 			if (duelCooldownMs > 0)
 			{
 				const int cooldownUntil = level.time + duelCooldownMs;
 				if (cooldownUntil > bs->botChallengingTime)
 				{
 					bs->botChallengingTime = cooldownUntil;
+				}
+				if (oldEnemyBS && cooldownUntil > oldEnemyBS->botChallengingTime)
+				{
+					oldEnemyBS->botChallengingTime = cooldownUntil;
 				}
 			}
 		}
@@ -17668,13 +17675,13 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 				//same direction so linear movement wins over nearest-point backtracking.
 				else
 				{
-					for (step = 1; step <= 3; step++)
+					for (step = 1; step <= NEWBOTAI_WAYPOINT_LINEAR_SKIP_AHEAD_MAX; step++)
 					{
 						int candidate = bs->lastWPDir ? (bs->lastWPIndex - step) : (bs->lastWPIndex + step);
 						if (candidate < 0 || candidate >= gWPNum ||
 							!gWPArray[candidate] || !gWPArray[candidate]->inuse)
 						{
-							break;
+							continue;
 						}
 						if (!PassWayCheck(bs, candidate))
 						{
@@ -17685,6 +17692,7 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 							continue;
 						}
 						aheadIndex = candidate;
+						break;
 					}
 					if (aheadIndex != -1)
 					{
