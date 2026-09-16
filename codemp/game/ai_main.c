@@ -15313,7 +15313,13 @@ static qboolean NewBotAI_TryNoWaypointYawEscape(bot_state_t *bs, vec3_t goalOrig
 
 static void NewBotAI_RunNavigationOrAlone(bot_state_t *bs, float thinktime)
 {
-	StandardBotAI(bs, thinktime);
+	if (gWPNum > 0)
+	{
+		StandardBotAI(bs, thinktime);
+		return;
+	}
+
+	NewBotAI_DoAloneStuff(bs, thinktime);
 }
 
 int NewBotAI_ScanForEnemies(bot_state_t* bs) {
@@ -15852,9 +15858,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		return;
 	}
 
-	if (!bs->frame_Enemy_Vis &&
-		gWPNum > 0 &&
-		bs->lastVisibleEnemyTime < level.time - NEWBOTAI_LOST_TARGET_GRACE_MS)
+	if (!bs->frame_Enemy_Vis)
 	{
 		NewBotAI_ClearLostSightCombatInput(bs);
 		NewBotAI_RunNavigationOrAlone(bs, thinktime);
