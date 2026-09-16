@@ -337,7 +337,6 @@ XCVAR_DEF( sv_autoRaceDemo,				"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 //JAPRO BOTS
 XCVAR_DEF( bot_nochat,					"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_strafeOffset,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
-XCVAR_DEF( bot_navigation,				"1",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_yawswitch,				"10",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_forcepowers,			"1",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_forgimmick,				"0",			NULL,				CVAR_ARCHIVE,									qtrue )
@@ -392,15 +391,6 @@ XCVAR_DEF( bot_drainbias,				"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_drainlockbias,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_lightningbias,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_lightningdistance,		"400",		NULL,				CVAR_ARCHIVE,									qtrue )
-// Recovery navigation mode: 0 = disable the new waypoint/adventure recovery overlay, 1 =
-// alternate waypoint travel with adventure time that keeps the last recovered heading, 2 =
-// alternate waypoint travel with goal-oriented adventure time toward open hallway/doorway space.
-XCVAR_DEF( bot_recovery,				"1",			NULL,				CVAR_ARCHIVE,									qtrue )
-// How long (ms) recovery mode should stay in waypoint routing before each adventure phase.
-XCVAR_DEF( bot_nav_waypointphase,		"4000",		NULL,				CVAR_ARCHIVE,									qtrue )
-// How long (ms) recovery mode should keep walking its chosen adventure heading before returning
-// to waypoint routing.
-XCVAR_DEF( bot_nav_adventuretime,		"2500",		NULL,				CVAR_ARCHIVE,									qtrue )
 // How long (ms) the bot holds a chosen wall redirect (yaw/jump/turn/hop) before allowing
 // another wall reaction attempt. Higher values reduce tight-space reaction loops.
 XCVAR_DEF( bot_redirectcooldown,		"800",		NULL,				CVAR_ARCHIVE,									qtrue )
