@@ -166,7 +166,7 @@ static int NewBotAI_GetNextHopIntervalMs(bot_state_t *bs, float hopFrequency);
 static void NewBotAI_PushHopRetryCooldown(bot_state_t *bs);
 static qboolean NewBotAI_ShouldUseCombatHop(bot_state_t *bs, qboolean forceImmediate);
 static void NewBotAI_ConsumeCombatHop(bot_state_t *bs);
-static float NewBotAI_GetPullkickTimeToKickRange(bot_state_t *bs);
+static float NewBotAI_GetPullkickTimeToKickRange(bot_state_t *bs, qboolean pullActingOnBot, int *timingModeOut);
 static void NewBotAI_SchedulePullkickJump(bot_state_t *bs);
 static qboolean NewBotAI_IsPullkickOpportunity(bot_state_t *bs);
 static int NewBotAI_GetDrainTapTargetTicks(bot_state_t *bs);
@@ -252,7 +252,7 @@ static void NewBotAI_TrySaberThrowDefenseBreak(bot_state_t *bs);
 static void NewBotAI_ApplyPullMistake(bot_state_t *bs);
 static qboolean BotNav_CheckFallingHazard(bot_state_t *bs, vec3_t moveDir, qboolean inCombat);
 static qboolean NewBotAI_ShouldConserveForce(bot_state_t *bs);
-static qboolean NewBotAI_TryNoWaypointYawEscape(bot_state_t *bs, vec3_t goalOrigin);
+static qboolean NewBotAI_HasWaypointNavigation(void);
 static qboolean NewBotAI_ShouldSkipPullForNaturalFlipkickPTK(bot_state_t *bs);
 static void NewBotAI_ApplyJumpAttackGate(bot_state_t *bs);
 qboolean NewBotAI_IsEnemyPullable(bot_state_t *bs);
@@ -7231,6 +7231,7 @@ static qboolean NewBotAI_CanAttemptFlipkick(bot_state_t *bs)
 #define NEWBOTAI_FLIPKICK_PREFERRED_RANGE 180.0f
 #define NEWBOTAI_IMMEDIATE_FLIPKICK_RANGE 135.0f
 #define NEWBOTAI_IMMEDIATE_FLIPKICK_CONTACT_RANGE 90.0f
+#define NEWBOTAI_PULL_STUN_ONLY_RANGE 220.0f
 
 // Item 4: for this long after a fresh grip session begins, levels 1-9 never successfully
 // pull/push free of the grip (see NewBotAI_ReactToBeingGripped) - giving a human player's
@@ -7257,6 +7258,26 @@ static qboolean NewBotAI_CanAttemptFlipkick(bot_state_t *bs)
 static int NewBotAI_GetFlipkickInputWindowMs(void)
 {
 	return Com_Clampi(50, 1000, bot_fkduration.integer);
+}
+
+static qboolean NewBotAI_HasWaypointNavigation(void)
+{
+	return (bot_navigation.integer && gWPNum > 0) ? qtrue : qfalse;
+}
+
+static float NewBotAI_GetPullkickAssumedPullSpeed(void)
+{
+	return Com_Clampf(0.0f, 2000.0f, bot_ptk_pullspeed.value);
+}
+
+static int NewBotAI_GetPullkickExtraDelayMs(void)
+{
+	return Com_Clampi(0, 500, bot_ptk_extradelay.integer);
+}
+
+static int NewBotAI_GetPullkickDefensiveReactionWindowMs(void)
+{
+	return Com_Clampi(0, 1000, bot_ptk_pullreactwindow.integer);
 }
 
 static void NewBotAI_StartEscapeYawOverride(bot_state_t *bs, int durationMs)
@@ -10734,33 +10755,54 @@ static float NewBotAI_GetEnemyClosingSpeed(bot_state_t *bs)
 	return DotProduct(bs->currentEnemy->client->ps.velocity, toUs);
 }
 
-// Predicts (in ms) when the enemy's horizontal distance to us will fall inside the
-// flipkick's forward trace range (~135 units of clearance for the 32-unit box trace).
-// Combines the enemy's own closing speed (a pull yanks them toward us) with our current
-// forward approach speed. Returns -1 when the enemy is already in range or isn't closing.
-static float NewBotAI_GetPullkickTimeToKickRange(bot_state_t *bs)
+enum
 {
-	const float pullKickRange = 135.0f;
+	NEWBOTAI_PULL_TIMING_NONE,
+	NEWBOTAI_PULL_TIMING_IMMEDIATE,
+	NEWBOTAI_PULL_TIMING_STUN_ONLY,
+	NEWBOTAI_PULL_TIMING_PULL_CLOSE
+};
+
+static int NewBotAI_GetPullkickTimingMode(bot_state_t *bs, qboolean pullActingOnBot)
+{
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return NEWBOTAI_PULL_TIMING_NONE;
+	}
+
+	if (bs->frame_Enemy_Len <= NEWBOTAI_IMMEDIATE_FLIPKICK_RANGE)
+	{
+		return NEWBOTAI_PULL_TIMING_IMMEDIATE;
+	}
+
+	if (bs->frame_Enemy_Len <= NEWBOTAI_PULL_STUN_ONLY_RANGE)
+	{
+		return NEWBOTAI_PULL_TIMING_STUN_ONLY;
+	}
+
+	if (pullActingOnBot || NewBotAI_IsEnemyPullable(bs))
+	{
+		return NEWBOTAI_PULL_TIMING_PULL_CLOSE;
+	}
+
+	return NEWBOTAI_PULL_TIMING_STUN_ONLY;
+}
+
+static float NewBotAI_GetProjectedPullkickClosingSpeed(bot_state_t *bs, int timingMode)
+{
 	float closing;
 	float ourForwardSpeed;
-	vec3_t fwd, toThem;
+	vec3_t toThem;
 
 	if (!bs->currentEnemy || !bs->currentEnemy->client)
 	{
-		return -1.0f;
-	}
-
-	if (bs->frame_Enemy_Len <= pullKickRange)
-	{
-		return -1.0f; //already in kick range - kick now, no wait
+		return 0.0f;
 	}
 
 	closing = NewBotAI_GetEnemyClosingSpeed(bs);
 
 	//Our own forward run also closes the gap - project our velocity onto the
 	//direction toward the enemy (only count actual approach, not backing off).
-	AngleVectors(bs->viewangles, fwd, NULL, NULL);
-	fwd[2] = 0.0f;
 	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->cur_ps.origin, toThem);
 	toThem[2] = 0.0f;
 	if (VectorNormalize(toThem) > 0.0f)
@@ -10772,12 +10814,41 @@ static float NewBotAI_GetPullkickTimeToKickRange(bot_state_t *bs)
 		}
 	}
 
+	if (timingMode == NEWBOTAI_PULL_TIMING_PULL_CLOSE)
+	{
+		closing += NewBotAI_GetPullkickAssumedPullSpeed();
+	}
+
+	return closing;
+}
+
+// Predicts (in ms) when the enemy's horizontal distance to us will fall inside the
+// flipkick's forward trace range (~135 units of clearance for the 32-unit box trace)
+// after accounting for either a close-range pull stun or an assumed pull-driven speed-up.
+static float NewBotAI_GetPullkickTimeToKickRange(bot_state_t *bs, qboolean pullActingOnBot, int *timingModeOut)
+{
+	const int timingMode = NewBotAI_GetPullkickTimingMode(bs, pullActingOnBot);
+	const float closing = NewBotAI_GetProjectedPullkickClosingSpeed(bs, timingMode);
+
+	if (timingModeOut)
+	{
+		*timingModeOut = timingMode;
+	}
+
+	if (timingMode == NEWBOTAI_PULL_TIMING_NONE)
+	{
+		return -1.0f;
+	}
+	if (timingMode == NEWBOTAI_PULL_TIMING_IMMEDIATE)
+	{
+		return 0.0f;
+	}
 	if (closing <= 0.0f)
 	{
 		return -1.0f;
 	}
 
-	return ((bs->frame_Enemy_Len - pullKickRange) / closing) * 1000.0f;
+	return ((bs->frame_Enemy_Len - NEWBOTAI_IMMEDIATE_FLIPKICK_RANGE) / closing) * 1000.0f;
 }
 
 #define NEWBOTAI_FAN_FLIPKICK_INIT_DELAY_MS 100
@@ -10804,27 +10875,17 @@ static qboolean NewBotAI_CanInitiateFlipkickUnderFanPressure(bot_state_t *bs)
 	return qtrue;
 }
 
-// Schedules the pk/ptk flipkick jump so the bot leaps only once the enemy is actually
-// closing into kick range: immediately when a kick is already possible, after the
-// predicted closing time (plus a small 150ms lead so the ~50ms think tick can't make
-// us late) while they are on the way in, or held (-1) until the enemy gets within
-// 320 units when nobody is closing yet. Called the moment we pull (pk) or select pull
-// during a throw (ptk), replacing the old instant hop that fired while the target was
-// still far away.
-//Item 2: bots were jumping into flipkicks a touch early (and kept hopping afterward
-//landing), so the whole schedule is nudged 30ms later - both the "kick now" case and
-//the predicted-closing-time lead below.
-//Item 2 (incessant hopping): this is called every think while pull remains the top
-//weighted force power, so once a scheduled jump fires it would otherwise immediately
-//re-arm itself (frame_Enemy_Len <= 135.0f is still true right after landing next to the
-//enemy) and hop again a few ms later, forever, regardless of bot_hopfrequency. Reuse the
-//same post-attempt cooldown NewBotAI_Flipkick uses (lastFlipkickAttemptTime) to hold off
-//scheduling a fresh jump until that cooldown expires.
-#define NEWBOTAI_PULLKICK_JUMP_DELAY_MS 30
+// Schedules the pk/ptk flipkick jump only when the distance/speed projection says the
+// pull should actually drag the enemy into kick range. Immediate kick-range cases are
+// handled by the direct pull+flipkick path; close pull-stun cases use only natural
+// closing speed; farther targets add an assumed pull-close speed before the final delay.
+// Reuse the same post-attempt cooldown NewBotAI_Flipkick uses (lastFlipkickAttemptTime)
+// so once a scheduled jump fires it does not instantly re-arm on the next think.
 #define NEWBOTAI_PULLKICK_RANGED_EXTRA_DELAY_MS 120
 static void NewBotAI_SchedulePullkickJump(bot_state_t *bs)
 {
-	const float timeToRange = NewBotAI_GetPullkickTimeToKickRange(bs);
+	float timeToRange;
+	int timingMode;
 	int extraDelay = 0;
 
 	if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE)
@@ -10854,17 +10915,16 @@ static void NewBotAI_SchedulePullkickJump(bot_state_t *bs)
 		return;
 	}
 
-	if (bs->frame_Enemy_Len <= NEWBOTAI_IMMEDIATE_FLIPKICK_RANGE)
+	timeToRange = NewBotAI_GetPullkickTimeToKickRange(bs, qfalse, &timingMode);
+	if (timingMode == NEWBOTAI_PULL_TIMING_IMMEDIATE)
 	{
-		//Kick is already possible - still hold the jump for the extra 30ms delay instead
-		//of firing this same think.
-		bs->pullKickJumpTime = level.time + NEWBOTAI_PULLKICK_JUMP_DELAY_MS;
+		bs->pullKickJumpTime = 0;
 		return;
 	}
 
 	if (timeToRange >= 0.0f)
 	{
-		if (bs->frame_Enemy_Len > NEWBOTAI_IMMEDIATE_FLIPKICK_RANGE)
+		if (timingMode == NEWBOTAI_PULL_TIMING_PULL_CLOSE)
 		{
 			extraDelay = (int)((bs->frame_Enemy_Len - NEWBOTAI_IMMEDIATE_FLIPKICK_RANGE) * 0.15f);
 			if (extraDelay > NEWBOTAI_PULLKICK_RANGED_EXTRA_DELAY_MS)
@@ -10872,12 +10932,12 @@ static void NewBotAI_SchedulePullkickJump(bot_state_t *bs)
 				extraDelay = NEWBOTAI_PULLKICK_RANGED_EXTRA_DELAY_MS;
 			}
 		}
-		bs->pullKickJumpTime = level.time + (int)timeToRange + 150 +
-			NEWBOTAI_PULLKICK_JUMP_DELAY_MS + extraDelay;
+		bs->pullKickJumpTime = level.time + (int)timeToRange +
+			NewBotAI_GetPullkickExtraDelayMs() + extraDelay;
 	}
 	else
 	{
-		bs->pullKickJumpTime = -1; //not closing - hold until they are within 320
+		bs->pullKickJumpTime = 0;
 	}
 }
 
@@ -10901,7 +10961,7 @@ static qboolean NewBotAI_IsPullkickOpportunity(bot_state_t *bs)
 		return qtrue;
 	}
 
-	return (bs->frame_Enemy_Len <= 220.0f) ? qtrue : qfalse;
+	return (bs->frame_Enemy_Len <= NEWBOTAI_PULL_STUN_ONLY_RANGE) ? qtrue : qfalse;
 }
 
 static qboolean NewBotAI_ShouldSkipPullForNaturalFlipkickPTK(bot_state_t *bs)
@@ -10926,7 +10986,7 @@ static qboolean NewBotAI_ShouldSkipPullForNaturalFlipkickPTK(bot_state_t *bs)
 		return qfalse;
 	}
 
-	timeToRange = NewBotAI_GetPullkickTimeToKickRange(bs);
+	timeToRange = NewBotAI_GetPullkickTimeToKickRange(bs, qfalse, NULL);
 	return NewBotAI_ShouldSkipPullForNaturalFlipkick(
 		pullUsable ? 1 : 0,
 		1,
@@ -11248,11 +11308,7 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 			//wall contact for a vertical wallrun recovery instead of lingering in place or
 			//pressing deeper into melee without a blade.
 			bs->combatAction = BOT_COMBAT_ACTION_RETREAT_DEFENSE;
-			if (NewBotAI_TryNoWaypointYawEscape(bs, bs->currentEnemy->client->ps.origin))
-			{
-				//keep driving the escape route immediately when no waypoints are available
-			}
-			else if (!enemySaberThreatImminent && NewBotAI_TouchingWallNotEnemy(bs))
+			if (!enemySaberThreatImminent && NewBotAI_TouchingWallNotEnemy(bs))
 			{
 				trap->EA_Jump(bs->client);
 				trap->EA_MoveBack(bs->client);
@@ -11470,17 +11526,14 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 		}
 	}
 		//A scheduled pk/ptk flipkick jump: we pulled (or selected pull during a throw)
-		//and want to leap exactly once the enemy is closing into kick range - not the
-		//instant we pull, which hopped way too soon and missed the kick. A positive time
-		//fires when reached; -1 holds until the enemy is within 320 units (nobody was
-		//closing when we pulled, so don't commit to a timed leap). The kick attempt
+		//and already projected a final kick window from the target's current distance,
+		//relative closing speed, and any assumed pull acceleration. The kick attempt
 		//itself happens via NewBotAI_Flipkick in the normal combat path below.
 		else if (bs->pullKickJumpTime != 0)
 		{
 			trap->EA_MoveForward(bs->client);
 			if (bs->cur_ps.groundEntityNum != ENTITYNUM_NONE &&
-				((bs->pullKickJumpTime > 0 && bs->pullKickJumpTime <= level.time) ||
-				 (bs->pullKickJumpTime == -1 && bs->frame_Enemy_Len <= 320.0f)))
+				bs->pullKickJumpTime <= level.time)
 			{
 				trap->EA_Jump(bs->client);
 				bs->flipkickInputTime = level.time + NewBotAI_GetFlipkickInputWindowMs();
@@ -11591,26 +11644,6 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 			VectorLengthSquared(bs->cur_ps.velocity) < 100.0f &&
 			bs->flipkickInputTime <= level.time)
 		{
-			//Item 5: on a map with no waypoint trail, prioritize closing on the target
-			//over lateral wall avoidance - a stuck bot swings its yaw off the wall and
-			//keeps driving forward instead of pacing around the obstacle forever.
-			if (NewBotAI_TryNoWaypointYawEscape(bs, bs->currentEnemy->client->ps.origin))
-			{
-				return;
-			}
-			//Break two-wall stalls with a small yaw drift and forward input
-			//instead of lateral obstacle avoidance during combat.
-			bs->ideal_viewangles[YAW] += Q_irand(20, 45) * ((level.framenum & 1) ? 1.0f : -1.0f);
-			bs->ideal_viewangles[PITCH] = 0.0f;
-			bs->goalAngles[PITCH] = 0.0f;
-			bs->ideal_viewangles[ROLL] = 0.0f;
-			bs->goalAngles[ROLL] = 0.0f;
-			if (bs->cur_ps.groundEntityNum != ENTITYNUM_NONE &&
-				bs->wallAvoidNextTime <= level.time)
-			{
-				trap->EA_Jump(bs->client);
-				bs->wallAvoidNextTime = level.time + NewBotAI_GetWallRedirectIntervalMs();
-			}
 			trap->EA_MoveForward(bs->client);
 		}
 	}
@@ -13606,6 +13639,8 @@ static void NewBotAI_ApplySidewaysDrainRoll(bot_state_t *bs, qboolean moveBack)
 
 static qboolean NewBotAI_ShouldUseSafePushWindowWhilePulled(bot_state_t *bs)
 {
+	float timeToKickRange;
+	int timingMode;
 	qboolean pullActive;
 
 	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
@@ -13634,7 +13669,17 @@ static qboolean NewBotAI_ShouldUseSafePushWindowWhilePulled(bot_state_t *bs)
 		return qfalse;
 	}
 
-	return qtrue;
+	timeToKickRange = NewBotAI_GetPullkickTimeToKickRange(bs, qtrue, &timingMode);
+	if (timingMode == NEWBOTAI_PULL_TIMING_IMMEDIATE)
+	{
+		return qtrue;
+	}
+	if (timeToKickRange < 0.0f)
+	{
+		return qfalse;
+	}
+
+	return (timeToKickRange <= NewBotAI_GetPullkickDefensiveReactionWindowMs()) ? qtrue : qfalse;
 }
 
 static qboolean NewBotAI_HandleRecoveryRollForcepower(bot_state_t *bs)
@@ -14271,9 +14316,18 @@ int NewBotAI_GetPull(bot_state_t *bs) {
 		}
 	}
 
-	if (NewBotAI_IsBeingPulledTowardEnemy(bs) && bs->frame_Enemy_Len <= 220.0f)
+	if (NewBotAI_IsBeingPulledTowardEnemy(bs) && bs->frame_Enemy_Len <= NEWBOTAI_PULL_STUN_ONLY_RANGE)
 	{
 		weight += freePullkickWindow ? 75.0f : 35.0f;
+	}
+	else if (NewBotAI_IsBeingPulledTowardEnemy(bs))
+	{
+		float timeToKickRange = NewBotAI_GetPullkickTimeToKickRange(bs, qtrue, NULL);
+		if (timeToKickRange >= 0.0f &&
+			timeToKickRange <= NewBotAI_GetPullkickDefensiveReactionWindowMs())
+		{
+			weight += freePullkickWindow ? 55.0f : 25.0f;
+		}
 	}
 
 	//We've pressed forward past our own thrown saber and are now the closer, saberless
@@ -16077,13 +16131,6 @@ void NewBotAI_DoAloneStuff(bot_state_t *bs, float thinktime) {
 		return;
 	}
 
-	//No waypoint trail to route around walls: if we're stuck on geometry between us
-	//and this item, swing the yaw off the wall instead of grinding into it.
-	if (NewBotAI_TryNoWaypointYawEscape(bs, waypoint))
-	{
-		return;
-	}
-
 	VectorSubtract(waypoint, bs->origin, temp);
 	vectoangles(temp, temp);
 	VectorCopy(temp, bs->ideal_viewangles);
@@ -16109,165 +16156,6 @@ void NewBotAI_DoAloneStuff(bot_state_t *bs, float thinktime) {
 	//Entities in box.. for each..
 	//Check if we have it..
 	//Run to it..
-}
-
-// Item 5 (no-waypoint pursuit): on maps with no waypoint trail there is nothing to
-// route around walls with, so a bot driving at its target just runs face-first into
-// geometry between them forever. Waypoint maps solve this by routing through the
-// trail; here the next best thing is bot_yawswitch - while we are grounded, making
-// almost no horizontal progress despite pushing toward the target, and a wall blocks
-// the direct line, swing the yaw away from the wall so we slide around it and keep
-// closing on the target rather than stalling in place.
-static qboolean NewBotAI_TryNoWaypointYawEscape(bot_state_t *bs, vec3_t goalOrigin)
-{
-	vec3_t toGoal, trTo, mins, maxs;
-	vec3_t escapeAngles, escapeDir;
-	trace_t tr;
-	float horizontalSpeedSquared;
-	float yawTurn;
-	qboolean startedRedirect = qfalse;
-	const int redirectHoldMs = NewBotAI_GetWallRedirectIntervalMs();
-
-	if (gWPNum > 0)
-	{
-		return qfalse; //maps with waypoints route around walls through the trail
-	}
-
-	if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE)
-	{
-		return qfalse; //airborne - yaw escape is a grounded un-stick tool
-	}
-
-	horizontalSpeedSquared = bs->cur_ps.velocity[0] * bs->cur_ps.velocity[0] +
-		bs->cur_ps.velocity[1] * bs->cur_ps.velocity[1];
-	if (horizontalSpeedSquared >= NEWBOTAI_WALLAVOID_STUCK_SPEED_SQ)
-	{
-		return qfalse; //actually moving - not stuck
-	}
-
-	VectorSubtract(goalOrigin, bs->origin, toGoal);
-	if (VectorNormalize(toGoal) < 96.0f)
-	{
-		return qfalse; //already on top of the goal
-	}
-
-	trTo[0] = bs->origin[0] + toGoal[0] * 64.0f;
-	trTo[1] = bs->origin[1] + toGoal[1] * 64.0f;
-	trTo[2] = bs->origin[2] + toGoal[2] * 64.0f;
-
-	mins[0] = -15;
-	mins[1] = -15;
-	mins[2] = 0;
-	maxs[0] = 15;
-	maxs[1] = 15;
-	maxs[2] = 32;
-
-	JP_Trace(&tr, bs->origin, mins, maxs, trTo, bs->client, MASK_PLAYERSOLID, qfalse, 0, 0);
-
-	if (tr.fraction >= 1.0f)
-	{
-		return qfalse; //path is clear - keep driving straight at the goal
-	}
-	if (bs->currentEnemy && tr.entityNum == bs->currentEnemy->s.number)
-	{
-		return qfalse; //we hit our target, not a wall
-	}
-
-	if (NewBotAI_FindWaypointAdventureGoal(bs, toGoal, trTo))
-	{
-		VectorSubtract(trTo, bs->origin, toGoal);
-		toGoal[2] = 0.0f;
-		if (VectorNormalize(toGoal) > 0.0f &&
-			!BotNav_CheckFallingHazard(bs, toGoal, qtrue))
-		{
-			const qboolean startRedirect = (bs->wallAvoidNextTime <= level.time) ? qtrue : qfalse;
-
-			vectoangles(toGoal, mins);
-			bs->ideal_viewangles[YAW] = mins[YAW];
-			bs->ideal_viewangles[PITCH] = 0.0f;
-			bs->goalAngles[YAW] = mins[YAW];
-			bs->goalAngles[PITCH] = 0.0f;
-			bs->ideal_viewangles[ROLL] = 0.0f;
-			bs->goalAngles[ROLL] = 0.0f;
-			if (startRedirect)
-			{
-				bs->wallAvoidNextTime = level.time + redirectHoldMs;
-				bs->customNavReverseTime = level.time + redirectHoldMs;
-				NewBotAI_StartEscapeYawOverride(bs, redirectHoldMs);
-			}
-			trap->EA_MoveForward(bs->client);
-			if (bs->cur_ps.groundEntityNum != ENTITYNUM_NONE &&
-				bs->wallAvoidNextTime <= level.time)
-			{
-				trap->EA_Jump(bs->client);
-				bs->wallAvoidNextTime = level.time + NewBotAI_GetWallRedirectIntervalMs();
-			}
-			return qtrue;
-		}
-	}
-
-	//Stuck on a wall with no waypoint trail: pick a deterministic-tuned yaw pattern
-	//and keep driving forward to unstick instead of hard 180 reversals.
-	{
-		const float recoveryYawSpeed = NewBotAI_GetRecoveryYawSpeedDegPerSec();
-
-		if (redirectHoldMs <= 0 || recoveryYawSpeed <= 0.0f)
-		{
-			return qfalse;
-		}
-		if (bs->wallAvoidNextTime > level.time)
-		{
-			yawTurn = 0.0f;
-		}
-		else if (bs->customNavReverseTime <= level.time)
-		{
-			int rerollMs = redirectHoldMs;
-			float slowTurn = recoveryYawSpeed * 0.5f;
-			if (slowTurn < 15.0f)
-			{
-				slowTurn = 15.0f;
-			}
-			yawTurn = slowTurn * (Q_irand(0, 1) ? 1.0f : -1.0f);
-			bs->customNavReverseTime = level.time + rerollMs;
-			bs->wallAvoidNextTime = level.time + rerollMs;
-			startedRedirect = qtrue;
-		}
-		else
-		{
-			yawTurn = 0.0f;
-		}
-	}
-	if (NewBotAI_HandleClimbableForwardObstacle(bs, toGoal))
-	{
-		return qtrue;
-	}
-	VectorClear(escapeAngles);
-	escapeAngles[YAW] = AngleNormalize360(bs->ideal_viewangles[YAW] + yawTurn);
-	AngleVectors(escapeAngles, escapeDir, NULL, NULL);
-	escapeDir[2] = 0.0f;
-	if (VectorNormalize(escapeDir) <= 0.0f ||
-		BotNav_CheckFallingHazard(bs, escapeDir, qtrue))
-	{
-		return qfalse;
-	}
-	bs->ideal_viewangles[PITCH] = 0.0f;
-	bs->goalAngles[PITCH] = 0.0f;
-	bs->ideal_viewangles[ROLL] = 0.0f;
-	bs->goalAngles[ROLL] = 0.0f;
-	if (startedRedirect)
-	{
-		NewBotAI_StartEscapeYawOverride(bs, redirectHoldMs);
-	}
-	bs->ideal_viewangles[YAW] = escapeAngles[YAW];
-	bs->goalAngles[YAW] = escapeAngles[YAW];
-	trap->EA_MoveForward(bs->client);
-	if (bs->cur_ps.groundEntityNum != ENTITYNUM_NONE &&
-		bs->wallAvoidNextTime <= level.time)
-	{
-		trap->EA_Jump(bs->client);
-		bs->wallAvoidNextTime = level.time + NewBotAI_GetWallRedirectIntervalMs();
-	}
-	return qtrue;
 }
 
 static qboolean NewBotAI_IsCombatProgressStalled(bot_state_t *bs)
@@ -16303,7 +16191,7 @@ static qboolean NewBotAI_IsCombatProgressStalled(bot_state_t *bs)
 
 static void NewBotAI_RunNavigationOrAlone(bot_state_t *bs, float thinktime)
 {
-	if (bot_navigation.integer)
+	if (NewBotAI_HasWaypointNavigation())
 	{
 		bs->navObstacleUntil = 0;
 		StandardBotAI(bs, thinktime);
@@ -16668,6 +16556,11 @@ static qboolean NewBotAI_ShouldFallbackToWaypoints(bot_state_t *bs)
 	vec3_t enemyOrigin, enemyDelta;
 	const qboolean progressStalled = NewBotAI_IsCombatProgressStalled(bs);
 
+	if (!NewBotAI_HasWaypointNavigation())
+	{
+		return qfalse;
+	}
+
 	if (!NewBotAI_HasValidCurrentEnemy(bs))
 	{
 		bs->combatStuckSince = 0;
@@ -16725,7 +16618,7 @@ static qboolean NewBotAI_CanUseWaypointFallbackInCombat(bot_state_t *bs)
 	vec3_t enemyDelta, enemyOrigin;
 	const qboolean progressStalled = NewBotAI_IsCombatProgressStalled(bs);
 
-	if (!bs)
+	if (!bs || !NewBotAI_HasWaypointNavigation())
 	{
 		return qfalse;
 	}
@@ -16976,40 +16869,48 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	VectorCopy(g_entities[closestID].client->ps.origin, headlevel);
 	headlevel[2] += g_entities[closestID].client->ps.viewheight - 24;
 
-	if ((bs->cur_ps.weapon == WP_DEMP2 && g_entities[bs->client].client->forcedFireMode != 1) || (targetMode >= 0) || OrgVisible(bs->eye, g_entities[closestID].client->ps.origin, bs->client)) { //We can see or dmg our closest enemy
-		bs->currentEnemy = &g_entities[closestID];
-		bs->frame_Enemy_Vis = 1;
-		bs->lastVisibleEnemyIndex = closestID;
-		bs->lastVisibleEnemyTime = level.time;
-		if (!bs->cur_ps.duelInProgress && NewBotAI_InFFAExploreWindow(bs, targetMode)) {
-			//Exploring after a few duels: a new non-dueling opponent ends the search,
-			//and the duel streak starts over.
-			bs->duelCompletedCount = 0;
-			bs->ffaExploreUntil = 0;
-		}
-	}
-	else { //we can't see our closest enemy, use last attacker
-		const int attacker = g_entities[bs->client].client->ps.persistant[PERS_ATTACKER];
-		if (PassStandardEnemyChecks(bs, &g_entities[attacker])) {
-			bs->currentEnemy = &g_entities[attacker];
+	{
+		const qboolean enemyVisible = OrgVisible(bs->eye, g_entities[closestID].client->ps.origin, bs->client) ? qtrue : qfalse;
 
-			VectorCopy(bs->currentEnemy->client->ps.origin, headlevel);
-			headlevel[2] += bs->currentEnemy->client->ps.viewheight - 24;
-			if (OrgVisible(bs->eye, headlevel, bs->client))
-				bs->frame_Enemy_Vis = 1;
-			bs->lastVisibleEnemyIndex = attacker;
-			bs->lastVisibleEnemyTime = level.time;
-		}
-		else {
-			if (NewBotAI_ShouldRetainLostSightTarget(bs, oldEnemy))
+		if ((bs->cur_ps.weapon == WP_DEMP2 && g_entities[bs->client].client->forcedFireMode != 1) ||
+			(targetMode >= 0) || enemyVisible || !NewBotAI_HasWaypointNavigation()) { //We can see or dmg our closest enemy
+			bs->currentEnemy = &g_entities[closestID];
+			bs->frame_Enemy_Vis = enemyVisible ? 1 : 0;
+			if (enemyVisible)
 			{
-				bs->currentEnemy = oldEnemy;
+				bs->lastVisibleEnemyIndex = closestID;
+				bs->lastVisibleEnemyTime = level.time;
+			}
+			if (!bs->cur_ps.duelInProgress && NewBotAI_InFFAExploreWindow(bs, targetMode)) {
+				//Exploring after a few duels: a new non-dueling opponent ends the search,
+				//and the duel streak starts over.
+				bs->duelCompletedCount = 0;
+				bs->ffaExploreUntil = 0;
+			}
+		}
+		else { //we can't see our closest enemy, use last attacker
+			const int attacker = g_entities[bs->client].client->ps.persistant[PERS_ATTACKER];
+			if (PassStandardEnemyChecks(bs, &g_entities[attacker])) {
+				bs->currentEnemy = &g_entities[attacker];
+
+				VectorCopy(bs->currentEnemy->client->ps.origin, headlevel);
+				headlevel[2] += bs->currentEnemy->client->ps.viewheight - 24;
+				if (OrgVisible(bs->eye, headlevel, bs->client))
+					bs->frame_Enemy_Vis = 1;
+				bs->lastVisibleEnemyIndex = attacker;
+				bs->lastVisibleEnemyTime = level.time;
 			}
 			else {
-				NewBotAI_ClearCurrentEnemyLock(bs);
-				NewBotAI_ClearLostSightCombatInput(bs);
-				NewBotAI_RunNavigationOrAlone(bs, thinktime);
-				return;
+				if (NewBotAI_ShouldRetainLostSightTarget(bs, oldEnemy))
+				{
+					bs->currentEnemy = oldEnemy;
+				}
+				else {
+					NewBotAI_ClearCurrentEnemyLock(bs);
+					NewBotAI_ClearLostSightCombatInput(bs);
+					NewBotAI_RunNavigationOrAlone(bs, thinktime);
+					return;
+				}
 			}
 		}
 	}
@@ -17152,6 +17053,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	}
 
 	if (!bs->frame_Enemy_Vis &&
+		NewBotAI_HasWaypointNavigation() &&
 		bs->navRecoverMode != NEWBOTAI_NAV_RECOVERY_MODE_HOLD)
 	{
 		if (!NewBotAI_ShouldRetainLostSightTarget(bs, bs->currentEnemy))
