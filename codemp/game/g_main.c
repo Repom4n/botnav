@@ -485,13 +485,7 @@ void G_InitGame( int levelTime, int randomSeed, int restart ) {
 		//need to do this, because combatpoint waypoints aren't saved out...?
 		CP_FindCombatPointWaypoints();
 		navCalcPathTime = 0;
-
-		/*
-		if ( g_eSavedGameJustLoaded == eNO )
-		{//clear all the failed edges unless we just loaded the game (which would include failed edges)
-			trap->Nav_ClearAllFailedEdges();
-		}
-		*/
+		trap->Nav_ClearAllFailedEdges();
 		//No loading games in MP.
 	}
 
