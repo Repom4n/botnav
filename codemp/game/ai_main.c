@@ -7267,7 +7267,7 @@ static qboolean NewBotAI_HasWaypointNavigation(void)
 
 static float NewBotAI_GetPullkickAssumedPullSpeed(void)
 {
-	return Com_Clampf(0.0f, 2000.0f, bot_ptk_pullspeed.value);
+	return Com_Clamp(0.0f, 2000.0f, bot_ptk_pullspeed.value);
 }
 
 static int NewBotAI_GetPullkickExtraDelayMs(void)
