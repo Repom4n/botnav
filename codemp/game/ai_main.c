@@ -16191,7 +16191,7 @@ static qboolean NewBotAI_IsCombatProgressStalled(bot_state_t *bs)
 
 static void NewBotAI_RunNavigationOrAlone(bot_state_t *bs, float thinktime)
 {
-	if (NewBotAI_HasWaypointNavigation())
+	if (bot_navigation.integer)
 	{
 		bs->navObstacleUntil = 0;
 		StandardBotAI(bs, thinktime);
