@@ -1521,6 +1521,22 @@ int PassWayCheck(bot_state_t *bs, int windex)
 	return 1;
 }
 
+static int BotGetDirectionalWaypointIndex(int baseIndex, int wpDirection, int step)
+{
+	return wpDirection ? (baseIndex - step) : (baseIndex + step);
+}
+
+static qboolean BotCanTraverseWaypointIndex(bot_state_t *bs, int windex)
+{
+	if (windex < 0 || windex >= gWPNum ||
+		!gWPArray[windex] || !gWPArray[windex]->inuse)
+	{
+		return qfalse;
+	}
+
+	return PassWayCheck(bs, windex) ? qtrue : qfalse;
+}
+
 //tally up the distance between two waypoints
 float TotalTrailDistance(int start, int end, bot_state_t *bs)
 {
@@ -17787,7 +17803,7 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 				const int linearSkipAheadMax = BotGetWaypointLinearSkipAheadMax();
 				int step;
 				int aheadIndex = -1;
-				int backIndex  = bs->lastWPDir ? (bs->lastWPIndex + 1) : (bs->lastWPIndex - 1);
+				int backIndex  = BotGetDirectionalWaypointIndex(bs->lastWPIndex, !bs->lastWPDir, 1);
 
 				//the waypoint we were heading to -- if we can see it, just keep going
 				if (WPOrgVisible(&g_entities[bs->client], bs->origin, gWPArray[bs->lastWPIndex]->origin, bs->client) == 1 &&
@@ -17803,22 +17819,15 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 					for (step = 1; step <= linearSkipAheadMax; step++)
 					{
 						int midStep;
-						int candidate = bs->lastWPDir ? (bs->lastWPIndex - step) : (bs->lastWPIndex + step);
-						if (candidate < 0 || candidate >= gWPNum ||
-							!gWPArray[candidate] || !gWPArray[candidate]->inuse)
-						{
-							continue;
-						}
-						if (!PassWayCheck(bs, candidate))
+						int candidate = BotGetDirectionalWaypointIndex(bs->lastWPIndex, bs->lastWPDir, step);
+						if (!BotCanTraverseWaypointIndex(bs, candidate))
 						{
 							continue;
 						}
 						for (midStep = 1; midStep < step; midStep++)
 						{
-							int midCandidate = bs->lastWPDir ? (bs->lastWPIndex - midStep) : (bs->lastWPIndex + midStep);
-							if (midCandidate < 0 || midCandidate >= gWPNum ||
-								!gWPArray[midCandidate] || !gWPArray[midCandidate]->inuse ||
-								!PassWayCheck(bs, midCandidate))
+							int midCandidate = BotGetDirectionalWaypointIndex(bs->lastWPIndex, bs->lastWPDir, midStep);
+							if (!BotCanTraverseWaypointIndex(bs, midCandidate))
 							{
 								candidate = -1;
 								break;
