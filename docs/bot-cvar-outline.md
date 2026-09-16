@@ -16,7 +16,7 @@ This document describes all cvars added for the NewBotAI system and how they rel
 |------|---------|-------------|
 | `g_newBotAITarget` | `-1` | Target selection mode. `-1` = default (closest), `-2` = humans only, `-3` = prefer humans then bots and offer force duels to either while continuing combat, `-4` = prefer humans then bots but only offer force duels and retreat/heal instead of attacking, `>=0` = force specific client index. |
 | `bot_targetdistance` | `4096` | Max distance at which bots will engage targets. |
-| `bot_target_timeout` | `10000` | How long (ms) a bot keeps its current target lock after losing line of sight through walls/floors before dropping back to normal navigation. |
+| `bot_target_timeout` | `3000` | How long (ms) a bot keeps its current target lock after losing line of sight through walls/floors before dropping back to normal navigation. |
 | `g_newBotAITargetDistance` | `4096` | Declared but currently unused (superseded by `bot_targetdistance`). |
 | `bot_lowhangingfruitHP` | `40` | HP threshold below which a target is considered "low-hanging fruit" (easy kill). |
 | `bot_lowhanginfruitDistance` | `1024` | Max distance to prioritize low-HP targets. |
@@ -89,7 +89,7 @@ These are all percentage-based (0-100) chance weights that gate specific behavio
 | `bot_strafeduration` | `50` | Duration scale (0-100) for random strafes. 50 = 80-2500ms range. |
 | `bot_strafeOffset` | `0` | Legacy strafe offset. |
 | `bot_hopfrequency` | `0` | Scales how often the bot schedules its next hop while close to a saber enemy, covering both random ambient hops and non-emergency combat hops such as saber-throw counter jumps. The interval is only re-rolled once the bot lands from its previous hop, and is a random 0.5-8 second wait divided by this value as a percentage (100 = 0.5-8s; higher = longer/less frequent hops, lower = shorter/more frequent, 0 = disables discretionary hops). The wide range makes most hops occasional singles while an occasional short roll chains one hop straight into the next, keeping the bot unpredictable. |
-| `bot_waypointskip` | `3` | Max number of same-direction waypoints the linear navigation helper may look ahead to avoid immediate backtrack ping-pong when wandering without an active combat/objective target. |
+| `bot_waypointskip` | `2` | Max number of same-direction waypoints the linear navigation helper may look ahead to avoid immediate backtrack ping-pong when wandering without an active combat/objective target. |
 | `bot_redirectcooldown` | `800` | Cooldown (ms) after a wall-triggered redirect reaction. During this window the bot keeps the chosen redirect heading instead of immediately rerolling another wall reaction, reducing tight-space spin loops and repeated reaction hopping. |
 
 ## Gripkick Tuning
