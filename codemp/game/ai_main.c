@@ -7206,7 +7206,7 @@ static int NewBotAI_GetWallAvoidCooldownMs(void)
 static int NewBotAI_GetWallRedirectIntervalMs(void)
 {
 	const int cooldownMs = NewBotAI_GetWallAvoidCooldownMs();
-	return cooldownMs;
+	return cooldownMs > 0 ? cooldownMs : 100;
 }
 
 static float NewBotAI_GetWallEscapeTurnAngle(void)
