@@ -226,7 +226,6 @@ static qboolean NewBotAI_FindWaypointAdventureGoal(bot_state_t *bs, vec3_t prefe
 static int BotGetNewBotAITargetMode(void);
 static qboolean BotTargetModeAllowsBotEnemies(int targetMode);
 static int BotGetTargetTimeoutMs(void);
-static int BotGetWaypointLinearSkipAheadMax(void);
 static qboolean NewBotAI_ShouldRetainLostSightTarget(bot_state_t *bs, gentity_t *enemy);
 static void NewBotAI_ClearCurrentEnemyLock(bot_state_t *bs);
 
@@ -238,12 +237,6 @@ static void NewBotAI_ClearCurrentEnemyLock(bot_state_t *bs);
 #define NEWBOTAI_LOSTSIGHT_PURSUIT_MAX_MS 1200
 #define NEWBOTAI_LOSTSIGHT_PURSUIT_MAX_DISTANCE 640.0f
 #define NEWBOTAI_TARGET_COMMIT_DISTANCE 768.0f
-// Default look-ahead to keep local trail motion linear without skipping too far.
-#define NEWBOTAI_WAYPOINT_LINEAR_SKIP_AHEAD_DEFAULT 2
-#define NEWBOTAI_WP_HARDFAIL_THRESHOLD 2
-#define NEWBOTAI_WP_REPATH_COOLDOWN_MS 500
-#define NEWBOTAI_WP_REACQUIRE_NULL_MS 300
-#define NEWBOTAI_WP_HARDFAIL_DEST_IGNORE_MS 1500
 #define NEWBOTAI_ESCAPE_YAW_SPEED NEWBOTAI_TUNING_ESCAPE_YAW_SPEED
 #define NEWBOTAI_ESCAPE_YAW_OVERRIDE_MS 250
 #define NEWBOTAI_JUMP_ATTACK_GATE_MS 40
@@ -1526,22 +1519,6 @@ int PassWayCheck(bot_state_t *bs, int windex)
 	}
 
 	return 1;
-}
-
-static int BotGetDirectionalWaypointIndex(int baseIndex, int wpDirection, int step)
-{
-	return wpDirection ? (baseIndex - step) : (baseIndex + step);
-}
-
-static qboolean BotCanTraverseWaypointIndex(bot_state_t *bs, int windex)
-{
-	if (windex < 0 || windex >= gWPNum ||
-		!gWPArray[windex] || !gWPArray[windex]->inuse)
-	{
-		return qfalse;
-	}
-
-	return PassWayCheck(bs, windex) ? qtrue : qfalse;
 }
 
 //tally up the distance between two waypoints
@@ -4184,11 +4161,6 @@ void GetIdealDestination(bot_state_t *bs)
 	else
 	{
 		bs->dangerousObject = NULL;
-	}
-
-	if (!badthing && bs->wpDestIgnoreTime > level.time)
-	{
-		return;
 	}
 
 	if (!badthing && bs->dontGoBack > level.time)
@@ -11762,11 +11734,6 @@ static int BotGetTargetTimeoutMs(void)
 	return Com_Clampi(0, 60000, bot_target_timeout.integer);
 }
 
-static int BotGetWaypointLinearSkipAheadMax(void)
-{
-	return Com_Clampi(0, 8, bot_waypointskip.integer);
-}
-
 static qboolean NewBotAI_ShouldRetainLostSightTarget(bot_state_t *bs, gentity_t *enemy)
 {
 	const int targetTimeoutMs = BotGetTargetTimeoutMs();
@@ -17626,17 +17593,9 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 	if (bs->wpCurrent &&
 		(bs->wpSeenTime < level.time || bs->wpTravelTime < level.time))
 	{
-		if (bs->wpRepathLockUntil <= level.time)
-		{
-			bs->lastWPIndex = bs->wpCurrent->index;
-			bs->lastWPDir = bs->wpDirection;
-			bs->wpCurrent = NULL;
-			bs->wpRepathLockUntil = level.time + NEWBOTAI_WP_REPATH_COOLDOWN_MS;
-		}
-		else
-		{
-			bs->wpSeenTime = level.time + 250;
-		}
+		bs->lastWPIndex = bs->wpCurrent->index;
+		bs->lastWPDir = bs->wpDirection;
+		bs->wpCurrent = NULL;
 	}
 
 	if (bs->currentEnemy)
@@ -17674,110 +17633,10 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 
 	if (!bs->wpCurrent)
 	{
-		int forcedWP = -1;
-		const qboolean outOfCombat = (!bs->currentEnemy || !bs->frame_Enemy_Vis) ? qtrue : qfalse;
-
-		if (outOfCombat)
-		{
-			if (!bs->wpNoPathSince)
-			{
-				bs->wpNoPathSince = level.time;
-			}
-			else if (bs->wpNoPathSince <= level.time - NEWBOTAI_WP_REACQUIRE_NULL_MS &&
-				bs->lastWPIndex >= 0 && gWPArray[bs->lastWPIndex] && gWPArray[bs->lastWPIndex]->inuse)
-			{
-				const int forwardIndex = BotGetDirectionalWaypointIndex(bs->lastWPIndex, bs->lastWPDir, 1);
-				if (BotCanTraverseWaypointIndex(bs, bs->lastWPIndex) &&
-					WPOrgVisible(&g_entities[bs->client], bs->origin, gWPArray[bs->lastWPIndex]->origin, bs->client) == 1)
-				{
-					forcedWP = bs->lastWPIndex;
-					bs->wpDirection = bs->lastWPDir;
-				}
-				else if (BotCanTraverseWaypointIndex(bs, forwardIndex) &&
-					WPOrgVisible(&g_entities[bs->client], bs->origin, gWPArray[forwardIndex]->origin, bs->client) == 1)
-				{
-					forcedWP = forwardIndex;
-					bs->wpDirection = bs->lastWPDir;
-				}
-			}
-		}
-		else
-		{
-			bs->wpNoPathSince = 0;
-		}
-
-		wp = (forcedWP != -1) ? forcedWP : GetNearestVisibleWP(bs->origin, bs->client);
+		wp = GetNearestVisibleWP(bs->origin, bs->client);
 
 		if (wp != -1)
 		{
-			//Avoid the pick-a-waypoint-behind-us loop that makes bots pace back and
-			//forth along the trail: if the nearest visible waypoint would send us back
-			//the way we just came and there's no live destination or enemy pulling us,
-			//keep travelling in our previous direction instead of reversing. A real
-			//destination (item, objective) or a visible enemy always wins over linear
-			//wandering.
-			if (!bs->wpDestination && !bs->currentEnemy &&
-				bs->lastWPIndex >= 0 && gWPArray[bs->lastWPIndex] && gWPArray[bs->lastWPIndex]->inuse)
-			{
-				const int linearSkipAheadMax = BotGetWaypointLinearSkipAheadMax();
-				int step;
-				int aheadIndex = -1;
-				int backIndex  = BotGetDirectionalWaypointIndex(bs->lastWPIndex, !bs->lastWPDir, 1);
-
-				//the waypoint we were heading to -- if we can see it, just keep going
-				if (WPOrgVisible(&g_entities[bs->client], bs->origin, gWPArray[bs->lastWPIndex]->origin, bs->client) == 1 &&
-					PassWayCheck(bs, bs->lastWPIndex))
-				{
-					wp = bs->lastWPIndex;
-					bs->wpDirection = bs->lastWPDir;
-				}
-				//otherwise prefer a small configurable skip-ahead window in the same
-				//direction so linear movement wins over nearest-point backtracking.
-				else if (linearSkipAheadMax > 0)
-				{
-					for (step = 1; step <= linearSkipAheadMax; step++)
-					{
-						int midStep;
-						int candidate = BotGetDirectionalWaypointIndex(bs->lastWPIndex, bs->lastWPDir, step);
-						if (!BotCanTraverseWaypointIndex(bs, candidate))
-						{
-							continue;
-						}
-						for (midStep = 1; midStep < step; midStep++)
-						{
-							int midCandidate = BotGetDirectionalWaypointIndex(bs->lastWPIndex, bs->lastWPDir, midStep);
-							if (!BotCanTraverseWaypointIndex(bs, midCandidate))
-							{
-								candidate = -1;
-								break;
-							}
-						}
-						if (candidate == -1)
-						{
-							continue;
-						}
-						if (WPOrgVisible(&g_entities[bs->client], bs->origin, gWPArray[candidate]->origin, bs->client) != 1)
-						{
-							continue;
-						}
-						aheadIndex = candidate;
-						break;
-					}
-					if (aheadIndex != -1)
-					{
-						wp = aheadIndex;
-						bs->wpDirection = bs->lastWPDir;
-					}
-				}
-				//if the nearest visible point is the one directly behind where we were
-				//heading, that's the pacing case -- leave wpDirection at lastWPDir so we
-				//turn right back around at it instead of settling into a 2-point loop
-				if (aheadIndex == -1 && wp == backIndex)
-				{
-					bs->wpDirection = bs->lastWPDir;
-				}
-			}
-
 			//If we have a live objective or enemy, keep waypoint direction ordered toward
 			//that target so we don't bounce between a local triangle of nearby points.
 			if (bs->wpDestination &&
@@ -17805,8 +17664,6 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 			bs->wpTravelTime = level.time + 10000; //never take more than 10 seconds to travel to a waypoint
 			bs->lastWPIndex = bs->wpCurrent->index;
 			bs->lastWPDir = bs->wpDirection;
-			bs->wpNoPathSince = 0;
-			bs->wpHardFailCount = 0;
 		}
 	}
 
@@ -17885,46 +17742,15 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 		if (visResult == 2)
 		{
 			bs->frame_Waypoint_Vis = 0;
-			bs->wpHardFailCount++;
-			if (bs->wpHardFailCount < NEWBOTAI_WP_HARDFAIL_THRESHOLD)
-			{
-				if (bs->wpSeenTime < level.time + 300)
-				{
-					bs->wpSeenTime = level.time + 300;
-				}
-			}
-			else
-			{
-				bs->wpSeenTime = 0;
-				if (bs->wpDestIgnoreTime <= level.time)
-				{
-					bs->wpDestination = NULL;
-					bs->wpDestIgnoreTime = level.time + NEWBOTAI_WP_HARDFAIL_DEST_IGNORE_MS;
-				}
-
-				if (bs->wpRepathLockUntil <= level.time)
-				{
-					if (bs->wpDirection)
-					{
-						bs->wpDirection = 0;
-					}
-					else
-					{
-						bs->wpDirection = 1;
-					}
-					bs->wpRepathLockUntil = level.time + NEWBOTAI_WP_REPATH_COOLDOWN_MS;
-				}
-			}
+			bs->wpSeenTime = 0;
 		}
 		else if (visResult)
 		{
 			bs->frame_Waypoint_Vis = 1;
-			bs->wpHardFailCount = 0;
 		}
 		else
 		{
 			bs->frame_Waypoint_Vis = 0;
-			bs->wpHardFailCount = 0;
 		}
 	}
 
@@ -18565,11 +18391,7 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 			(bs->currentEnemy && bs->frame_Enemy_Vis) ? qtrue : qfalse))
 		{
 			bs->beStill = level.time + 100;
-			if (bs->wpRepathLockUntil <= level.time)
-			{
-				bs->wpCurrent = NULL; //force re-path
-				bs->wpRepathLockUntil = level.time + NEWBOTAI_WP_REPATH_COOLDOWN_MS;
-			}
+			bs->wpCurrent = NULL; //force re-path
 		}
 		else if (bs->jumpTime > level.time && bs->jDelay < level.time &&
 			level.clients[bs->client].pers.cmd.upmove > 0)
