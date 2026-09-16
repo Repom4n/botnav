@@ -15858,7 +15858,10 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		return;
 	}
 
-	if (!bs->frame_Enemy_Vis)
+	if (!bs->frame_Enemy_Vis &&
+		((gWPNum > 0 &&
+		  bs->lastVisibleEnemyTime < level.time - NEWBOTAI_LOST_TARGET_GRACE_MS) ||
+		 bs->frame_Enemy_Len > 8096))
 	{
 		NewBotAI_ClearLostSightCombatInput(bs);
 		NewBotAI_RunNavigationOrAlone(bs, thinktime);
