@@ -652,14 +652,7 @@ bool CNavigator::Load( const char *filename, int checksum )
 
 		STL_INSERT( m_nodes, node );
 	}
-
-	//read in the failed edges
-	FS_Read( &failedEdges, sizeof( failedEdges ), file );
-	for ( int j = 0; j < MAX_FAILED_EDGES; j++ )
-	{
-		m_edgeLookupMap.insert(std::pair<int, int>(failedEdges[j].startID, j));
-	}
-
+	ClearAllFailedEdges();
 
 	FS_FCloseFile( file );
 
@@ -702,9 +695,6 @@ bool CNavigator::Save( const char *filename, int checksum )
 	{
 		(*ni)->Save( numNodes, file );
 	}
-
-	//write out failed edges
-	FS_Write( &failedEdges, sizeof( failedEdges ), file );
 
 	FS_FCloseFile( file );
 
@@ -1843,6 +1833,10 @@ qboolean CNavigator::NodesAreNeighbors( int startID, int endID )
 
 void CNavigator::ClearFailedEdge( failedEdge_t *failedEdge )
 {
+	const int oldStartID = failedEdge ? failedEdge->startID : WAYPOINT_NONE;
+	const int oldEndID = failedEdge ? failedEdge->endID : WAYPOINT_NONE;
+	EdgeMultimapIt it;
+
 	if ( !failedEdge )
 	{
 		return;
@@ -1868,6 +1862,34 @@ void CNavigator::ClearFailedEdge( failedEdge_t *failedEdge )
 	*/
 	//clear failedEdge info
 	SetEdgeCost( failedEdge->startID, failedEdge->endID, -1 );
+	if ( oldStartID != WAYPOINT_NONE )
+	{
+		for ( it = m_edgeLookupMap.lower_bound( oldStartID ); it != m_edgeLookupMap.upper_bound( oldStartID ); )
+		{
+			if ( it->second == ( failedEdge - failedEdges ) )
+			{
+				it = m_edgeLookupMap.erase( it );
+			}
+			else
+			{
+				++it;
+			}
+		}
+	}
+	if ( oldEndID != WAYPOINT_NONE )
+	{
+		for ( it = m_edgeLookupMap.lower_bound( oldEndID ); it != m_edgeLookupMap.upper_bound( oldEndID ); )
+		{
+			if ( it->second == ( failedEdge - failedEdges ) )
+			{
+				it = m_edgeLookupMap.erase( it );
+			}
+			else
+			{
+				++it;
+			}
+		}
+	}
 	failedEdge->startID = failedEdge->endID = WAYPOINT_NONE;
 	failedEdge->entID = ENTITYNUM_NONE;
 	failedEdge->checkTime = 0;
@@ -1875,6 +1897,7 @@ void CNavigator::ClearFailedEdge( failedEdge_t *failedEdge )
 
 void CNavigator::ClearAllFailedEdges( void )
 {
+	m_edgeLookupMap.clear();
 	memset( &failedEdges, WAYPOINT_NONE, sizeof( failedEdges ) );
 	for ( int j = 0; j < MAX_FAILED_EDGES; j++ )
 	{
@@ -2789,4 +2812,3 @@ bool CPriorityQueue::Empty()
 {
    return( mHeap.empty() );
 };
-

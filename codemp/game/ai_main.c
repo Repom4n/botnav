@@ -5758,7 +5758,7 @@ int BotFallbackNavigation(bot_state_t *bs)
 	vec3_t b_angle, fwd, trto, mins, maxs;
 	trace_t tr;
 
-	if (!bot_navigation.integer)
+	if (!NewBotAI_HasWaypointNavigation())
 	{
 		return 0;
 	}
@@ -5795,75 +5795,7 @@ int BotFallbackNavigation(bot_state_t *bs)
 	}
 	else
 	{
-		if (gWPNum <= 0)
-		{
-			vec3_t adventureDir;
-
-			if (bs->navRecoverStuckSince <= 0)
-			{
-				bs->navRecoverStuckSince = level.time;
-			}
-			VectorCopy(fwd, adventureDir);
-			adventureDir[2] = 0.0f;
-			if (VectorNormalize(adventureDir) > 0.0f &&
-				NewBotAI_FindWaypointAdventureGoal(bs, adventureDir, trto))
-			{
-				VectorSubtract(trto, bs->origin, adventureDir);
-				adventureDir[2] = 0.0f;
-				if (VectorNormalize(adventureDir) > 0.0f)
-				{
-					vectoangles(adventureDir, b_angle);
-					bs->goalAngles[YAW] = AngleNormalize360(b_angle[YAW]);
-					bs->goalAngles[PITCH] = 0.0f;
-					bs->goalAngles[ROLL] = 0.0f;
-					if (bs->wallAvoidNextTime <= level.time)
-					{
-						const int rerollMs = NewBotAI_GetWallRedirectIntervalMs();
-
-						bs->wallAvoidNextTime = level.time + rerollMs;
-						bs->customNavReverseTime = level.time + rerollMs;
-						NewBotAI_StartEscapeYawOverride(bs, rerollMs);
-					}
-					VectorCopy(trto, bs->goalPosition);
-					return 1;
-				}
-			}
-			if (bs->wallAvoidNextTime <= level.time &&
-				(bs->customNavReverseTime < level.time ||
-				bs->navRecoverStuckSince <= level.time - NewBotAI_GetRecoveryStuckTimeoutMs()))
-			{
-				const int rerollMs = NewBotAI_GetWallRedirectIntervalMs();
-				const float baseTurn = NewBotAI_GetRecoveryYawSpeedDegPerSec() * 0.5f;
-				float turn = baseTurn;
-				if (turn < 20.0f)
-				{
-					turn = 20.0f;
-				}
-				turn *= (Q_irand(0, 1) ? 1.0f : -1.0f);
-				bs->goalAngles[YAW] = AngleNormalize360(bs->goalAngles[YAW] + turn);
-				bs->customNavReverseTime = level.time + rerollMs;
-				bs->wallAvoidNextTime = level.time + rerollMs;
-				bs->navRecoverStuckSince = level.time;
-				NewBotAI_StartEscapeYawOverride(bs, rerollMs);
-			}
-			VectorCopy(bs->goalAngles, b_angle);
-			AngleVectors(b_angle, fwd, NULL, NULL);
-			trto[0] = bs->origin[0] + fwd[0]*96;
-			trto[1] = bs->origin[1] + fwd[1]*96;
-			trto[2] = bs->origin[2];
-			VectorCopy(trto, bs->goalPosition);
-			return 1;
-		}
-		else if (bs->customNavReverseTime < level.time)
-		{
-			const int rerollMs = NewBotAI_GetWallRedirectIntervalMs();
-			bs->goalAngles[YAW] = AngleNormalize360(bs->goalAngles[YAW] + NewBotAI_GetWallEscapeTurnAngle());
-			bs->customNavReverseTime = level.time + rerollMs;
-		}
-		trto[0] = bs->origin[0] - fwd[0]*48;
-		trto[1] = bs->origin[1] - fwd[1]*48;
-		trto[2] = bs->origin[2];
-		VectorCopy(trto, bs->goalPosition);
+		VectorCopy(bs->origin, bs->goalPosition);
 		return 1;
 	}
 }
@@ -16191,7 +16123,7 @@ static qboolean NewBotAI_IsCombatProgressStalled(bot_state_t *bs)
 
 static void NewBotAI_RunNavigationOrAlone(bot_state_t *bs, float thinktime)
 {
-	if (bot_navigation.integer)
+	if (NewBotAI_HasWaypointNavigation())
 	{
 		bs->navObstacleUntil = 0;
 		StandardBotAI(bs, thinktime);
@@ -18572,6 +18504,7 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 		}
 #ifdef BOT_STRAFE_AVOIDANCE
 		else if ((!bs->frame_Enemy_Vis || !bs->currentEnemy || bs->frame_Enemy_Len > 512) &&
+			!NewBotAI_HasWaypointNavigation() &&
 			!NewBotAI_IsRecoveryMovementActive(bs) &&
 			!NewBotAI_HasExclusiveFlipkickMovement(bs))
 		{

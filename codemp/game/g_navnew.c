@@ -26,6 +26,9 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
 qboolean NAV_CheckAhead( gentity_t *self, vec3_t end, trace_t *trace, int clipmask );
 qboolean NAV_TestForBlocked( gentity_t *self, gentity_t *goal, gentity_t *blocker, float distance, int *flags );
 
+#define NAVNEW_NOWAYPOINT_RETRY_MIN_MS 100
+#define NAVNEW_NOWAYPOINT_RETRY_MAX_MS 250
+
 void G_Line( vec3_t start, vec3_t end, vec3_t color, float alpha );
 void G_Cube( vec3_t mins, vec3_t maxs, vec3_t color, float alpha );
 void G_CubeOutline( vec3_t mins, vec3_t maxs, int time, unsigned int color, float alpha );
@@ -613,6 +616,28 @@ int	NAVNEW_MoveToGoal( gentity_t *self, navInfo_t *info )
 	if( self->NPC->goalEntity == NULL )
 		return WAYPOINT_NONE;
 
+	if ( self->waypoint == WAYPOINT_NONE && self->lastWaypoint != WAYPOINT_NONE )
+	{
+		self->waypoint = trap->Nav_GetNearestNode( (sharedEntity_t *)self, self->lastWaypoint, NF_CLEAR_PATH, WAYPOINT_NONE );
+		if ( self->waypoint != WAYPOINT_NONE )
+		{
+			self->noWaypointTime = 0;
+		}
+	}
+	if ( self->NPC->goalEntity->waypoint == WAYPOINT_NONE &&
+		self->NPC->goalEntity->lastWaypoint != WAYPOINT_NONE )
+	{
+		self->NPC->goalEntity->waypoint = trap->Nav_GetNearestNode(
+			(sharedEntity_t *)self->NPC->goalEntity,
+			self->NPC->goalEntity->lastWaypoint,
+			NF_CLEAR_PATH,
+			WAYPOINT_NONE );
+		if ( self->NPC->goalEntity->waypoint != WAYPOINT_NONE )
+		{
+			self->NPC->goalEntity->noWaypointTime = 0;
+		}
+	}
+
 	if ( self->waypoint == WAYPOINT_NONE && self->noWaypointTime > level.time )
 	{//didn't have a valid one in about the past second, don't look again just yet
 		return WAYPOINT_NONE;
@@ -631,11 +656,11 @@ int	NAVNEW_MoveToGoal( gentity_t *self, navInfo_t *info )
 	{//one of us didn't have a valid waypoint!
 		if ( self->waypoint == NODE_NONE )
 		{//don't even try to find one again for a bit
-			self->noWaypointTime = level.time + Q_irand( 500, 1500 );
+			self->noWaypointTime = level.time + Q_irand( NAVNEW_NOWAYPOINT_RETRY_MIN_MS, NAVNEW_NOWAYPOINT_RETRY_MAX_MS );
 		}
 		if ( self->NPC->goalEntity->waypoint == NODE_NONE )
 		{//don't even try to find one again for a bit
-			self->NPC->goalEntity->noWaypointTime = level.time + Q_irand( 500, 1500 );
+			self->NPC->goalEntity->noWaypointTime = level.time + Q_irand( NAVNEW_NOWAYPOINT_RETRY_MIN_MS, NAVNEW_NOWAYPOINT_RETRY_MAX_MS );
 		}
 		return WAYPOINT_NONE;
 	}
@@ -643,7 +668,7 @@ int	NAVNEW_MoveToGoal( gentity_t *self, navInfo_t *info )
 	{
 		if ( self->NPC->goalEntity->noWaypointTime < level.time )
 		{
-			self->NPC->goalEntity->noWaypointTime = level.time + Q_irand( 500, 1500 );
+			self->NPC->goalEntity->noWaypointTime = level.time + Q_irand( NAVNEW_NOWAYPOINT_RETRY_MIN_MS, NAVNEW_NOWAYPOINT_RETRY_MAX_MS );
 		}
 	}
 
