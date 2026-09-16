@@ -420,24 +420,8 @@ typedef struct bot_state_s
 	int					escapeYawOverrideUntil; // while > level.time, yaw escapes/rolls use the fixed NEWBOTAI_TUNING_ESCAPE_YAW_SPEED turn rate
 	int					lastGripkickSuccessTime; // level.time of the most recent confirmed gripkick hit/knockdown, used to weight pullkick follow-ups
 
-	int					navObstacleUntil; // stay in waypoint nav mode until this time when an obstacle blocks path to enemy
-	int					combatNavHoldUntil; // remain in combat for 1500ms before returning to waypoint navigation
 	int					lastHurtTime;     // level.time when this bot last took damage (set in BotDamageNotification)
-	int					enemyWaypointFallbackIndex; // cached nearest visible waypoint for currentEnemy when enemy->waypoint is unavailable
-	int					enemyWaypointFallbackTime; // when enemyWaypointFallbackIndex should be refreshed
-	int					enemyWaypointFallbackEnemyNum; // enemy entity number associated with enemyWaypointFallbackIndex
-	vec3_t				combatStuckOrigin; // sampled combat position used to detect failing to make meaningful progress toward a target
-	int					combatStuckSince; // when combatStuckOrigin was sampled/reset
-	vec3_t				navRecoverOrigin; // sampled position while in direct recovery movement
-	int					navRecoverStuckSince; // when navRecoverOrigin was last refreshed
-	int					navRecoverMode; // 0 = direct pursuit, 1 = waypoint routing phase, 2 = temporary recovery/adventure traversal
-	int					navRecoverModeUntil; // expiry for navRecoverMode==1
-	int					navHoldUntil; // expiry for navRecoverMode==2 temporary walk-forward traversal
-	qboolean			navBuildWaypointTrail; // on maps that start with no waypoints, append a waypoint at each adventure-phase end
 	int					lightningHoldUntil; // keep selecting lightning until this time unless the target closes inside bot_lightningdistance
-	vec3_t				navHoldDirection; // held walk-forward direction captured from waypoint guidance
-	vec3_t				navHoldGoal; // runtime forward target projected from navHoldDirection
-	qboolean			navHoldGoalValid; // true after waypoint phase acquires a walk-forward direction
 	int					duelNoStrafeUntil; // while > level.time, suppress lateral move input to ease duel acceptance aiming
 	int					nextHopTime;      // level.time the next bot_hopfrequency-gated hop may fire (ambient/random or discretionary combat hop) - set to -1 after firing so the interval re-rolls only once we land again
 	qboolean			hopWasGrounded;   // groundEntityNum state as of the last hop-frequency update - used to detect a fresh landing (from a flipkick/knockdown/etc, not our own hop) so we re-roll instead of firing immediately
