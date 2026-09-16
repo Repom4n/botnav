@@ -7209,6 +7209,18 @@ static int NewBotAI_GetWallRedirectIntervalMs(void)
 	return cooldownMs;
 }
 
+static float NewBotAI_GetWallEscapeTurnAngle(void)
+{
+	const float yawTurn = (float)Q_irand(NEWBOTAI_WALL_ESCAPE_TURN_MIN_DEG, NEWBOTAI_WALL_ESCAPE_TURN_MAX_DEG);
+
+	return (Q_irand(0, 1) ? yawTurn : -yawTurn);
+}
+
+static int NewBotAI_GetLightningBurstHoldMs(void)
+{
+	return Q_irand(1000, 2000);
+}
+
 static void NewBotAI_ClearLostSightCombatInput(bot_state_t *bs)
 {
 	if (!bs || bs->frame_Enemy_Vis)
@@ -7326,93 +7338,6 @@ static qboolean NewBotAI_CanContinueLightningBurst(bot_state_t *bs)
 	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, a_fo);
 	vectoangles(a_fo, a_fo);
 	if (!InFieldOfVision(bs->viewangles, 50, a_fo))
-	{
-		return qfalse;
-	}
-
-	return qtrue;
-}
-
-static qboolean NewBotAI_GetRecoveryHeadingVector(bot_state_t *bs, vec3_t outDir)
-{
-	vec3_t dir;
-	int goalWPIndex;
-
-	if (!bs)
-	{
-		return qfalse;
-	}
-
-	VectorCopy(bs->goalMovedir, dir);
-	dir[2] = 0;
-	if (VectorNormalize(dir) > 0.0f)
-	{
-		VectorCopy(dir, outDir);
-		return qtrue;
-	}
-
-	if (bs->wpCurrent)
-	{
-		goalWPIndex = bs->wpDirection ? (bs->wpCurrent->index - 1) : (bs->wpCurrent->index + 1);
-		if (goalWPIndex >= 0 && goalWPIndex < gWPNum &&
-			gWPArray[goalWPIndex] && gWPArray[goalWPIndex]->inuse)
-		{
-			VectorSubtract(gWPArray[goalWPIndex]->origin, bs->wpCurrent->origin, dir);
-			dir[2] = 0;
-			if (VectorNormalize(dir) > 0.0f)
-			{
-				VectorCopy(dir, outDir);
-				return qtrue;
-			}
-		}
-
-		VectorSubtract(bs->wpCurrent->origin, bs->origin, dir);
-		dir[2] = 0;
-		if (VectorNormalize(dir) > 0.0f)
-		{
-			VectorCopy(dir, outDir);
-			return qtrue;
-		}
-	}
-
-	AngleVectors(bs->goalAngles, dir, NULL, NULL);
-	dir[2] = 0;
-	if (VectorNormalize(dir) <= 0.0f)
-	{
-		return qfalse;
-	}
-
-	VectorCopy(dir, outDir);
-	return qtrue;
-}
-
-static qboolean NewBotAI_IsReachableAdventureGoal(bot_state_t *bs, vec3_t goalPos)
-{
-	vec3_t floorStart, floorEnd;
-	trace_t floorTrace;
-	int contents;
-
-	if (!bs)
-	{
-		return qfalse;
-	}
-
-	VectorCopy(goalPos, floorStart);
-	floorStart[2] += 24.0f;
-	VectorCopy(goalPos, floorEnd);
-	floorEnd[2] -= 96.0f;
-	JP_Trace(&floorTrace, floorStart, NULL, NULL, floorEnd, bs->client, MASK_PLAYERSOLID, qfalse, 0, 0);
-	if (floorTrace.fraction >= 1.0f)
-	{
-		return qfalse;
-	}
-	if ((floorStart[2] - floorTrace.endpos[2]) > 80.0f)
-	{
-		return qfalse;
-	}
-
-	contents = trap->PointContents(floorTrace.endpos, bs->client);
-	if (contents & (CONTENTS_LAVA|CONTENTS_SLIME|CONTENTS_NODROP))
 	{
 		return qfalse;
 	}
