@@ -15753,10 +15753,6 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		}
 		else {
 			bs->currentEnemy = &g_entities[closestID];
-			if (gWPNum > 0 && bs->lastVisibleEnemyTime < level.time - NEWBOTAI_LOST_TARGET_GRACE_MS) {
-				NewBotAI_RunNavigationOrAlone(bs, thinktime);
-				return;
-			}
 		}
 	}
 
@@ -16577,8 +16573,6 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 				bs->enemySeenTime = 0;
 				bs->lastVisibleEnemyIndex = ENTITYNUM_NONE;
 				bs->lastVisibleEnemyTime = 0;
-				bs->pullKickJumpTime = 0;
-				bs->timeToReact = 0;
 				NewBotAI_ClearLostSightCombatInput(bs);
 			}
 		}
