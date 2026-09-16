@@ -17019,7 +17019,9 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	else if (NewBotAI_ShouldRetainLostSightTarget(bs, bs->currentEnemy))
 	{
 		const int targetTimeoutMs = BotGetTargetTimeoutMs();
-		bs->enemySeenTime = bs->lastVisibleEnemyTime + ((targetTimeoutMs > 0) ? targetTimeoutMs : ENEMY_FORGET_MS);
+		const int targetTimeoutTime = bs->lastVisibleEnemyTime + ((targetTimeoutMs > 0) ? targetTimeoutMs : ENEMY_FORGET_MS);
+		const int forgetTime = bs->lastVisibleEnemyTime + ENEMY_FORGET_MS;
+		bs->enemySeenTime = (targetTimeoutTime > forgetTime) ? targetTimeoutTime : forgetTime;
 	}
 	else
 	{
