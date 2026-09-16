@@ -267,9 +267,12 @@ typedef struct bot_state_s
 
 	int					randomNavTime;
 	int					randomNav;
-    int					customNavReverseTime;
+	int					customNavReverseTime;
 	int					lastWPIndex;	//index of the waypoint we were travelling to before wpCurrent was cleared; -1 if none
 	int					lastWPDir;		//wpDirection we were travelling in when lastWPIndex was set
+	int					wpNoPathSince; // timestamp when wpCurrent first became NULL while not actively fighting
+	int					wpHardFailCount; // consecutive hard waypoint-visibility failures (WPOrgVisible==2)
+	int					wpRepathLockUntil; // cooldown gate before repeating aggressive wpCurrent reset/flip
 
 	int					saberSpecialist;
 
