@@ -12,6 +12,11 @@
 #endif
 
 static char LOCAL_DB_PATH[MAX_OSPATH];
+#define BOT_DUEL_RANKED_LIMIT_PER_LEVEL 5
+#define BOT_DUEL_LEVEL_MIN 1
+#define BOT_DUEL_LEVEL_MAX 10
+static int s_botLevelRankedDuelSessionCounts[BOT_DUEL_LEVEL_MAX + 1];
+static int s_botLevelRankedDuelSessionDayBucket = -1;
 //#define GLOBAL_DB_PATH sv_globalDBPath.string
 //#define MAX_TMP_RACELOG_SIZE 80 * 1024
 
@@ -449,13 +454,123 @@ int GetEloKValue(int numDuels) { //Also take rank into account
 	return k3;
 }
 
-void G_AddDuelToDB(char *winner, char *loser, int type, int duration, int winner_hp, int winner_shield, int end_time) {
-	sqlite3 * db;
-    char * sql;
-    sqlite3_stmt * stmt;
-	int s;
+static int G_ParseBotLevelName(const char *name)
+{
+	int level = 0;
 
-	CALL_SQLITE (open (LOCAL_DB_PATH, & db));
+	if (!name || strncmp(name, "botlvl", 6))
+	{
+		return 0;
+	}
+
+	level = atoi(name + 6);
+	if (level < BOT_DUEL_LEVEL_MIN || level > BOT_DUEL_LEVEL_MAX)
+	{
+		return 0;
+	}
+
+	return level;
+}
+
+static int G_GetRankedBotLevelDuelsToday(int botLevel, int end_time, sqlite3 *db)
+{
+	char *sql;
+	sqlite3_stmt *stmt;
+	int s;
+	int count = 0;
+	int dayStart;
+	int dayEnd;
+	char botLevelName[16];
+
+	if (!db || botLevel < BOT_DUEL_LEVEL_MIN || botLevel > BOT_DUEL_LEVEL_MAX)
+	{
+		return 0;
+	}
+
+	dayStart = end_time - (end_time % 86400);
+	dayEnd = dayStart + 86400;
+	Com_sprintf(botLevelName, sizeof(botLevelName), "botlvl%i", botLevel);
+
+	sql = "SELECT COUNT(*) FROM LocalDuel "
+		"WHERE end_time >= ? AND end_time < ? "
+		"AND winner_elo > -998 AND loser_elo > -998 "
+		"AND (winner = ? OR loser = ?)";
+	CALL_SQLITE (prepare_v2 (db, sql, strlen (sql) + 1, & stmt, NULL));
+	CALL_SQLITE (bind_int (stmt, 1, dayStart));
+	CALL_SQLITE (bind_int (stmt, 2, dayEnd));
+	CALL_SQLITE (bind_text (stmt, 3, botLevelName, -1, SQLITE_TRANSIENT));
+	CALL_SQLITE (bind_text (stmt, 4, botLevelName, -1, SQLITE_TRANSIENT));
+
+	s = sqlite3_step(stmt);
+	if (s == SQLITE_ROW) {
+		count = sqlite3_column_int(stmt, 0);
+	}
+	else if (s != SQLITE_DONE) {
+		G_ErrorPrint("ERROR: SQL Select Failed (G_GetRankedBotLevelDuelsToday)", s);
+	}
+
+	CALL_SQLITE (finalize(stmt));
+	return count;
+}
+
+static qboolean G_ShouldRankBotVsBotDuel(const char *winner, const char *loser, int end_time, sqlite3 *db)
+{
+	int winnerLevel;
+	int loserLevel;
+	int dayBucket;
+
+	winnerLevel = G_ParseBotLevelName(winner);
+	loserLevel = G_ParseBotLevelName(loser);
+
+	if (!winnerLevel || !loserLevel)
+	{
+		return qtrue;
+	}
+
+	dayBucket = end_time - (end_time % 86400);
+	if (s_botLevelRankedDuelSessionDayBucket != dayBucket)
+	{
+		memset(s_botLevelRankedDuelSessionCounts, 0, sizeof(s_botLevelRankedDuelSessionCounts));
+		s_botLevelRankedDuelSessionDayBucket = dayBucket;
+	}
+
+	if (s_botLevelRankedDuelSessionCounts[winnerLevel] >= BOT_DUEL_RANKED_LIMIT_PER_LEVEL ||
+		s_botLevelRankedDuelSessionCounts[loserLevel] >= BOT_DUEL_RANKED_LIMIT_PER_LEVEL)
+	{
+		return qfalse;
+	}
+
+	if (G_GetRankedBotLevelDuelsToday(winnerLevel, end_time, db) >= BOT_DUEL_RANKED_LIMIT_PER_LEVEL ||
+		G_GetRankedBotLevelDuelsToday(loserLevel, end_time, db) >= BOT_DUEL_RANKED_LIMIT_PER_LEVEL)
+	{
+		return qfalse;
+	}
+
+	return qtrue;
+}
+
+static void G_TrackRankedBotVsBotDuel(const char *winner, const char *loser)
+{
+	int winnerLevel = G_ParseBotLevelName(winner);
+	int loserLevel = G_ParseBotLevelName(loser);
+
+	if (!winnerLevel || !loserLevel)
+	{
+		return;
+	}
+
+	s_botLevelRankedDuelSessionCounts[winnerLevel]++;
+	if (loserLevel != winnerLevel)
+	{
+		s_botLevelRankedDuelSessionCounts[loserLevel]++;
+	}
+}
+
+static void G_AddDuelToDBWithHandle(sqlite3 *db, char *winner, char *loser, int type, int duration, int winner_hp, int winner_shield, int end_time)
+{
+	char *sql;
+	sqlite3_stmt *stmt;
+	int s;
 
 	sql = "INSERT INTO LocalDuel(winner, loser, duration, type, winner_hp, winner_shield, end_time, winner_elo, loser_elo, odds) VALUES (?, ?, ?, ?, ?, ?, ?, -999, -999, 0)";
 	CALL_SQLITE (prepare_v2 (db, sql, strlen (sql) + 1, & stmt, NULL));
@@ -472,6 +587,13 @@ void G_AddDuelToDB(char *winner, char *loser, int type, int duration, int winner
 	}
 
 	CALL_SQLITE (finalize(stmt));
+}
+
+void G_AddDuelToDB(char *winner, char *loser, int type, int duration, int winner_hp, int winner_shield, int end_time) {
+	sqlite3 * db;
+
+	CALL_SQLITE (open (LOCAL_DB_PATH, & db));
+	G_AddDuelToDBWithHandle(db, winner, loser, type, duration, winner_hp, winner_shield, end_time);
 
 	CALL_SQLITE (close(db));
 }
@@ -823,7 +945,18 @@ void G_AddDuel(char *winner, char *loser, int start_time, int type, int winner_h
 #if _ELORANKING	
 	if (g_eloRanking.integer) {
 		CALL_SQLITE (open (LOCAL_DB_PATH, & db));
-		G_AddDuelElo(winner, loser, type, duration, winner_hp, winner_shield, 0, rawtime, db);
+		{
+			const qboolean shouldRankDuel = G_ShouldRankBotVsBotDuel(winner, loser, rawtime, db);
+			if (shouldRankDuel)
+			{
+				G_AddDuelElo(winner, loser, type, duration, winner_hp, winner_shield, 0, rawtime, db);
+				G_TrackRankedBotVsBotDuel(winner, loser);
+			}
+			else
+			{
+				G_AddDuelToDBWithHandle(db, winner, loser, type, duration, winner_hp, winner_shield, rawtime);
+			}
+		}
 		CALL_SQLITE (close(db));
 	}
 #endif

@@ -5735,11 +5735,6 @@ int BotFallbackNavigation(bot_state_t *bs)
 	vec3_t b_angle, fwd, trto, mins, maxs;
 	trace_t tr;
 
-	if (!bot_navigation.integer)
-	{
-		return 0;
-	}
-
 	if (bs->currentEnemy && bs->frame_Enemy_Vis)
 	{
 		return 2; //we're busy
@@ -7269,17 +7264,17 @@ static float NewBotAI_GetRecoveryYawSpeedDegPerSec(void)
 
 static int NewBotAI_GetRecoveryWaypointPhaseMs(void)
 {
-	return Com_Clampi(0, 30000, bot_nav_waypointphase.integer);
+	return 0;
 }
 
 static int NewBotAI_GetRecoveryAdventureTimeMs(void)
 {
-	return Com_Clampi(0, 30000, bot_nav_adventuretime.integer);
+	return 0;
 }
 
 static int NewBotAI_GetRecoveryMode(void)
 {
-	return Com_Clampi(0, 2, bot_recovery.integer);
+	return 0;
 }
 
 static int NewBotAI_GetRecoveryYawIntervalMs(void)
@@ -11821,6 +11816,24 @@ static qboolean NewBotAI_InFFAExploreWindow(bot_state_t *bs, int targetMode)
 	return (bs->duelCompletedCount >= bot_duelcountmax.integer) ? qtrue : qfalse;
 }
 
+static qboolean NewBotAI_IsBotVsBotDuelCooldownActive(bot_state_t *bs, gentity_t *enemy, int targetMode)
+{
+	if (!bs || !enemy)
+	{
+		return qfalse;
+	}
+	if (!BotTargetModeAllowsBotDuelChallenges(targetMode))
+	{
+		return qfalse;
+	}
+	if (!(g_entities[bs->client].r.svFlags & SVF_BOT) || !(enemy->r.svFlags & SVF_BOT))
+	{
+		return qfalse;
+	}
+
+	return (bs->botChallengingTime > level.time) ? qtrue : qfalse;
+}
+
 //Bots may only request a duel once every 7 seconds by default; bot-initiated bot-vs-bot
 //offers are throttled much harder (2 minutes) in -3/-4 target modes so human duel
 //opportunities are not crowded out by rapid bot challenge loops.
@@ -11846,6 +11859,10 @@ static qboolean NewBotAI_ShouldIssueBotDuelChallenge(bot_state_t *bs, int target
 		return qfalse;
 	}
 	if (bs->cur_ps.duelInProgress || bs->currentEnemy->client->ps.duelInProgress || bs->botChallengingTime > level.time)
+	{
+		return qfalse;
+	}
+	if (NewBotAI_IsBotVsBotDuelCooldownActive(bs, bs->currentEnemy, targetMode))
 	{
 		return qfalse;
 	}
@@ -16181,15 +16198,8 @@ static qboolean NewBotAI_IsCombatProgressStalled(bot_state_t *bs)
 
 static void NewBotAI_RunNavigationOrAlone(bot_state_t *bs, float thinktime)
 {
-	if (bot_navigation.integer)
-	{
-		bs->navObstacleUntil = 0;
-		StandardBotAI(bs, thinktime);
-	}
-	else
-	{
-		NewBotAI_DoAloneStuff(bs, thinktime);
-	}
+	bs->navObstacleUntil = 0;
+	StandardBotAI(bs, thinktime);
 }
 
 int NewBotAI_ScanForEnemies(bot_state_t* bs) {
@@ -16430,6 +16440,10 @@ static qboolean BotTryAcceptAnyDuelChallenge(bot_state_t *bs, int targetMode)
 		}
 
 		if (challenger->health < 1 || challenger->client->ps.duelIndex != bs->client || challenger->client->ps.duelTime <= level.time)
+		{
+			continue;
+		}
+		if (NewBotAI_IsBotVsBotDuelCooldownActive(bs, challenger, targetMode))
 		{
 			continue;
 		}
@@ -16751,6 +16765,24 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	if (bs->wasDuelInProgress && !bs->cur_ps.duelInProgress &&
 		BotTargetModeAllowsBotDuelChallenges(targetMode))
 	{
+		if (oldEnemy && (g_entities[bs->client].r.svFlags & SVF_BOT) && (oldEnemy->r.svFlags & SVF_BOT))
+		{
+			const int duelCooldownMs = NewBotAI_GetDuelRequestCooldownMs(
+				NEWBOTAI_DUEL_REQUEST_COOLDOWN_MS,
+				NEWBOTAI_DUEL_REQUEST_BOT_VS_BOT_COOLDOWN_MS,
+				BotTargetModeUsesExtendedBotDuelCooldown(targetMode) ? 1 : 0,
+				1,
+				1);
+			if (duelCooldownMs > 0)
+			{
+				const int cooldownUntil = level.time + duelCooldownMs;
+				if (cooldownUntil > bs->botChallengingTime)
+				{
+					bs->botChallengingTime = cooldownUntil;
+				}
+			}
+		}
+
 		bs->duelCompletedCount++;
 		if (bs->duelCompletedCount >= bot_duelcountmax.integer)
 		{
@@ -16936,7 +16968,8 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	//away) - fall through into normal combat/navigation so it actually fights and
 	//explores for a new opponent, same as -3 already does.
 	if (BotTargetModeIsForceDuelOnly(targetMode) && !bs->cur_ps.duelInProgress &&
-		!NewBotAI_InFFAExploreWindow(bs, targetMode))
+		!NewBotAI_InFFAExploreWindow(bs, targetMode) &&
+		!NewBotAI_IsBotVsBotDuelCooldownActive(bs, bs->currentEnemy, targetMode))
 	{
 		NewBotAI_RunForceDuelOnly(bs);
 		return;
@@ -16970,136 +17003,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		return;
 	}
 
-	if (bot_navigation.integer)
-	{
-		const int recoveryMode = NewBotAI_GetRecoveryMode();
-		const int waypointPhaseMs = NewBotAI_GetRecoveryWaypointPhaseMs();
-		const qboolean recoveryContext = NewBotAI_IsRecoveryNavigationContext(bs);
-		const qboolean canUseWaypointFallback = (recoveryContext && recoveryMode > 0) ? NewBotAI_CanUseWaypointFallbackInCombat(bs) : qfalse;
-		const qboolean shouldFallbackToWaypoints = recoveryContext ? NewBotAI_ShouldFallbackToWaypoints(bs) : qfalse;
-
-		if (recoveryMode <= 0)
-		{
-			NewBotAI_ResetRecoveryMovement(bs);
-		}
-		else if (!recoveryContext)
-		{
-			NewBotAI_ResetRecoveryMovement(bs);
-		}
-		else if (NewBotAI_ForceRecoverFromStalledNavigation(bs))
-		{
-			NewBotAI_RunNavigationOrAlone(bs, thinktime);
-			return;
-		}
-
-		if (bs->navRecoverMode == NEWBOTAI_NAV_RECOVERY_MODE_WAYPOINT &&
-			bs->navRecoverModeUntil <= level.time)
-		{
-			if (canUseWaypointFallback && NewBotAI_StartWaypointHeadingHold(bs))
-			{
-				bs->navRecoverMode = NEWBOTAI_NAV_RECOVERY_MODE_HOLD;
-			}
-			else if (canUseWaypointFallback)
-			{
-				if (!NewBotAI_EnterWaypointRecovery(bs, waypointPhaseMs, qfalse))
-				{
-					NewBotAI_ResetRecoveryMovement(bs);
-				}
-			}
-			else
-			{
-				NewBotAI_ResetRecoveryMovement(bs);
-			}
-		}
-
-		if (bs->navRecoverMode == NEWBOTAI_NAV_RECOVERY_MODE_HOLD)
-		{
-			if (!recoveryContext)
-			{
-				NewBotAI_ResetRecoveryMovement(bs);
-			}
-			else if (bs->navHoldUntil > level.time)
-			{
-				if (NewBotAI_RunWaypointHeadingHold(bs))
-				{
-					return;
-				}
-				if (NewBotAI_GetRecoveryMode() >= 2 && canUseWaypointFallback &&
-					shouldFallbackToWaypoints &&
-					waypointPhaseMs > 0)
-				{
-					if (!NewBotAI_EnterWaypointRecovery(bs, waypointPhaseMs, qtrue))
-					{
-						NewBotAI_ResetRecoveryMovement(bs);
-					}
-				}
-				else
-				{
-					NewBotAI_ResetRecoveryMovement(bs);
-				}
-			}
-			else
-			{
-				if (!NewBotAI_EnterWaypointRecovery(bs, waypointPhaseMs, qtrue))
-				{
-					NewBotAI_ResetRecoveryMovement(bs);
-				}
-			}
-		}
-
-		if (bs->navRecoverMode == NEWBOTAI_NAV_RECOVERY_MODE_WAYPOINT &&
-			bs->navRecoverModeUntil > level.time &&
-			recoveryContext && canUseWaypointFallback)
-		{
-			(void)NewBotAI_UpdateWaypointHeadingGoal(bs);
-			NewBotAI_ClearLostSightCombatInput(bs);
-			NewBotAI_MaintainWaypointFallbackEnemyLock(bs);
-			if (bs->frame_Enemy_Vis && NewBotAI_HasValidCurrentEnemy(bs))
-			{
-				StandardBotAI(bs, thinktime);
-			}
-			else
-			{
-				NewBotAI_RunNavigationOrAlone(bs, thinktime);
-			}
-			bs->ideal_viewangles[PITCH] = 0.0f;
-			bs->goalAngles[PITCH] = 0.0f;
-			bs->ideal_viewangles[ROLL] = 0.0f;
-			bs->goalAngles[ROLL] = 0.0f;
-			return;
-		}
-
-		if (recoveryContext && canUseWaypointFallback && shouldFallbackToWaypoints)
-		{
-			const int waypointFallbackDuration = (waypointPhaseMs > 0) ? waypointPhaseMs : 1;
-			if (NewBotAI_EnterWaypointRecovery(bs, waypointFallbackDuration, qfalse))
-			{
-				NewBotAI_ClearLostSightCombatInput(bs);
-				NewBotAI_MaintainWaypointFallbackEnemyLock(bs);
-				if (bs->frame_Enemy_Vis && NewBotAI_HasValidCurrentEnemy(bs))
-				{
-					StandardBotAI(bs, thinktime);
-				}
-				else
-				{
-					NewBotAI_RunNavigationOrAlone(bs, thinktime);
-				}
-				bs->ideal_viewangles[PITCH] = 0.0f;
-				bs->goalAngles[PITCH] = 0.0f;
-				bs->ideal_viewangles[ROLL] = 0.0f;
-				bs->goalAngles[ROLL] = 0.0f;
-				return;
-			}
-			else
-			{
-				NewBotAI_ResetRecoveryMovement(bs);
-			}
-		}
-	}
-	else
-	{
-		NewBotAI_ResetRecoveryMovement(bs);
-	}
+	NewBotAI_ResetRecoveryMovement(bs);
 
 	if (!NewBotAI_HasValidCurrentEnemy(bs))
 	{
@@ -17749,7 +17653,8 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 			if (!bs->wpDestination && !bs->currentEnemy &&
 				bs->lastWPIndex >= 0 && gWPArray[bs->lastWPIndex] && gWPArray[bs->lastWPIndex]->inuse)
 			{
-				int aheadIndex = bs->lastWPDir ? (bs->lastWPIndex - 1) : (bs->lastWPIndex + 1);
+				int step;
+				int aheadIndex = -1;
 				int backIndex  = bs->lastWPDir ? (bs->lastWPIndex + 1) : (bs->lastWPIndex - 1);
 
 				//the waypoint we were heading to -- if we can see it, just keep going
@@ -17759,21 +17664,38 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 					wp = bs->lastWPIndex;
 					bs->wpDirection = bs->lastWPDir;
 				}
-				//otherwise prefer the next point ahead of where we were, so we keep
-				//moving linearly along the trail rather than snapping back to the
-				//nearest point behind us
-				else if (aheadIndex >= 0 && aheadIndex < gWPNum &&
-					gWPArray[aheadIndex] && gWPArray[aheadIndex]->inuse &&
-					PassWayCheck(bs, aheadIndex) &&
-					WPOrgVisible(&g_entities[bs->client], bs->origin, gWPArray[aheadIndex]->origin, bs->client) == 1)
+				//otherwise prefer a small skip-ahead window (up to 3 waypoints) in the
+				//same direction so linear movement wins over nearest-point backtracking.
+				else
 				{
-					wp = aheadIndex;
-					bs->wpDirection = bs->lastWPDir;
+					for (step = 1; step <= 3; step++)
+					{
+						int candidate = bs->lastWPDir ? (bs->lastWPIndex - step) : (bs->lastWPIndex + step);
+						if (candidate < 0 || candidate >= gWPNum ||
+							!gWPArray[candidate] || !gWPArray[candidate]->inuse)
+						{
+							break;
+						}
+						if (!PassWayCheck(bs, candidate))
+						{
+							continue;
+						}
+						if (WPOrgVisible(&g_entities[bs->client], bs->origin, gWPArray[candidate]->origin, bs->client) != 1)
+						{
+							continue;
+						}
+						aheadIndex = candidate;
+					}
+					if (aheadIndex != -1)
+					{
+						wp = aheadIndex;
+						bs->wpDirection = bs->lastWPDir;
+					}
 				}
 				//if the nearest visible point is the one directly behind where we were
 				//heading, that's the pacing case -- leave wpDirection at lastWPDir so we
 				//turn right back around at it instead of settling into a 2-point loop
-				else if (wp == backIndex)
+				if (aheadIndex == -1 && wp == backIndex)
 				{
 					bs->wpDirection = bs->lastWPDir;
 				}
