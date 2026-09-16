@@ -8,6 +8,7 @@ This document describes all cvars added for the NewBotAI system and how they rel
 |------|---------|-------------|
 | `g_newBotAI` | `0` | Master switch. 0 = legacy bot AI, 1 = NewBotAI combat logic. |
 | `g_flipKick` | `0` | Engine-level flipkick enable. 1 = JA+ style, 2 = flood-protected, 3 = JK2 style. Required for flipkicks and PTK combos. |
+| `bot_navigation` | `1` | Enable waypoint-based navigation pathing while NewBotAI is active. |
 
 ## Targeting
 
@@ -171,6 +172,7 @@ g_newBotAI (master switch)
   +-- Movement
   |     +-- bot_strafefrequency / bot_strafeduration
   |     +-- bot_hopfrequency
+  |     +-- bot_navigation
   |     +-- bot_redirectcooldown
   |
   +-- Gripkick

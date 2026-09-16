@@ -5737,6 +5737,11 @@ int BotFallbackNavigation(bot_state_t *bs)
 	vec3_t b_angle, fwd, trto, mins, maxs;
 	trace_t tr;
 
+	if (!bot_navigation.integer)
+	{
+		return 0;
+	}
+
 	if (bs->currentEnemy && bs->frame_Enemy_Vis)
 	{
 		return 2; //we're busy
@@ -16196,8 +16201,15 @@ static qboolean NewBotAI_IsCombatProgressStalled(bot_state_t *bs)
 
 static void NewBotAI_RunNavigationOrAlone(bot_state_t *bs, float thinktime)
 {
-	bs->navObstacleUntil = 0;
-	StandardBotAI(bs, thinktime);
+	if (bot_navigation.integer)
+	{
+		bs->navObstacleUntil = 0;
+		StandardBotAI(bs, thinktime);
+	}
+	else
+	{
+		NewBotAI_DoAloneStuff(bs, thinktime);
+	}
 }
 
 int NewBotAI_ScanForEnemies(bot_state_t* bs) {

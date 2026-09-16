@@ -337,6 +337,7 @@ XCVAR_DEF( sv_autoRaceDemo,				"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 //JAPRO BOTS
 XCVAR_DEF( bot_nochat,					"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_strafeOffset,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
+XCVAR_DEF( bot_navigation,				"1",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_yawswitch,				"10",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_forcepowers,			"1",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_forgimmick,				"0",			NULL,				CVAR_ARCHIVE,									qtrue )
