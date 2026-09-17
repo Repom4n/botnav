@@ -16067,7 +16067,8 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		bs->navObstacleUntil <= level.time &&
 		NewBotAI_ShouldFallbackToWaypoints(bs))
 	{
-		if (!bs->frame_Enemy_Vis)
+		if (!bs->frame_Enemy_Vis &&
+			!NewBotAI_ShouldRetainLostSightTarget(bs, bs->currentEnemy))
 		{
 			NewBotAI_ClearCurrentEnemyLock(bs);
 			NewBotAI_ClearLostSightCombatInput(bs);
