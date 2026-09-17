@@ -16329,8 +16329,11 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	{
 		if (!bs->frame_Enemy_Vis)
 		{
-			const qboolean clearEnemyLock = NewBotAI_ShouldForceLostSightWaypointReset(bs) ? qtrue : qfalse;
-			NewBotAI_PrepareWaypointHandoff(bs, clearEnemyLock);
+			const qboolean forceLostSightReset = NewBotAI_ShouldForceLostSightWaypointReset(bs);
+			if (!(NewBotAI_ShouldRetainLostSightTarget(bs, bs->currentEnemy) && !forceLostSightReset))
+			{
+				NewBotAI_PrepareWaypointHandoff(bs, forceLostSightReset ? qtrue : qfalse);
+			}
 		}
 		bs->navObstacleUntil = 0;
 		StandardBotAI(bs, thinktime);
