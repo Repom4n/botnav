@@ -16064,7 +16064,6 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	}
 
 	if (NewBotAI_HasWaypointNavigation() &&
-		bs->navObstacleUntil <= level.time &&
 		NewBotAI_ShouldFallbackToWaypoints(bs))
 	{
 		if (!bs->frame_Enemy_Vis &&
@@ -16073,10 +16072,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 			NewBotAI_ClearCurrentEnemyLock(bs);
 			NewBotAI_ClearLostSightCombatInput(bs);
 		}
-		if (bs->navObstacleUntil < level.time)
-		{
-			bs->navObstacleUntil = level.time + 2000;
-		}
+		bs->navObstacleUntil = 0;
 		StandardBotAI(bs, thinktime);
 		return;
 	}
@@ -16084,13 +16080,6 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	{
 		bs->navObstacleUntil = 0;
 	}
-
-	if (bs->navObstacleUntil > level.time)
-	{
-		StandardBotAI(bs, thinktime);
-		return;
-	}
-	bs->navObstacleUntil = 0;
 	if (NewBotAI_IsDuelStrafeSuppressed(bs))
 	{
 		NewBotAI_GetAim(bs);
