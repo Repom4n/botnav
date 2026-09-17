@@ -16368,7 +16368,6 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		if (NewBotAI_ShouldRetainLostSightTarget(bs, bs->currentEnemy) &&
 			!NewBotAI_ShouldForceLostSightWaypointReset(bs))
 		{
-			NewBotAI_GetAim(bs);
 			NewBotAI_PrepareWaypointHandoff(bs, qfalse);
 			NewBotAI_RunNavigationOrAlone(bs, thinktime);
 			return;
