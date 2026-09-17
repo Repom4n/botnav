@@ -15751,7 +15751,7 @@ static qboolean NewBotAI_ShouldFallbackToWaypoints(bot_state_t *bs)
 
 	if (!bs->frame_Enemy_Vis)
 	{
-		return !NewBotAI_ShouldRetainLostSightTarget(bs, bs->currentEnemy);
+		return qfalse;
 	}
 
 	if (NewBotAI_IsDirectPathToEnemyBlocked(bs))
@@ -16056,11 +16056,6 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 
 	if (NewBotAI_HasWaypointNavigation() && NewBotAI_ShouldFallbackToWaypoints(bs))
 	{
-		if (!bs->frame_Enemy_Vis)
-		{
-			NewBotAI_ClearCurrentEnemyLock(bs);
-			NewBotAI_ClearLostSightCombatInput(bs);
-		}
 		bs->navObstacleUntil = 0;
 		StandardBotAI(bs, thinktime);
 		return;
@@ -16099,6 +16094,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		if (NewBotAI_ShouldRetainLostSightTarget(bs, bs->currentEnemy))
 		{
 			NewBotAI_ClearLostSightCombatInput(bs);
+			NewBotAI_RunNavigationOrAlone(bs, thinktime);
 			return;
 		}
 
@@ -16985,7 +16981,8 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 
 		if (bs->frame_Waypoint_Len < wpTouchDist || (RMG.integer && bs->frame_Waypoint_Len < wpTouchDist*2))
 		{
-			const qboolean canSkipAhead = (!bs->currentEnemy && !bs->wpDestination) ? qtrue : qfalse;
+			const qboolean activeCombatLock = (bs->currentEnemy && bs->frame_Enemy_Vis) ? qtrue : qfalse;
+			const qboolean canSkipAhead = !activeCombatLock;
 			const int maxWaypointSkip = Com_Clampi(0, 16, bot_waypointskip.integer);
 			int skipStep;
 			WPTouchRoutine(bs);
