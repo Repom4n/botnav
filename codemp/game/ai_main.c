@@ -6760,7 +6760,8 @@ static void NewBotAI_ApplyFanAttackWobble(bot_state_t *bs)
 	float speed;
 	int wobbleDelayMs;
 	float elapsedMs;
-	float phase;
+	float yawOffset;
+	float pitchOffset;
 
 	if (!bs)
 	{
@@ -6792,24 +6793,38 @@ static void NewBotAI_ApplyFanAttackWobble(bot_state_t *bs)
 
 	wobbleDelayMs = Com_Clampi(0, 2000, bot_wobbledelay.integer);
 	elapsedMs = (float)(level.time - bs->fanWobbleStartTime);
-	if (elapsedMs < wobbleDelayMs)
-	{
-		return;
-	}
-
 	yawAmplitude = Com_Clamp(0.0f, 45.0f, bot_wobbleyaw.value);
 	pitchAmplitude = Com_Clamp(0.0f, 20.0f, bot_wobblepitch.value);
 	speed = Com_Clamp(0.0f, 20.0f, bot_wobblespeed.value);
-	if (yawAmplitude <= 0.0f || pitchAmplitude <= 0.0f || speed <= 0.0f)
+	if (!NewBotAI_ShouldApplyFanWobble(
+		fanActive,
+		attackHeld,
+		(int)elapsedMs,
+		wobbleDelayMs,
+		yawAmplitude,
+		pitchAmplitude,
+		speed))
 	{
 		return;
 	}
 
-	phase = ((elapsedMs - wobbleDelayMs) * 0.001f) * speed * 6.28318530718f;
+	NewBotAI_GetFanWobbleOffsets(
+		elapsedMs - wobbleDelayMs,
+		yawAmplitude,
+		pitchAmplitude,
+		speed,
+		&yawOffset,
+		&pitchOffset);
 
 	// Counter-clockwise oval around the current normal aim center.
-	bs->goalAngles[YAW] = AngleNormalize360(bs->goalAngles[YAW] + cosf(phase) * yawAmplitude);
-	bs->goalAngles[PITCH] = AngleNormalize180(bs->goalAngles[PITCH] - sinf(phase) * pitchAmplitude);
+	if (yawOffset != 0.0f)
+	{
+		bs->goalAngles[YAW] = AngleNormalize360(bs->goalAngles[YAW] + yawOffset);
+	}
+	if (pitchOffset != 0.0f)
+	{
+		bs->goalAngles[PITCH] = AngleNormalize180(bs->goalAngles[PITCH] + pitchOffset);
+	}
 }
 
 void NewBotAI_GetAim(bot_state_t *bs)
@@ -16359,12 +16374,21 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 			return;
 		}
 
-		NewBotAI_PrepareWaypointHandoff(bs, qtrue);
+		{
+			const qboolean farLostSight = (bs->frame_Enemy_Len > 8096) ? qtrue : qfalse;
+			const qboolean staleReset = NewBotAI_ShouldForceLostSightWaypointReset(bs);
+			const qboolean clearEnemyLock = (farLostSight || staleReset) ? qtrue : qfalse;
+			if (farLostSight)
+			{
+				bs->frame_Enemy_Len = 0.0f;
+			}
+			NewBotAI_PrepareWaypointHandoff(bs, clearEnemyLock);
+		}
 		NewBotAI_RunNavigationOrAlone(bs, thinktime);
 		return;
 	}
 
-	if (!bs->frame_Enemy_Vis && bs->frame_Enemy_Len > 8096) {
+	if (!bs->frame_Enemy_Vis && !NewBotAI_HasWaypointNavigation() && bs->frame_Enemy_Len > 8096) {
 		NewBotAI_ClearCurrentEnemyLock(bs);
 		bs->frame_Enemy_Len = 0.0f;
 		NewBotAI_PrepareWaypointHandoff(bs, qtrue);
