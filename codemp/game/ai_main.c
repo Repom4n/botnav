@@ -7406,6 +7406,7 @@ static void NewBotAI_PrepareWaypointHandoff(bot_state_t *bs, qboolean clearEnemy
 	}
 
 	NewBotAI_ClearLostSightCombatInput(bs);
+	bs->frame_Enemy_Vis = 0;
 	NewBotAI_ResetRecoveryMovement(bs);
 	bs->combatStuckSince = 0;
 	VectorCopy(bs->origin, bs->combatStuckOrigin);
