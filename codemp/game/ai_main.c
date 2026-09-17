@@ -17022,14 +17022,29 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 			{
 				if (canSkipAhead && maxWaypointSkip > 0)
 				{
+					int prevIndex = bs->wpCurrent->index;
 					for (skipStep = 0; skipStep < maxWaypointSkip; skipStep++)
 					{
-						const int directionSign = bs->wpDirection ? -1 : 1;
 						wpobject_t *currentWP = gWPArray[desiredIndex];
 						int nextIndex = -1;
 						int n;
+						float bestScore = 0.0f;
+						vec3_t preferredDir;
+						float preferredLen;
 
 						if (!currentWP)
+						{
+							break;
+						}
+						if (prevIndex < 0 || prevIndex >= gWPNum || !gWPArray[prevIndex])
+						{
+							break;
+						}
+
+						VectorSubtract(currentWP->origin, gWPArray[prevIndex]->origin, preferredDir);
+						preferredDir[2] = 0.0f;
+						preferredLen = VectorNormalize(preferredDir);
+						if (preferredLen <= 0.0f)
 						{
 							break;
 						}
@@ -17037,21 +17052,33 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 						for (n = 0; n < currentWP->neighbornum; n++)
 						{
 							const int neighborIndex = currentWP->neighbors[n].num;
-							const int delta = neighborIndex - currentWP->index;
+							vec3_t neighborDir;
+							float score;
 
 							if (neighborIndex < 0 || neighborIndex >= gWPNum ||
 								!gWPArray[neighborIndex] || !gWPArray[neighborIndex]->inuse ||
-								(delta * directionSign) <= 0 ||
+								neighborIndex == prevIndex ||
 								!PassWayCheck(bs, neighborIndex))
 							{
 								continue;
 							}
 
-							if (nextIndex == -1 ||
-								(directionSign > 0 && neighborIndex > nextIndex) ||
-								(directionSign < 0 && neighborIndex < nextIndex))
+							VectorSubtract(gWPArray[neighborIndex]->origin, currentWP->origin, neighborDir);
+							neighborDir[2] = 0.0f;
+							if (VectorNormalize(neighborDir) <= 0.0f)
+							{
+								continue;
+							}
+							score = DotProduct(preferredDir, neighborDir);
+							if (score <= 0.0f)
+							{
+								continue;
+							}
+
+							if (nextIndex == -1 || score > bestScore)
 							{
 								nextIndex = neighborIndex;
+								bestScore = score;
 							}
 						}
 
@@ -17060,6 +17087,7 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 							break;
 						}
 
+						prevIndex = desiredIndex;
 						desiredIndex = nextIndex;
 					}
 				}
