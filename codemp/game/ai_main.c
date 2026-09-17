@@ -5765,72 +5765,27 @@ int BotFallbackNavigation(bot_state_t *bs)
 	}
 	else
 	{
-		float baseYaw = bs->goalAngles[YAW];
-		float yawOffset = 0.0f;
-		float currentOffset;
-		vec3_t desiredDelta;
+		float probeYaw[3];
+		int i;
 
-		VectorSubtract(bs->goalPosition, bs->origin, desiredDelta);
-		desiredDelta[2] = 0.0f;
-		if (VectorLengthSquared(desiredDelta) > 1.0f)
+		probeYaw[0] = AngleNormalize360(bs->goalAngles[YAW] + 90.0f);
+		probeYaw[1] = AngleNormalize360(bs->goalAngles[YAW] - 90.0f);
+		probeYaw[2] = AngleNormalize360(bs->goalAngles[YAW] + 180.0f);
+
+		for (i = 0; i < 3; i++)
 		{
-			baseYaw = vectoyaw(desiredDelta);
-		}
-
-		currentOffset = AngleNormalize180(bs->goalAngles[YAW] - baseYaw);
-
-		if (bs->customNavReverseTime < level.time)
-		{
-			if (bot_yawswitch.integer > 0 &&
-				Q_irand(0, 99) < bot_yawswitch.integer)
+			bs->goalAngles[YAW] = probeYaw[i];
+			VectorCopy(bs->goalAngles, b_angle);
+			AngleVectors(b_angle, fwd, NULL, NULL);
+			trto[0] = bs->origin[0] + fwd[0]*48;
+			trto[1] = bs->origin[1] + fwd[1]*48;
+			trto[2] = bs->origin[2];
+			JP_Trace(&tr, bs->origin, mins, maxs, trto, bs->client, MASK_SOLID, qfalse, 0, 0);
+			if (tr.fraction == 1.0f)
 			{
-				yawOffset = 180.0f;
+				VectorCopy(trto, bs->goalPosition);
+				return 1;
 			}
-			else
-			{
-				yawOffset = (Q_irand(0, 1)) ? 90.0f : -90.0f;
-			}
-			bs->customNavReverseTime = level.time + 1000;
-		}
-		else if (currentOffset >= 135.0f || currentOffset <= -135.0f)
-		{
-			yawOffset = 180.0f;
-		}
-		else if (currentOffset >= 45.0f && currentOffset <= 135.0f)
-		{
-			yawOffset = 90.0f;
-		}
-		else if (currentOffset <= -45.0f && currentOffset >= -135.0f)
-		{
-			yawOffset = -90.0f;
-		}
-		else
-		{
-			yawOffset = 90.0f;
-		}
-
-		bs->goalAngles[YAW] = AngleNormalize360(baseYaw + yawOffset);
-
-		VectorCopy(bs->goalAngles, b_angle);
-		AngleVectors(b_angle, fwd, NULL, NULL);
-		trto[0] = bs->origin[0] + fwd[0]*48;
-		trto[1] = bs->origin[1] + fwd[1]*48;
-		trto[2] = bs->origin[2];
-		JP_Trace(&tr, bs->origin, mins, maxs, trto, bs->client, MASK_SOLID, qfalse, 0, 0);
-		if (tr.fraction == 1.0f)
-		{
-			VectorCopy(trto, bs->goalPosition);
-			return 1;
-		}
-
-		trto[0] = bs->origin[0] - fwd[0]*48;
-		trto[1] = bs->origin[1] - fwd[1]*48;
-		trto[2] = bs->origin[2];
-		JP_Trace(&tr, bs->origin, mins, maxs, trto, bs->client, MASK_SOLID, qfalse, 0, 0);
-		if (tr.fraction == 1.0f)
-		{
-			VectorCopy(trto, bs->goalPosition);
-			return 1;
 		}
 
 		return 0;
@@ -11256,10 +11211,6 @@ static qboolean NewBotAI_ShouldRetainLostSightTarget(bot_state_t *bs, gentity_t 
 	{
 		return qfalse;
 	}
-	if (NewBotAI_HasWaypointNavigation())
-	{
-		return qfalse;
-	}
 	if (enemy->health < 1)
 	{
 		return qfalse;
@@ -16010,7 +15961,6 @@ static qboolean NewBotAI_IsDirectPathToEnemyBlocked(bot_state_t *bs)
 
 static qboolean NewBotAI_ShouldFallbackToWaypoints(bot_state_t *bs)
 {
-	vec3_t enemyOrigin, enemyDelta;
 	const qboolean progressStalled = NewBotAI_IsCombatProgressStalled(bs);
 
 	if (!NewBotAI_HasWaypointNavigation())
@@ -16026,22 +15976,7 @@ static qboolean NewBotAI_ShouldFallbackToWaypoints(bot_state_t *bs)
 
 	if (!bs->frame_Enemy_Vis)
 	{
-		if (NewBotAI_ShouldKeepLostSightTargetLock(bs, progressStalled))
-		{
-			return qfalse;
-		}
-		VectorCopy(bs->currentEnemy->r.currentOrigin, enemyOrigin);
-		if (!enemyOrigin[0] && !enemyOrigin[1] && !enemyOrigin[2])
-		{
-			VectorCopy(bs->currentEnemy->client->ps.origin, enemyOrigin);
-		}
-		VectorSubtract(enemyOrigin, bs->origin, enemyDelta);
-		if (VectorLengthSquared(enemyDelta) <= NEWBOTAI_COMBAT_WAYPOINT_SEPARATION_SQ &&
-			bs->lastVisibleEnemyTime > level.time - NEWBOTAI_LOST_TARGET_GRACE_MS)
-		{
-			return qfalse;
-		}
-		return qtrue;
+		return qfalse;
 	}
 
 	if (NewBotAI_IsDirectPathToEnemyBlocked(bs))
@@ -16346,45 +16281,16 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 
 	if (NewBotAI_HasWaypointNavigation() && NewBotAI_ShouldFallbackToWaypoints(bs))
 	{
-		// If the bot is actively being attacked, don't divert to waypoint nav -
-		// keep full combat logic running so it can defend, dodge, and fight back.
-		if (bs->lastHurtTime > level.time - 1500)
-		{
-			bs->navObstacleUntil = 0;
-		}
-		else
-		{
-			// Obstacle detected: hold waypoint-nav mode for a period so the bot
-			// navigates around the blocker rather than flickering back to direct
-			// combat movement every frame.
-			bs->navObstacleUntil = level.time + 2000;
-			StandardBotAI(bs, thinktime);
-			return;
-		}
+		bs->navObstacleUntil = 0;
+		StandardBotAI(bs, thinktime);
+		return;
 	}
 	else if (!NewBotAI_HasWaypointNavigation())
 	{
 		bs->navObstacleUntil = 0;
 	}
 
-	if (bs->navObstacleUntil > level.time)
-	{
-		// Hysteresis: obstacle was recently blocking, so keep following waypoints
-		// while StandardBotAI keeps the combat target/aim in sync.
-		if (bs->lastHurtTime > level.time - 1500)
-		{
-			bs->navObstacleUntil = 0;
-		}
-		else
-		{
-			StandardBotAI(bs, thinktime);
-			return;
-		}
-	}
-	else
-	{
-		bs->navObstacleUntil = 0;
-	}
+	bs->navObstacleUntil = 0;
 	if (NewBotAI_IsDuelStrafeSuppressed(bs))
 	{
 		NewBotAI_GetAim(bs);
@@ -16410,12 +16316,11 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	if (!bs->frame_Enemy_Vis &&
 		NewBotAI_HasWaypointNavigation())
 	{
-		if (NewBotAI_ShouldUseLostSightTargetPursuit(bs))
+		if (NewBotAI_ShouldRetainLostSightTarget(bs, bs->currentEnemy))
 		{
-			if (NewBotAI_RunLostSightTargetPursuit(bs))
-			{
-				return;
-			}
+			NewBotAI_ClearLostSightCombatInput(bs);
+			NewBotAI_RunNavigationOrAlone(bs, thinktime);
+			return;
 		}
 
 		NewBotAI_ClearCurrentEnemyLock(bs);
@@ -17301,6 +17206,9 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 
 		if (bs->frame_Waypoint_Len < wpTouchDist || (RMG.integer && bs->frame_Waypoint_Len < wpTouchDist*2))
 		{
+			const qboolean canSkipAhead = (!bs->currentEnemy && !bs->wpDestination) ? qtrue : qfalse;
+			const int maxWaypointSkip = Com_Clampi(0, 16, bot_waypointskip.integer);
+			int skipStep;
 			WPTouchRoutine(bs);
 
 			if (!bs->wpDirection)
@@ -17318,6 +17226,22 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 				desiredIndex >= 0 &&
 				PassWayCheck(bs, desiredIndex))
 			{
+				if (canSkipAhead && maxWaypointSkip > 0)
+				{
+					for (skipStep = 0; skipStep < maxWaypointSkip; skipStep++)
+					{
+						const int nextIndex = desiredIndex + (bs->wpDirection ? -1 : 1);
+						if (!(gWPArray[nextIndex] &&
+							gWPArray[nextIndex]->inuse &&
+							nextIndex < gWPNum &&
+							nextIndex >= 0 &&
+							PassWayCheck(bs, nextIndex)))
+						{
+							break;
+						}
+						desiredIndex = nextIndex;
+					}
+				}
 				bs->lastWPIndex = bs->wpCurrent->index;
 				bs->lastWPDir = bs->wpDirection;
 				bs->wpCurrent = gWPArray[desiredIndex];
