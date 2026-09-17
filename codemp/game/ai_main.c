@@ -15751,7 +15751,7 @@ static qboolean NewBotAI_ShouldFallbackToWaypoints(bot_state_t *bs)
 
 	if (!bs->frame_Enemy_Vis)
 	{
-		return qfalse;
+		return NewBotAI_ShouldRetainLostSightTarget(bs, bs->currentEnemy);
 	}
 
 	if (NewBotAI_IsDirectPathToEnemyBlocked(bs))
@@ -16093,8 +16093,8 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	{
 		if (NewBotAI_ShouldRetainLostSightTarget(bs, bs->currentEnemy))
 		{
-			NewBotAI_ClearLostSightCombatInput(bs);
-			NewBotAI_RunNavigationOrAlone(bs, thinktime);
+			bs->navObstacleUntil = 0;
+			StandardBotAI(bs, thinktime);
 			return;
 		}
 
