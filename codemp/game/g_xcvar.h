@@ -382,6 +382,14 @@ XCVAR_DEF( bot_fanbias,					"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 // bot may move freely for this whole window, then negates non-chosen-direction movement
 // for a 100ms strafe-only tap before committing attack+strafe in the opposite direction.
 XCVAR_DEF( bot_fandwell,				"250",			NULL,				CVAR_ARCHIVE,									qtrue )
+// Delay (ms) after fan attack hold begins before aim wobble starts.
+XCVAR_DEF( bot_wobbledelay,			"120",			NULL,				CVAR_ARCHIVE,									qtrue )
+// Horizontal wobble amplitude (yaw degrees) for fan-chain aim wobble.
+XCVAR_DEF( bot_wobbleyaw,				"6",			NULL,				CVAR_ARCHIVE,									qtrue )
+// Vertical wobble amplitude (pitch degrees) for fan-chain aim wobble.
+XCVAR_DEF( bot_wobblepitch,			"2",			NULL,				CVAR_ARCHIVE,									qtrue )
+// Wobble speed (cycles per second) for fan-chain aim wobble.
+XCVAR_DEF( bot_wobblespeed,			"2",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_drainbias,				"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 // Percent chance-style bias (see BotGetChanceBiasPercent) that weights how readily a bot
 // commits to a long-held, deep drain (toward 0 FP rather than the normal safe-below-19
