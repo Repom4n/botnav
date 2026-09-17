@@ -16365,7 +16365,8 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	}
 
 	if (!bs->frame_Enemy_Vis && bs->frame_Enemy_Len > 8096) {
-		NewBotAI_PrepareWaypointHandoff(bs, qtrue);
+		const qboolean clearEnemyLock = NewBotAI_ShouldForceLostSightWaypointReset(bs) ? qtrue : qfalse;
+		NewBotAI_PrepareWaypointHandoff(bs, clearEnemyLock);
 		NewBotAI_RunNavigationOrAlone(bs, thinktime);
 		return;
 	}
