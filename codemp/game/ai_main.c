@@ -16988,7 +16988,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 			return;
 		}
 	}
-	else
+	else if (!NewBotAI_HasWaypointNavigation())
 	{
 		bs->navObstacleUntil = 0;
 	}
@@ -17006,6 +17006,10 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 			StandardBotAI(bs, thinktime);
 			return;
 		}
+	}
+	else
+	{
+		bs->navObstacleUntil = 0;
 	}
 	if (NewBotAI_IsDuelStrafeSuppressed(bs))
 	{
