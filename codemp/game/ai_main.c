@@ -16969,6 +16969,44 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		}
 		bs->ideal_viewangles[YAW] = AngleNormalize360(bs->ideal_viewangles[YAW] + 24);
 	}
+
+	if (NewBotAI_HasWaypointNavigation() && NewBotAI_ShouldFallbackToWaypoints(bs))
+	{
+		// If the bot is actively being attacked, don't divert to waypoint nav -
+		// keep full combat logic running so it can defend, dodge, and fight back.
+		if (bs->lastHurtTime > level.time - 1500)
+		{
+			bs->navObstacleUntil = 0;
+		}
+		else
+		{
+			// Obstacle detected: hold waypoint-nav mode for a period so the bot
+			// navigates around the blocker rather than flickering back to direct
+			// combat movement every frame.
+			bs->navObstacleUntil = level.time + 2000;
+			StandardBotAI(bs, thinktime);
+			return;
+		}
+	}
+	else
+	{
+		bs->navObstacleUntil = 0;
+	}
+
+	if (bs->navObstacleUntil > level.time)
+	{
+		// Hysteresis: obstacle was recently blocking, so keep following waypoints
+		// while StandardBotAI keeps the combat target/aim in sync.
+		if (bs->lastHurtTime > level.time - 1500)
+		{
+			bs->navObstacleUntil = 0;
+		}
+		else
+		{
+			StandardBotAI(bs, thinktime);
+			return;
+		}
+	}
 	if (NewBotAI_IsDuelStrafeSuppressed(bs))
 	{
 		NewBotAI_GetAim(bs);
