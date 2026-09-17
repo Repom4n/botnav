@@ -5754,6 +5754,7 @@ int BotFallbackNavigation(bot_state_t *bs)
 	{
 		float baseYaw = bs->goalAngles[YAW];
 		float probeYaw[3];
+		const qboolean preferLeftFirst = ((bs->customNavReverseTime++ & 1) == 0) ? qtrue : qfalse;
 		int i;
 		vec3_t desiredDelta;
 
@@ -5764,8 +5765,8 @@ int BotFallbackNavigation(bot_state_t *bs)
 			baseYaw = vectoyaw(desiredDelta);
 		}
 
-		probeYaw[0] = AngleNormalize360(baseYaw + 90.0f);
-		probeYaw[1] = AngleNormalize360(baseYaw - 90.0f);
+		probeYaw[0] = AngleNormalize360(baseYaw + (preferLeftFirst ? 90.0f : -90.0f));
+		probeYaw[1] = AngleNormalize360(baseYaw + (preferLeftFirst ? -90.0f : 90.0f));
 		probeYaw[2] = AngleNormalize360(baseYaw + 180.0f);
 
 		for (i = 0; i < 3; i++)
@@ -17046,7 +17047,9 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 								continue;
 							}
 
-							if (nextIndex == -1 || abs(delta) < abs(nextIndex - currentWP->index))
+							if (nextIndex == -1 ||
+								(directionSign > 0 && neighborIndex > nextIndex) ||
+								(directionSign < 0 && neighborIndex < nextIndex))
 							{
 								nextIndex = neighborIndex;
 							}
