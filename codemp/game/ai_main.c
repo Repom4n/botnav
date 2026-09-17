@@ -5774,8 +5774,44 @@ int BotFallbackNavigation(bot_state_t *bs)
 	}
 	else
 	{
-		VectorCopy(bs->origin, bs->goalPosition);
-		return 1;
+		if (bs->customNavReverseTime < level.time)
+		{
+			if (bot_yawswitch.integer > 0 &&
+				Q_irand(0, 99) < bot_yawswitch.integer)
+			{
+				bs->goalAngles[YAW] = AngleNormalize360(bs->goalAngles[YAW] + 180.0f);
+			}
+			else
+			{
+				bs->goalAngles[YAW] = AngleNormalize360(bs->goalAngles[YAW] +
+					((Q_irand(0, 1)) ? 90.0f : -90.0f));
+			}
+			bs->customNavReverseTime = level.time + 1000;
+		}
+
+		VectorCopy(bs->goalAngles, b_angle);
+		AngleVectors(b_angle, fwd, NULL, NULL);
+		trto[0] = bs->origin[0] + fwd[0]*48;
+		trto[1] = bs->origin[1] + fwd[1]*48;
+		trto[2] = bs->origin[2];
+		JP_Trace(&tr, bs->origin, mins, maxs, trto, bs->client, MASK_SOLID, qfalse, 0, 0);
+		if (tr.fraction == 1.0f)
+		{
+			VectorCopy(trto, bs->goalPosition);
+			return 1;
+		}
+
+		trto[0] = bs->origin[0] - fwd[0]*48;
+		trto[1] = bs->origin[1] - fwd[1]*48;
+		trto[2] = bs->origin[2];
+		JP_Trace(&tr, bs->origin, mins, maxs, trto, bs->client, MASK_SOLID, qfalse, 0, 0);
+		if (tr.fraction == 1.0f)
+		{
+			VectorCopy(trto, bs->goalPosition);
+			return 1;
+		}
+
+		return 0;
 	}
 }
 
@@ -8146,6 +8182,10 @@ static qboolean NewBotAI_ShouldUseLostSightTargetPursuit(bot_state_t *bs)
 	{
 		return qfalse;
 	}
+	if (NewBotAI_HasWaypointNavigation())
+	{
+		return qfalse;
+	}
 	if (!NewBotAI_ShouldRetainLostSightTarget(bs, bs->currentEnemy))
 	{
 		return qfalse;
@@ -9655,8 +9695,6 @@ void NewBotAI_Draining(bot_state_t *bs)
 	if (!enemyVisible)
 	{
 		bs->drainHoldTime = 0;
-		level.clients[bs->client].ps.fd.forcePowerSelected = FP_DRAIN;
-		trap->EA_ForcePower(bs->client);
 		return;
 	}
 
@@ -11739,6 +11777,10 @@ static qboolean NewBotAI_ShouldRetainLostSightTarget(bot_state_t *bs, gentity_t 
 	const int targetTimeoutMs = BotGetTargetTimeoutMs();
 
 	if (!bs || !enemy || !enemy->client || bs->frame_Enemy_Vis || targetTimeoutMs <= 0)
+	{
+		return qfalse;
+	}
+	if (NewBotAI_HasWaypointNavigation())
 	{
 		return qfalse;
 	}
