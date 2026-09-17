@@ -16332,7 +16332,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 			const qboolean forceLostSightReset = NewBotAI_ShouldForceLostSightWaypointReset(bs);
 			if (!(NewBotAI_ShouldRetainLostSightTarget(bs, bs->currentEnemy) && !forceLostSightReset))
 			{
-				NewBotAI_PrepareWaypointHandoff(bs, forceLostSightReset ? qtrue : qfalse);
+				NewBotAI_PrepareWaypointHandoff(bs, qtrue);
 			}
 		}
 		bs->navObstacleUntil = 0;
@@ -16383,7 +16383,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 			{
 				bs->frame_Enemy_Len = 0.0f;
 			}
-			NewBotAI_PrepareWaypointHandoff(bs, forceLostSightReset);
+			NewBotAI_PrepareWaypointHandoff(bs, qtrue);
 		}
 		NewBotAI_RunNavigationOrAlone(bs, thinktime);
 		return;
