@@ -1,8 +1,6 @@
 #ifndef AI_COMBAT_TUNING_H
 #define AI_COMBAT_TUNING_H
 
-#include <math.h>
-
 #define NEWBOTAI_TUNING_ESCAPE_YAW_SPEED 333.0f
 
 typedef enum
