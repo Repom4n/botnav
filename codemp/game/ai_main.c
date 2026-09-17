@@ -17032,15 +17032,40 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 				{
 					for (skipStep = 0; skipStep < maxWaypointSkip; skipStep++)
 					{
-						const int nextIndex = desiredIndex + (bs->wpDirection ? -1 : 1);
-						if (!(nextIndex >= 0 &&
-							nextIndex < gWPNum &&
-							gWPArray[nextIndex] &&
-							gWPArray[nextIndex]->inuse &&
-							PassWayCheck(bs, nextIndex)))
+						const int directionSign = bs->wpDirection ? -1 : 1;
+						wpobject_t *currentWP = gWPArray[desiredIndex];
+						int nextIndex = -1;
+						int n;
+
+						if (!currentWP)
 						{
 							break;
 						}
+
+						for (n = 0; n < currentWP->neighbornum; n++)
+						{
+							const int neighborIndex = currentWP->neighbors[n].num;
+							const int delta = neighborIndex - currentWP->index;
+
+							if (neighborIndex < 0 || neighborIndex >= gWPNum ||
+								!gWPArray[neighborIndex] || !gWPArray[neighborIndex]->inuse ||
+								(delta * directionSign) <= 0 ||
+								!PassWayCheck(bs, neighborIndex))
+							{
+								continue;
+							}
+
+							if (nextIndex == -1 || abs(delta) < abs(nextIndex - currentWP->index))
+							{
+								nextIndex = neighborIndex;
+							}
+						}
+
+						if (nextIndex == -1)
+						{
+							break;
+						}
+
 						desiredIndex = nextIndex;
 					}
 				}
