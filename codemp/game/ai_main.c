@@ -5752,12 +5752,21 @@ int BotFallbackNavigation(bot_state_t *bs)
 	}
 	else
 	{
+		float baseYaw = bs->goalAngles[YAW];
 		float probeYaw[3];
 		int i;
+		vec3_t desiredDelta;
 
-		probeYaw[0] = AngleNormalize360(bs->goalAngles[YAW] + 90.0f);
-		probeYaw[1] = AngleNormalize360(bs->goalAngles[YAW] - 90.0f);
-		probeYaw[2] = AngleNormalize360(bs->goalAngles[YAW] + 180.0f);
+		VectorSubtract(bs->goalPosition, bs->origin, desiredDelta);
+		desiredDelta[2] = 0.0f;
+		if (VectorLengthSquared(desiredDelta) > 1.0f)
+		{
+			baseYaw = vectoyaw(desiredDelta);
+		}
+
+		probeYaw[0] = AngleNormalize360(baseYaw + 90.0f);
+		probeYaw[1] = AngleNormalize360(baseYaw - 90.0f);
+		probeYaw[2] = AngleNormalize360(baseYaw + 180.0f);
 
 		for (i = 0; i < 3; i++)
 		{
@@ -16056,7 +16065,10 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 
 	if (NewBotAI_HasWaypointNavigation() && NewBotAI_ShouldFallbackToWaypoints(bs))
 	{
-		bs->navObstacleUntil = 0;
+		if (bs->navObstacleUntil < level.time)
+		{
+			bs->navObstacleUntil = level.time + 2000;
+		}
 		StandardBotAI(bs, thinktime);
 		return;
 	}
@@ -16065,6 +16077,11 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		bs->navObstacleUntil = 0;
 	}
 
+	if (bs->navObstacleUntil > level.time)
+	{
+		StandardBotAI(bs, thinktime);
+		return;
+	}
 	bs->navObstacleUntil = 0;
 	if (NewBotAI_IsDuelStrafeSuppressed(bs))
 	{
@@ -16094,6 +16111,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		if (NewBotAI_ShouldRetainLostSightTarget(bs, bs->currentEnemy))
 		{
 			NewBotAI_ClearLostSightCombatInput(bs);
+			NewBotAI_GetAim(bs);
 			NewBotAI_RunNavigationOrAlone(bs, thinktime);
 			return;
 		}
