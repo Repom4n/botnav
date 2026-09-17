@@ -6809,7 +6809,7 @@ static void NewBotAI_ApplyFanAttackWobble(bot_state_t *bs)
 
 	// Counter-clockwise oval around the current normal aim center.
 	bs->goalAngles[YAW] = AngleNormalize360(bs->goalAngles[YAW] + cosf(phase) * yawAmplitude);
-	bs->goalAngles[PITCH] = AngleNormalize360(bs->goalAngles[PITCH] - sinf(phase) * pitchAmplitude);
+	bs->goalAngles[PITCH] = AngleNormalize180(bs->goalAngles[PITCH] - sinf(phase) * pitchAmplitude);
 }
 
 void NewBotAI_GetAim(bot_state_t *bs)
@@ -16365,8 +16365,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	}
 
 	if (!bs->frame_Enemy_Vis && bs->frame_Enemy_Len > 8096) {
-		const qboolean clearEnemyLock = NewBotAI_ShouldForceLostSightWaypointReset(bs) ? qtrue : qfalse;
-		NewBotAI_PrepareWaypointHandoff(bs, clearEnemyLock);
+		NewBotAI_PrepareWaypointHandoff(bs, qtrue);
 		NewBotAI_RunNavigationOrAlone(bs, thinktime);
 		return;
 	}
