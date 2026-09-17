@@ -15760,7 +15760,7 @@ static qboolean NewBotAI_ShouldFallbackToWaypoints(bot_state_t *bs)
 
 	if (!bs->frame_Enemy_Vis)
 	{
-		return qfalse;
+		return !NewBotAI_ShouldRetainLostSightTarget(bs, bs->currentEnemy);
 	}
 
 	if (NewBotAI_IsDirectPathToEnemyBlocked(bs))
@@ -16063,8 +16063,15 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		bs->ideal_viewangles[YAW] = AngleNormalize360(bs->ideal_viewangles[YAW] + 24);
 	}
 
-	if (NewBotAI_HasWaypointNavigation() && NewBotAI_ShouldFallbackToWaypoints(bs))
+	if (NewBotAI_HasWaypointNavigation() &&
+		bs->navObstacleUntil <= level.time &&
+		NewBotAI_ShouldFallbackToWaypoints(bs))
 	{
+		if (!bs->frame_Enemy_Vis)
+		{
+			NewBotAI_ClearCurrentEnemyLock(bs);
+			NewBotAI_ClearLostSightCombatInput(bs);
+		}
 		if (bs->navObstacleUntil < level.time)
 		{
 			bs->navObstacleUntil = level.time + 2000;
