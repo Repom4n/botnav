@@ -272,6 +272,44 @@ static inline int NewBotAI_ShouldIgnoreBotSaberLoss(int isBot, int noSaberDropEn
 	return (isBot && noSaberDropEnabled) ? 1 : 0;
 }
 
+static inline int NewBotAI_ShouldApplyFanWobble(
+	int fanActive, int attackHeld, int elapsedMs, int delayMs,
+	float yawAmplitude, float pitchAmplitude, float speed)
+{
+	if (!fanActive || !attackHeld)
+	{
+		return 0;
+	}
+
+	if (elapsedMs < delayMs)
+	{
+		return 0;
+	}
+
+	if (speed <= 0.0f || (yawAmplitude <= 0.0f && pitchAmplitude <= 0.0f))
+	{
+		return 0;
+	}
+
+	return 1;
+}
+
+static inline void NewBotAI_GetFanWobbleOffsets(
+	float elapsedMsAfterDelay, float yawAmplitude, float pitchAmplitude, float speed,
+	float *yawOffset, float *pitchOffset)
+{
+	float phase = (elapsedMsAfterDelay * 0.001f) * speed * 6.28318530718f;
+
+	if (yawOffset)
+	{
+		*yawOffset = (yawAmplitude > 0.0f) ? cosf(phase) * yawAmplitude : 0.0f;
+	}
+	if (pitchOffset)
+	{
+		*pitchOffset = (pitchAmplitude > 0.0f) ? -sinf(phase) * pitchAmplitude : 0.0f;
+	}
+}
+
 static inline int NewBotAI_ShouldForceImmediateSaberThrowHop(
 	float timeToImpactMs, float forwardDist, int isReturning, float skill)
 {

@@ -205,6 +205,8 @@ static int NewBotAI_GetRecoveryYawIntervalMs(void);
 static int NewBotAI_GetWallRedirectIntervalMs(void);
 static void NewBotAI_ResetRecoveryMovement(bot_state_t *bs);
 static void NewBotAI_ClearLostSightCombatInput(bot_state_t *bs);
+static void NewBotAI_PrepareWaypointHandoff(bot_state_t *bs, qboolean clearEnemyLock);
+static qboolean NewBotAI_ShouldForceLostSightWaypointReset(bot_state_t *bs);
 static void NewBotAI_ClearLightningBurst(bot_state_t *bs);
 static qboolean NewBotAI_IsRecoveryMovementActive(bot_state_t *bs);
 static qboolean NewBotAI_HasExclusiveFlipkickMovement(bot_state_t *bs);
@@ -235,6 +237,8 @@ static qboolean NewBotAI_ShouldSkipPullForNaturalFlipkickPTK(bot_state_t *bs);
 static void NewBotAI_ApplyJumpAttackGate(bot_state_t *bs);
 qboolean NewBotAI_IsEnemyPullable(bot_state_t *bs);
 static qboolean NewBotAI_IsDirectPathToEnemyBlocked(bot_state_t *bs);
+static qboolean NewBotAI_ShouldForcePulledFlipkickOverride(bot_state_t *bs, int *timeToKickRangeMsOut, int *timingModeOut);
+static void NewBotAI_ApplyFanAttackWobble(bot_state_t *bs);
 void Cmd_EngageDuel_f(gentity_t *ent, int dueltype);
 extern void DownedSaberThink(gentity_t *saberent);
 extern void CreateNewWP(vec3_t origin, int flags);
@@ -6746,6 +6750,83 @@ void NewBotAI_GetStrafeAim(bot_state_t *bs)
 	//trap_EA_View(bs->client, bs->goalAngles); // if we want instant aim?
 }
 
+static void NewBotAI_ApplyFanAttackWobble(bot_state_t *bs)
+{
+	usercmd_t *cmd;
+	qboolean fanActive;
+	qboolean attackHeld;
+	float yawAmplitude;
+	float pitchAmplitude;
+	float speed;
+	int wobbleDelayMs;
+	float elapsedMs;
+	float yawOffset;
+	float pitchOffset;
+
+	if (!bs)
+	{
+		return;
+	}
+
+	fanActive = (bs->cur_ps.weapon == WP_SABER && bs->fanPhase != FAN_PHASE_INACTIVE) ? qtrue : qfalse;
+	if (!fanActive)
+	{
+		bs->fanWobbleStartTime = 0;
+		return;
+	}
+
+	cmd = &level.clients[bs->client].pers.cmd;
+	attackHeld = (bs->doAttack || (cmd->buttons & BUTTON_ATTACK) ||
+		bs->cur_ps.weaponstate == WEAPON_FIRING ||
+		bs->cur_ps.weaponstate == WEAPON_CHARGING ||
+		bs->cur_ps.weaponstate == WEAPON_CHARGING_ALT) ? qtrue : qfalse;
+	if (!attackHeld)
+	{
+		bs->fanWobbleStartTime = 0;
+		return;
+	}
+
+	if (bs->fanWobbleStartTime <= 0)
+	{
+		bs->fanWobbleStartTime = level.time;
+	}
+
+	wobbleDelayMs = Com_Clampi(0, 2000, bot_wobbledelay.integer);
+	elapsedMs = (float)(level.time - bs->fanWobbleStartTime);
+	yawAmplitude = Com_Clamp(0.0f, 45.0f, bot_wobbleyaw.value);
+	pitchAmplitude = Com_Clamp(0.0f, 20.0f, bot_wobblepitch.value);
+	speed = Com_Clamp(0.0f, 20.0f, bot_wobblespeed.value);
+	if (!NewBotAI_ShouldApplyFanWobble(
+		fanActive,
+		attackHeld,
+		(int)elapsedMs,
+		wobbleDelayMs,
+		yawAmplitude,
+		pitchAmplitude,
+		speed))
+	{
+		return;
+	}
+
+	NewBotAI_GetFanWobbleOffsets(
+		elapsedMs - wobbleDelayMs,
+		yawAmplitude,
+		pitchAmplitude,
+		speed,
+		&yawOffset,
+		&pitchOffset);
+
+	// Counter-clockwise oval around the current normal aim center.
+	if (yawOffset != 0.0f)
+	{
+		bs->goalAngles[YAW] = AngleNormalize360(bs->goalAngles[YAW] + yawOffset);
+	}
+	if (pitchOffset != 0.0f)
+	{
+		bs->goalAngles[PITCH] = AngleNormalize180(bs->goalAngles[PITCH] + pitchOffset);
+	}
+}
+
 void NewBotAI_GetAim(bot_state_t *bs)
 {
 	vec3_t headlevel;
@@ -6836,6 +6917,7 @@ void NewBotAI_GetAim(bot_state_t *bs)
 			NewBotAI_AdjustSaberThrowLead(bs);
 		}
 	}
+	NewBotAI_ApplyFanAttackWobble(bs);
 	VectorCopy(bs->goalAngles, bs->ideal_viewangles);
 }
 
@@ -7300,12 +7382,24 @@ static void NewBotAI_ClearLostSightCombatInput(bot_state_t *bs)
 	bs->flipkickInputTime = 0;
 	bs->flipkickJumpHeld = qfalse;
 	bs->pullKickJumpTime = 0;
+	bs->lastFlipkickAttemptTime = 0;
 	bs->drainRollYawStart = 0;
 	bs->drainRollResetTime = 0;
+	bs->drainRollDir = 0;
 	bs->gripkickLookDownUntil = 0;
 	bs->gripkickRestackDir = 0;
+	bs->enemyWaypointFallbackIndex = -1;
+	bs->enemyWaypointFallbackTime = 0;
+	bs->enemyWaypointFallbackEnemyNum = -1;
+	bs->combatAction = BOT_COMBAT_ACTION_AGGRESSION;
+	bs->runningLikeASissy = 0;
+	bs->forceMove_Forward = 0;
+	bs->forceMove_Right = 0;
+	bs->forceMove_Up = 0;
 	bs->ideal_viewangles[PITCH] = 0.0f;
 	bs->goalAngles[PITCH] = 0.0f;
+	NewBotAI_ClearRandomStrafeOverlay(bs);
+	NewBotAI_ResetFanChain(bs);
 	if (!(bs->cur_ps.fd.forcePowersActive & (1 << FP_GRIP)))
 	{
 		bs->gripkickActive = qfalse;
@@ -7317,6 +7411,68 @@ static void NewBotAI_ClearLostSightCombatInput(bot_state_t *bs)
 		bs->gripkickDwellUntil = 0;
 	}
 	NewBotAI_ClearLightningBurst(bs);
+}
+
+static void NewBotAI_PrepareWaypointHandoff(bot_state_t *bs, qboolean clearEnemyLock)
+{
+	if (!bs)
+	{
+		return;
+	}
+
+	NewBotAI_ClearLostSightCombatInput(bs);
+	bs->frame_Enemy_Vis = 0;
+	NewBotAI_ResetRecoveryMovement(bs);
+	bs->combatStuckSince = 0;
+	VectorCopy(bs->origin, bs->combatStuckOrigin);
+	if (clearEnemyLock)
+	{
+		NewBotAI_ClearCurrentEnemyLock(bs);
+	}
+}
+
+static qboolean NewBotAI_ShouldForceLostSightWaypointReset(bot_state_t *bs)
+{
+	const int targetTimeoutMs = BotGetTargetTimeoutMs();
+	int retainWindowMs;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client || bs->frame_Enemy_Vis)
+	{
+		return qfalse;
+	}
+	if (!NewBotAI_HasWaypointNavigation())
+	{
+		return qfalse;
+	}
+	if (!NewBotAI_ShouldRetainLostSightTarget(bs, bs->currentEnemy))
+	{
+		return qtrue;
+	}
+	if (bs->lastVisibleEnemyTime <= 0)
+	{
+		return qfalse;
+	}
+
+	retainWindowMs = targetTimeoutMs / 2;
+	if (retainWindowMs < 300)
+	{
+		retainWindowMs = 300;
+	}
+	else if (retainWindowMs > 1500)
+	{
+		retainWindowMs = 1500;
+	}
+	if (level.time < bs->lastVisibleEnemyTime + retainWindowMs)
+	{
+		return qfalse;
+	}
+
+	if (VectorLengthSquared(bs->cur_ps.velocity) > 900.0f)
+	{
+		return qfalse;
+	}
+
+	return qtrue;
 }
 
 static qboolean NewBotAI_HasValidCurrentEnemy(bot_state_t *bs)
@@ -10597,13 +10753,49 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 			}
 			return;
 		}
-		else if (NewBotAI_ShouldUseSafePushWindowWhilePulled(bs))
+		else if (NewBotAI_IsBeingPulledTowardEnemy(bs))
 		{
-			bs->combatAction = BOT_COMBAT_ACTION_RETREAT_DEFENSE;
-			NewBotAI_RetreatDiagonal(bs, (level.framenum & 1) ? qtrue : qfalse);
-			level.clients[bs->client].ps.fd.forcePowerSelected = FP_PUSH;
-			trap->EA_ForcePower(bs->client);
-			return;
+			int pullKickRangeMs = -1;
+			int pullTimingMode = NEWBOTAI_PULL_TIMING_NONE;
+
+			if (NewBotAI_ShouldForcePulledFlipkickOverride(bs, &pullKickRangeMs, &pullTimingMode))
+			{
+				bs->combatAction = BOT_COMBAT_ACTION_AGGRESSION;
+				trap->EA_MoveForward(bs->client);
+
+				if (bs->cur_ps.groundEntityNum != ENTITYNUM_NONE)
+				{
+					if (NewBotAI_IsFlipkickSetupReady(bs) &&
+						(pullTimingMode == NEWBOTAI_PULL_TIMING_IMMEDIATE || pullKickRangeMs <= 120))
+					{
+						NewBotAI_Flipkick(bs);
+					}
+					else if (pullKickRangeMs >= 0 && pullKickRangeMs <= 260)
+					{
+						const int jumpDelay = Com_Clampi(0, 220, pullKickRangeMs);
+						bs->pullKickJumpTime = level.time + jumpDelay;
+					}
+				}
+				else if (bs->cur_ps.velocity[2] <= 0.0f)
+				{
+					const float msToGround = NewBotAI_FlipkickMsToGround(bs);
+					if (msToGround >= 0.0f && msToGround <= 260.0f)
+					{
+						const int landingDelay = Com_Clampi(0, 220, (int)msToGround);
+						bs->pullKickJumpTime = level.time + landingDelay;
+					}
+				}
+				return;
+			}
+
+			if (NewBotAI_ShouldUseSafePushWindowWhilePulled(bs))
+			{
+				bs->combatAction = BOT_COMBAT_ACTION_RETREAT_DEFENSE;
+				NewBotAI_RetreatDiagonal(bs, (level.framenum & 1) ? qtrue : qfalse);
+				level.clients[bs->client].ps.fd.forcePowerSelected = FP_PUSH;
+				trap->EA_ForcePower(bs->client);
+				return;
+			}
 		}
 
 		else if (bs->currentEnemy->client->ps.legsAnim == BOTH_GETUP_BROLL_B && bs->frame_Enemy_Len < 100) {//Dodge a getup?
@@ -12168,6 +12360,7 @@ static void NewBotAI_ResetFanChain(bot_state_t *bs)
 	bs->fanAttackTime = 0;
 	bs->fanChainStartTime = 0;
 	bs->fanChainStartHealth = 0;
+	bs->fanWobbleStartTime = 0;
 }
 
 //Fan pressure should be strongest while healthy and pressing an advantage; outside of
@@ -12873,6 +13066,74 @@ static qboolean NewBotAI_ShouldUseSafePushWindowWhilePulled(bot_state_t *bs)
 	}
 
 	return (timeToKickRange <= NewBotAI_GetPullkickDefensiveReactionWindowMs()) ? qtrue : qfalse;
+}
+
+static qboolean NewBotAI_ShouldForcePulledFlipkickOverride(bot_state_t *bs, int *timeToKickRangeMsOut, int *timingModeOut)
+{
+	float timeToKickRange;
+	int timingMode;
+	const int reactionWindowMs = NewBotAI_GetPullkickDefensiveReactionWindowMs();
+	const int pullFlipkickWindowMs = reactionWindowMs + 120;
+
+	if (timeToKickRangeMsOut)
+	{
+		*timeToKickRangeMsOut = -1;
+	}
+	if (timingModeOut)
+	{
+		*timingModeOut = NEWBOTAI_PULL_TIMING_NONE;
+	}
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return qfalse;
+	}
+	if (!NewBotAI_IsBeingPulledTowardEnemy(bs))
+	{
+		return qfalse;
+	}
+	if (!g_flipKick.integer || !NewBotAI_CanAttemptFlipkick(bs) || !NewBotAI_IsPullkickOpportunity(bs))
+	{
+		return qfalse;
+	}
+	if (bs->currentEnemy->client->ps.weapon != WP_SABER ||
+		bs->currentEnemy->client->ps.saberInFlight ||
+		NewBotAI_IsEnemySaberThreatImminent(bs))
+	{
+		return qfalse;
+	}
+	if (bs->frame_Enemy_Len > 240.0f)
+	{
+		return qfalse;
+	}
+	if (NewBotAI_ShouldAvoidFlipkickForSafety(bs) && !NewBotAI_IsImmediateFlipkickContact(bs))
+	{
+		return qfalse;
+	}
+
+	timeToKickRange = NewBotAI_GetPullkickTimeToKickRange(bs, qtrue, &timingMode);
+	if (timingModeOut)
+	{
+		*timingModeOut = timingMode;
+	}
+
+	if (timingMode == NEWBOTAI_PULL_TIMING_IMMEDIATE)
+	{
+		if (timeToKickRangeMsOut)
+		{
+			*timeToKickRangeMsOut = 0;
+		}
+		return qtrue;
+	}
+	if (timeToKickRange < 0.0f || timeToKickRange > pullFlipkickWindowMs)
+	{
+		return qfalse;
+	}
+
+	if (timeToKickRangeMsOut)
+	{
+		*timeToKickRangeMsOut = (int)timeToKickRange;
+	}
+	return qtrue;
 }
 
 static qboolean NewBotAI_HandleRecoveryRollForcepower(bot_state_t *bs)
@@ -15939,8 +16200,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 					bs->currentEnemy = oldEnemy;
 				}
 				else {
-					NewBotAI_ClearCurrentEnemyLock(bs);
-					NewBotAI_ClearLostSightCombatInput(bs);
+					NewBotAI_PrepareWaypointHandoff(bs, qtrue);
 					NewBotAI_RunNavigationOrAlone(bs, thinktime);
 					return;
 				}
@@ -16069,10 +16329,10 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	{
 		if (!bs->frame_Enemy_Vis)
 		{
-			NewBotAI_ClearLostSightCombatInput(bs);
-			if (!NewBotAI_ShouldRetainLostSightTarget(bs, bs->currentEnemy))
+			const qboolean forceLostSightReset = NewBotAI_ShouldForceLostSightWaypointReset(bs);
+			if (!(NewBotAI_ShouldRetainLostSightTarget(bs, bs->currentEnemy) && !forceLostSightReset))
 			{
-				NewBotAI_ClearCurrentEnemyLock(bs);
+				NewBotAI_PrepareWaypointHandoff(bs, qtrue);
 			}
 		}
 		bs->navObstacleUntil = 0;
@@ -16100,7 +16360,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	if (!NewBotAI_HasValidCurrentEnemy(bs))
 	{
 		bs->frame_Enemy_Vis = 0;
-		NewBotAI_ClearLostSightCombatInput(bs);
+		NewBotAI_PrepareWaypointHandoff(bs, qtrue);
 		NewBotAI_RunNavigationOrAlone(bs, thinktime);
 		return;
 	}
@@ -16108,7 +16368,9 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	if (!bs->frame_Enemy_Vis &&
 		NewBotAI_HasWaypointNavigation())
 	{
-		if (NewBotAI_ShouldRetainLostSightTarget(bs, bs->currentEnemy))
+		const qboolean forceLostSightReset = NewBotAI_ShouldForceLostSightWaypointReset(bs);
+		if (NewBotAI_ShouldRetainLostSightTarget(bs, bs->currentEnemy) &&
+			!forceLostSightReset)
 		{
 			NewBotAI_ClearLostSightCombatInput(bs);
 			NewBotAI_GetAim(bs);
@@ -16116,13 +16378,21 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 			return;
 		}
 
-		NewBotAI_ClearCurrentEnemyLock(bs);
-		NewBotAI_ClearLostSightCombatInput(bs);
+		{
+			if (bs->frame_Enemy_Len > 8096)
+			{
+				bs->frame_Enemy_Len = 0.0f;
+			}
+			NewBotAI_PrepareWaypointHandoff(bs, qtrue);
+		}
 		NewBotAI_RunNavigationOrAlone(bs, thinktime);
 		return;
 	}
 
-	if (!bs->frame_Enemy_Vis && bs->frame_Enemy_Len > 8096) {
+	if (!bs->frame_Enemy_Vis && !NewBotAI_HasWaypointNavigation() && bs->frame_Enemy_Len > 8096) {
+		NewBotAI_ClearCurrentEnemyLock(bs);
+		bs->frame_Enemy_Len = 0.0f;
+		NewBotAI_PrepareWaypointHandoff(bs, qtrue);
 		NewBotAI_RunNavigationOrAlone(bs, thinktime);
 		return;
 	}
