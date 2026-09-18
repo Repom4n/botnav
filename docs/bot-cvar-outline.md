@@ -80,8 +80,8 @@ These are all percentage-based (0-100) chance weights that gate specific behavio
 
 | Cvar | Default | Description |
 |------|---------|-------------|
-| `bot_aimspeed` | `0` | 0 = use per-bot `.jkb` turnspeed_combat/reflex. 1-10 = server-selected aim quality blended with bot personality. 9-10 = near-perfect aim. |
-| `bot_delay` | `0` | Preferred name for additional response delay in ms before reacting to a new enemy. 0 = use `.jkb` reflex only. |
+| `bot_aimspeed` | `0` | 0 = legacy aim speed from per-bot `.jkb` turnspeed_combat. 1-10 = multiplier on legacy combat turning with strict monotonic progression (higher is always faster, 10 fastest). Affects aim turn speed only. |
+| `bot_delay` | `0` | Preferred name for extra response delay (ms). The configured delay is still scaled by each bot’s `.jkb` reflex, then additionally scaled by bot level (1 gets full add-on, 10 gets none). |
 | `bot_delayresponsetime` | `0` | Legacy alias for `bot_delay`. |
 | `bot_responseTimeDelay` | `0` | Legacy alias for `bot_delay`. |
 
