@@ -59,6 +59,7 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
 */
 
 #define BOT_THINK_TIME	0
+#define NEWBOTAI_PTK_FORCE_BUDGET 40
 
 //bot states
 bot_state_t	*botstates[MAX_CLIENTS];
@@ -137,6 +138,7 @@ static qboolean NewBotAI_IsWithinLightningRange(bot_state_t *bs);
 static int NewBotAI_GetLightningWeight(bot_state_t *bs);
 static int NewBotAI_GetPTKWeight(bot_state_t *bs);
 static qboolean NewBotAI_IsGetupAnim(int anim);
+static qboolean NewBotAI_IsForceGetupAnim(int anim);
 static qboolean NewBotAI_IsKnockdownRecoveryRoll(int anim);
 static qboolean NewBotAI_IsSaberSwingStartWindow(bot_state_t *bs);
 static qboolean NewBotAI_CanAttemptFlipkick(bot_state_t *bs);
@@ -211,7 +213,9 @@ static void NewBotAI_PrepareWaypointHandoff(bot_state_t *bs, qboolean clearEnemy
 static qboolean NewBotAI_ShouldForceLostSightWaypointReset(bot_state_t *bs);
 static void NewBotAI_ClearLightningBurst(bot_state_t *bs);
 static qboolean NewBotAI_IsEnemyGetupPushWindow(bot_state_t *bs);
+static qboolean NewBotAI_IsEnemyPreGetupKnockdownState(bot_state_t *bs);
 static qboolean NewBotAI_ShouldAbortChargedThrowForGetupPush(bot_state_t *bs);
+static qboolean NewBotAI_TryAbortChargedThrowIntoPullkick(bot_state_t *bs);
 static qboolean NewBotAI_IsRecoveryMovementActive(bot_state_t *bs);
 static qboolean NewBotAI_HasExclusiveFlipkickMovement(bot_state_t *bs);
 static int BotGetNewBotAITargetMode(void);
@@ -10377,7 +10381,7 @@ static qboolean NewBotAI_ShouldHoldForPTKForce(bot_state_t *bs)
 
 	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
 		return qfalse;
-	if (ourForce <= 25 || ourForce >= 40)
+	if (ourForce <= 25 || ourForce >= NEWBOTAI_PTK_FORCE_BUDGET)
 		return qfalse;
 	if (!g_flipKick.integer || !NewBotAI_IsEnemyPullable(bs) || !NewBotAI_IsPullkickOpportunity(bs))
 		return qfalse;
@@ -10430,7 +10434,7 @@ static qboolean NewBotAI_ShouldConserveForce(bot_state_t *bs)
 		return qtrue;
 	}
 
-	//When PTK would be the preferred path but we are just short of the ~40 FP budget,
+	//When PTK would be the preferred path but we are just short of the budgeted FP cost,
 	//take a short conservation window to regen first instead of burning force early.
 	if (NewBotAI_ShouldHoldForPTKForce(bs))
 	{
@@ -10484,7 +10488,7 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 		{
 			if (NewBotAI_ShouldHoldForPTKForce(bs))
 			{
-				const int missingForce = 40 - bs->cur_ps.fd.forcePower;
+				const int missingForce = NEWBOTAI_PTK_FORCE_BUDGET - bs->cur_ps.fd.forcePower;
 				const int ptkConserveMs = Com_Clampi(300, 1400, missingForce * 140);
 				bs->conserveUntil = level.time + ptkConserveMs;
 			}
@@ -11108,6 +11112,24 @@ static qboolean NewBotAI_IsGetupAnim(int anim)
 	return qfalse;
 }
 
+static qboolean NewBotAI_IsForceGetupAnim(int anim)
+{
+	switch (anim)
+	{
+	case BOTH_FORCE_GETUP_F1:
+	case BOTH_FORCE_GETUP_F2:
+	case BOTH_FORCE_GETUP_B1:
+	case BOTH_FORCE_GETUP_B2:
+	case BOTH_FORCE_GETUP_B3:
+	case BOTH_FORCE_GETUP_B4:
+	case BOTH_FORCE_GETUP_B5:
+	case BOTH_FORCE_GETUP_B6:
+		return qtrue;
+	}
+
+	return qfalse;
+}
+
 static qboolean NewBotAI_IsStandingRoll(int anim)
 {
 	switch (anim)
@@ -11121,15 +11143,42 @@ static qboolean NewBotAI_IsStandingRoll(int anim)
 	return qfalse;
 }
 
-static qboolean NewBotAI_IsEnemyGetupPushWindow(bot_state_t *bs)
+static qboolean NewBotAI_IsEnemyPreGetupKnockdownState(bot_state_t *bs)
 {
 	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
 	{
 		return qfalse;
 	}
 
+	if (!BG_InKnockDown(bs->currentEnemy->client->ps.legsAnim) &&
+		!BG_InKnockDown(bs->currentEnemy->client->ps.torsoAnim) &&
+		!NewBotAI_IsGetupAnim(bs->currentEnemy->client->ps.legsAnim) &&
+		!NewBotAI_IsGetupAnim(bs->currentEnemy->client->ps.torsoAnim))
+	{
+		return qfalse;
+	}
+
+	return qtrue;
+}
+
+static qboolean NewBotAI_IsEnemyGetupPushWindow(bot_state_t *bs)
+{
+	qboolean enemyForceGetup;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return qfalse;
+	}
+
+	enemyForceGetup = (NewBotAI_IsForceGetupAnim(bs->currentEnemy->client->ps.legsAnim) ||
+		NewBotAI_IsForceGetupAnim(bs->currentEnemy->client->ps.torsoAnim)) ? qtrue : qfalse;
+
 	if (!NewBotAI_IsGetupAnim(bs->currentEnemy->client->ps.legsAnim) &&
 		!NewBotAI_IsGetupAnim(bs->currentEnemy->client->ps.torsoAnim))
+	{
+		return qfalse;
+	}
+	if (!enemyForceGetup)
 	{
 		return qfalse;
 	}
@@ -11139,11 +11188,25 @@ static qboolean NewBotAI_IsEnemyGetupPushWindow(bot_state_t *bs)
 		return qtrue;
 	}
 
-	return (bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_PUSH)) ? qtrue : qfalse;
+	//Keep the interrupt window alive briefly through the force-getup animation after
+	//the exact push frame so charged-throw abort logic can still react consistently.
+	if (bs->currentEnemy->client->ps.forceHandExtendTime > 0)
+	{
+		const int sincePushMs = level.time - bs->currentEnemy->client->ps.forceHandExtendTime;
+		if (sincePushMs >= 0 && sincePushMs <= 400)
+		{
+			return qtrue;
+		}
+	}
+
+	return qfalse;
 }
 
 static qboolean NewBotAI_ShouldAbortChargedThrowForGetupPush(bot_state_t *bs)
 {
+	int chargeAgeMs;
+	vec3_t toEnemyAngles;
+
 	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
 	{
 		return qfalse;
@@ -11161,12 +11224,46 @@ static qboolean NewBotAI_ShouldAbortChargedThrowForGetupPush(bot_state_t *bs)
 		return qfalse;
 	}
 
-	if (bs->frame_Enemy_Len > 320)
+	if (!bs->frame_Enemy_Vis || bs->frame_Enemy_Len > 320)
+	{
+		return qfalse;
+	}
+	if (bs->cur_ps.weaponChargeTime <= 0)
+	{
+		return qfalse;
+	}
+	chargeAgeMs = level.time - bs->cur_ps.weaponChargeTime;
+	if (chargeAgeMs < 150)
 	{
 		return qfalse;
 	}
 
-	return (bs->cur_ps.forceHandExtend == HANDEXTEND_FORCEPUSH) ? qtrue : qfalse;
+	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, toEnemyAngles);
+	vectoangles(toEnemyAngles, toEnemyAngles);
+	if (!InFieldOfVision(bs->viewangles, 35, toEnemyAngles))
+	{
+		return qfalse;
+	}
+
+	return qtrue;
+}
+
+static qboolean NewBotAI_TryAbortChargedThrowIntoPullkick(bot_state_t *bs)
+{
+	if (!NewBotAI_ShouldAbortChargedThrowForGetupPush(bs))
+	{
+		return qfalse;
+	}
+
+	if (NewBotAI_IsPullkickOpportunity(bs) &&
+		bs->frame_Enemy_Len <= NEWBOTAI_IMMEDIATE_FLIPKICK_RANGE &&
+		NewBotAI_IsFlipkickSetupReady(bs))
+	{
+		NewBotAI_Flipkick(bs);
+		return qtrue;
+	}
+
+	return qfalse;
 }
 
 static qboolean NewBotAI_IsKnockdownRecoveryRoll(int anim)
@@ -11242,40 +11339,22 @@ static float BotGetExtraPenaltyScaleForSkill(bot_state_t *bs)
 	return 1.0f / skill;
 }
 
-//Legacy reflex delay comes from each bot's .jkb reflex value and is divided by bot skill,
-//so higher-level bots react sooner.
-static int BotGetLegacyReflexResponseDelayMs(bot_state_t *bs)
-{
-	float skill;
-	int reflexDelay;
-
-	if (!bs)
-	{
-		return 0;
-	}
-
-	skill = bs->settings.skill;
-	if (skill < 1.0f)
-	{
-		skill = 1.0f;
-	}
-
-	reflexDelay = (bs->skills.reflex > 0) ? bs->skills.reflex : 100;
-	return Com_Clampi(0, 5000, (int)((float)reflexDelay / skill));
-}
-
-//Uses legacy reflex/skill reaction delay, then adds optional bot_delay ms as an extra
-//handicap scaled by the shared 1-10 penalty rule. bot_aimspeed no longer modifies delay.
+//Uses the existing reflex-scaled response delay behavior as the base, then applies the
+//shared 1-10 penalty rule to bot_delay so higher levels reduce the added handicap.
+//bot_aimspeed no longer modifies delay.
 static int BotGetReflexScaledResponseDelayMs(bot_state_t *bs)
 {
-	int delay = BotGetLegacyReflexResponseDelayMs(bs);
-	int extraDelay = BotGetResponseDelayMs();
+	int delay = BotGetResponseDelayMs();
+	float reflexScale;
 
 	if (!bs)
 	{
-		return extraDelay;
+		return delay;
 	}
-	delay += (int)((float)extraDelay * BotGetExtraPenaltyScaleForSkill(bs));
+
+	reflexScale = 100.0f / (float)((bs->skills.reflex > 0) ? bs->skills.reflex : 100);
+	delay = (int)((float)delay * reflexScale);
+	delay = (int)((float)delay * BotGetExtraPenaltyScaleForSkill(bs));
 
 	if (delay < 0)
 	{
@@ -13887,10 +13966,10 @@ int NewBotAI_GetPull(bot_state_t *bs) {
 		//20 FP pull for follow-up pressure and let kick/throw paths handle the damage.
 		return 0;
 	}
-	if (ptkWeight > 0 && ourForce > 25 && ourForce < 40)
+	if (ptkWeight > 0 && ourForce > 25 && ourForce < NEWBOTAI_PTK_FORCE_BUDGET)
 	{
 		//PTK-weighted window but not enough bank for the full pull+throw budget yet:
-		//conserve briefly and re-enter PTK once we cross 40 FP.
+		//conserve briefly and re-enter PTK once we cross the budget threshold.
 		return 0;
 	}
 
@@ -14597,10 +14676,7 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 	const int enemyTotalHealth = NewBotAI_GetEnemyTotalHealth(bs);
 	const int forceLead = ourForce - hisForce;
 	const qboolean enemyKnockedDown = BG_InKnockDown(bs->currentEnemy->client->ps.legsAnim) ? qtrue : qfalse;
-	const qboolean enemyInGetup = (NewBotAI_IsGetupAnim(bs->currentEnemy->client->ps.legsAnim) ||
-		NewBotAI_IsGetupAnim(bs->currentEnemy->client->ps.torsoAnim)) ? qtrue : qfalse;
-	const qboolean enemyPreGetupResponse = (bs->currentEnemy->client->ps.forceHandExtend == HANDEXTEND_KNOCKDOWN &&
-		!enemyInGetup) ? qtrue : qfalse;
+	const qboolean enemyPreGetupResponse = NewBotAI_IsEnemyPreGetupKnockdownState(bs);
 	const float saberthrowBias = BotGetChanceBiasPercent(bot_saberthrowbias.value);
 	const int antiDrainWeight = NewBotAI_GetAntiDrainWeight(bs);
 	int weight = 0;
@@ -14926,29 +15002,11 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 		NewBotAI_ClearLightningBurst(bs);
 	}
 
-	if (!longRangeLightningOnly && NewBotAI_ShouldAbortChargedThrowForGetupPush(bs))
+	if (!longRangeLightningOnly)
 	{
-		//Getup jump+push interrupted our throw charge before release: abandon the throw and
-		//immediately transition into close pullkick pressure (or free flipkick if already in range).
-		if (NewBotAI_IsPullkickOpportunity(bs) &&
-			bs->frame_Enemy_Len <= NEWBOTAI_IMMEDIATE_FLIPKICK_RANGE &&
-			NewBotAI_IsFlipkickSetupReady(bs))
+		if (NewBotAI_TryAbortChargedThrowIntoPullkick(bs))
 		{
-			NewBotAI_Flipkick(bs);
 			return;
-		}
-		if (!(g_forcePowerDisable.integer & (1 << FP_PULL)) &&
-			(bs->cur_ps.fd.forcePowersKnown & (1 << FP_PULL)) &&
-			bs->cur_ps.groundEntityNum != ENTITYNUM_NONE &&
-			bs->cur_ps.fd.forcePower >= 20 &&
-			!(bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB)) &&
-			bs->frame_Enemy_Len >= 96 && bs->frame_Enemy_Len <= 640)
-		{
-			level.clients[bs->client].ps.fd.forcePowerSelected = FP_PULL;
-			NewBotAI_ApplyPullMistake(bs);
-			NewBotAI_SchedulePullkickJump(bs);
-			trap->EA_ForcePower(bs->client);
-			firedImmediatePull = qtrue;
 		}
 	}
 
@@ -14968,7 +15026,7 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 				!(g_forcePowerDisable.integer & (1 << FP_PULL)) &&
 				(bs->cur_ps.fd.forcePowersKnown & (1 << FP_PULL)) &&
 				bs->cur_ps.groundEntityNum != ENTITYNUM_NONE &&
-				bs->cur_ps.fd.forcePower >= 40 &&
+				bs->cur_ps.fd.forcePower >= NEWBOTAI_PTK_FORCE_BUDGET &&
 				!(bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB)) &&
 				bs->frame_Enemy_Len >= 96 && bs->frame_Enemy_Len <= 640 &&
 				!NewBotAI_ShouldSkipPullForNaturalFlipkickPTK(bs))
@@ -14982,7 +15040,7 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 			}
 			else if (!ptkWeighted && !(g_forcePowerDisable.integer & (1 << FP_PUSH)) &&
 				(bs->cur_ps.fd.forcePowersKnown & (1 << FP_PUSH)) &&
-				bs->cur_ps.fd.forcePower >= 40 &&
+				bs->cur_ps.fd.forcePower >= NEWBOTAI_PTK_FORCE_BUDGET &&
 				bs->frame_Enemy_Len >= 96 && bs->frame_Enemy_Len <= 640)
 			{
 				level.clients[bs->client].ps.fd.forcePowerSelected = FP_PUSH;
@@ -14994,6 +15052,7 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 	if (!firedImmediatePull &&
 		useTheForce &&
 		bs->currentEnemy && bs->currentEnemy->client &&
+		bs->cur_ps.weaponstate != WEAPON_CHARGING_ALT &&
 		(level.framenum % 2) &&
 		(!bs->currentEnemy->client->invulnerableTimer || (bs->currentEnemy->client->invulnerableTimer <= level.time)))
 		trap->EA_ForcePower(bs->client);
@@ -15155,31 +15214,8 @@ void NewBotAI_GetLSForcepower(bot_state_t *bs)
 		useTheForce = qtrue;
 	}
 
-	if (NewBotAI_ShouldAbortChargedThrowForGetupPush(bs))
-	{
-		//Getup jump+push interrupted our throw charge before release: stop charging and
-		//immediately convert into pullkick pressure, or cash a free flipkick if in range.
-		if (NewBotAI_IsPullkickOpportunity(bs) &&
-			bs->frame_Enemy_Len <= NEWBOTAI_IMMEDIATE_FLIPKICK_RANGE &&
-			NewBotAI_IsFlipkickSetupReady(bs))
-		{
-			NewBotAI_Flipkick(bs);
-			return;
-		}
-		if (!(g_forcePowerDisable.integer & (1 << FP_PULL)) &&
-			(bs->cur_ps.fd.forcePowersKnown & (1 << FP_PULL)) &&
-			bs->cur_ps.groundEntityNum != ENTITYNUM_NONE &&
-			bs->cur_ps.fd.forcePower >= 20 &&
-			!(bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB)) &&
-			bs->frame_Enemy_Len >= 96 && bs->frame_Enemy_Len <= 640)
-		{
-			level.clients[bs->client].ps.fd.forcePowerSelected = FP_PULL;
-			NewBotAI_ApplyPullMistake(bs);
-			NewBotAI_SchedulePullkickJump(bs);
-			trap->EA_ForcePower(bs->client);
-			return;
-		}
-	}
+	if (NewBotAI_TryAbortChargedThrowIntoPullkick(bs))
+		return;
 
 	//Check if we should saberthrow I guess.
 	//A free flipkick always beats holding/charging a throw once the enemy has closed
@@ -15195,7 +15231,7 @@ void NewBotAI_GetLSForcepower(bot_state_t *bs)
 				!(g_forcePowerDisable.integer & (1 << FP_PULL)) &&
 				(bs->cur_ps.fd.forcePowersKnown & (1 << FP_PULL)) &&
 				bs->cur_ps.groundEntityNum != ENTITYNUM_NONE &&
-				bs->cur_ps.fd.forcePower >= 40 &&
+				bs->cur_ps.fd.forcePower >= NEWBOTAI_PTK_FORCE_BUDGET &&
 				!(bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB)) &&
 				bs->frame_Enemy_Len >= 96 && bs->frame_Enemy_Len <= 640 &&
 				!NewBotAI_ShouldSkipPullForNaturalFlipkickPTK(bs))
@@ -15209,7 +15245,7 @@ void NewBotAI_GetLSForcepower(bot_state_t *bs)
 			}
 			else if (!ptkWeighted && !(g_forcePowerDisable.integer & (1 << FP_PUSH)) &&
 				(bs->cur_ps.fd.forcePowersKnown & (1 << FP_PUSH)) &&
-				bs->cur_ps.fd.forcePower >= 40 &&
+				bs->cur_ps.fd.forcePower >= NEWBOTAI_PTK_FORCE_BUDGET &&
 				bs->frame_Enemy_Len >= 96 && bs->frame_Enemy_Len <= 640)
 			{
 				level.clients[bs->client].ps.fd.forcePowerSelected = FP_PUSH;
@@ -15224,7 +15260,8 @@ void NewBotAI_GetLSForcepower(bot_state_t *bs)
 	//if (bs->cur_ps.weaponstate != WEAPON_CHARGING_ALT && (level.clients[bs->client].ps.fd.forcePowerSelected == FP_PULL) && random() > 0.5)
 		//useTheForce = qfalse;
 
-	if (useTheForce && (level.framenum % 2) && (!bs->currentEnemy->client->invulnerableTimer || (bs->currentEnemy->client->invulnerableTimer <= level.time))) {
+	if (useTheForce && bs->cur_ps.weaponstate != WEAPON_CHARGING_ALT &&
+		(level.framenum % 2) && (!bs->currentEnemy->client->invulnerableTimer || (bs->currentEnemy->client->invulnerableTimer <= level.time))) {
 		trap->EA_ForcePower(bs->client);
 		//Com_Printf("Using force\n");
 	}
