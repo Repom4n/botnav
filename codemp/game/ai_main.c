@@ -7489,10 +7489,6 @@ static qboolean NewBotAI_ShouldForceLostSightWaypointReset(bot_state_t *bs)
 	{
 		return qtrue;
 	}
-	if (NewBotAI_ShouldPursueTargetThroughWaypoints(bs, bs->currentEnemy))
-	{
-		return qfalse;
-	}
 	if (bs->lastVisibleEnemyTime <= 0)
 	{
 		return qfalse;
@@ -12747,13 +12743,16 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 		{
 			if (bs->fanSwingStarted)
 			{
-				const int nextDwellMs = (bs->fanSwingCount == 0) ? firstDwellMs : dwellMs;
+				if (!BG_SaberInAttack(bs->cur_ps.saberMove))
+				{
+					const int nextDwellMs = (bs->fanSwingCount == 0) ? firstDwellMs : dwellMs;
 
-				bs->fanSwingCount++;
-				bs->fanSwingStarted = 0;
-				bs->fanPhase = FAN_PHASE_DWELL;
-				bs->fanPhaseStartTime = level.time;
-				bs->fanAttackTime = level.time + nextDwellMs;
+					bs->fanSwingCount++;
+					bs->fanSwingStarted = 0;
+					bs->fanPhase = FAN_PHASE_DWELL;
+					bs->fanPhaseStartTime = level.time;
+					bs->fanAttackTime = level.time + nextDwellMs;
+				}
 			}
 			else
 			{
