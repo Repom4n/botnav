@@ -7520,6 +7520,12 @@ static qboolean NewBotAI_ShouldForceLostSightWaypointReset(bot_state_t *bs)
 	return qtrue;
 }
 
+static qboolean NewBotAI_ShouldKeepWaypointPursuitTarget(bot_state_t *bs, gentity_t *enemy)
+{
+	return (NewBotAI_ShouldPursueTargetThroughWaypoints(bs, enemy) &&
+		!NewBotAI_ShouldForceLostSightWaypointReset(bs)) ? qtrue : qfalse;
+}
+
 static qboolean NewBotAI_HasValidCurrentEnemy(bot_state_t *bs)
 {
 	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
@@ -12749,6 +12755,10 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 				bs->fanPhaseStartTime = level.time;
 				bs->fanAttackTime = level.time + nextDwellMs;
 			}
+			else
+			{
+				NewBotAI_ResetFanChain(bs);
+			}
 		}
 		break;
 
@@ -16485,7 +16495,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		const int targetTimeoutMs = BotGetTargetTimeoutMs();
 		bs->enemySeenTime = bs->lastVisibleEnemyTime + ((targetTimeoutMs > 0) ? targetTimeoutMs : ENEMY_FORGET_MS);
 	}
-	else if (NewBotAI_ShouldPursueTargetThroughWaypoints(bs, bs->currentEnemy))
+	else if (NewBotAI_ShouldKeepWaypointPursuitTarget(bs, bs->currentEnemy))
 	{
 		bs->enemySeenTime = level.time + ENEMY_FORGET_MS;
 	}
@@ -16603,7 +16613,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		{
 			NewBotAI_PrepareWaypointHandoff(
 				bs,
-				NewBotAI_ShouldPursueTargetThroughWaypoints(bs, bs->currentEnemy) ? qfalse : qtrue);
+				NewBotAI_ShouldKeepWaypointPursuitTarget(bs, bs->currentEnemy) ? qfalse : qtrue);
 		}
 		bs->navObstacleUntil = 0;
 		StandardBotAI(bs, thinktime);
@@ -16641,7 +16651,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		const qboolean forceLostSightReset = NewBotAI_ShouldForceLostSightWaypointReset(bs);
 		if ((NewBotAI_ShouldRetainLostSightTarget(bs, bs->currentEnemy) &&
 			!forceLostSightReset) ||
-			NewBotAI_ShouldPursueTargetThroughWaypoints(bs, bs->currentEnemy))
+			NewBotAI_ShouldKeepWaypointPursuitTarget(bs, bs->currentEnemy))
 		{
 			NewBotAI_ClearLostSightCombatInput(bs);
 			NewBotAI_GetAim(bs);
@@ -17339,7 +17349,7 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 				(bs->enemySeenTime < level.time || shouldRescanForCloserTarget) &&
 				(shouldRescanForCloserTarget ||
 				 (!bs->frame_Enemy_Vis &&
-				  !NewBotAI_ShouldPursueTargetThroughWaypoints(bs, bs->currentEnemy))))
+				  !NewBotAI_ShouldKeepWaypointPursuitTarget(bs, bs->currentEnemy))))
 			{
 				bs->currentEnemy = NULL;
 				bs->enemySeenTime = 0;

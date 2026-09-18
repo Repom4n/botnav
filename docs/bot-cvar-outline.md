@@ -53,8 +53,8 @@ These are all percentage-based (0-100) chance weights that gate specific behavio
 | `bot_fanbias` | `0` | Chance weight for fan-chain attack patterns (horizontal swing chains). Used in `NewBotAI_PrepareHorizontalSwingStart()`. |
 | `bot_fanhold` | `220` | How long (ms) each fan gate holds exclusive left/right strafe plus attack to start the current horizontal swing. |
 | `bot_firstfandwell` | `250` | Special dwell (ms) used only between the first and second swings of a fan chain. |
-| `bot_fandwell` | `250` | Free-movement dwell (ms) between all later fan swings in the chain. During this dwell the bot yaws with the current swing direction, then returns to center by dwell end. |
-| `bot_fanyawspeed` | `90` | Dwell-yaw speed in degrees per second for fan chains. Negative values yaw opposite the current swing direction. |
+| `bot_fandwell` | `250` | Free-movement dwell (ms) between all later fan swings in the chain. During this dwell the bot applies a triangular yaw offset: it drifts away from center during the first half of the dwell and returns by the end. |
+| `bot_fanyawspeed` | `90` | Degrees per second used to build that triangular fan-dwell yaw offset. Negative values mirror the offset to the opposite side of the current swing direction. |
 | `bot_wobbledelay` | `120` | Delay in ms after fan-chain attack hold begins before aim wobble starts. |
 | `bot_wobbleyaw` | `6` | Fan-chain wobble horizontal amplitude in yaw degrees. |
 | `bot_wobblepitch` | `2` | Fan-chain wobble vertical amplitude in pitch degrees. |
