@@ -434,10 +434,10 @@ XCVAR_DEF( bot_fkduration,				"300",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_delay,					"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_delayresponsetime,		"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_responseTimeDelay,		"0",			NULL,				CVAR_ARCHIVE,									qtrue )
-// 0: disabled, use each bot's .jkb turnspeed_combat/reflex unmodified (legacy behavior).
-// 1-10: server-selected aim quality target, blended with each bot's own .jkb turnspeed_combat
-// for personality variance. 9 = near-perfect aim with minimal response delay, 10 = perfect
-// aim with zero response delay.
+// 0: disabled, use each bot's .jkb turnspeed_combat aim handling unmodified (legacy behavior).
+// 1-10: multiplies the legacy combat-turn factor with a strict monotonic scale where higher
+// values always turn faster (1=slowest override, 10=fastest override). This cvar affects aim
+// turn speed only; reaction delay is controlled by .jkb reflex + bot_delay.
 XCVAR_DEF( bot_aimspeed,				"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_strafefrequency,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_strafeduration,			"50",			NULL,				CVAR_ARCHIVE,									qtrue )
