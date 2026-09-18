@@ -6816,10 +6816,15 @@ static void NewBotAI_ApplyFanDwellYaw(bot_state_t *bs)
 	float dwellDurationMs;
 	float halfDwellMs;
 	float yawSpeed;
-	float phaseOffset;
+	float desiredOffset;
 
-	if (!bs || bs->fanPhase != FAN_PHASE_DWELL || !bs->fanAttackDir)
+	if (!bs)
 	{
+		return;
+	}
+	if (bs->fanPhase != FAN_PHASE_DWELL || !bs->fanAttackDir)
+	{
+		bs->fanDwellYawOffset = 0.0f;
 		return;
 	}
 
@@ -6843,20 +6848,23 @@ static void NewBotAI_ApplyFanDwellYaw(bot_state_t *bs)
 	yawSpeed = Com_Clamp(-360.0f, 360.0f, bot_fanyawspeed.value);
 	if (halfDwellMs <= 0.0f || yawSpeed == 0.0f)
 	{
+		bs->fanDwellYawOffset = 0.0f;
 		return;
 	}
 
 	if (dwellElapsedMs <= halfDwellMs)
 	{
-		phaseOffset = yawSpeed * (dwellElapsedMs / 1000.0f);
+		desiredOffset = yawSpeed * (dwellElapsedMs / 1000.0f);
 	}
 	else
 	{
-		phaseOffset = yawSpeed * ((dwellDurationMs - dwellElapsedMs) / 1000.0f);
+		desiredOffset = yawSpeed * ((dwellDurationMs - dwellElapsedMs) / 1000.0f);
 	}
+	desiredOffset *= (float)bs->fanAttackDir;
 
 	bs->goalAngles[YAW] = AngleNormalize360(bs->goalAngles[YAW] +
-		(phaseOffset * (float)bs->fanAttackDir));
+		(desiredOffset - bs->fanDwellYawOffset));
+	bs->fanDwellYawOffset = desiredOffset;
 }
 
 void NewBotAI_GetAim(bot_state_t *bs)
@@ -11442,6 +11450,10 @@ static qboolean NewBotAI_ShouldPursueTargetThroughWaypoints(bot_state_t *bs, gen
 	{
 		return qfalse;
 	}
+	if (enemy != bs->currentEnemy)
+	{
+		return qfalse;
+	}
 	if (!NewBotAI_HasWaypointNavigation())
 	{
 		return qfalse;
@@ -12610,6 +12622,7 @@ static void NewBotAI_ResetFanChain(bot_state_t *bs)
 	bs->fanChainStartTime = 0;
 	bs->fanChainStartHealth = 0;
 	bs->fanSwingCount = 0;
+	bs->fanDwellYawOffset = 0.0f;
 	bs->fanWobbleStartTime = 0;
 }
 
