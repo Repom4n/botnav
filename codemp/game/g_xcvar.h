@@ -387,9 +387,9 @@ XCVAR_DEF( bot_fanhold,					"220",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_firstfandwell,			"250",			NULL,				CVAR_ARCHIVE,									qtrue )
 // How long (ms) later fan dwells last between all following swings in the chain.
 XCVAR_DEF( bot_fandwell,				"250",			NULL,				CVAR_ARCHIVE,									qtrue )
-// Degrees/second for the fan dwell's triangular yaw offset: over the first half of the
-// dwell the bot yaws away from center in the swing direction (or opposite for negative
-// values), then it returns to center over the second half.
+// Degrees/second for the fan dwell's triangular yaw offset, clamped to [-360, 360]: over
+// the first half of the dwell the bot yaws away from center in the swing direction (or
+// opposite for negative values), then it returns to center over the second half.
 XCVAR_DEF( bot_fanyawspeed,				"90",			NULL,				CVAR_ARCHIVE,									qtrue )
 // Delay (ms) after fan attack hold begins before aim wobble starts.
 XCVAR_DEF( bot_wobbledelay,			"120",			NULL,				CVAR_ARCHIVE,									qtrue )

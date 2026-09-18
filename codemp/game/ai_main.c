@@ -12753,6 +12753,10 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 					bs->fanPhaseStartTime = level.time;
 					bs->fanAttackTime = level.time + nextDwellMs;
 				}
+				else if (level.time > bs->fanPhaseStartTime + holdMs + 1000)
+				{
+					NewBotAI_ResetFanChain(bs);
+				}
 			}
 			else
 			{
