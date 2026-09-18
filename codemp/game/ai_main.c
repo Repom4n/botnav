@@ -17345,6 +17345,10 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 			 (targetDistanceLimit > 0.0f) && (bs->frame_Enemy_Len > targetDistanceLimit)) ? qtrue : qfalse;
 		if (bs->enemySeenTime < level.time || !bs->frame_Enemy_Vis || !bs->currentEnemy || shouldRescanForCloserTarget)
 		{
+			const qboolean keepWaypointPursuitTarget =
+				(!bs->frame_Enemy_Vis &&
+				 NewBotAI_ShouldKeepWaypointPursuitTarget(bs, bs->currentEnemy)) ? qtrue : qfalse;
+
 			enemy = ScanForEnemies(bs);
 
 			if (enemy != -1)
@@ -17354,9 +17358,7 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 			}
 			else if (bs->currentEnemy &&
 				(bs->enemySeenTime < level.time || shouldRescanForCloserTarget) &&
-				(shouldRescanForCloserTarget ||
-				 (!bs->frame_Enemy_Vis &&
-				  !NewBotAI_ShouldKeepWaypointPursuitTarget(bs, bs->currentEnemy))))
+				!keepWaypointPursuitTarget)
 			{
 				bs->currentEnemy = NULL;
 				bs->enemySeenTime = 0;
