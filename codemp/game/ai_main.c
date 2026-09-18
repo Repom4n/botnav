@@ -12745,9 +12745,10 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 			{
 				if (!BG_SaberInAttack(bs->cur_ps.saberMove))
 				{
-					const int nextDwellMs = (bs->fanSwingCount == 0) ? firstDwellMs : dwellMs;
+					const int completedSwingCount = bs->fanSwingCount;
+					const int nextDwellMs = (completedSwingCount <= 0) ? firstDwellMs : dwellMs;
 
-					bs->fanSwingCount++;
+					bs->fanSwingCount = completedSwingCount + 1;
 					bs->fanSwingStarted = 0;
 					bs->fanPhase = FAN_PHASE_DWELL;
 					bs->fanPhaseStartTime = level.time;
@@ -16652,9 +16653,12 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		NewBotAI_HasWaypointNavigation())
 	{
 		const qboolean forceLostSightReset = NewBotAI_ShouldForceLostSightWaypointReset(bs);
+		const qboolean keepWaypointPursuitTarget =
+			(NewBotAI_ShouldPursueTargetThroughWaypoints(bs, bs->currentEnemy) &&
+			 !forceLostSightReset) ? qtrue : qfalse;
 		if ((NewBotAI_ShouldRetainLostSightTarget(bs, bs->currentEnemy) &&
 			!forceLostSightReset) ||
-			NewBotAI_ShouldKeepWaypointPursuitTarget(bs, bs->currentEnemy))
+			keepWaypointPursuitTarget)
 		{
 			NewBotAI_ClearLostSightCombatInput(bs);
 			NewBotAI_GetAim(bs);
