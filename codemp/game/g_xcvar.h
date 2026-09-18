@@ -349,8 +349,10 @@ XCVAR_DEF( g_newBotAI,					"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 // -4: same as -3 but also biases bots toward issuing/accepting duel challenges against each
 // other (to build ELO) once no humans are active, >=0: force client index
 XCVAR_DEF( g_newBotAITarget,			"-1",			NULL,				CVAR_ARCHIVE,									qfalse )
+// Max distance at which bots will acquire or keep pursuing a target, including through-wall
+// waypoint reconnects after combat.
 XCVAR_DEF( bot_targetdistance,			"4096",		NULL,				CVAR_ARCHIVE,									qtrue )
-XCVAR_DEF( bot_target_timeout,			"3000",		NULL,				CVAR_ARCHIVE,									qtrue )
+XCVAR_DEF( bot_target_timeout,			"3000",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( g_newBotAITargetDistance,	"4096",		NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_lowhangingfruitHP,		"40",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_lowhanginfruitDistance,	"1024",		NULL,				CVAR_ARCHIVE,									qtrue )
@@ -378,10 +380,16 @@ XCVAR_DEF( bot_duelcountmax,			"3",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_ffaexploretime,			"180000",		NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_antidrainbias,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_fanbias,					"0",			NULL,				CVAR_ARCHIVE,									qtrue )
-// How long (ms) a fan/fan-chain swing dwells between alternating left/right swings: the
-// bot may move freely for this whole window, then negates non-chosen-direction movement
-// for a 100ms strafe-only tap before committing attack+strafe in the opposite direction.
+// How long (ms) a fan swing holds exclusive left/right strafe plus attack to start the swing.
+XCVAR_DEF( bot_fanhold,					"220",			NULL,				CVAR_ARCHIVE,									qtrue )
+// How long (ms) the first post-open dwell lasts, specifically between the first and second
+// swings in a fan chain.
+XCVAR_DEF( bot_firstfandwell,			"250",			NULL,				CVAR_ARCHIVE,									qtrue )
+// How long (ms) later fan dwells last between all following swings in the chain.
 XCVAR_DEF( bot_fandwell,				"250",			NULL,				CVAR_ARCHIVE,									qtrue )
+// Degrees/second of dwell yaw drift in the swing direction before returning to center by
+// dwell end. Negative values drift opposite the swing direction.
+XCVAR_DEF( bot_fanyawspeed,				"90",			NULL,				CVAR_ARCHIVE,									qtrue )
 // Delay (ms) after fan attack hold begins before aim wobble starts.
 XCVAR_DEF( bot_wobbledelay,			"120",			NULL,				CVAR_ARCHIVE,									qtrue )
 // Horizontal wobble amplitude (yaw degrees) for fan-chain aim wobble.

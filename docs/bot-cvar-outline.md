@@ -15,8 +15,8 @@ This document describes all cvars added for the NewBotAI system and how they rel
 | Cvar | Default | Description |
 |------|---------|-------------|
 | `g_newBotAITarget` | `-1` | Target selection mode. `-1` = default (closest), `-2` = humans only, `-3` = prefer humans then bots and offer force duels to either while continuing combat, `-4` = prefer humans then bots but only offer force duels and retreat/heal instead of attacking, `>=0` = force specific client index. |
-| `bot_targetdistance` | `4096` | Max distance at which bots will engage targets. |
-| `bot_target_timeout` | `3000` | How long (ms) a bot keeps its current target lock after losing line of sight through walls/floors before dropping back to normal navigation. |
+| `bot_targetdistance` | `4096` | Max distance at which bots will acquire, keep, or keep waypoint-pursuing a target through walls. If the target exceeds this distance, the lock is dropped unless a new in-range target is found. |
+| `bot_target_timeout` | `3000` | How long (ms) a bot keeps its current lost-sight combat lock before fully falling back to normal navigation when it is not using waypoint pursuit retention. |
 | `g_newBotAITargetDistance` | `4096` | Declared but currently unused (superseded by `bot_targetdistance`). |
 | `bot_lowhangingfruitHP` | `40` | HP threshold below which a target is considered "low-hanging fruit" (easy kill). |
 | `bot_lowhanginfruitDistance` | `1024` | Max distance to prioritize low-HP targets. |
@@ -50,7 +50,11 @@ These are all percentage-based (0-100) chance weights that gate specific behavio
 |------|---------|-------------|
 | `bot_saberthrowbias` | `0` | Chance weight for saber throw decisions. Higher = more throws. Feeds into `NewBotAI_GetSaberthrow()`. |
 | `bot_gripkickbias` | `0` | Chance weight for grip-kick combo initiation. Feeds into `NewBotAI_GetGrip()`. |
-| `bot_fanbias` | `0` | Chance weight for fan-chain attack patterns (horizontal swing chains). Used in `NewBotAI_PrepareHorizontalSwingStart()`. A committed chain holds attack for its whole duration (up to a 3s cap) and breaks only after taking more than 4 damage total. |
+| `bot_fanbias` | `0` | Chance weight for fan-chain attack patterns (horizontal swing chains). Used in `NewBotAI_PrepareHorizontalSwingStart()`. |
+| `bot_fanhold` | `220` | How long (ms) each fan gate holds exclusive left/right strafe plus attack to start the current horizontal swing. |
+| `bot_firstfandwell` | `250` | Special dwell (ms) used only between the first and second swings of a fan chain. |
+| `bot_fandwell` | `250` | Free-movement dwell (ms) between all later fan swings in the chain. During this dwell the bot yaws with the current swing direction, then returns to center by dwell end. |
+| `bot_fanyawspeed` | `90` | Dwell-yaw speed in degrees per second for fan chains. Negative values yaw opposite the current swing direction. |
 | `bot_wobbledelay` | `120` | Delay in ms after fan-chain attack hold begins before aim wobble starts. |
 | `bot_wobbleyaw` | `6` | Fan-chain wobble horizontal amplitude in yaw degrees. |
 | `bot_wobblepitch` | `2` | Fan-chain wobble vertical amplitude in pitch degrees. |
@@ -164,7 +168,7 @@ g_newBotAI (master switch)
   |     +-- Consumed by:
   |           +-- bot_saberthrowbias --> saber throw weight
   |           +-- bot_gripkickbias --> grip initiation weight
-  |           +-- bot_fanbias --> fan-chain patterns
+  |           +-- bot_fanbias + bot_fanhold + bot_firstfandwell + bot_fandwell + bot_fanyawspeed --> fan-chain patterns
   |           +-- bot_drainbias --> drain hold duration
   |           +-- bot_antidrainbias --> anti-drain priority
   |           +-- bot_lightningbias + bot_lightningdistance --> lightning

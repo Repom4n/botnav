@@ -373,11 +373,13 @@ typedef struct bot_state_s
 	int					forceMove_Forward;
 	int					forceMove_Right;
 	int					forceMove_Up;
-	int					fanAttackTime; // level.time the current fan-chain phase (dwell/tap/swing) ends
+	int					fanAttackTime; // level.time the current fan-chain phase (hold/dwell) ends
 	int					fanAttackDir;
-	int					fanPhase; // FAN_PHASE_* - dwell (free move), tap (100ms strafe-only), swing (attack+strafe)
+	int					fanPhase; // FAN_PHASE_* - hold (exclusive strafe+attack) or dwell (free move)
+	int					fanPhaseStartTime; // level.time when the current fan-chain phase began
 	int					fanChainStartTime; // level.time the fan chain began - chain hard-caps at 3s
-	int					fanChainStartHealth; // health when the fan chain began - chain breaks once it takes more than 4 total damage
+	int					fanChainStartHealth; // health when the fan chain began
+	int					fanSwingCount; // completed fan swings in the current chain
 	int					fanWobbleStartTime; // level.time when fan-chain attack hold began for delayed wiggle/wobble aim offset
 	int					drainHoldTime;
 	qboolean			healDrainlockActive; // latched once a health-disadvantaged drainlock starts; stays active on the same enemy until topped off or aggression turns reckless

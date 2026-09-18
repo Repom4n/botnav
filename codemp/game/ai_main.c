@@ -150,18 +150,17 @@ static void NewBotAI_SaberDuelIndecisionFallback(bot_state_t *bs, qboolean horiz
 static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs);
 static void NewBotAI_ApplyHorizontalSwingMove(bot_state_t *bs);
 static void NewBotAI_ResetFanChain(bot_state_t *bs);
+static void NewBotAI_ApplyFanDwellYaw(bot_state_t *bs);
+static qboolean NewBotAI_HasValidCurrentEnemy(bot_state_t *bs);
 static qboolean NewBotAI_CanInitiateFlipkickUnderFanPressure(bot_state_t *bs);
 
-// Fan-chain phases (see NewBotAI_PrepareHorizontalSwingStart): DWELL is a free-movement
-// hold (bot_fandwell ms), TAP_PRE_SWING/TAP_POST_SWING are the 100ms strafe-only commit
-// pulses that bookend each side of a DWELL, and SWING holds attack+strafe to actually
-// throw the horizontal swing.
+// Fan-chain phases (see NewBotAI_PrepareHorizontalSwingStart): HOLD owns exclusive
+// strafe+attack long enough to start the horizontal swing, and DWELL is the free-movement
+// gap before the next alternating hold.
 enum {
 	FAN_PHASE_INACTIVE = 0,
-	FAN_PHASE_DWELL,
-	FAN_PHASE_TAP_PRE_SWING,
-	FAN_PHASE_SWING,
-	FAN_PHASE_TAP_POST_SWING
+	FAN_PHASE_HOLD,
+	FAN_PHASE_DWELL
 };
 
 static qboolean NewBotAI_CanUseSaberThrowDefenseBreakForce(bot_state_t *bs, qboolean preferPull);
@@ -203,7 +202,7 @@ static void NewBotAI_ApplyRandomStrafePattern(bot_state_t *bs);
 static void NewBotAI_StartEscapeYawOverride(bot_state_t *bs, int durationMs);
 static qboolean NewBotAI_IsDuelStrafeSuppressed(bot_state_t *bs);
 static int NewBotAI_GetWallStrafeAwayDir(bot_state_t *bs);
-static int NewBotAI_GetNearestEnemyIgnoringDistance(bot_state_t *bs);
+static qboolean NewBotAI_ShouldPursueTargetThroughWaypoints(bot_state_t *bs, gentity_t *enemy);
 static float NewBotAI_GetRecoveryYawSpeedDegPerSec(void);
 static int NewBotAI_GetRecoveryYawIntervalMs(void);
 static int NewBotAI_GetWallRedirectIntervalMs(void);
@@ -1121,6 +1120,9 @@ int BotAISetupClient(int client, struct bot_settings_s *settings, qboolean resta
 	bs->randomStrafeEndTime = 0;
 	bs->gripkickRestackDir = 0;
 	bs->escapeYawOverrideUntil = 0;
+	bs->lastWPIndex = -1;
+	bs->enemyWaypointFallbackIndex = -1;
+	bs->enemyWaypointFallbackEnemyNum = -1;
 
 	//initialize weapon weight defaults..
 	bs->botWeaponWeights[WP_NONE] = 0;
@@ -5705,7 +5707,7 @@ int BotFallbackNavigation(bot_state_t *bs)
 		return 0;
 	}
 
-	if (bs->currentEnemy && bs->frame_Enemy_Vis)
+	if (NewBotAI_HasValidCurrentEnemy(bs))
 	{
 		return 2; //we're busy
 	}
@@ -6808,6 +6810,55 @@ static void NewBotAI_ApplyFanAttackWobble(bot_state_t *bs)
 	}
 }
 
+static void NewBotAI_ApplyFanDwellYaw(bot_state_t *bs)
+{
+	float dwellElapsedMs;
+	float dwellDurationMs;
+	float halfDwellMs;
+	float yawSpeed;
+	float phaseOffset;
+
+	if (!bs || bs->fanPhase != FAN_PHASE_DWELL || !bs->fanAttackDir)
+	{
+		return;
+	}
+
+	dwellDurationMs = (float)(bs->fanAttackTime - bs->fanPhaseStartTime);
+	if (dwellDurationMs <= 0.0f)
+	{
+		return;
+	}
+
+	dwellElapsedMs = (float)(level.time - bs->fanPhaseStartTime);
+	if (dwellElapsedMs < 0.0f)
+	{
+		dwellElapsedMs = 0.0f;
+	}
+	else if (dwellElapsedMs > dwellDurationMs)
+	{
+		dwellElapsedMs = dwellDurationMs;
+	}
+
+	halfDwellMs = dwellDurationMs * 0.5f;
+	yawSpeed = Com_Clamp(-360.0f, 360.0f, bot_fanyawspeed.value);
+	if (halfDwellMs <= 0.0f || yawSpeed == 0.0f)
+	{
+		return;
+	}
+
+	if (dwellElapsedMs <= halfDwellMs)
+	{
+		phaseOffset = yawSpeed * (dwellElapsedMs / 1000.0f);
+	}
+	else
+	{
+		phaseOffset = yawSpeed * ((dwellDurationMs - dwellElapsedMs) / 1000.0f);
+	}
+
+	bs->goalAngles[YAW] = AngleNormalize360(bs->goalAngles[YAW] +
+		(phaseOffset * (float)bs->fanAttackDir));
+}
+
 void NewBotAI_GetAim(bot_state_t *bs)
 {
 	vec3_t headlevel;
@@ -6898,6 +6949,7 @@ void NewBotAI_GetAim(bot_state_t *bs)
 			NewBotAI_AdjustSaberThrowLead(bs);
 		}
 	}
+	NewBotAI_ApplyFanDwellYaw(bs);
 	NewBotAI_ApplyFanAttackWobble(bs);
 	VectorCopy(bs->goalAngles, bs->ideal_viewangles);
 }
@@ -7429,6 +7481,10 @@ static qboolean NewBotAI_ShouldForceLostSightWaypointReset(bot_state_t *bs)
 	{
 		return qtrue;
 	}
+	if (NewBotAI_ShouldPursueTargetThroughWaypoints(bs, bs->currentEnemy))
+	{
+		return qfalse;
+	}
 	if (bs->lastVisibleEnemyTime <= 0)
 	{
 		return qfalse;
@@ -7588,52 +7644,6 @@ static int NewBotAI_GetWallStrafeAwayDir(bot_state_t *bs)
 	}
 
 	return 0;
-}
-
-static int NewBotAI_GetNearestEnemyIgnoringDistance(bot_state_t *bs)
-{
-	int i;
-	int best = -1;
-	float bestDistSq = 0.0f;
-
-	if (!bs)
-	{
-		return -1;
-	}
-
-	for (i = 0; i < MAX_CLIENTS; i++)
-	{
-		gentity_t *ent = &g_entities[i];
-		vec3_t delta;
-		float distSq;
-
-		if (!ent->inuse || !ent->client || i == bs->client)
-		{
-			continue;
-		}
-		if (ent->health < 1 || ent->client->pers.connected != CON_CONNECTED)
-		{
-			continue;
-		}
-		if (OnSameTeam(&g_entities[bs->client], ent))
-		{
-			continue;
-		}
-		if (!BotTargetModeAllowsBotEnemies(BotGetNewBotAITargetMode()) && (ent->r.svFlags & SVF_BOT))
-		{
-			continue;
-		}
-
-		VectorSubtract(ent->client->ps.origin, bs->origin, delta);
-		distSq = VectorLengthSquared(delta);
-		if (best == -1 || distSq < bestDistSq)
-		{
-			best = i;
-			bestDistSq = distSq;
-		}
-	}
-
-	return best;
 }
 
 static qboolean NewBotAI_IsActivelyEngagedInCombat(bot_state_t *bs)
@@ -9892,20 +9902,13 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 				return;
 			}
 
-			//A committed fan chain keeps the attack button held for its entire duration
-			//(dwell, tap, and swing windows, up to the 3s chain cap) so the engine's
-			//saber combo keeps chaining across the dwell between direction taps instead
-			//of getting released mid-chain. Movement negation stays strafe-only during
-			//the tap/swing phases via NewBotAI_ApplyHorizontalSwingMove; DWELL moves
-			//freely. Chain-ending conditions (time cap, dropping below 70 HP) are handled
-			//by NewBotAI_PrepareHorizontalSwingStart, so no separate health gate is needed
-			//here - it would otherwise end the hold early even without dropping low.
-			//Check this ahead of, and independent from, the saberMove-gated
-			//single-swing case below.
+			//A committed fan chain now alternates between an exclusive strafe+attack
+			//hold window and a free-movement dwell. Only HOLD presses attack; DWELL keeps
+			//the chain reserved while allowing normal repositioning and dwell yaw.
 			if (bs->fanPhase != FAN_PHASE_INACTIVE)
 			{
 				NewBotAI_ApplyHorizontalSwingMove(bs);
-				if (!suppressSaberAttack)
+				if (!suppressSaberAttack && bs->fanPhase == FAN_PHASE_HOLD)
 					trap->EA_Attack(bs->client);
 				return;
 			}
@@ -9926,7 +9929,7 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 			}
 
 			if ((g_entities[bs->client].client->ps.saberMove == LS_NONE || g_entities[bs->client].client->ps.saberMove == LS_READY) &&
-				bs->fanPhase != FAN_PHASE_INACTIVE &&
+				bs->fanPhase == FAN_PHASE_HOLD &&
 				bs->frame_Enemy_Len < 256 &&
 				((NewBotAI_GetTimeToInRange(bs, 75, 800) < 800) || bs->frame_Enemy_Len < 128)) {
 				if (g_entities[bs->client].health > 40) {
@@ -10529,8 +10532,7 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 	}
 
 	NewBotAI_PrepareHorizontalSwingStart(bs);
-	horizontalSwingStart = (bs->fanPhase == FAN_PHASE_TAP_PRE_SWING || bs->fanPhase == FAN_PHASE_SWING ||
-		bs->fanPhase == FAN_PHASE_TAP_POST_SWING) ? qtrue : qfalse;
+	horizontalSwingStart = (bs->fanPhase == FAN_PHASE_HOLD) ? qtrue : qfalse;
 
 	hardRetreatHealth = 30 - (int)(aggressionBias * 25.0f);
 	softRetreatHealth = 60 - (int)(aggressionBias * 35.0f);
@@ -11372,19 +11374,37 @@ static float BotGetTargetDistanceLimit(void)
 {
 	float targetDistanceLimit = bot_targetdistance.value;
 
-	// g_newBotAITargetDistance is the dedicated NewBotAI target-distance override.
-	// Preserve the legacy bot_targetdistance cvar as the general fallback, but let a
-	// specific NewBotAI value take priority whenever it is changed from its default.
-	if (g_newBotAITargetDistance.value != 4096.0f)
-	{
-		targetDistanceLimit = g_newBotAITargetDistance.value;
-	}
 	if (targetDistanceLimit < 0.0f)
 	{
 		targetDistanceLimit = 0.0f;
 	}
 
 	return targetDistanceLimit;
+}
+
+static qboolean NewBotAI_IsEnemyWithinTargetDistance(bot_state_t *bs, gentity_t *enemy)
+{
+	float targetDistanceLimit;
+	vec3_t enemyOrigin;
+	vec3_t delta;
+	float enemyDistance;
+
+	if (!bs || !enemy || !enemy->client)
+	{
+		return qfalse;
+	}
+
+	targetDistanceLimit = BotGetTargetDistanceLimit();
+	if (targetDistanceLimit <= 0.0f)
+	{
+		return qfalse;
+	}
+
+	VectorCopy(enemy->client->ps.origin, enemyOrigin);
+	VectorSubtract(enemyOrigin, bs->eye, delta);
+	enemyDistance = VectorLength(delta);
+
+	return (enemyDistance <= targetDistanceLimit) ? qtrue : qfalse;
 }
 
 static int BotGetTargetTimeoutMs(void)
@@ -11414,6 +11434,24 @@ static qboolean NewBotAI_ShouldRetainLostSightTarget(bot_state_t *bs, gentity_t 
 	}
 
 	return (bs->lastVisibleEnemyTime > level.time - targetTimeoutMs) ? qtrue : qfalse;
+}
+
+static qboolean NewBotAI_ShouldPursueTargetThroughWaypoints(bot_state_t *bs, gentity_t *enemy)
+{
+	if (!bs || !enemy || !enemy->client || bs->frame_Enemy_Vis)
+	{
+		return qfalse;
+	}
+	if (!NewBotAI_HasWaypointNavigation())
+	{
+		return qfalse;
+	}
+	if (!NewBotAI_HasValidCurrentEnemy(bs))
+	{
+		return qfalse;
+	}
+
+	return NewBotAI_IsEnemyWithinTargetDistance(bs, enemy);
 }
 
 static void NewBotAI_ClearCurrentEnemyLock(bot_state_t *bs)
@@ -12556,13 +12594,10 @@ static qboolean NewBotAI_IsSaberSwingStartWindow(bot_state_t *bs)
 	return qtrue;
 }
 
-// Fan-chain phases (see NewBotAI_PrepareHorizontalSwingStart): DWELL is a free-movement
-// hold, TAP_PRE_SWING/TAP_POST_SWING are brief strafe-only commit pulses bookending the
-// dwell, SWING holds attack+strafe to actually throw the horizontal swing. The chain
-// keeps the attack/swing input held continuously for a flat 3 seconds (regardless of
-// bot_fandwell, which only paces the direction taps within it), ending early only if the
-// bot drops below 70 HP.
-#define NEWBOTAI_FAN_TAP_MS 100
+// Fan-chain phases (see NewBotAI_PrepareHorizontalSwingStart): HOLD owns exclusive
+// left/right strafe plus attack long enough to start the horizontal swing, then DWELL
+// frees movement before the next alternating hold. The chain ends after a flat 3 second
+// cap or when the bot drops below 70 HP.
 #define NEWBOTAI_FAN_CHAIN_MAX_MS 3000
 #define NEWBOTAI_FAN_CHAIN_MIN_HEALTH 70
 
@@ -12571,8 +12606,10 @@ static void NewBotAI_ResetFanChain(bot_state_t *bs)
 	bs->fanPhase = FAN_PHASE_INACTIVE;
 	bs->fanAttackDir = 0;
 	bs->fanAttackTime = 0;
+	bs->fanPhaseStartTime = 0;
 	bs->fanChainStartTime = 0;
 	bs->fanChainStartHealth = 0;
+	bs->fanSwingCount = 0;
 	bs->fanWobbleStartTime = 0;
 }
 
@@ -12640,20 +12677,15 @@ static float NewBotAI_GetFanBiasPercent(bot_state_t *bs)
 }
 
 // Item 2: fan/fanning is a left-right (or right-left) alternating horizontal swing chain.
-// Each cycle is: DWELL (bot_fandwell ms, bot may move freely) -> TAP_PRE_SWING (100ms,
-// strafe-only, no forward/back/diagonal, still in the current direction) -> SWING (attack
-// held while strafing in the opposite direction of that tap - the actual swing) ->
-// TAP_POST_SWING (100ms, strafe-only, still in the swing's direction) -> back to DWELL.
-// The two 100ms strafe-only taps bookend the free-movement dwell on either side, bridging
-// the movement space between the horizontal swing-inducing strafes. Attack stays held for
-// the entire chain so the engine's combo keeps chaining even across the dwell between
-// swings, and the chain only ends after a flat 3 second cap or as soon as the bot drops
-// below 70 HP during it, whichever comes first.
+// Each cycle is: HOLD (bot_fanhold ms, exclusive strafe+attack in one lateral direction)
+// -> DWELL (bot_firstfandwell once after the first swing, then bot_fandwell thereafter,
+// free movement) -> next HOLD in the opposite direction.
 static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 {
 	const float fanBias = NewBotAI_GetFanBiasPercent(bs);
+	const int holdMs = Com_Clampi(10, 3000, bot_fanhold.integer);
+	const int firstDwellMs = Com_Clampi(10, 3000, bot_firstfandwell.integer);
 	const int dwellMs = Com_Clampi(10, 3000, bot_fandwell.integer);
-	const int swingHoldMs = 160 + (int)(fanBias * 5.0f) + Q_irand(0, 120);
 
 	if (!NewBotAI_IsSaberSwingStartWindow(bs))
 	{
@@ -12684,45 +12716,25 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 
 	switch (bs->fanPhase)
 	{
+	case FAN_PHASE_HOLD:
+		if (bs->fanAttackTime <= level.time)
+		{
+			const int nextDwellMs = (bs->fanSwingCount == 0) ? firstDwellMs : dwellMs;
+
+			bs->fanSwingCount++;
+			bs->fanPhase = FAN_PHASE_DWELL;
+			bs->fanPhaseStartTime = level.time;
+			bs->fanAttackTime = level.time + nextDwellMs;
+		}
+		break;
+
 	case FAN_PHASE_DWELL:
 		if (bs->fanAttackTime <= level.time)
 		{
-			//Dwell window elapsed: commit to the pre-swing tap, still in the
-			//current direction.
-			bs->fanPhase = FAN_PHASE_TAP_PRE_SWING;
-			bs->fanAttackTime = level.time + NEWBOTAI_FAN_TAP_MS;
-		}
-		break;
-
-	case FAN_PHASE_TAP_PRE_SWING:
-		if (bs->fanAttackTime <= level.time)
-		{
-			//Tap window elapsed: engage the swing in the opposite direction of the
-			//strafe we just tapped.
 			bs->fanAttackDir = -bs->fanAttackDir;
-			bs->fanPhase = FAN_PHASE_SWING;
-			bs->fanAttackTime = level.time + swingHoldMs;
-		}
-		break;
-
-	case FAN_PHASE_SWING:
-		if (bs->fanAttackTime <= level.time)
-		{
-			//Swing finished: bookend it with a matching post-swing tap (still in the
-			//swing's direction) before the next free-movement dwell.
-			bs->fanPhase = FAN_PHASE_TAP_POST_SWING;
-			bs->fanAttackTime = level.time + NEWBOTAI_FAN_TAP_MS;
-		}
-		break;
-
-	case FAN_PHASE_TAP_POST_SWING:
-		if (bs->fanAttackTime <= level.time)
-		{
-			//Post-swing tap elapsed: loop back into a fresh dwell, keeping this
-			//direction as the baseline for the next tap/swing (so the chain keeps
-			//alternating).
-			bs->fanPhase = FAN_PHASE_DWELL;
-			bs->fanAttackTime = level.time + dwellMs;
+			bs->fanPhase = FAN_PHASE_HOLD;
+			bs->fanPhaseStartTime = level.time;
+			bs->fanAttackTime = level.time + holdMs;
 		}
 		break;
 
@@ -12746,29 +12758,29 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 		if (startDir)
 		{
 			bs->fanAttackDir = startDir;
-			bs->fanPhase = FAN_PHASE_DWELL;
-			bs->fanAttackTime = level.time + dwellMs;
+			bs->fanPhase = FAN_PHASE_HOLD;
+			bs->fanPhaseStartTime = level.time;
+			bs->fanAttackTime = level.time + holdMs;
 			bs->fanChainStartTime = level.time;
 			bs->fanChainStartHealth = g_entities[bs->client].health;
+			bs->fanSwingCount = 0;
 		}
 		break;
 	}
 	}
 }
 
-// Strafe-only movement for the fan chain's TAP_PRE_SWING/SWING/TAP_POST_SWING phases -
-// forward/back/diagonal input is negated so only the chosen strafe direction is issued.
-// DWELL is free movement for approach/positioning and leaves normal steering unchanged.
+// HOLD is exclusive strafe-only movement so the horizontal swing starts with no
+// forward/back input. DWELL is free movement for approach/positioning and leaves normal
+// steering unchanged.
 static void NewBotAI_ApplyHorizontalSwingMove(bot_state_t *bs)
 {
 	if (bs->fanPhase == FAN_PHASE_DWELL)
 	{
-		trap->EA_MoveForward(bs->client);
 		return;
 	}
 
-	if ((bs->fanPhase != FAN_PHASE_TAP_PRE_SWING && bs->fanPhase != FAN_PHASE_SWING &&
-		bs->fanPhase != FAN_PHASE_TAP_POST_SWING) || !bs->fanAttackDir)
+	if (bs->fanPhase != FAN_PHASE_HOLD || !bs->fanAttackDir)
 	{
 		return;
 	}
@@ -15903,11 +15915,9 @@ int NewBotAI_ScanForEnemies(bot_state_t* bs) {
 	float distcheck;
 	float closest;
 	float lowFruitClosest;
-	float fallbackClosest;
 	float startingClosest = 999999;
 	int bestindex;
 	int lowFruitBestIndex;
-	int fallbackBestIndex;
 	int i;
 	int pass;
 	float hasEnemyDist = 0;
@@ -15994,8 +16004,6 @@ int NewBotAI_ScanForEnemies(bot_state_t* bs) {
 
 		closest = startingClosest;
 		lowFruitClosest = startingClosest;
-		fallbackClosest = startingClosest;
-		fallbackBestIndex = -1;
 		bestindex = -1;
 		lowFruitBestIndex = -1;
 
@@ -16064,12 +16072,6 @@ int NewBotAI_ScanForEnemies(bot_state_t* bs) {
 					continue;
 				}
 
-				if (distcheck < fallbackClosest)
-				{
-					fallbackClosest = distcheck;
-					fallbackBestIndex = i;
-				}
-
 				if (targetDistanceLimit > 0.0f && enemyDist > targetDistanceLimit)
 				{
 					continue;
@@ -16102,7 +16104,7 @@ int NewBotAI_ScanForEnemies(bot_state_t* bs) {
 			{
 				return bestindex;
 			}
-			return fallbackBestIndex;
+			return -1;
 		}
 	}
 
@@ -16264,7 +16266,7 @@ static qboolean NewBotAI_ShouldFallbackToWaypoints(bot_state_t *bs)
 
 	if (!bs->frame_Enemy_Vis)
 	{
-		return !NewBotAI_ShouldRetainLostSightTarget(bs, bs->currentEnemy);
+		return NewBotAI_ShouldPursueTargetThroughWaypoints(bs, bs->currentEnemy);
 	}
 
 	if (NewBotAI_IsDirectPathToEnemyBlocked(bs))
@@ -16378,14 +16380,12 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	}
 
 	if (closestID == -1) {//Its just us, or they are too far away.
-		int nearestAny = NewBotAI_GetNearestEnemyIgnoringDistance(bs);
-		if (nearestAny != -1)
+		if (bs->currentEnemy &&
+			(!NewBotAI_HasValidCurrentEnemy(bs) ||
+			 !NewBotAI_IsEnemyWithinTargetDistance(bs, bs->currentEnemy)))
 		{
-			closestID = nearestAny;
+			NewBotAI_ClearCurrentEnemyLock(bs);
 		}
-	}
-
-	if (closestID == -1) {//Its just us, or they are too far away.
 		if (NewBotAI_InFFAExploreWindow(bs, targetMode)) {
 			//Exploring after a few duels: keep roaming instead of dropping out of the
 			//FFA window just because nobody is in range this think.
@@ -16458,6 +16458,10 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	{
 		const int targetTimeoutMs = BotGetTargetTimeoutMs();
 		bs->enemySeenTime = bs->lastVisibleEnemyTime + ((targetTimeoutMs > 0) ? targetTimeoutMs : ENEMY_FORGET_MS);
+	}
+	else if (NewBotAI_ShouldPursueTargetThroughWaypoints(bs, bs->currentEnemy))
+	{
+		bs->enemySeenTime = level.time + ENEMY_FORGET_MS;
 	}
 	else
 	{
@@ -16571,11 +16575,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	{
 		if (!bs->frame_Enemy_Vis)
 		{
-			const qboolean forceLostSightReset = NewBotAI_ShouldForceLostSightWaypointReset(bs);
-			if (!(NewBotAI_ShouldRetainLostSightTarget(bs, bs->currentEnemy) && !forceLostSightReset))
-			{
-				NewBotAI_PrepareWaypointHandoff(bs, qtrue);
-			}
+			NewBotAI_PrepareWaypointHandoff(bs, qfalse);
 		}
 		bs->navObstacleUntil = 0;
 		StandardBotAI(bs, thinktime);
@@ -16611,8 +16611,9 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		NewBotAI_HasWaypointNavigation())
 	{
 		const qboolean forceLostSightReset = NewBotAI_ShouldForceLostSightWaypointReset(bs);
-		if (NewBotAI_ShouldRetainLostSightTarget(bs, bs->currentEnemy) &&
-			!forceLostSightReset)
+		if ((NewBotAI_ShouldRetainLostSightTarget(bs, bs->currentEnemy) &&
+			!forceLostSightReset) ||
+			NewBotAI_ShouldPursueTargetThroughWaypoints(bs, bs->currentEnemy))
 		{
 			NewBotAI_ClearLostSightCombatInput(bs);
 			NewBotAI_GetAim(bs);
@@ -17308,7 +17309,9 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 			}
 			else if (bs->currentEnemy &&
 				(bs->enemySeenTime < level.time || shouldRescanForCloserTarget) &&
-				!bs->frame_Enemy_Vis)
+				(shouldRescanForCloserTarget ||
+				 (!bs->frame_Enemy_Vis &&
+				  !NewBotAI_ShouldPursueTargetThroughWaypoints(bs, bs->currentEnemy))))
 			{
 				bs->currentEnemy = NULL;
 				bs->enemySeenTime = 0;
