@@ -12746,9 +12746,13 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 	switch (bs->fanPhase)
 	{
 	case FAN_PHASE_HOLD:
-		if (BG_SaberInAttack(bs->cur_ps.saberMove) ||
+	{
+		const qboolean inHorizontalSwingWindow =
+			(BG_SaberInAttack(bs->cur_ps.saberMove) ||
 			bs->cur_ps.saberMove == LS_A_L2R ||
-			bs->cur_ps.saberMove == LS_A_R2L)
+			bs->cur_ps.saberMove == LS_A_R2L) ? qtrue : qfalse;
+
+		if (inHorizontalSwingWindow)
 		{
 			bs->fanSwingStarted = 1;
 		}
@@ -12756,7 +12760,7 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 		{
 			if (bs->fanSwingStarted)
 			{
-				if (!BG_SaberInAttack(bs->cur_ps.saberMove))
+				if (!inHorizontalSwingWindow)
 				{
 					const int completedSwingCount = bs->fanSwingCount;
 					const int nextDwellMs = (completedSwingCount <= 0) ? firstDwellMs : dwellMs;
@@ -12778,6 +12782,7 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 			}
 		}
 		break;
+	}
 
 	case FAN_PHASE_DWELL:
 		if (bs->fanAttackTime <= level.time)
@@ -12830,6 +12835,7 @@ static void NewBotAI_ApplyHorizontalSwingMove(bot_state_t *bs)
 {
 	if (bs->fanPhase == FAN_PHASE_DWELL)
 	{
+		trap->EA_MoveForward(bs->client);
 		return;
 	}
 
