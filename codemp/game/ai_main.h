@@ -380,6 +380,7 @@ typedef struct bot_state_s
 	int					fanChainStartTime; // level.time the fan chain began - chain hard-caps at 3s
 	int					fanChainStartHealth; // health when the fan chain began
 	int					fanSwingCount; // completed fan swings in the current chain
+	int					fanSwingStarted; // latched once the current HOLD window actually starts a swing
 	float				fanDwellYawOffset; // current dwell-yaw offset applied relative to normal aim
 	int					fanWobbleStartTime; // level.time when fan-chain attack hold began for delayed wiggle/wobble aim offset
 	int					drainHoldTime;

@@ -11405,7 +11405,7 @@ static qboolean NewBotAI_IsEnemyWithinTargetDistance(bot_state_t *bs, gentity_t 
 	targetDistanceLimit = BotGetTargetDistanceLimit();
 	if (targetDistanceLimit <= 0.0f)
 	{
-		return qfalse;
+		return qtrue;
 	}
 
 	VectorCopy(enemy->client->ps.origin, enemyOrigin);
@@ -12622,6 +12622,7 @@ static void NewBotAI_ResetFanChain(bot_state_t *bs)
 	bs->fanChainStartTime = 0;
 	bs->fanChainStartHealth = 0;
 	bs->fanSwingCount = 0;
+	bs->fanSwingStarted = 0;
 	bs->fanDwellYawOffset = 0.0f;
 	bs->fanWobbleStartTime = 0;
 }
@@ -12730,14 +12731,24 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 	switch (bs->fanPhase)
 	{
 	case FAN_PHASE_HOLD:
+		if (BG_SaberInAttack(bs->cur_ps.saberMove) ||
+			bs->cur_ps.saberMove == LS_A_L2R ||
+			bs->cur_ps.saberMove == LS_A_R2L)
+		{
+			bs->fanSwingStarted = 1;
+		}
 		if (bs->fanAttackTime <= level.time)
 		{
-			const int nextDwellMs = (bs->fanSwingCount == 0) ? firstDwellMs : dwellMs;
+			if (bs->fanSwingStarted)
+			{
+				const int nextDwellMs = (bs->fanSwingCount == 0) ? firstDwellMs : dwellMs;
 
-			bs->fanSwingCount++;
-			bs->fanPhase = FAN_PHASE_DWELL;
-			bs->fanPhaseStartTime = level.time;
-			bs->fanAttackTime = level.time + nextDwellMs;
+				bs->fanSwingCount++;
+				bs->fanSwingStarted = 0;
+				bs->fanPhase = FAN_PHASE_DWELL;
+				bs->fanPhaseStartTime = level.time;
+				bs->fanAttackTime = level.time + nextDwellMs;
+			}
 		}
 		break;
 
@@ -12745,6 +12756,7 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 		if (bs->fanAttackTime <= level.time)
 		{
 			bs->fanAttackDir = -bs->fanAttackDir;
+			bs->fanSwingStarted = 0;
 			bs->fanPhase = FAN_PHASE_HOLD;
 			bs->fanPhaseStartTime = level.time;
 			bs->fanAttackTime = level.time + holdMs;
@@ -12777,6 +12789,7 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 			bs->fanChainStartTime = level.time;
 			bs->fanChainStartHealth = g_entities[bs->client].health;
 			bs->fanSwingCount = 0;
+			bs->fanSwingStarted = 0;
 		}
 		break;
 	}
