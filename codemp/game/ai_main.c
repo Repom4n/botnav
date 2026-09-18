@@ -11401,7 +11401,7 @@ static qboolean NewBotAI_IsEnemyWithinTargetDistance(bot_state_t *bs, gentity_t 
 	}
 
 	VectorCopy(enemy->client->ps.origin, enemyOrigin);
-	VectorSubtract(enemyOrigin, bs->eye, delta);
+	VectorSubtract(enemyOrigin, bs->origin, delta);
 	enemyDistance = VectorLength(delta);
 
 	return (enemyDistance <= targetDistanceLimit) ? qtrue : qfalse;
@@ -16575,7 +16575,9 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	{
 		if (!bs->frame_Enemy_Vis)
 		{
-			NewBotAI_PrepareWaypointHandoff(bs, qfalse);
+			NewBotAI_PrepareWaypointHandoff(
+				bs,
+				NewBotAI_ShouldPursueTargetThroughWaypoints(bs, bs->currentEnemy) ? qfalse : qtrue);
 		}
 		bs->navObstacleUntil = 0;
 		StandardBotAI(bs, thinktime);
