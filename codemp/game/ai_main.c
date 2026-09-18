@@ -6824,6 +6824,10 @@ static void NewBotAI_ApplyFanDwellYaw(bot_state_t *bs)
 	}
 	if (bs->fanPhase != FAN_PHASE_DWELL || !bs->fanAttackDir)
 	{
+		if (bs->fanDwellYawOffset != 0.0f)
+		{
+			bs->goalAngles[YAW] = AngleNormalize360(bs->goalAngles[YAW] - bs->fanDwellYawOffset);
+		}
 		bs->fanDwellYawOffset = 0.0f;
 		return;
 	}
@@ -6831,6 +6835,11 @@ static void NewBotAI_ApplyFanDwellYaw(bot_state_t *bs)
 	dwellDurationMs = (float)(bs->fanAttackTime - bs->fanPhaseStartTime);
 	if (dwellDurationMs <= 0.0f)
 	{
+		if (bs->fanDwellYawOffset != 0.0f)
+		{
+			bs->goalAngles[YAW] = AngleNormalize360(bs->goalAngles[YAW] - bs->fanDwellYawOffset);
+			bs->fanDwellYawOffset = 0.0f;
+		}
 		return;
 	}
 
@@ -6848,6 +6857,10 @@ static void NewBotAI_ApplyFanDwellYaw(bot_state_t *bs)
 	yawSpeed = Com_Clamp(-360.0f, 360.0f, bot_fanyawspeed.value);
 	if (halfDwellMs <= 0.0f || yawSpeed == 0.0f)
 	{
+		if (bs->fanDwellYawOffset != 0.0f)
+		{
+			bs->goalAngles[YAW] = AngleNormalize360(bs->goalAngles[YAW] - bs->fanDwellYawOffset);
+		}
 		bs->fanDwellYawOffset = 0.0f;
 		return;
 	}

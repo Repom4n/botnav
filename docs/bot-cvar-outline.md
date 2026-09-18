@@ -19,7 +19,7 @@ This document describes all cvars added for the NewBotAI system and how they rel
 | `bot_target_timeout` | `3000` | How long (ms) a bot keeps its current lost-sight combat lock before fully falling back to normal navigation when it is not using waypoint pursuit retention. |
 | `g_newBotAITargetDistance` | `4096` | Declared but currently unused (superseded by `bot_targetdistance`). |
 | `bot_lowhangingfruitHP` | `40` | HP threshold below which a target is considered "low-hanging fruit" (easy kill). |
-| `bot_lowhanginfruitDistance` | `1024` | Max distance to prioritize low-HP targets. |
+| `bot_lowhanginfruitDistance` | `1024` | Max distance to prioritize low-HP targets. Historical cvar name; spelling intentionally omits the second `g`. |
 
 ## Aggression System
 
