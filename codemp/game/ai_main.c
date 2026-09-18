@@ -12756,30 +12756,27 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 		{
 			bs->fanSwingStarted = 1;
 		}
-		if (bs->fanAttackTime <= level.time)
+		if (bs->fanSwingStarted && !inHorizontalSwingWindow)
 		{
-			if (bs->fanSwingStarted)
-			{
-				if (!inHorizontalSwingWindow)
-				{
-					const int completedSwingCount = bs->fanSwingCount;
-					const int nextDwellMs = (completedSwingCount <= 0) ? firstDwellMs : dwellMs;
+			const int completedSwingCount = bs->fanSwingCount;
+			const int nextDwellMs = (completedSwingCount <= 0) ? firstDwellMs : dwellMs;
 
-					bs->fanSwingCount = completedSwingCount + 1;
-					bs->fanSwingStarted = 0;
-					bs->fanPhase = FAN_PHASE_DWELL;
-					bs->fanPhaseStartTime = level.time;
-					bs->fanAttackTime = level.time + nextDwellMs;
-				}
-				else if (level.time > bs->fanPhaseStartTime + holdMs + 1000)
-				{
-					NewBotAI_ResetFanChain(bs);
-				}
-			}
-			else
+			bs->fanSwingCount = completedSwingCount + 1;
+			bs->fanSwingStarted = 0;
+			bs->fanPhase = FAN_PHASE_DWELL;
+			bs->fanPhaseStartTime = level.time;
+			bs->fanAttackTime = level.time + nextDwellMs;
+		}
+		else if (bs->fanSwingStarted)
+		{
+			if (level.time > bs->fanPhaseStartTime + holdMs + 1000)
 			{
 				NewBotAI_ResetFanChain(bs);
 			}
+		}
+		else if (bs->fanAttackTime <= level.time)
+		{
+			NewBotAI_ResetFanChain(bs);
 		}
 		break;
 	}
@@ -16439,9 +16436,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	}
 
 	if (closestID == -1) {//Its just us, or they are too far away.
-		if (bs->currentEnemy &&
-			(!NewBotAI_HasValidCurrentEnemy(bs) ||
-			 !NewBotAI_IsEnemyWithinTargetDistance(bs, bs->currentEnemy)))
+		if (bs->currentEnemy && !NewBotAI_HasValidCurrentEnemy(bs))
 		{
 			NewBotAI_ClearCurrentEnemyLock(bs);
 		}
