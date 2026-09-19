@@ -477,6 +477,9 @@ static void G_ArcadeStartRound(void)
 	{
 		gentity_t *ent = &g_entities[i];
 		const qboolean wasParticipant = level.arcadeParticipant[i];
+		const qboolean shouldParticipate = ent->inuse && ent->client && !(ent->r.svFlags & SVF_BOT) &&
+			ent->client->pers.connected == CON_CONNECTED &&
+			(wasParticipant || ent->client->sess.sessionTeam == TEAM_RED);
 		const int savedScore = level.arcadeScore[i];
 		const int savedTotalKills = level.arcadeTotalKills[i];
 		if (!ent->inuse || !ent->client || (ent->r.svFlags & SVF_BOT) ||
@@ -485,13 +488,10 @@ static void G_ArcadeStartRound(void)
 			continue;
 		}
 
+		if (!shouldParticipate)
 		{
-			const qboolean shouldParticipate = wasParticipant || ent->client->sess.sessionTeam == TEAM_RED;
-			if (!shouldParticipate)
-			{
-				level.arcadeParticipant[i] = qfalse;
-				continue;
-			}
+			level.arcadeParticipant[i] = qfalse;
+			continue;
 		}
 
 		if (ent->client->sess.sessionTeam == TEAM_RED)
