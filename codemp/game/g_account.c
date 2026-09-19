@@ -18,6 +18,8 @@ static char LOCAL_DB_PATH[MAX_OSPATH];
 //#define GLOBAL_DB_PATH sv_globalDBPath.string
 //#define MAX_TMP_RACELOG_SIZE 80 * 1024
 
+void G_ErrorPrint( const char *fmt, int s );
+
 #define CALL_SQLITE(f) {                                        \
         int i;                                                  \
         i = sqlite3_ ## f;                                      \
