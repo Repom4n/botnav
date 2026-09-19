@@ -20,6 +20,9 @@ static char LOCAL_DB_PATH[MAX_OSPATH];
 #define TRACKED_DUEL_TUTORIAL_MAX_MESSAGES 3
 #define TRACKED_DUEL_TUTORIAL_COOLDOWN_MS 7000
 #define TRACKED_DUEL_LOW_FORCE_THRESHOLD 25
+#define TRACKED_DUEL_ADVICE_BASIC_WINDOW 3
+#define TRACKED_DUEL_ADVICE_MIN_OBSERVATIONS 3
+#define TRACKED_DUEL_ADVICE_REPEAT_THRESHOLD 2
 #define LOCAL_ARCADE_SCORE_ORDER "score DESC, end_time DESC"
 //#define GLOBAL_DB_PATH sv_globalDBPath.string
 //#define MAX_TMP_RACELOG_SIZE 80 * 1024
@@ -141,8 +144,33 @@ typedef struct
 	char messages[TRACKED_DUEL_TUTORIAL_MAX_MESSAGES][MAX_SAY_TEXT];
 } bot_tutorial_queue_t;
 
+typedef enum
+{
+	DUEL_TRACK_ISSUE_LOW_FORCE = 0,
+	DUEL_TRACK_ISSUE_GRIP_CONTROL,
+	DUEL_TRACK_ISSUE_SABER_THROW,
+	DUEL_TRACK_ISSUE_KNOCKDOWN,
+	DUEL_TRACK_ISSUE_LATE_DEFENSE,
+	DUEL_TRACK_ISSUE_FORCED_ENTRIES,
+	DUEL_TRACK_ISSUE_LINEAR_ENTRIES,
+	DUEL_TRACK_ISSUE_COUNT
+} duel_track_issue_t;
+
+typedef struct
+{
+	qboolean active;
+	int identityKind;
+	int duelsSeen;
+	int historyDuels;
+	qboolean historyLoaded;
+	char identityKey[64];
+	int sessionIssueCounts[DUEL_TRACK_ISSUE_COUNT];
+	int historyIssueCounts[DUEL_TRACK_ISSUE_COUNT];
+} duel_advice_session_state_t;
+
 static tracked_duel_runtime_t g_trackedDuels[MAX_CLIENTS];
 static bot_tutorial_queue_t g_botTutorialQueues[MAX_CLIENTS];
+static duel_advice_session_state_t g_duelAdviceSessions[MAX_CLIENTS];
 static qboolean g_duelTrackingSchemaReady = qfalse;
 static char g_duelTrackingSchemaPath[MAX_OSPATH];
 
@@ -231,6 +259,21 @@ static void G_ClearBotTutorialQueue(int clientNum)
 static qboolean G_IsTrackedDuelCollectionEnabled(void)
 {
 	return bot_dueltracking.integer ? qtrue : qfalse;
+}
+
+static void G_ClearDuelAdviceSession(int clientNum)
+{
+	if (clientNum < 0 || clientNum >= MAX_CLIENTS)
+		return;
+
+	memset(&g_duelAdviceSessions[clientNum], 0, sizeof(g_duelAdviceSessions[clientNum]));
+}
+
+void G_ClearTrackedDuelClientState(int clientNum)
+{
+	G_ClearTrackedDuelRuntime(clientNum);
+	G_ClearBotTutorialQueue(clientNum);
+	G_ClearDuelAdviceSession(clientNum);
 }
 
 static unsigned int G_HashTrackedIdentityString(const char *value)
@@ -372,6 +415,107 @@ static int G_GetTrackedMatchup(int side, int opponentSide)
 	if (side == FORCE_DARKSIDE && opponentSide == FORCE_DARKSIDE)
 		return 3;
 	return 0;
+}
+
+static duel_track_issue_t G_MapPrimaryIssueToTrackedIssue(const char *primaryIssue)
+{
+	if (!primaryIssue || !primaryIssue[0])
+		return DUEL_TRACK_ISSUE_COUNT;
+	if (!Q_stricmp(primaryIssue, "low_force"))
+		return DUEL_TRACK_ISSUE_LOW_FORCE;
+	if (!Q_stricmp(primaryIssue, "grip_control"))
+		return DUEL_TRACK_ISSUE_GRIP_CONTROL;
+	if (!Q_stricmp(primaryIssue, "saber_throw"))
+		return DUEL_TRACK_ISSUE_SABER_THROW;
+	if (!Q_stricmp(primaryIssue, "knockdown"))
+		return DUEL_TRACK_ISSUE_KNOCKDOWN;
+	if (!Q_stricmp(primaryIssue, "late_defense"))
+		return DUEL_TRACK_ISSUE_LATE_DEFENSE;
+	if (!Q_stricmp(primaryIssue, "forced_entries"))
+		return DUEL_TRACK_ISSUE_FORCED_ENTRIES;
+	if (!Q_stricmp(primaryIssue, "linear_entries"))
+		return DUEL_TRACK_ISSUE_LINEAR_ENTRIES;
+	return DUEL_TRACK_ISSUE_COUNT;
+}
+
+static void G_LoadTrackedAdviceHistory(duel_advice_session_state_t *session)
+{
+	sqlite3 *db;
+	sqlite3_stmt *stmt = NULL;
+	char *sql;
+	int s;
+
+	if (!session || session->historyLoaded || !session->identityKey[0] || session->identityKind != DUEL_TRACK_ID_LOGIN)
+		return;
+
+	CALL_SQLITE(open(LOCAL_DB_PATH, &db));
+	G_EnsureLocalDuelTrackingSchema(db);
+
+	sql = "SELECT COUNT(*), "
+		"COALESCE(SUM(CASE WHEN primary_issue='low_force' THEN 1 ELSE 0 END), 0), "
+		"COALESCE(SUM(CASE WHEN primary_issue='grip_control' THEN 1 ELSE 0 END), 0), "
+		"COALESCE(SUM(CASE WHEN primary_issue='saber_throw' THEN 1 ELSE 0 END), 0), "
+		"COALESCE(SUM(CASE WHEN primary_issue='knockdown' THEN 1 ELSE 0 END), 0), "
+		"COALESCE(SUM(CASE WHEN primary_issue='late_defense' THEN 1 ELSE 0 END), 0), "
+		"COALESCE(SUM(CASE WHEN primary_issue='forced_entries' THEN 1 ELSE 0 END), 0), "
+		"COALESCE(SUM(CASE WHEN primary_issue='linear_entries' THEN 1 ELSE 0 END), 0) "
+		"FROM LocalDuelTrackParticipant WHERE participant_key=? AND participant_kind=?";
+	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
+	CALL_SQLITE(bind_text(stmt, 1, session->identityKey, -1, SQLITE_STATIC));
+	CALL_SQLITE(bind_int(stmt, 2, session->identityKind));
+	s = sqlite3_step(stmt);
+	if (s == SQLITE_ROW)
+	{
+		session->historyDuels = sqlite3_column_int(stmt, 0);
+		session->historyIssueCounts[DUEL_TRACK_ISSUE_LOW_FORCE] = sqlite3_column_int(stmt, 1);
+		session->historyIssueCounts[DUEL_TRACK_ISSUE_GRIP_CONTROL] = sqlite3_column_int(stmt, 2);
+		session->historyIssueCounts[DUEL_TRACK_ISSUE_SABER_THROW] = sqlite3_column_int(stmt, 3);
+		session->historyIssueCounts[DUEL_TRACK_ISSUE_KNOCKDOWN] = sqlite3_column_int(stmt, 4);
+		session->historyIssueCounts[DUEL_TRACK_ISSUE_LATE_DEFENSE] = sqlite3_column_int(stmt, 5);
+		session->historyIssueCounts[DUEL_TRACK_ISSUE_FORCED_ENTRIES] = sqlite3_column_int(stmt, 6);
+		session->historyIssueCounts[DUEL_TRACK_ISSUE_LINEAR_ENTRIES] = sqlite3_column_int(stmt, 7);
+	}
+	else if (s != SQLITE_DONE)
+	{
+		G_ErrorPrint("ERROR: SQL Select Failed (G_LoadTrackedAdviceHistory)", s);
+	}
+	CALL_SQLITE(finalize(stmt));
+	CALL_SQLITE(close(db));
+	session->historyLoaded = qtrue;
+}
+
+static duel_advice_session_state_t *G_GetTrackedAdviceSession(gentity_t *ent, tracked_duel_runtime_t *runtime)
+{
+	duel_advice_session_state_t *session;
+
+	if (!ent || !ent->client || !runtime || ent->s.number < 0 || ent->s.number >= MAX_CLIENTS)
+		return NULL;
+
+	session = &g_duelAdviceSessions[ent->s.number];
+	if (!session->active ||
+		session->identityKind != runtime->identityKind ||
+		Q_stricmp(session->identityKey, runtime->identityKey))
+	{
+		memset(session, 0, sizeof(*session));
+		session->active = qtrue;
+		session->identityKind = runtime->identityKind;
+		Q_strncpyz(session->identityKey, runtime->identityKey, sizeof(session->identityKey));
+	}
+	return session;
+}
+
+static qboolean G_TrackedAdviceIsSpecificAllowed(duel_advice_session_state_t *session, duel_track_issue_t issue)
+{
+	const int observedDuels = session->duelsSeen + session->historyDuels;
+	const int issueConfidence = session->sessionIssueCounts[issue] + session->historyIssueCounts[issue];
+
+	if (!session || issue >= DUEL_TRACK_ISSUE_COUNT)
+		return qfalse;
+	if (observedDuels < TRACKED_DUEL_ADVICE_MIN_OBSERVATIONS)
+		return qfalse;
+	if (issueConfidence < TRACKED_DUEL_ADVICE_REPEAT_THRESHOLD)
+		return qfalse;
+	return qtrue;
 }
 
 static const char *G_GetTrackedEventTypeName(int eventType)
@@ -531,6 +675,10 @@ static void G_QueueBotTutorialMessage(int botClientNum, int targetClientNum, con
 static void G_MaybeQueueBotTutorial(tracked_duel_runtime_t *loserRuntime, gentity_t *winner, gentity_t *loser)
 {
 	int botClientNum;
+	duel_advice_session_state_t *session;
+	duel_track_issue_t issue;
+	qboolean loggedIn;
+	qboolean basicsWindow;
 
 	if (!bot_tutorial.integer || bot_nochat.integer || !loserRuntime || !winner || !loser ||
 		!winner->client || !loser->client)
@@ -539,41 +687,72 @@ static void G_MaybeQueueBotTutorial(tracked_duel_runtime_t *loserRuntime, gentit
 		return;
 
 	botClientNum = winner->s.number;
-	if (!Q_stricmp(loserRuntime->primaryIssue, "low_force"))
+	session = G_GetTrackedAdviceSession(loser, loserRuntime);
+	if (!session)
+		return;
+	loggedIn = (loserRuntime->identityKind == DUEL_TRACK_ID_LOGIN) ? qtrue : qfalse;
+	if (loggedIn)
+		G_LoadTrackedAdviceHistory(session);
+	session->duelsSeen++;
+	issue = G_MapPrimaryIssueToTrackedIssue(loserRuntime->primaryIssue);
+	if (issue < DUEL_TRACK_ISSUE_COUNT)
+		session->sessionIssueCounts[issue]++;
+
+	basicsWindow = (!loggedIn || (session->historyDuels <= 0)) &&
+		(session->duelsSeen <= TRACKED_DUEL_ADVICE_BASIC_WINDOW);
+	if (basicsWindow)
 	{
-		if (loserRuntime->opponentSide == FORCE_LIGHTSIDE)
-			G_QueueBotTutorialMessage(botClientNum, loser->s.number, "Your force dropped too early. Stop spending into stable defense.");
+		if (session->duelsSeen == 1)
+			G_QueueBotTutorialMessage(botClientNum, loser->s.number, "Opening read: keep a balanced offense lane (PTK/pull-throw, saber pressure, and Grip Kick threat).");
+		else if (session->duelsSeen == 2)
+			G_QueueBotTutorialMessage(botClientNum, loser->s.number, "Foundational reset: preserve force reserve so panic spend never controls your duel tempo.");
 		else
-			G_QueueBotTutorialMessage(botClientNum, loser->s.number, "You entered low force too often. Save force for escape and reset sooner.");
+			G_QueueBotTutorialMessage(botClientNum, loser->s.number, "Core full-force discipline: strafe-jump entry, saber feint first, then commit force only on reaction.");
+		return;
 	}
-	else if (!Q_stricmp(loserRuntime->primaryIssue, "grip_control"))
+
+	if (issue < DUEL_TRACK_ISSUE_COUNT && G_TrackedAdviceIsSpecificAllowed(session, issue))
 	{
-		G_QueueBotTutorialMessage(botClientNum, loser->s.number, "You let the control window form too cleanly. Reset space before the kick setup.");
-	}
-	else if (!Q_stricmp(loserRuntime->primaryIssue, "saber_throw"))
-	{
-		G_QueueBotTutorialMessage(botClientNum, loser->s.number, "You lost track of the saber too often. Track the throw before re-entering.");
-	}
-	else if (!Q_stricmp(loserRuntime->primaryIssue, "knockdown"))
-	{
-		G_QueueBotTutorialMessage(botClientNum, loser->s.number, "You got punished off knockdowns too often. Recover, move, then commit.");
-	}
-	else if (!Q_stricmp(loserRuntime->primaryIssue, "late_defense"))
-	{
-		G_QueueBotTutorialMessage(botClientNum, loser->s.number, "Your defense came on too late. Stabilize first, then spend force.");
-	}
-	else if (loserRuntime->opponentSide == FORCE_LIGHTSIDE)
-	{
-		G_QueueBotTutorialMessage(botClientNum, loser->s.number, "You forced entries into active defense. Pressure with saber first, then commit force.");
+		switch (issue)
+		{
+		case DUEL_TRACK_ISSUE_LOW_FORCE:
+			G_QueueBotTutorialMessage(botClientNum, loser->s.number, "Pattern confirmed: low-force collapses are recurring. Bank reserve for escape, then restart pressure.");
+			break;
+		case DUEL_TRACK_ISSUE_GRIP_CONTROL:
+			G_QueueBotTutorialMessage(botClientNum, loser->s.number, "Pattern confirmed: Grip control windows are too clean. Break line, alter yaw rhythm, deny the GK setup.");
+			break;
+		case DUEL_TRACK_ISSUE_SABER_THROW:
+			G_QueueBotTutorialMessage(botClientNum, loser->s.number, "Pattern confirmed: saber-throw punish windows repeat. Track blade path first, then re-enter safely.");
+			break;
+		case DUEL_TRACK_ISSUE_KNOCKDOWN:
+			G_QueueBotTutorialMessage(botClientNum, loser->s.number, "Pattern confirmed: knockdown follow-ups are costing rounds. Recover, move, then commit to offense.");
+			break;
+		case DUEL_TRACK_ISSUE_LATE_DEFENSE:
+			G_QueueBotTutorialMessage(botClientNum, loser->s.number, "Pattern confirmed: defense activates too late. Stabilize earlier before spending absorb/protect.");
+			break;
+		case DUEL_TRACK_ISSUE_FORCED_ENTRIES:
+			G_QueueBotTutorialMessage(botClientNum, loser->s.number, "Pattern confirmed: entries are forced into active defense. Win saber initiative before force commitment.");
+			break;
+		case DUEL_TRACK_ISSUE_LINEAR_ENTRIES:
+			G_QueueBotTutorialMessage(botClientNum, loser->s.number, "Pattern confirmed: linear entries are readable. Rotate PTK, saber pressure, and GK threat angles.");
+			break;
+		default:
+			break;
+		}
 	}
 	else
 	{
-		G_QueueBotTutorialMessage(botClientNum, loser->s.number, "Your entries were too linear. Mix movement with saber pressure before you commit.");
+		G_QueueBotTutorialMessage(botClientNum, loser->s.number, "Pattern scan still building. Keep offense balanced and prioritize controlled entries over rushed commits.");
+		if (loggedIn && session->historyDuels > 0)
+			G_QueueBotTutorialMessage(botClientNum, loser->s.number, "Historical blend active: maintain strategic tempo until repeat mistakes become statistically reliable.");
+		else
+			G_QueueBotTutorialMessage(botClientNum, loser->s.number, "Session coaching active: demonstrate clean fundamentals and we’ll escalate to targeted counters.");
 	}
 
-	if (loserRuntime->spentByState[DUEL_TRACK_STATE_PANIC] >= 20 || loserRuntime->lateDefenseSpends >= 1)
+	if ((loserRuntime->spentByState[DUEL_TRACK_STATE_PANIC] >= 20 || loserRuntime->lateDefenseSpends >= 1) &&
+		G_TrackedAdviceIsSpecificAllowed(session, DUEL_TRACK_ISSUE_LATE_DEFENSE))
 	{
-		G_QueueBotTutorialMessage(botClientNum, loser->s.number, "Your late force spends were expensive. Recover earlier instead of reacting at the collapse point.");
+		G_QueueBotTutorialMessage(botClientNum, loser->s.number, "Secondary pattern: late defensive spend is repeating. Reset earlier to avoid collapse-point reactions.");
 	}
 }
 
@@ -4543,6 +4722,161 @@ void Svcmd_DBInfo_f(void)
 	CALL_SQLITE (close(db));
 
 	trap->Print( "There are %i accounts, %i race records, and %i duels in the database.\n", numAccounts, numRaces, numDuels);
+}
+
+static void G_WriteTrackedCSVCell(FILE *out, const char *text)
+{
+	const char *cursor;
+
+	if (!text)
+	{
+		fputs("\"\"", out);
+		return;
+	}
+
+	fputc('"', out);
+	for (cursor = text; *cursor; cursor++)
+	{
+		if (*cursor == '"')
+			fputc('"', out);
+		fputc(*cursor, out);
+	}
+	fputc('"', out);
+}
+
+static qboolean G_ExportTrackedDuelTableCSV(sqlite3 *db, const char *tableName, const char *outputPath, int *rowsWritten)
+{
+	sqlite3_stmt *stmt = NULL;
+	char sql[256];
+	FILE *out;
+	int s;
+	int i;
+	int colCount;
+	int localRows = 0;
+
+	if (!db || !tableName || !outputPath)
+		return qfalse;
+
+	Com_sprintf(sql, sizeof(sql), "SELECT * FROM %s", tableName);
+	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
+	colCount = sqlite3_column_count(stmt);
+	if (colCount <= 0)
+	{
+		CALL_SQLITE(finalize(stmt));
+		return qfalse;
+	}
+
+	out = fopen(outputPath, "w");
+	if (!out)
+	{
+		trap->Print("Failed opening export file: %s\n", outputPath);
+		CALL_SQLITE(finalize(stmt));
+		return qfalse;
+	}
+
+	for (i = 0; i < colCount; i++)
+	{
+		if (i > 0)
+			fputc(',', out);
+		G_WriteTrackedCSVCell(out, sqlite3_column_name(stmt, i));
+	}
+	fputc('\n', out);
+
+	while ((s = sqlite3_step(stmt)) == SQLITE_ROW)
+	{
+		for (i = 0; i < colCount; i++)
+		{
+			const unsigned char *text;
+			if (i > 0)
+				fputc(',', out);
+			text = sqlite3_column_text(stmt, i);
+			G_WriteTrackedCSVCell(out, text ? (const char *)text : "");
+		}
+		fputc('\n', out);
+		localRows++;
+	}
+
+	if (s != SQLITE_DONE)
+	{
+		G_ErrorPrint("ERROR: SQL Select Failed (G_ExportTrackedDuelTableCSV)", s);
+		fclose(out);
+		CALL_SQLITE(finalize(stmt));
+		return qfalse;
+	}
+
+	fclose(out);
+	CALL_SQLITE(finalize(stmt));
+	if (rowsWritten)
+		*rowsWritten = localRows;
+	return qtrue;
+}
+
+void Svcmd_ExportDuelTrack_f(void)
+{
+	static const char *trackedTables[] = {
+		"LocalDuelTrackSummary",
+		"LocalDuelTrackParticipant",
+		"LocalDuelTrackEvent",
+		"LocalDuelTrackAggregate"
+	};
+	sqlite3 *db;
+	char dbDir[MAX_OSPATH];
+	char timestamp[32];
+	char outPath[MAX_OSPATH];
+	char optionalPrefix[64];
+	char *slashPos;
+	char *backslashPos;
+	time_t rawtime;
+	int i;
+	int rows;
+
+	if (trap->Argc() > 2)
+	{
+		trap->Print("Usage: exportDuelTrack [prefix]\n");
+		return;
+	}
+
+	optionalPrefix[0] = '\0';
+	if (trap->Argc() == 2)
+	{
+		trap->Argv(1, optionalPrefix, sizeof(optionalPrefix));
+		Q_CleanStr(optionalPrefix);
+		Q_strlwr(optionalPrefix);
+	}
+
+	if (!LOCAL_DB_PATH[0])
+	{
+		trap->Print("Duel tracking export unavailable: LOCAL_DB_PATH is not initialized yet.\n");
+		return;
+	}
+
+	Q_strncpyz(dbDir, LOCAL_DB_PATH, sizeof(dbDir));
+	slashPos = strrchr(dbDir, '/');
+	backslashPos = strrchr(dbDir, '\\');
+	if (backslashPos && (!slashPos || backslashPos > slashPos))
+		slashPos = backslashPos;
+	if (slashPos)
+		*slashPos = '\0';
+	else
+		Q_strncpyz(dbDir, ".", sizeof(dbDir));
+
+	time(&rawtime);
+	strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", localtime(&rawtime));
+
+	CALL_SQLITE(open(LOCAL_DB_PATH, &db));
+	G_EnsureLocalDuelTrackingSchema(db);
+
+	for (i = 0; i < (int)(sizeof(trackedTables) / sizeof(trackedTables[0])); i++)
+	{
+		if (optionalPrefix[0])
+			Com_sprintf(outPath, sizeof(outPath), "%s/%s_dueltrack_%s_%s.csv", dbDir, optionalPrefix, timestamp, trackedTables[i]);
+		else
+			Com_sprintf(outPath, sizeof(outPath), "%s/dueltrack_%s_%s.csv", dbDir, timestamp, trackedTables[i]);
+		if (G_ExportTrackedDuelTableCSV(db, trackedTables[i], outPath, &rows))
+			trap->Print("Exported %s (%d rows) -> %s\n", trackedTables[i], rows, outPath);
+	}
+
+	CALL_SQLITE(close(db));
 }
 
 void Svcmd_ClanDelete_f(void) {
@@ -8744,6 +9078,7 @@ void InitGameAccountStuff( void ) { //Called every mapload , move the create tab
 
 	memset(g_trackedDuels, 0, sizeof(g_trackedDuels));
 	memset(g_botTutorialQueues, 0, sizeof(g_botTutorialQueues));
+	memset(g_duelAdviceSessions, 0, sizeof(g_duelAdviceSessions));
 
 	//ok build DB file path from fs_game and fs_homepath
 	char fs_game[MAX_QPATH];

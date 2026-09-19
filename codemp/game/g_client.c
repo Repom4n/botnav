@@ -4890,6 +4890,7 @@ void ClientDisconnect( int clientNum ) {
 			}
 		}
 	}
+	G_ClearTrackedDuelClientState(clientNum);
 
 	if (ent->client->pers.userName[0]) {
 		if (ent->client->sess.raceMode && !ent->client->pers.practice && ent->client->pers.stats.startTime) {

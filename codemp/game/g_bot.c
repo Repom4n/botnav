@@ -639,7 +639,7 @@ void G_CheckMinimumPlayers( void ) {
 	int humanplayers, botplayers;
 	static int checkminimumplayers_time;
 
-	if (level.gametype == GT_SIEGE)
+	if (level.gametype == GT_SIEGE || level.gametype == GT_ARCADE)
 	{
 		return;
 	}

@@ -138,6 +138,14 @@ Notes:
 | `g_flipKickDamageScale` | `1` | Scale flipkick damage. |
 | `g_movementStyle` | `1` | Movement physics style (affects bot movement code paths). |
 
+Tracked duel data access:
+- Stored in SQLite at `fs_homepath/fs_game/data.db` (fallback: `fs_game/data.db`).
+- Use server console command `exportDuelTrack [prefix]` to export timestamped CSV files for:
+  - `LocalDuelTrackSummary`
+  - `LocalDuelTrackParticipant`
+  - `LocalDuelTrackEvent`
+  - `LocalDuelTrackAggregate`
+
 ## Skill Tuning (Debug)
 
 | Cvar | Default | Description |

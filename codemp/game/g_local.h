@@ -1869,6 +1869,7 @@ void G_StartTrackedDuel(gentity_t *first, gentity_t *second, int duelType);
 void G_UpdateTrackedDuelFrame(gentity_t *ent);
 void G_FinishTrackedDuel(gentity_t *winner, gentity_t *loser, int duelType, qboolean draw);
 void G_ClearTrackedDuelIfMismatched(gentity_t *ent, gentity_t *opponent);
+void G_ClearTrackedDuelClientState(int clientNum);
 
 //
 // g_cmds.c
