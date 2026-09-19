@@ -281,6 +281,7 @@ void G_ArcadeResetClientRunState(int clientNum)
 	level.arcadeTotalKills[clientNum] = 0;
 	level.arcadeEliminated[clientNum] = qfalse;
 	level.arcadeParticipant[clientNum] = qfalse;
+	level.arcadeRunStartTime[clientNum] = 0;
 }
 
 static void G_ArcadeResetScores(void)
@@ -442,8 +443,36 @@ static void G_ArcadeStartRound(void)
 	for (i = 0; i < MAX_CLIENTS; i++)
 	{
 		gentity_t *ent = &g_entities[i];
+		const qboolean wasParticipant = level.arcadeParticipant[i];
 		level.arcadeRoundKills[i] = 0;
 		level.arcadeEliminated[i] = qfalse;
+		if (!ent->inuse || !ent->client || (ent->r.svFlags & SVF_BOT) ||
+			ent->client->pers.connected != CON_CONNECTED)
+		{
+			continue;
+		}
+		level.arcadeParticipant[i] = qfalse;
+		if (ent->client->sess.sessionTeam == TEAM_RED || ent->client->sess.sessionTeam == TEAM_SPECTATOR)
+		{
+			level.arcadeParticipant[i] = wasParticipant;
+		}
+	}
+
+	G_ArcadeKickAllBots();
+	for (i = 0; i < humans; i++)
+	{
+		trap->Cvar_Set("g_npcspskill", va("%.2f", primarySkill));
+		G_AddRandomBot(TEAM_BLUE);
+	}
+	for (i = 0; i < extraBots; i++)
+	{
+		trap->Cvar_Set("g_npcspskill", va("%.2f", extraSkill));
+		G_AddRandomBot(TEAM_BLUE);
+	}
+	for (i = 0; i < MAX_CLIENTS; i++)
+	{
+		gentity_t *ent = &g_entities[i];
+		const qboolean wasParticipant = level.arcadeParticipant[i];
 		if (!ent->inuse || !ent->client || (ent->r.svFlags & SVF_BOT) ||
 			ent->client->pers.connected != CON_CONNECTED)
 		{
@@ -459,18 +488,10 @@ static void G_ArcadeStartRound(void)
 			ClientSpawn(ent);
 		}
 		level.arcadeParticipant[i] = (ent->client->sess.sessionTeam == TEAM_RED);
-	}
-
-	G_ArcadeKickAllBots();
-	for (i = 0; i < humans; i++)
-	{
-		trap->Cvar_Set("g_npcspskill", va("%.2f", primarySkill));
-		G_AddRandomBot(TEAM_BLUE);
-	}
-	for (i = 0; i < extraBots; i++)
-	{
-		trap->Cvar_Set("g_npcspskill", va("%.2f", extraSkill));
-		G_AddRandomBot(TEAM_BLUE);
+		if (level.arcadeParticipant[i] && !wasParticipant)
+		{
+			level.arcadeRunStartTime[i] = level.time;
+		}
 	}
 
 	level.arcadeRoundBotsTarget = humans + extraBots;
@@ -551,8 +572,9 @@ static void G_ArcadeFinishRound(qboolean gameOver, qboolean arcadeComplete)
 			char topName[MAX_NETNAME] = {0};
 			if (ent->client->pers.userName[0])
 			{
+				const int runDuration = (level.arcadeRunStartTime[i] > 0) ? (level.time - level.arcadeRunStartTime[i]) : level.time;
 				G_AddArcadeScore(ent->client->pers.userName, level.rawmapname, level.arcadeScore[i],
-					level.arcadeLevel, level.arcadeTotalKills[i], level.time);
+					level.arcadeLevel, level.arcadeTotalKills[i], runDuration);
 				G_GetArcadeTopScore(level.rawmapname, &topScore, topName, sizeof(topName));
 			}
 			G_ArcadePrintConsoleSummary(ent, arcadeComplete ? "Arcade Complete" : "Final",
