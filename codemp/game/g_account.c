@@ -978,8 +978,10 @@ void Cmd_DuelTop10_f(gentity_t *ent) {
 
 		if (type == 21)
 		{
-			sql = "SELECT username, score, level, kills FROM LocalArcade "
-				"WHERE mapname = ? OR (mapname = '' AND NOT EXISTS (SELECT 1 FROM LocalArcade WHERE mapname = ?)) "
+			sql = "WITH has_map(map_exists) AS (SELECT EXISTS(SELECT 1 FROM LocalArcade WHERE mapname = ?)) "
+				"SELECT username, score, level, kills FROM LocalArcade, has_map "
+				"WHERE (has_map.map_exists = 1 AND LocalArcade.mapname = ?) "
+				"OR (has_map.map_exists = 0 AND LocalArcade.mapname = '') "
 				"ORDER BY " LOCAL_ARCADE_SCORE_ORDER " LIMIT ?, 10";
 			CALL_SQLITE (prepare_v2 (db, sql, strlen (sql) + 1, & stmt, NULL));
 			CALL_SQLITE (bind_text (stmt, 1, level.rawmapname, -1, SQLITE_STATIC));
@@ -1173,8 +1175,10 @@ qboolean G_GetArcadeTopScore(const char *mapname, int *scoreOut, char *usernameO
 	}
 
 	CALL_SQLITE(open(LOCAL_DB_PATH, &db));
-	sql = "SELECT username, score FROM LocalArcade "
-		"WHERE mapname = ? OR (mapname = '' AND NOT EXISTS (SELECT 1 FROM LocalArcade WHERE mapname = ?)) "
+	sql = "WITH has_map(map_exists) AS (SELECT EXISTS(SELECT 1 FROM LocalArcade WHERE mapname = ?)) "
+		"SELECT username, score FROM LocalArcade, has_map "
+		"WHERE (has_map.map_exists = 1 AND LocalArcade.mapname = ?) "
+		"OR (has_map.map_exists = 0 AND LocalArcade.mapname = '') "
 		"ORDER BY " LOCAL_ARCADE_SCORE_ORDER " LIMIT 1";
 	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
 	CALL_SQLITE(bind_text(stmt, 1, mapname, -1, SQLITE_TRANSIENT));

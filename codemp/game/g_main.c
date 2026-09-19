@@ -478,6 +478,9 @@ static void G_ArcadeStartRound(void)
 	{
 		gentity_t *ent = &g_entities[i];
 		const qboolean wasParticipant = level.arcadeParticipant[i];
+		const int savedScore = level.arcadeScore[i];
+		const int savedTotalKills = level.arcadeTotalKills[i];
+		const int savedRunStartTime = level.arcadeRunStartTime[i];
 		if (!ent->inuse || !ent->client || (ent->r.svFlags & SVF_BOT) ||
 			ent->client->pers.connected != CON_CONNECTED)
 		{
@@ -489,6 +492,12 @@ static void G_ArcadeStartRound(void)
 			SetTeam(ent, "s", qtrue);
 		}
 		SetTeam(ent, "red", qtrue);
+		if (wasParticipant)
+		{
+			level.arcadeScore[i] = savedScore;
+			level.arcadeTotalKills[i] = savedTotalKills;
+			level.arcadeRunStartTime[i] = savedRunStartTime;
+		}
 		level.arcadeParticipant[i] = (ent->client->sess.sessionTeam == TEAM_RED);
 		if (level.arcadeParticipant[i] && !wasParticipant)
 		{
