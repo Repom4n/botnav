@@ -145,6 +145,7 @@ static bot_tutorial_queue_t g_botTutorialQueues[MAX_CLIENTS];
 static qboolean g_duelTrackingSchemaReady = qfalse;
 static char g_duelTrackingSchemaPath[MAX_OSPATH];
 
+static void G_EnsureLocalArcadeSchema(sqlite3 *db);
 static void G_EnsureLocalDuelTrackingSchema(sqlite3 *db)
 {
 	sqlite3_stmt *stmt = NULL;
