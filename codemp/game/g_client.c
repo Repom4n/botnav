@@ -2917,6 +2917,7 @@ char *ClientConnect( int clientNum, qboolean firstTime, qboolean isBot ) {
 	// they can connect
 	client = &level.clients[ clientNum ];
 	ent->client = client;
+	G_ArcadeResetClientState(clientNum);
 
 	//assign the pointer for bg entity access
 	ent->playerState = &ent->client->ps;
@@ -4666,6 +4667,12 @@ void ClientSpawn(gentity_t *ent) {
 			client->ps.stats[STAT_ARMOR] = client->ps.stats[STAT_MAX_HEALTH] * 0.25;
 	}
 
+	if (level.gametype == GT_ARCADE && client->sess.sessionTeam != TEAM_SPECTATOR)
+	{
+		ent->health = client->ps.stats[STAT_HEALTH] = client->ps.stats[STAT_MAX_HEALTH];
+		client->ps.stats[STAT_ARMOR] = client->ps.stats[STAT_MAX_HEALTH];
+	}
+
 	G_SetOrigin( ent, spawn_origin );
 	VectorCopy( spawn_origin, client->ps.origin );
 
@@ -4887,6 +4894,7 @@ void ClientDisconnect( int clientNum ) {
 			ent->client->pers.stats.racetime = 0.0f;
 		}
 	}
+	G_ArcadeResetClientState(clientNum);
 
 //JAPRO - Serverside - Stop those pesky reconnect whores - End
 
@@ -5029,5 +5037,4 @@ void ClientDisconnect( int clientNum ) {
 
 	G_ClearClientLog(clientNum);
 }
-
 

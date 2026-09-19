@@ -30,6 +30,7 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
 #include "b_local.h"
 #include "game/bg_public.h"
 #include "qcommon/game_version.h"
+#include <math.h>
 
 NORETURN_PTR void (*Com_Error)( int level, const char *error, ... );
 void (*Com_Printf)( const char *msg, ... );
@@ -200,28 +201,29 @@ void G_CacheMapname( const vmCvar_t *mapname )
 	Com_sprintf( level.rawmapname, sizeof( level.rawmapname ), "maps/%s", mapname->string );
 }
 
-#define ARCADE_START_LEVEL 4
-#define ARCADE_FINAL_LEVEL 14
-#define ARCADE_GAME_START_DELAY_MS 2500
-#define ARCADE_BETWEEN_LEVEL_DELAY_MS 5000
-#define ARCADE_GAME_OVER_DELAY_MS 6000
+#define ARCADE_START_LEVEL 1
+#define ARCADE_FINAL_LEVEL 12
+#define ARCADE_BOT_LEVEL_OFFSET 2
+#define ARCADE_PRIMARY_BOT_LEVEL_MIN 3
+#define ARCADE_PRIMARY_BOT_LEVEL_MAX 10
+#define ARCADE_GAME_START_DELAY_MS 3500
+#define ARCADE_BETWEEN_LEVEL_DELAY_MS 6000
+#define ARCADE_GAME_OVER_DELAY_MS 7000
 
-static const char *const g_arcadeOpeningBotNames[] = {
-	"Cultist",
-	"cultist",
-	"Cultist_Commando",
-	"cultistcommando"
-};
+static int G_ArcadeGetProgressionLevel(int arcadeLevel)
+{
+	return arcadeLevel + ARCADE_BOT_LEVEL_OFFSET;
+}
 
 static int G_ArcadeClampPrimaryBotLevel(int arcadeLevel)
 {
-	if (arcadeLevel < ARCADE_START_LEVEL)
+	if (arcadeLevel < ARCADE_PRIMARY_BOT_LEVEL_MIN)
 	{
-		return ARCADE_START_LEVEL;
+		return ARCADE_PRIMARY_BOT_LEVEL_MIN;
 	}
-	if (arcadeLevel > 10)
+	if (arcadeLevel > ARCADE_PRIMARY_BOT_LEVEL_MAX)
 	{
-		return 10;
+		return ARCADE_PRIMARY_BOT_LEVEL_MAX;
 	}
 	return arcadeLevel;
 }
@@ -254,7 +256,8 @@ static int G_ArcadeExtraBotLevelForLevel(int arcadeLevel)
 
 static float G_ArcadeSkillForBotLevel(int botLevel)
 {
-	float skill = 1.0f + ((float)(botLevel - ARCADE_START_LEVEL) / (10.0f - ARCADE_START_LEVEL)) * 4.0f;
+	float skill = 1.0f + ((float)(botLevel - ARCADE_PRIMARY_BOT_LEVEL_MIN) /
+		(float)(ARCADE_PRIMARY_BOT_LEVEL_MAX - ARCADE_PRIMARY_BOT_LEVEL_MIN)) * 4.0f;
 	if (skill < 1.0f)
 	{
 		skill = 1.0f;
@@ -266,40 +269,49 @@ static float G_ArcadeSkillForBotLevel(int botLevel)
 	return skill;
 }
 
+void G_ArcadeResetClientState(int clientNum)
+{
+	if (clientNum < 0 || clientNum >= MAX_CLIENTS)
+	{
+		return;
+	}
+
+	level.arcadeScore[clientNum] = 0;
+	level.arcadeRoundKills[clientNum] = 0;
+	level.arcadeTotalKills[clientNum] = 0;
+	level.arcadeEliminated[clientNum] = qfalse;
+	level.arcadeParticipant[clientNum] = qfalse;
+}
+
 static void G_ArcadeResetScores(void)
 {
 	int i;
 
 	for (i = 0; i < MAX_CLIENTS; i++)
 	{
-		level.arcadeScore[i] = 0;
-		level.arcadeRoundKills[i] = 0;
-		level.arcadeTotalKills[i] = 0;
-		level.arcadeEliminated[i] = qfalse;
+		G_ArcadeResetClientState(i);
 	}
 }
 
-static int G_ArcadeGetDefenseResource(const gentity_t *ent)
+static int G_ArcadeGetArmorResource(const gentity_t *ent)
 {
-	const int armor = ent->client->ps.stats[STAT_ARMOR];
-	const int force = ent->client->ps.fd.forcePower;
-	return (force > armor) ? force : armor;
+	return ent->client->ps.stats[STAT_ARMOR];
 }
 
 static int G_ArcadeGetTimeBonus(int elapsed)
 {
-	int timeBonus = (60000 - elapsed) / 100;
+	const float remainingRatio = (60000 - elapsed) / 60000.0f;
 
-	if (timeBonus < 0)
+	if (elapsed >= 60000)
 	{
-		timeBonus = 0;
+		return 0;
 	}
 
-	return timeBonus;
+	return (int)(2000.0f * (powf(2.0f, remainingRatio * 2.0f) - 1.0f));
 }
 
 static void G_ArcadePrintConsoleSummary(gentity_t *ent, const char *resultLabel, int levelNumber,
-	int healthBonus, int defenseBonus, int timeBonus, int killBonus, int roundScore, int totalScore,
+	int healthBonus, int armorBonus, int timeBonus, int killBonus, int roundScore, int totalScore,
 	int kills, int topScore, const char *topName)
 {
 	const int clientNum = ent - g_entities;
@@ -307,10 +319,10 @@ static void G_ArcadePrintConsoleSummary(gentity_t *ent, const char *resultLabel,
 	trap->SendServerCommand(clientNum, va("print \"\n^5Arcade %s - Level %i\n\"",
 		resultLabel, levelNumber));
 	trap->SendServerCommand(clientNum,
-		"print \" ^5Base     HPx10    A/Fx5    Time    Killsx100  Round      Total      Kills\n\"");
+		"print \" ^5Base     HPx5     APx10    Time    Killsx100  Round      Total      TotalKills\n\"");
 	trap->SendServerCommand(clientNum, va(
 		"print \" ^2%-8i ^2%-8i ^2%-8i ^2%-7i ^2%-10i ^2%-10i ^2%-10i ^2%i\n\"",
-		(roundScore > 0) ? 1000 : 0, healthBonus, defenseBonus, timeBonus, killBonus, roundScore, totalScore, kills));
+		(roundScore > 0) ? 1000 : 0, healthBonus, armorBonus, timeBonus, killBonus, roundScore, totalScore, kills));
 	if (topName && topName[0])
 	{
 		trap->SendServerCommand(clientNum, va(
@@ -334,42 +346,6 @@ static void G_ArcadeSendCenterMessage(gentity_t *ent, const char *headline, int 
 			"cp \"%s\n^7Round ^2+%i\n^7Score ^2%i\n\"",
 			headline, roundScore, totalScore));
 	}
-}
-
-static qboolean G_ArcadeTryAddNamedBot(int team, float skill, const char *const *names, int nameCount)
-{
-	int i;
-	char netname[36];
-	char *teamstr;
-
-	if (team == TEAM_RED)
-	{
-		teamstr = "red";
-	}
-	else if (team == TEAM_BLUE)
-	{
-		teamstr = "blue";
-	}
-	else
-	{
-		teamstr = "";
-	}
-
-	for (i = 0; i < nameCount; i++)
-	{
-		char *botInfo = G_GetBotInfoByName(names[i]);
-		if (!botInfo)
-		{
-			continue;
-		}
-
-		Q_strncpyz(netname, Info_ValueForKey(botInfo, "name"), sizeof(netname));
-		Q_CleanStr(netname);
-		trap->SendConsoleCommand(EXEC_INSERT, va("addbot \"%s\" %.2f %s %i\n", netname, skill, teamstr, 0));
-		return qtrue;
-	}
-
-	return qfalse;
 }
 
 static int G_ArcadeCountHumans(qboolean activeOnly)
@@ -450,9 +426,10 @@ static void G_ArcadeStartRound(void)
 {
 	int i;
 	const int humans = G_ArcadeCountHumans(qfalse);
-	const int primaryLevel = G_ArcadeClampPrimaryBotLevel(level.arcadeLevel);
-	const int extraBots = G_ArcadeExtraBotCountForLevel(level.arcadeLevel);
-	const int extraLevel = G_ArcadeExtraBotLevelForLevel(level.arcadeLevel);
+	const int progressionLevel = G_ArcadeGetProgressionLevel(level.arcadeLevel);
+	const int primaryLevel = G_ArcadeClampPrimaryBotLevel(progressionLevel);
+	const int extraBots = G_ArcadeExtraBotCountForLevel(progressionLevel);
+	const int extraLevel = G_ArcadeExtraBotLevelForLevel(progressionLevel);
 	const float primarySkill = G_ArcadeSkillForBotLevel(primaryLevel);
 	const float extraSkill = G_ArcadeSkillForBotLevel(extraLevel);
 
@@ -467,11 +444,20 @@ static void G_ArcadeStartRound(void)
 		gentity_t *ent = &g_entities[i];
 		level.arcadeRoundKills[i] = 0;
 		level.arcadeEliminated[i] = qfalse;
-		if (ent->inuse && ent->client && !(ent->r.svFlags & SVF_BOT) &&
-			ent->client->pers.connected == CON_CONNECTED &&
-			ent->client->sess.sessionTeam != TEAM_RED)
+		if (!ent->inuse || !ent->client || (ent->r.svFlags & SVF_BOT) ||
+			ent->client->pers.connected != CON_CONNECTED)
+		{
+			continue;
+		}
+
+		level.arcadeParticipant[i] = qtrue;
+		if (ent->client->sess.sessionTeam != TEAM_RED)
 		{
 			SetTeam(ent, "red", qfalse);
+		}
+		else
+		{
+			ClientSpawn(ent);
 		}
 	}
 
@@ -479,17 +465,7 @@ static void G_ArcadeStartRound(void)
 	for (i = 0; i < humans; i++)
 	{
 		trap->Cvar_Set("g_npcspskill", va("%.2f", primarySkill));
-		if (level.arcadeLevel == ARCADE_START_LEVEL &&
-			!G_ArcadeTryAddNamedBot(TEAM_BLUE, primarySkill,
-				g_arcadeOpeningBotNames,
-				sizeof(g_arcadeOpeningBotNames) / sizeof(g_arcadeOpeningBotNames[0])))
-		{
-			G_AddRandomBot(TEAM_BLUE);
-		}
-		else if (level.arcadeLevel != ARCADE_START_LEVEL)
-		{
-			G_AddRandomBot(TEAM_BLUE);
-		}
+		G_AddRandomBot(TEAM_BLUE);
 	}
 	for (i = 0; i < extraBots; i++)
 	{
@@ -536,11 +512,15 @@ static void G_ArcadeFinishRound(qboolean gameOver, qboolean arcadeComplete)
 		gentity_t *ent = &g_entities[i];
 		int roundScore = 0;
 		int healthBonus = 0;
-		int defenseBonus = 0;
+		int armorBonus = 0;
 		int timeBonus = 0;
 		int killBonus = 0;
 		if (!ent->inuse || !ent->client || (ent->r.svFlags & SVF_BOT) ||
 			ent->client->pers.connected != CON_CONNECTED)
+		{
+			continue;
+		}
+		if (!level.arcadeParticipant[i])
 		{
 			continue;
 		}
@@ -549,17 +529,17 @@ static void G_ArcadeFinishRound(qboolean gameOver, qboolean arcadeComplete)
 			ent->client->sess.sessionTeam != TEAM_SPECTATOR && ent->health > 0)
 		{
 			const int elapsed = level.time - level.arcadeRoundStartTime;
-			const int defenseResource = G_ArcadeGetDefenseResource(ent);
+			const int armorResource = G_ArcadeGetArmorResource(ent);
 			timeBonus = G_ArcadeGetTimeBonus(elapsed);
-			healthBonus = ent->health * 10;
-			defenseBonus = defenseResource * 5;
+			healthBonus = ent->health * 5;
+			armorBonus = armorResource * 10;
 			killBonus = level.arcadeRoundKills[i] * 100;
-			roundScore = 1000 + healthBonus + defenseBonus + timeBonus + killBonus;
+			roundScore = 1000 + healthBonus + armorBonus + timeBonus + killBonus;
 			level.arcadeScore[i] += roundScore;
 			if (!gameOver)
 			{
 				G_ArcadePrintConsoleSummary(ent, "Level Clear", level.arcadeLevel,
-					healthBonus, defenseBonus, timeBonus, killBonus, roundScore,
+					healthBonus, armorBonus, timeBonus, killBonus, roundScore,
 					level.arcadeScore[i], level.arcadeTotalKills[i], 0, NULL);
 				G_ArcadeSendCenterMessage(ent, "^2LEVEL CLEAR", roundScore, level.arcadeScore[i], 0);
 			}
@@ -569,16 +549,24 @@ static void G_ArcadeFinishRound(qboolean gameOver, qboolean arcadeComplete)
 		{
 			int topScore = 0;
 			char topName[MAX_NETNAME] = {0};
-			G_AddArcadeScore(ent->client->pers.netname, level.arcadeScore[i], level.arcadeLevel, level.arcadeTotalKills[i], level.time);
-			G_GetArcadeTopScore(&topScore, topName, sizeof(topName));
+			if (ent->client->pers.userName[0])
+			{
+				G_AddArcadeScore(ent->client->pers.userName, level.rawmapname, level.arcadeScore[i],
+					level.arcadeLevel, level.arcadeTotalKills[i], level.time);
+				G_GetArcadeTopScore(level.rawmapname, &topScore, topName, sizeof(topName));
+			}
 			G_ArcadePrintConsoleSummary(ent, arcadeComplete ? "Arcade Complete" : "Final",
 				level.arcadeLevel,
-				healthBonus, defenseBonus, timeBonus, killBonus,
+				healthBonus, armorBonus, timeBonus, killBonus,
 				arcadeComplete ? roundScore : 0, level.arcadeScore[i],
 				level.arcadeTotalKills[i], topScore, topName);
 			G_ArcadeSendCenterMessage(ent,
 				arcadeComplete ? "^2ARCADE COMPLETE" : "^1GAME OVER",
 				arcadeComplete ? roundScore : level.arcadeScore[i], level.arcadeScore[i], topScore);
+			if (!ent->client->pers.userName[0])
+			{
+				trap->SendServerCommand(i, "print \"^3Use /login to save highscores.\n\"");
+			}
 		}
 	}
 }

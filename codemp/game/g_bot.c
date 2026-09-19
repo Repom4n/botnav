@@ -515,7 +515,7 @@ void G_AddRandomBot( int team ) {
 		if (i >= sv_maxclients.integer) {
 			num--;
 			if (num <= 0) {
-				skill = trap->Cvar_VariableIntegerValue( "g_npcspskill" );
+				skill = trap->Cvar_VariableValue( "g_npcspskill" );
 				if (team == TEAM_RED) teamstr = "red";
 				else if (team == TEAM_BLUE) teamstr = "blue";
 				else teamstr = "";
@@ -1197,7 +1197,7 @@ static void G_SpawnBots( char *botList, int baseDelay ) {
 	int			delay;
 	char		bots[MAX_INFO_VALUE];
 
-	skill = trap->Cvar_VariableIntegerValue( "g_npcspskill" );
+	skill = trap->Cvar_VariableValue( "g_npcspskill" );
 	if( skill < 1 ) {
 		trap->Cvar_Set( "g_npcspskill", "1" );
 		skill = 1;
