@@ -281,7 +281,6 @@ void G_ArcadeResetClientRunState(int clientNum)
 	level.arcadeTotalKills[clientNum] = 0;
 	level.arcadeEliminated[clientNum] = qfalse;
 	level.arcadeParticipant[clientNum] = qfalse;
-	level.arcadeRunStartTime[clientNum] = 0;
 }
 
 static void G_ArcadeResetScores(void)
@@ -480,11 +479,19 @@ static void G_ArcadeStartRound(void)
 		const qboolean wasParticipant = level.arcadeParticipant[i];
 		const int savedScore = level.arcadeScore[i];
 		const int savedTotalKills = level.arcadeTotalKills[i];
-		const int savedRunStartTime = level.arcadeRunStartTime[i];
 		if (!ent->inuse || !ent->client || (ent->r.svFlags & SVF_BOT) ||
 			ent->client->pers.connected != CON_CONNECTED)
 		{
 			continue;
+		}
+
+		{
+			const qboolean shouldParticipate = wasParticipant || ent->client->sess.sessionTeam == TEAM_RED;
+			if (!shouldParticipate)
+			{
+				level.arcadeParticipant[i] = qfalse;
+				continue;
+			}
 		}
 
 		if (ent->client->sess.sessionTeam == TEAM_RED)
@@ -496,13 +503,8 @@ static void G_ArcadeStartRound(void)
 		{
 			level.arcadeScore[i] = savedScore;
 			level.arcadeTotalKills[i] = savedTotalKills;
-			level.arcadeRunStartTime[i] = savedRunStartTime;
 		}
 		level.arcadeParticipant[i] = (ent->client->sess.sessionTeam == TEAM_RED);
-		if (level.arcadeParticipant[i] && !wasParticipant)
-		{
-			level.arcadeRunStartTime[i] = level.time;
-		}
 	}
 
 	level.arcadeRoundBotsTarget = humans + extraBots;
@@ -583,9 +585,8 @@ static void G_ArcadeFinishRound(qboolean gameOver, qboolean arcadeComplete)
 			char topName[MAX_NETNAME] = {0};
 			if (G_ArcadePlayerIsLoggedIn(ent))
 			{
-				const int runDuration = (level.arcadeRunStartTime[i] > 0) ? (level.time - level.arcadeRunStartTime[i]) : level.time;
 				G_AddArcadeScore(ent->client->pers.userName, level.rawmapname, level.arcadeScore[i],
-					level.arcadeLevel, level.arcadeTotalKills[i], runDuration);
+					level.arcadeLevel, level.arcadeTotalKills[i], level.time);
 				G_GetArcadeTopScore(level.rawmapname, &topScore, topName, sizeof(topName));
 			}
 			G_ArcadePrintConsoleSummary(ent, arcadeComplete ? "Arcade Complete" : "Final",
