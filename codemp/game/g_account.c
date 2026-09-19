@@ -228,6 +228,22 @@ static qboolean G_IsTrackedDuelCollectionEnabled(void)
 	return bot_dueltracking.integer ? qtrue : qfalse;
 }
 
+static unsigned int G_HashTrackedIdentityString(const char *value)
+{
+	unsigned int hash = 2166136261u;
+
+	if (!value)
+		return 0;
+
+	while (*value)
+	{
+		hash ^= (unsigned char)*value++;
+		hash *= 16777619u;
+	}
+
+	return hash;
+}
+
 static void G_GetTrackingIPKey(gentity_t *ent, char *out, int outSize)
 {
 	char ip[NET_ADDRSTRMAXLEN];
@@ -267,7 +283,7 @@ static void G_GetTrackingIPKey(gentity_t *ent, char *out, int outSize)
 		}
 	}
 	if (ip[0])
-		Com_sprintf(out, outSize, "ip:%s", ip);
+		Com_sprintf(out, outSize, "iphash:%08x", G_HashTrackedIdentityString(ip));
 }
 
 static void G_NormalizeTrackedIdentityComponent(const char *in, char *out, int outSize)
@@ -805,7 +821,7 @@ static void G_PersistTrackedDuel(tracked_duel_runtime_t *winnerRuntime, tracked_
 	int endTimestamp;
 	int startTimestamp;
 
-	if (!bot_dueltracking.integer || !winnerRuntime || !loserRuntime)
+	if (!winnerRuntime || !loserRuntime)
 		return;
 
 	time(&rawtime);
@@ -969,7 +985,7 @@ void G_FinishTrackedDuel(gentity_t *winner, gentity_t *loser, int duelType, qboo
 	tracked_duel_runtime_t *winnerSlot;
 	tracked_duel_runtime_t *loserSlot;
 
-	if (!G_IsTrackedDuelCollectionEnabled() || !winner || !loser || !winner->client || !loser->client)
+	if (!winner || !loser || !winner->client || !loser->client)
 		return;
 
 	winnerSlot = &g_trackedDuels[winner->s.number];
