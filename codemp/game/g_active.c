@@ -4490,7 +4490,7 @@ void ClientThink_real( gentity_t *ent ) {
 					if (duelAgainst->client) {
 						G_FinishTrackedDuel(ent, duelAgainst, dueltypes[ent->client->ps.clientNum], qfalse);
 					}
-					if (ent->client->pers.lastUserName[0] && duelAgainst->client->pers.lastUserName[0]) {//loda
+					if (duelAgainst->client && ent->client->pers.lastUserName[0] && duelAgainst->client->pers.lastUserName[0]) {//loda
 						if (!(ent->client->sess.accountFlags & JAPRO_ACCOUNTFLAG_NODUEL) && !(duelAgainst->client->sess.accountFlags & JAPRO_ACCOUNTFLAG_NODUEL))
 						{
 							G_AddDuel(ent->client->pers.lastUserName, duelAgainst->client->pers.lastUserName, ent->client->pers.duelStartTime, dueltypes[ent->client->ps.clientNum], ent->client->ps.stats[STAT_HEALTH], ent->client->ps.stats[STAT_ARMOR]);

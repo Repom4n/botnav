@@ -481,12 +481,12 @@ static void G_AddTrackedDuelEvent(tracked_duel_runtime_t *runtime, int eventType
 		Q_strncpyz(event->note, note, sizeof(event->note));
 }
 
-static void G_SetTrackedPrimaryIssue(tracked_duel_runtime_t *runtime)
+static void G_SetTrackedPrimaryIssue(tracked_duel_runtime_t *runtime, qboolean lowForceFinish)
 {
 	if (!runtime)
 		return;
 
-	if (runtime->didDieLowForce || runtime->spentByState[DUEL_TRACK_STATE_PANIC] >= 25)
+	if (lowForceFinish || runtime->spentByState[DUEL_TRACK_STATE_PANIC] >= 25)
 		Q_strncpyz(runtime->primaryIssue, "low_force", sizeof(runtime->primaryIssue));
 	else if (runtime->gripCrippleEvents >= 2)
 		Q_strncpyz(runtime->primaryIssue, "grip_control", sizeof(runtime->primaryIssue));
@@ -986,6 +986,8 @@ void G_FinishTrackedDuel(gentity_t *winner, gentity_t *loser, int duelType, qboo
 	tracked_duel_runtime_t loserRuntime;
 	tracked_duel_runtime_t *winnerSlot;
 	tracked_duel_runtime_t *loserSlot;
+	qboolean winnerLowForceFinish;
+	qboolean loserLowForceFinish;
 
 	if (!winner || !loser || !winner->client || !loser->client)
 		return;
@@ -1003,10 +1005,11 @@ void G_FinishTrackedDuel(gentity_t *winner, gentity_t *loser, int duelType, qboo
 	loserSlot->endingForce = loser->client->ps.fd.forcePower;
 	loserSlot->endingHP = loser->health;
 	loserSlot->endingArmor = loser->client->ps.stats[STAT_ARMOR];
-	winnerSlot->didDieLowForce = (winnerSlot->endingForce <= TRACKED_DUEL_LOW_FORCE_THRESHOLD || winnerSlot->lowestForce <= TRACKED_DUEL_LOW_FORCE_THRESHOLD) ? 1 : 0;
-	loserSlot->didDieLowForce = (loserSlot->endingForce <= TRACKED_DUEL_LOW_FORCE_THRESHOLD || loserSlot->lowestForce <= TRACKED_DUEL_LOW_FORCE_THRESHOLD) ? 1 : 0;
-	G_SetTrackedPrimaryIssue(winnerSlot);
-	G_SetTrackedPrimaryIssue(loserSlot);
+	winnerLowForceFinish = (winnerSlot->endingForce <= TRACKED_DUEL_LOW_FORCE_THRESHOLD || winnerSlot->lowestForce <= TRACKED_DUEL_LOW_FORCE_THRESHOLD) ? qtrue : qfalse;
+	loserLowForceFinish = (loserSlot->endingForce <= TRACKED_DUEL_LOW_FORCE_THRESHOLD || loserSlot->lowestForce <= TRACKED_DUEL_LOW_FORCE_THRESHOLD) ? qtrue : qfalse;
+	loserSlot->didDieLowForce = draw ? 0 : (loserLowForceFinish ? 1 : 0);
+	G_SetTrackedPrimaryIssue(winnerSlot, winnerLowForceFinish);
+	G_SetTrackedPrimaryIssue(loserSlot, loserLowForceFinish);
 
 	memcpy(&winnerRuntime, winnerSlot, sizeof(winnerRuntime));
 	memcpy(&loserRuntime, loserSlot, sizeof(loserRuntime));
