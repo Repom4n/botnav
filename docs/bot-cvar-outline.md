@@ -140,7 +140,8 @@ Notes:
 
 Tracked duel data access:
 - Stored in SQLite at `fs_homepath/fs_game/data.db` (fallback: `fs_game/data.db`).
-- Use server console command `exportDuelTrack [prefix]` to export timestamped CSV files for:
+- Detailed event rows auto-archive into `fs_homepath/fs_game/dueltrack/archive/` once `LocalDuelTrackEvent` reaches 50,000 rows; each rollover keeps the newest 10,000 rows in SQLite.
+- Use server console command `exportDuelTrack [prefix]` to export overwrite-in-place snapshot CSV files into `fs_homepath/fs_game/dueltrack/` for:
   - `LocalDuelTrackSummary`
   - `LocalDuelTrackParticipant`
   - `LocalDuelTrackEvent`

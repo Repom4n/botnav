@@ -1,8 +1,13 @@
 #include "g_local.h"
 #include <ctype.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#if defined(_WIN32)
+#include <direct.h>
+#endif
 #include "sqlite3.h"
 
 #define _USE_CURL 0
@@ -23,6 +28,10 @@ static char LOCAL_DB_PATH[MAX_OSPATH];
 #define TRACKED_DUEL_ADVICE_BASIC_WINDOW 5
 #define TRACKED_DUEL_ADVICE_MIN_OBSERVATIONS 3
 #define TRACKED_DUEL_ADVICE_REPEAT_THRESHOLD 2
+#define TRACKED_DUEL_EXPORT_DIR "dueltrack"
+#define TRACKED_DUEL_ARCHIVE_DIR "archive"
+#define TRACKED_DUEL_EVENT_ARCHIVE_MAX_ROWS 50000
+#define TRACKED_DUEL_EVENT_ARCHIVE_RETAIN_ROWS 10000
 #define LOCAL_ARCADE_SCORE_ORDER "score DESC, end_time DESC"
 //#define GLOBAL_DB_PATH sv_globalDBPath.string
 //#define MAX_TMP_RACELOG_SIZE 80 * 1024
@@ -177,6 +186,7 @@ static char g_duelTrackingSchemaPath[MAX_OSPATH];
 static void G_EnsureLocalArcadeSchema(sqlite3 *db);
 static qboolean G_DoesTrackedDuelTableExist(sqlite3 *db, const char *tableName);
 static qboolean G_OpenTrackedLocalDB(sqlite3 **dbOut, char *resolvedPath, int resolvedPathSize);
+static void G_MaybeArchiveTrackedDuelEvents(sqlite3 *db, const char *effectiveDbPath);
 static void G_EnsureLocalDuelTrackingSchema(sqlite3 *db)
 {
 	sqlite3_stmt *stmt = NULL;
@@ -1148,6 +1158,7 @@ static void G_PersistTrackedDuel(tracked_duel_runtime_t *winnerRuntime, tracked_
 	G_InsertTrackedEvents(db, summaryId, loserRuntime);
 	G_UpdateTrackedAggregate(db, winnerRuntime, qtrue, draw);
 	G_UpdateTrackedAggregate(db, loserRuntime, qfalse, draw);
+	G_MaybeArchiveTrackedDuelEvents(db, LOCAL_DB_PATH);
 
 	CALL_SQLITE(close(db));
 }
@@ -4831,20 +4842,18 @@ static void G_WriteTrackedCSVCell(FILE *out, const char *text)
 	fputc('"', out);
 }
 
-static qboolean G_ExportTrackedDuelTableCSV(sqlite3 *db, const char *tableName, const char *outputPath, int *rowsWritten)
+static qboolean G_ExportTrackedDuelQueryCSV(sqlite3 *db, const char *sql, const char *outputPath, int *rowsWritten)
 {
 	sqlite3_stmt *stmt = NULL;
-	char sql[256];
 	FILE *out;
 	int s;
 	int i;
 	int colCount;
 	int localRows = 0;
 
-	if (!db || !tableName || !outputPath)
+	if (!db || !sql || !sql[0] || !outputPath)
 		return qfalse;
 
-	Com_sprintf(sql, sizeof(sql), "SELECT * FROM %s", tableName);
 	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
 	colCount = sqlite3_column_count(stmt);
 	if (colCount <= 0)
@@ -4899,6 +4908,17 @@ static qboolean G_ExportTrackedDuelTableCSV(sqlite3 *db, const char *tableName, 
 	return qtrue;
 }
 
+static qboolean G_ExportTrackedDuelTableCSV(sqlite3 *db, const char *tableName, const char *outputPath, int *rowsWritten)
+{
+	char sql[256];
+
+	if (!tableName || !tableName[0])
+		return qfalse;
+
+	Com_sprintf(sql, sizeof(sql), "SELECT * FROM %s", tableName);
+	return G_ExportTrackedDuelQueryCSV(db, sql, outputPath, rowsWritten);
+}
+
 static void G_SanitizeTrackedExportPrefix(const char *in, char *out, int outSize)
 {
 	int i;
@@ -4918,6 +4938,215 @@ static void G_SanitizeTrackedExportPrefix(const char *in, char *out, int outSize
 			out[outIndex++] = (char)tolower(ch);
 	}
 	out[outIndex] = '\0';
+}
+
+static qboolean G_EnsureTrackedExportDir(const char *dirPath)
+{
+	struct stat st;
+	int result;
+
+	if (!dirPath || !dirPath[0])
+		return qfalse;
+
+	if (stat(dirPath, &st) == 0)
+		return S_ISDIR(st.st_mode) ? qtrue : qfalse;
+
+#if defined(_WIN32)
+	result = _mkdir(dirPath);
+#else
+	result = mkdir(dirPath, 0750);
+#endif
+	if (result == 0)
+		return qtrue;
+
+	if (errno == EEXIST)
+		return qtrue;
+
+	trap->Print("Failed creating duel tracking directory %s: %s\n", dirPath, strerror(errno));
+	return qfalse;
+}
+
+static qboolean G_GetTrackedExportRootDir(const char *dbPath, char *dirPath, int dirPathSize)
+{
+	char dbDir[MAX_OSPATH];
+	char *slashPos;
+	char *backslashPos;
+#if defined(_WIN32)
+	char pathSep = '\\';
+#else
+	char pathSep = '/';
+#endif
+
+	if (!dbPath || !dbPath[0] || !dirPath || dirPathSize < 1)
+		return qfalse;
+
+	Q_strncpyz(dbDir, dbPath, sizeof(dbDir));
+	slashPos = strrchr(dbDir, '/');
+	backslashPos = strrchr(dbDir, '\\');
+	if (backslashPos && (!slashPos || backslashPos > slashPos))
+		slashPos = backslashPos;
+	if (slashPos)
+		*slashPos = '\0';
+	else
+		dbDir[0] = '\0';
+
+	if (!dbDir[0])
+		return qfalse;
+
+	Com_sprintf(dirPath, dirPathSize, "%s%c%s", dbDir, pathSep, TRACKED_DUEL_EXPORT_DIR);
+	return G_EnsureTrackedExportDir(dirPath);
+}
+
+static qboolean G_GetTrackedArchiveDir(const char *dbPath, char *dirPath, int dirPathSize)
+{
+	char exportDir[MAX_OSPATH];
+#if defined(_WIN32)
+	char pathSep = '\\';
+#else
+	char pathSep = '/';
+#endif
+
+	if (!G_GetTrackedExportRootDir(dbPath, exportDir, sizeof(exportDir)))
+		return qfalse;
+
+	Com_sprintf(dirPath, dirPathSize, "%s%c%s", exportDir, pathSep, TRACKED_DUEL_ARCHIVE_DIR);
+	return G_EnsureTrackedExportDir(dirPath);
+}
+
+static qboolean G_GetTrackedTimestamp(char *timestamp, int timestampSize, int *msPartOut)
+{
+	time_t rawtime;
+	struct tm tmLocal;
+
+	if (!timestamp || timestampSize < 1 || !msPartOut)
+		return qfalse;
+
+	time(&rawtime);
+#if defined(_WIN32)
+	if (localtime_s(&tmLocal, &rawtime) != 0)
+		return qfalse;
+#else
+	if (!localtime_r(&rawtime, &tmLocal))
+		return qfalse;
+#endif
+	if (!strftime(timestamp, timestampSize, "%Y%m%d_%H%M%S", &tmLocal))
+		return qfalse;
+
+	*msPartOut = trap->Milliseconds() % 1000;
+	return qtrue;
+}
+
+static int G_CountTrackedEventRows(sqlite3 *db)
+{
+	sqlite3_stmt *stmt = NULL;
+	char *sql;
+	int s;
+	int rowCount = -1;
+
+	if (!db)
+		return -1;
+
+	sql = "SELECT COUNT(*) FROM LocalDuelTrackEvent";
+	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
+	s = sqlite3_step(stmt);
+	if (s == SQLITE_ROW)
+		rowCount = sqlite3_column_int(stmt, 0);
+	else if (s != SQLITE_DONE)
+		G_ErrorPrint("ERROR: SQL Select Failed (G_CountTrackedEventRows)", s);
+	CALL_SQLITE(finalize(stmt));
+	return rowCount;
+}
+
+static int G_GetTrackedEventArchiveCutoffId(sqlite3 *db, int rowsToKeep)
+{
+	sqlite3_stmt *stmt = NULL;
+	char *sql;
+	int s;
+	int cutoffId = -1;
+
+	if (!db || rowsToKeep < 1)
+		return -1;
+
+	sql = "SELECT id FROM LocalDuelTrackEvent ORDER BY id DESC LIMIT 1 OFFSET ?";
+	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
+	CALL_SQLITE(bind_int(stmt, 1, rowsToKeep - 1));
+	s = sqlite3_step(stmt);
+	if (s == SQLITE_ROW)
+		cutoffId = sqlite3_column_int(stmt, 0);
+	else if (s != SQLITE_DONE)
+		G_ErrorPrint("ERROR: SQL Select Failed (G_GetTrackedEventArchiveCutoffId)", s);
+	CALL_SQLITE(finalize(stmt));
+	return cutoffId;
+}
+
+static void G_MaybeArchiveTrackedDuelEvents(sqlite3 *db, const char *effectiveDbPath)
+{
+	char archiveDir[MAX_OSPATH];
+	char timestamp[32];
+	char outPath[MAX_OSPATH];
+	char selectSql[256];
+	sqlite3_stmt *stmt = NULL;
+	char *sql;
+	int rowCount;
+	int cutoffId;
+	int s;
+	int rowsArchived = 0;
+	int msPart;
+#if defined(_WIN32)
+	char pathSep = '\\';
+#else
+	char pathSep = '/';
+#endif
+
+	if (!db || !effectiveDbPath || !effectiveDbPath[0])
+		return;
+
+	if (!G_DoesTrackedDuelTableExist(db, "LocalDuelTrackEvent"))
+		return;
+
+	rowCount = G_CountTrackedEventRows(db);
+	if (rowCount < TRACKED_DUEL_EVENT_ARCHIVE_MAX_ROWS)
+		return;
+
+	cutoffId = G_GetTrackedEventArchiveCutoffId(db, TRACKED_DUEL_EVENT_ARCHIVE_RETAIN_ROWS);
+	if (cutoffId <= 0)
+		return;
+
+	if (!G_GetTrackedArchiveDir(effectiveDbPath, archiveDir, sizeof(archiveDir)))
+		return;
+
+	if (!G_GetTrackedTimestamp(timestamp, sizeof(timestamp), &msPart))
+	{
+		trap->Print("Tracked duel event rollover skipped: could not format archive timestamp.\n");
+		return;
+	}
+
+	Com_sprintf(outPath, sizeof(outPath), "%s%cdueltrack_event_archive_%s_%03d.csv", archiveDir, pathSep, timestamp, msPart);
+	Com_sprintf(selectSql, sizeof(selectSql), "SELECT * FROM LocalDuelTrackEvent WHERE id < %d ORDER BY id", cutoffId);
+
+	CALL_SQLITE(exec(db, "BEGIN IMMEDIATE TRANSACTION", NULL, NULL, NULL));
+	if (!G_ExportTrackedDuelQueryCSV(db, selectSql, outPath, &rowsArchived))
+	{
+		CALL_SQLITE(exec(db, "ROLLBACK TRANSACTION", NULL, NULL, NULL));
+		trap->Print("Tracked duel event rollover failed while exporting %s\n", outPath);
+		return;
+	}
+
+	sql = "DELETE FROM LocalDuelTrackEvent WHERE id < ?";
+	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
+	CALL_SQLITE(bind_int(stmt, 1, cutoffId));
+	s = sqlite3_step(stmt);
+	if (s != SQLITE_DONE)
+	{
+		G_ErrorPrint("ERROR: SQL Delete Failed (G_MaybeArchiveTrackedDuelEvents)", s);
+		CALL_SQLITE(finalize(stmt));
+		CALL_SQLITE(exec(db, "ROLLBACK TRANSACTION", NULL, NULL, NULL));
+		remove(outPath);
+		return;
+	}
+	CALL_SQLITE(finalize(stmt));
+	CALL_SQLITE(exec(db, "COMMIT TRANSACTION", NULL, NULL, NULL));
+	trap->Print("Archived %d duel track event rows -> %s\n", rowsArchived, outPath);
 }
 
 static qboolean G_DoesTrackedDuelTableExist(sqlite3 *db, const char *tableName)
@@ -4994,21 +5223,25 @@ void Svcmd_ExportDuelTrack_f(void)
 		"LocalDuelTrackEvent",
 		"LocalDuelTrackAggregate"
 	};
+	static const char *trackedFileNames[] = {
+		"summary",
+		"participant",
+		"event",
+		"aggregate"
+	};
 	sqlite3 *db;
-	char dbDir[MAX_OSPATH];
+	char exportDir[MAX_OSPATH];
 	char effectiveDbPath[MAX_OSPATH];
-	char timestamp[32];
 	char outPath[MAX_OSPATH];
 	char optionalPrefix[64];
 	char safePrefix[64];
-	char *slashPos;
-	char *backslashPos;
-	time_t rawtime;
-	struct tm tmLocal;
 	int i;
 	int rows;
-	int msPart;
+#if defined(_WIN32)
 	char pathSep;
+#else
+	char pathSep;
+#endif
 
 	optionalPrefix[0] = '\0';
 	if (trap->Argc() >= 2)
@@ -5049,47 +5282,17 @@ void Svcmd_ExportDuelTrack_f(void)
 		return;
 	}
 
-	Q_strncpyz(dbDir, effectiveDbPath, sizeof(dbDir));
-	slashPos = strrchr(dbDir, '/');
-	backslashPos = strrchr(dbDir, '\\');
-	if (backslashPos && (!slashPos || backslashPos > slashPos))
-		slashPos = backslashPos;
-	if (slashPos)
-		*slashPos = '\0';
-	else
-		dbDir[0] = '\0';
+	if (!G_GetTrackedExportRootDir(effectiveDbPath, exportDir, sizeof(exportDir)))
+	{
+		CALL_SQLITE(close(db));
+		trap->Print("exportDuelTrack failed: unable to create dueltrack export folder.\n");
+		return;
+	}
 #if defined(_WIN32)
 	pathSep = '\\';
 #else
 	pathSep = '/';
 #endif
-
-	time(&rawtime);
-#if defined(_WIN32)
-	if (localtime_s(&tmLocal, &rawtime) != 0)
-	{
-		if (db)
-			sqlite3_close(db);
-		trap->Print("exportDuelTrack failed: could not format local timestamp.\n");
-		return;
-	}
-#else
-	if (!localtime_r(&rawtime, &tmLocal))
-	{
-		if (db)
-			sqlite3_close(db);
-		trap->Print("exportDuelTrack failed: could not format local timestamp.\n");
-		return;
-	}
-#endif
-	if (!strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", &tmLocal))
-	{
-		if (db)
-			sqlite3_close(db);
-		trap->Print("exportDuelTrack failed: could not format local timestamp.\n");
-		return;
-	}
-	msPart = trap->Milliseconds() % 1000;
 
 	for (i = 0; i < (int)(sizeof(trackedTables) / sizeof(trackedTables[0])); i++)
 	{
@@ -5098,14 +5301,10 @@ void Svcmd_ExportDuelTrack_f(void)
 			trap->Print("Skipping %s: table not present in %s\n", trackedTables[i], effectiveDbPath);
 			continue;
 		}
-		if (safePrefix[0] && dbDir[0])
-			Com_sprintf(outPath, sizeof(outPath), "%s%c%s_dueltrack_%s_%03d_%s.csv", dbDir, pathSep, safePrefix, timestamp, msPart, trackedTables[i]);
-		else if (safePrefix[0])
-			Com_sprintf(outPath, sizeof(outPath), "%s_dueltrack_%s_%03d_%s.csv", safePrefix, timestamp, msPart, trackedTables[i]);
-		else if (dbDir[0])
-			Com_sprintf(outPath, sizeof(outPath), "%s%cdueltrack_%s_%03d_%s.csv", dbDir, pathSep, timestamp, msPart, trackedTables[i]);
+		if (safePrefix[0])
+			Com_sprintf(outPath, sizeof(outPath), "%s%c%s_dueltrack_%s.csv", exportDir, pathSep, safePrefix, trackedFileNames[i]);
 		else
-			Com_sprintf(outPath, sizeof(outPath), "dueltrack_%s_%03d_%s.csv", timestamp, msPart, trackedTables[i]);
+			Com_sprintf(outPath, sizeof(outPath), "%s%cdueltrack_%s.csv", exportDir, pathSep, trackedFileNames[i]);
 		if (G_ExportTrackedDuelTableCSV(db, trackedTables[i], outPath, &rows))
 			trap->Print("Exported %s (%d rows) -> %s\n", trackedTables[i], rows, outPath);
 	}
