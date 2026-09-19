@@ -1525,6 +1525,7 @@ void SetTeam( gentity_t *ent, char *s, qboolean forcedToJoin ) {//JAPRO - Modifi
 	if (client->ps.duelInProgress) {
 		gentity_t *duelAgainst = &g_entities[client->ps.duelIndex];
 
+		G_ClearTrackedDuelIfMismatched(ent, duelAgainst);
 		if (duelAgainst->client) {
 			G_FinishTrackedDuel(duelAgainst, ent, dueltypes[ent->client->ps.clientNum], qfalse);
 		}

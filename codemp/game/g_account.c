@@ -512,7 +512,7 @@ static void G_QueueBotTutorialMessage(int botClientNum, int targetClientNum, con
 		return;
 
 	queue = &g_botTutorialQueues[botClientNum];
-	if (queue->queuedCount > queue->nextMessageIndex && queue->targetClientNum != targetClientNum)
+	if (queue->queuedCount > queue->nextMessageIndex)
 		return;
 	if (queue->queuedCount >= TRACKED_DUEL_TUTORIAL_MAX_MESSAGES)
 		return;
@@ -823,9 +823,17 @@ static void G_PersistTrackedDuel(tracked_duel_runtime_t *winnerRuntime, tracked_
 	const int durationSeconds = duration / 1000;
 	int endTimestamp;
 	int startTimestamp;
+	tracked_duel_runtime_t *summaryFirst = winnerRuntime;
+	tracked_duel_runtime_t *summarySecond = loserRuntime;
 
 	if (!winnerRuntime || !loserRuntime)
 		return;
+
+	if (draw && Q_stricmp(summaryFirst->identityKey, summarySecond->identityKey) > 0)
+	{
+		summaryFirst = loserRuntime;
+		summarySecond = winnerRuntime;
+	}
 
 	time(&rawtime);
 	endTimestamp = (int)rawtime;
@@ -843,17 +851,17 @@ static void G_PersistTrackedDuel(tracked_duel_runtime_t *winnerRuntime, tracked_
 	CALL_SQLITE(bind_int(stmt, 3, durationSeconds));
 	CALL_SQLITE(bind_int(stmt, 4, duelType));
 	CALL_SQLITE(bind_text(stmt, 5, level.rawmapname, -1, SQLITE_STATIC));
-	CALL_SQLITE(bind_text(stmt, 6, draw ? "" : winnerRuntime->identityKey, -1, SQLITE_STATIC));
-	CALL_SQLITE(bind_text(stmt, 7, draw ? "" : winnerRuntime->identityLabel, -1, SQLITE_STATIC));
-	CALL_SQLITE(bind_int(stmt, 8, draw ? 0 : winnerRuntime->identityKind));
-	CALL_SQLITE(bind_int(stmt, 9, draw ? 0 : winnerRuntime->side));
-	CALL_SQLITE(bind_text(stmt, 10, draw ? "" : loserRuntime->identityKey, -1, SQLITE_STATIC));
-	CALL_SQLITE(bind_text(stmt, 11, draw ? "" : loserRuntime->identityLabel, -1, SQLITE_STATIC));
-	CALL_SQLITE(bind_int(stmt, 12, draw ? 0 : loserRuntime->identityKind));
-	CALL_SQLITE(bind_int(stmt, 13, draw ? 0 : loserRuntime->side));
+	CALL_SQLITE(bind_text(stmt, 6, summaryFirst->identityKey, -1, SQLITE_STATIC));
+	CALL_SQLITE(bind_text(stmt, 7, summaryFirst->identityLabel, -1, SQLITE_STATIC));
+	CALL_SQLITE(bind_int(stmt, 8, summaryFirst->identityKind));
+	CALL_SQLITE(bind_int(stmt, 9, summaryFirst->side));
+	CALL_SQLITE(bind_text(stmt, 10, summarySecond->identityKey, -1, SQLITE_STATIC));
+	CALL_SQLITE(bind_text(stmt, 11, summarySecond->identityLabel, -1, SQLITE_STATIC));
+	CALL_SQLITE(bind_int(stmt, 12, summarySecond->identityKind));
+	CALL_SQLITE(bind_int(stmt, 13, summarySecond->side));
 	CALL_SQLITE(bind_int(stmt, 14, draw ? 1 : 0));
-	CALL_SQLITE(bind_text(stmt, 15, draw ? "" : winnerRuntime->openingTactic, -1, SQLITE_STATIC));
-	CALL_SQLITE(bind_text(stmt, 16, draw ? "" : loserRuntime->openingTactic, -1, SQLITE_STATIC));
+	CALL_SQLITE(bind_text(stmt, 15, summaryFirst->openingTactic, -1, SQLITE_STATIC));
+	CALL_SQLITE(bind_text(stmt, 16, summarySecond->openingTactic, -1, SQLITE_STATIC));
 	s = sqlite3_step(stmt);
 	if (s != SQLITE_DONE)
 		G_ErrorPrint("ERROR: SQL Insert Failed (LocalDuelTrackSummary)", s);
@@ -1021,6 +1029,36 @@ void G_FinishTrackedDuel(gentity_t *winner, gentity_t *loser, int duelType, qboo
 	G_PersistTrackedDuel(&winnerRuntime, &loserRuntime, duelType, draw);
 	if (!draw)
 		G_MaybeQueueBotTutorial(&loserRuntime, winner, loser);
+}
+
+void G_ClearTrackedDuelIfMismatched(gentity_t *ent, gentity_t *opponent)
+{
+	tracked_duel_runtime_t *runtime;
+	tracked_duel_runtime_t *otherRuntime;
+
+	if (!ent || !ent->client)
+		return;
+
+	runtime = &g_trackedDuels[ent->s.number];
+	if (!runtime->active)
+		return;
+
+	if (!opponent || !opponent->client)
+	{
+		G_ClearTrackedDuelRuntime(ent->s.number);
+		return;
+	}
+
+	otherRuntime = &g_trackedDuels[opponent->s.number];
+	if (runtime->opponentClientNum == opponent->s.number &&
+		(!otherRuntime->active || otherRuntime->opponentClientNum == ent->s.number))
+	{
+		return;
+	}
+
+	G_ClearTrackedDuelRuntime(ent->s.number);
+	if (otherRuntime->active && otherRuntime->opponentClientNum == ent->s.number)
+		G_ClearTrackedDuelRuntime(opponent->s.number);
 }
 
 static void G_EnsureLocalArcadeSchema(sqlite3 *db)

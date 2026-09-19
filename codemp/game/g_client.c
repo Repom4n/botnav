@@ -4877,6 +4877,7 @@ void ClientDisconnect( int clientNum ) {
 	if (ent->client->ps.duelInProgress) {
 		gentity_t *duelAgainst = &g_entities[ent->client->ps.duelIndex];
 
+		G_ClearTrackedDuelIfMismatched(ent, duelAgainst);
 		if (duelAgainst->client) {
 			G_FinishTrackedDuel(duelAgainst, ent, dueltypes[ent->client->ps.clientNum], qfalse);
 		}
