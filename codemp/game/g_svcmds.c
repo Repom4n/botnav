@@ -1618,6 +1618,7 @@ void Svcmd_DBInfo_f( void );
 #if 0
 void G_TestAddDuel( void );
 #endif
+void SV_BotEloReset_f( void );
 void SV_RebuildElo_f( void );
 #endif
 #if 1//NEWRACERANKING
@@ -1656,6 +1657,9 @@ svcmd_t svcmds[] = {
 	{ "amgrantadmin",				Svcmd_Amgrantadmin_f,				qfalse },
 	{ "amkick",						Svcmd_AmKick_f,						qfalse },
 
+#if _ELORANKING
+	{ "bot_eloreset",				SV_BotEloReset_f,					qfalse },
+#endif
 	{ "botlist",					Svcmd_BotList_f,					qfalse },
 
 	{ "changepassword",				Svcmd_ChangePass_f,					qfalse },
