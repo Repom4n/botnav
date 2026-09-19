@@ -259,6 +259,15 @@ static inline int NewBotAI_GetDuelRequestCooldownMs(
 	int defaultCooldownMs, int botVsBotCooldownMs, int extendedModeEnabled,
 	int challengerIsBot, int targetIsBot)
 {
+	if (defaultCooldownMs < 1000)
+	{
+		defaultCooldownMs = 1000;
+	}
+	if (botVsBotCooldownMs < 1000)
+	{
+		botVsBotCooldownMs = 1000;
+	}
+
 	if (extendedModeEnabled && challengerIsBot && targetIsBot)
 	{
 		return botVsBotCooldownMs;

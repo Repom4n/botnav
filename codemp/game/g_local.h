@@ -1548,6 +1548,17 @@ typedef struct level_locals_s {
 	gametype_t	gametype;
 	char		mapname[MAX_QPATH];
 	char		rawmapname[MAX_QPATH];
+
+	// Arcade mode (g_gametype 10)
+	int			arcadeLevel;
+	int			arcadeRoundStartTime;
+	int			arcadeRoundBotsTarget;
+	int			arcadeRoundQueuedStart;
+	int			arcadeGameOverTime;
+	int			arcadeScore[MAX_CLIENTS];
+	int			arcadeRoundKills[MAX_CLIENTS];
+	qboolean	arcadeEliminated[MAX_CLIENTS];
+	qboolean	arcadeInitialized;
 } level_locals_t;
 
 
@@ -1880,6 +1891,8 @@ void QDECL G_LogPrintf( const char *fmt, ... );
 void QDECL G_SecurityLogPrintf( const char *fmt, ... );
 void SendScoreboardMessageToAllClients( void );
 const char *G_GetStringEdString(char *refSection, char *refName);
+void G_ArcadeHandlePlayerDeath(gentity_t *self, gentity_t *attacker);
+void G_AddArcadeScore(char *username, int score, int level, int kills, int end_time);
 
 //
 // g_client.c
@@ -1947,6 +1960,7 @@ char *G_GetBotInfoByName( const char *name );
 void G_CheckBotSpawn( void );
 void G_RemoveQueuedBotBegin( int clientNum );
 qboolean G_BotConnect( int clientNum, qboolean restart );
+void G_AddRandomBot( int team );
 void Svcmd_AddBot_f( void );
 void Svcmd_BotList_f( void );
 void BotInterbreedEndMatch( void );

@@ -3449,7 +3449,8 @@ const char *gametypeStringShort[GT_MAX_GAME_TYPE] = {
 	"TDM",
 	"SAGA",
 	"CTF",
-	"CTY"
+	"CTY",
+	"ARCADE"
 };
 
 const char *BG_GetGametypeString( int gametype )
@@ -3477,6 +3478,8 @@ const char *BG_GetGametypeString( int gametype )
 		return "Capture The Flag";
 	case GT_CTY:
 		return "Capture The Ysalimiri";
+	case GT_ARCADE:
+		return "Arcade";
 
 	default:
 		return "Unknown Gametype";
@@ -3499,5 +3502,6 @@ int BG_GetGametypeForString( const char *gametype )
 	else if ( !Q_stricmp( gametype, "siege" ) )			return GT_SIEGE;
 	else if ( !Q_stricmp( gametype, "ctf" ) )			return GT_CTF;
 	else if ( !Q_stricmp( gametype, "cty" ) )			return GT_CTY;
+	else if ( !Q_stricmp( gametype, "arcade" ) )		return GT_ARCADE;
 	else												return -1;
 }

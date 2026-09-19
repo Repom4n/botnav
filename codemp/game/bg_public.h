@@ -246,6 +246,7 @@ typedef enum {
 	GT_SIEGE,			// siege
 	GT_CTF,				// capture the flag
 	GT_CTY,
+	GT_ARCADE,
 	GT_MAX_GAME_TYPE
 } gametype_t;
 
@@ -262,7 +263,8 @@ typedef enum {
 #define GTB_SIEGE			0x080 // siege
 #define GTB_CTF				0x100 // capture the flag
 #define GTB_CTY				0x200 // capture the ysalimiri
-#define GTB_ALL				0x1FF // all
+#define GTB_ARCADE			0x400 // arcade survival
+#define GTB_ALL				0x3FF // all
 
 typedef enum _flag_status {
 	FLAG_ATBASE = 0,

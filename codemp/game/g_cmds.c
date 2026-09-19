@@ -2636,7 +2636,8 @@ static const char *gameNames[GT_MAX_GAME_TYPE] = {
 	"Team FFA",
 	"Siege",
 	"Capture the Flag",
-	"Capture the Ysalamiri"
+	"Capture the Ysalamiri",
+	"Arcade"
 };
 
 /*

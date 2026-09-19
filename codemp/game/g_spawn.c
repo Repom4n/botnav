@@ -945,7 +945,7 @@ void G_SpawnGEntityFromSpawnVars( qboolean inSubBSP ) {
 	int			i;
 	gentity_t	*ent;
 	char		*s, *value, *gametypeName;
-	static char *gametypeNames[GT_MAX_GAME_TYPE] = {"ffa", "holocron", "jedimaster", "duel", "powerduel", "single", "team", "siege", "ctf", "cty"};
+	static char *gametypeNames[GT_MAX_GAME_TYPE] = {"ffa", "holocron", "jedimaster", "duel", "powerduel", "single", "team", "siege", "ctf", "cty", "arcade"};
 
 	G_SpawnString("classname", NULL, &value);
 	if (!value) {
@@ -1708,4 +1708,3 @@ void G_SpawnEntitiesFromString( qboolean inSubBSP ) {
 
 	G_PrecacheSoundsets();
 }
-
