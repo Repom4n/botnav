@@ -15,8 +15,11 @@ static char LOCAL_DB_PATH[MAX_OSPATH];
 #define BOT_DUEL_RANKED_LIMIT_PER_LEVEL 5
 #define BOT_DUEL_LEVEL_MIN 1
 #define BOT_DUEL_LEVEL_MAX 10
+#define LOCAL_ARCADE_SCORE_ORDER "score DESC, end_time DESC"
 //#define GLOBAL_DB_PATH sv_globalDBPath.string
 //#define MAX_TMP_RACELOG_SIZE 80 * 1024
+
+void G_ErrorPrint( const char *fmt, int s );
 
 #define CALL_SQLITE(f) {                                        \
         int i;                                                  \
@@ -35,6 +38,48 @@ static char LOCAL_DB_PATH[MAX_OSPATH];
                      #f, i, sqlite3_errmsg (db));               \
         }                                                       \
     }   
+
+static void G_EnsureLocalArcadeSchema(sqlite3 *db)
+{
+	sqlite3_stmt *stmt = NULL;
+	char *sql;
+	int s;
+	qboolean hasMapname = qfalse;
+
+	sql = "CREATE TABLE IF NOT EXISTS LocalArcade(id INTEGER PRIMARY KEY, username VARCHAR(16), mapname VARCHAR(64), score UNSIGNED INTEGER, level UNSIGNED SMALLINT, kills UNSIGNED SMALLINT, end_time UNSIGNED INTEGER)";
+	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
+	s = sqlite3_step(stmt);
+	if (s != SQLITE_DONE)
+		G_ErrorPrint("ERROR: SQL Create Failed (InitGameAccountStuff arcade)", s);
+	CALL_SQLITE(finalize(stmt));
+	stmt = NULL;
+
+	sql = "PRAGMA table_info(LocalArcade)";
+	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
+	while ((s = sqlite3_step(stmt)) == SQLITE_ROW)
+	{
+		const unsigned char *columnName = sqlite3_column_text(stmt, 1);
+		if (columnName && !Q_stricmp((const char *)columnName, "mapname"))
+		{
+			hasMapname = qtrue;
+			break;
+		}
+	}
+	if (s != SQLITE_DONE && s != SQLITE_ROW)
+		G_ErrorPrint("ERROR: SQL Select Failed (LocalArcade schema)", s);
+	CALL_SQLITE(finalize(stmt));
+	stmt = NULL;
+
+	if (!hasMapname)
+	{
+		sql = "ALTER TABLE LocalArcade ADD COLUMN mapname VARCHAR(64) DEFAULT ''";
+		CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
+		s = sqlite3_step(stmt);
+		if (s != SQLITE_DONE)
+			G_ErrorPrint("ERROR: SQL Alter Failed (LocalArcade mapname)", s);
+		CALL_SQLITE(finalize(stmt));
+	}
+}
 
 #if 0
 typedef struct RaceRecord_s {
@@ -933,11 +978,17 @@ void Cmd_DuelTop10_f(gentity_t *ent) {
 
 		if (type == 21)
 		{
-			sql = "SELECT username, score, level, kills FROM LocalArcade ORDER BY score DESC LIMIT ?, 10";
+			sql = "WITH has_map(map_exists) AS (SELECT EXISTS(SELECT 1 FROM LocalArcade WHERE mapname = ?)) "
+				"SELECT username, score, level, kills FROM LocalArcade, has_map "
+				"WHERE (has_map.map_exists = 1 AND LocalArcade.mapname = ?) "
+				"OR (has_map.map_exists = 0 AND (LocalArcade.mapname = '' OR LocalArcade.mapname IS NULL)) "
+				"ORDER BY " LOCAL_ARCADE_SCORE_ORDER " LIMIT ?, 10";
 			CALL_SQLITE (prepare_v2 (db, sql, strlen (sql) + 1, & stmt, NULL));
-			CALL_SQLITE (bind_int (stmt, 1, start));
+			CALL_SQLITE (bind_text (stmt, 1, level.rawmapname, -1, SQLITE_STATIC));
+			CALL_SQLITE (bind_text (stmt, 2, level.rawmapname, -1, SQLITE_STATIC));
+			CALL_SQLITE (bind_int (stmt, 3, start));
 
-			trap->SendServerCommand(ent-g_entities, "print \"Topscore results for arcade:\n ^5#   Username           Score      Level  Kills\n\"");
+			trap->SendServerCommand(ent-g_entities, va("print \"Topscore results for arcade on %s:\n ^5#   Username           Score      Level  Kills\n\"", level.rawmapname));
 			while (1) {
 				s = sqlite3_step(stmt);
 				if (s == SQLITE_ROW) {
@@ -1072,26 +1123,27 @@ void G_AddDuel(char *winner, char *loser, int start_time, int type, int winner_h
 
 }
 
-void G_AddArcadeScore(char *username, int score, int levelReached, int kills, int end_time)
+void G_AddArcadeScore(const char *username, const char *mapname, int score, int levelReached, int kills, int end_time)
 {
 	sqlite3 *db;
 	sqlite3_stmt *stmt;
 	char *sql;
 	int s;
 
-	if (!username || !username[0])
+	if (!username || !username[0] || !mapname || !mapname[0])
 	{
 		return;
 	}
 
 	CALL_SQLITE(open(LOCAL_DB_PATH, &db));
-	sql = "INSERT INTO LocalArcade(username, score, level, kills, end_time) VALUES (?, ?, ?, ?, ?)";
+	sql = "INSERT INTO LocalArcade(username, mapname, score, level, kills, end_time) VALUES (?, ?, ?, ?, ?, ?)";
 	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
 	CALL_SQLITE(bind_text(stmt, 1, username, -1, SQLITE_TRANSIENT));
-	CALL_SQLITE(bind_int(stmt, 2, score));
-	CALL_SQLITE(bind_int(stmt, 3, levelReached));
-	CALL_SQLITE(bind_int(stmt, 4, kills));
-	CALL_SQLITE(bind_int(stmt, 5, end_time));
+	CALL_SQLITE(bind_text(stmt, 2, mapname, -1, SQLITE_TRANSIENT));
+	CALL_SQLITE(bind_int(stmt, 3, score));
+	CALL_SQLITE(bind_int(stmt, 4, levelReached));
+	CALL_SQLITE(bind_int(stmt, 5, kills));
+	CALL_SQLITE(bind_int(stmt, 6, end_time));
 	s = sqlite3_step(stmt);
 	if (s != SQLITE_DONE)
 	{
@@ -1101,7 +1153,7 @@ void G_AddArcadeScore(char *username, int score, int levelReached, int kills, in
 	CALL_SQLITE(close(db));
 }
 
-qboolean G_GetArcadeTopScore(int *scoreOut, char *usernameOut, int usernameOutSize)
+qboolean G_GetArcadeTopScore(const char *mapname, int *scoreOut, char *usernameOut, int usernameOutSize)
 {
 	sqlite3 *db;
 	sqlite3_stmt *stmt;
@@ -1117,10 +1169,20 @@ qboolean G_GetArcadeTopScore(int *scoreOut, char *usernameOut, int usernameOutSi
 	{
 		usernameOut[0] = '\0';
 	}
+	if (!mapname || !mapname[0])
+	{
+		return qfalse;
+	}
 
 	CALL_SQLITE(open(LOCAL_DB_PATH, &db));
-	sql = "SELECT username, score FROM LocalArcade ORDER BY score DESC, end_time DESC LIMIT 1";
+	sql = "WITH has_map(map_exists) AS (SELECT EXISTS(SELECT 1 FROM LocalArcade WHERE mapname = ?)) "
+		"SELECT username, score FROM LocalArcade, has_map "
+		"WHERE (has_map.map_exists = 1 AND LocalArcade.mapname = ?) "
+		"OR (has_map.map_exists = 0 AND (LocalArcade.mapname = '' OR LocalArcade.mapname IS NULL)) "
+		"ORDER BY " LOCAL_ARCADE_SCORE_ORDER " LIMIT 1";
 	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
+	CALL_SQLITE(bind_text(stmt, 1, mapname, -1, SQLITE_TRANSIENT));
+	CALL_SQLITE(bind_text(stmt, 2, mapname, -1, SQLITE_TRANSIENT));
 	s = sqlite3_step(stmt);
 	if (s == SQLITE_ROW)
 	{
@@ -7706,12 +7768,7 @@ void InitGameAccountStuff( void ) { //Called every mapload , move the create tab
 		G_ErrorPrint("ERROR: SQL Create Failed (InitGameAccountStuff 3)", s);
 	CALL_SQLITE (finalize(stmt));
 
-	sql = "CREATE TABLE IF NOT EXISTS LocalArcade(id INTEGER PRIMARY KEY, username VARCHAR(16), score UNSIGNED INTEGER, level UNSIGNED SMALLINT, kills UNSIGNED SMALLINT, end_time UNSIGNED INTEGER)";
-	CALL_SQLITE (prepare_v2 (db, sql, strlen (sql) + 1, & stmt, NULL));
-	s = sqlite3_step(stmt);
-	if (s != SQLITE_DONE)
-		G_ErrorPrint("ERROR: SQL Create Failed (InitGameAccountStuff arcade)", s);
-	CALL_SQLITE (finalize(stmt));
+	G_EnsureLocalArcadeSchema(db);
 
 	sql = "CREATE TABLE IF NOT EXISTS LocalTeam(id INTEGER PRIMARY KEY, name VARCHAR(16), tag VARCHAR(16), longname VARCHAR(24), flags UNSIGNED TINYINT)";
     CALL_SQLITE (prepare_v2 (db, sql, strlen (sql) + 1, & stmt, NULL));
