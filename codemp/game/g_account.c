@@ -15,6 +15,7 @@ static char LOCAL_DB_PATH[MAX_OSPATH];
 #define BOT_DUEL_RANKED_LIMIT_PER_LEVEL 5
 #define BOT_DUEL_LEVEL_MIN 1
 #define BOT_DUEL_LEVEL_MAX 10
+#define LOCAL_ARCADE_SCORE_ORDER "score DESC, end_time ASC"
 //#define GLOBAL_DB_PATH sv_globalDBPath.string
 //#define MAX_TMP_RACELOG_SIZE 80 * 1024
 
@@ -977,7 +978,7 @@ void Cmd_DuelTop10_f(gentity_t *ent) {
 
 		if (type == 21)
 		{
-			sql = "SELECT username, score, level, kills FROM LocalArcade WHERE mapname = ? ORDER BY score DESC, end_time ASC LIMIT ?, 10";
+			sql = "SELECT username, score, level, kills FROM LocalArcade WHERE mapname = ? ORDER BY " LOCAL_ARCADE_SCORE_ORDER " LIMIT ?, 10";
 			CALL_SQLITE (prepare_v2 (db, sql, strlen (sql) + 1, & stmt, NULL));
 			CALL_SQLITE (bind_text (stmt, 1, level.rawmapname, -1, SQLITE_STATIC));
 			CALL_SQLITE (bind_int (stmt, 2, start));
@@ -1169,7 +1170,7 @@ qboolean G_GetArcadeTopScore(const char *mapname, int *scoreOut, char *usernameO
 	}
 
 	CALL_SQLITE(open(LOCAL_DB_PATH, &db));
-	sql = "SELECT username, score FROM LocalArcade WHERE mapname = ? ORDER BY score DESC, end_time ASC LIMIT 1";
+	sql = "SELECT username, score FROM LocalArcade WHERE mapname = ? ORDER BY " LOCAL_ARCADE_SCORE_ORDER " LIMIT 1";
 	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
 	CALL_SQLITE(bind_text(stmt, 1, mapname, -1, SQLITE_TRANSIENT));
 	s = sqlite3_step(stmt);

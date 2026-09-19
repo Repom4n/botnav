@@ -311,6 +311,11 @@ static int G_ArcadeGetTimeBonus(int elapsed)
 	return (int)(2000.0f * (powf(2.0f, remainingRatio * 2.0f) - 1.0f));
 }
 
+static qboolean G_ArcadePlayerIsLoggedIn(const gentity_t *ent)
+{
+	return (ent && ent->client && ent->client->pers.userName[0]);
+}
+
 static void G_ArcadePrintConsoleSummary(gentity_t *ent, const char *resultLabel, int levelNumber,
 	int healthBonus, int armorBonus, int timeBonus, int killBonus, int roundScore, int totalScore,
 	int kills, int topScore, const char *topName)
@@ -479,14 +484,11 @@ static void G_ArcadeStartRound(void)
 			continue;
 		}
 
-		if (ent->client->sess.sessionTeam != TEAM_RED)
+		if (ent->client->sess.sessionTeam == TEAM_RED)
 		{
-			SetTeam(ent, "red", qfalse);
+			SetTeam(ent, "s", qtrue);
 		}
-		else
-		{
-			ClientSpawn(ent);
-		}
+		SetTeam(ent, "red", qtrue);
 		level.arcadeParticipant[i] = (ent->client->sess.sessionTeam == TEAM_RED);
 		if (level.arcadeParticipant[i] && !wasParticipant)
 		{
@@ -570,7 +572,7 @@ static void G_ArcadeFinishRound(qboolean gameOver, qboolean arcadeComplete)
 		{
 			int topScore = 0;
 			char topName[MAX_NETNAME] = {0};
-			if (ent->client->pers.userName[0])
+			if (G_ArcadePlayerIsLoggedIn(ent))
 			{
 				const int runDuration = (level.arcadeRunStartTime[i] > 0) ? (level.time - level.arcadeRunStartTime[i]) : level.time;
 				G_AddArcadeScore(ent->client->pers.userName, level.rawmapname, level.arcadeScore[i],
@@ -585,7 +587,7 @@ static void G_ArcadeFinishRound(qboolean gameOver, qboolean arcadeComplete)
 			G_ArcadeSendCenterMessage(ent,
 				arcadeComplete ? "^2ARCADE COMPLETE" : "^1GAME OVER",
 				arcadeComplete ? roundScore : level.arcadeScore[i], level.arcadeScore[i], topScore);
-			if (!ent->client->pers.userName[0])
+			if (!G_ArcadePlayerIsLoggedIn(ent))
 			{
 				trap->SendServerCommand(i, "print \"^3Use /login to save highscores.\n\"");
 			}
