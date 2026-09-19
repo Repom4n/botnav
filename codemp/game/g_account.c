@@ -220,9 +220,9 @@ static void G_ClearBotTutorialQueue(int clientNum)
 	g_botTutorialQueues[clientNum].targetClientNum = -1;
 }
 
-static qboolean G_IsTrackedDuelEnabled(void)
+static qboolean G_IsTrackedDuelCollectionEnabled(void)
 {
-	return (bot_dueltracking.integer || bot_tutorial.integer) ? qtrue : qfalse;
+	return bot_dueltracking.integer ? qtrue : qfalse;
 }
 
 static void G_GetTrackingIPKey(gentity_t *ent, char *out, int outSize)
@@ -779,7 +779,6 @@ static void G_PersistTrackedDuel(tracked_duel_runtime_t *winnerRuntime, tracked_
 	startTimestamp = endTimestamp - (duration / 1000);
 
 	CALL_SQLITE(open(LOCAL_DB_PATH, &db));
-	G_EnsureLocalDuelTrackingSchema(db);
 
 	sql = "INSERT INTO LocalDuelTrackSummary(start_time, end_time, duration, type, mapname, winner_key, winner_label, winner_kind, winner_side, loser_key, loser_label, loser_kind, loser_side, draw, winner_opening, loser_opening) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
@@ -817,7 +816,7 @@ static void G_PersistTrackedDuel(tracked_duel_runtime_t *winnerRuntime, tracked_
 
 void G_StartTrackedDuel(gentity_t *first, gentity_t *second, int duelType)
 {
-	if (!G_IsTrackedDuelEnabled() || !first || !second || !first->client || !second->client)
+	if (!G_IsTrackedDuelCollectionEnabled() || !first || !second || !first->client || !second->client)
 		return;
 
 	if (first->r.svFlags & SVF_BOT)
@@ -839,8 +838,9 @@ void G_UpdateTrackedDuelFrame(gentity_t *ent)
 	if (!ent || !ent->client)
 		return;
 
-	G_ProcessBotTutorialQueue(ent);
-	if (!G_IsTrackedDuelEnabled())
+	if (ent->r.svFlags & SVF_BOT)
+		G_ProcessBotTutorialQueue(ent);
+	if (!G_IsTrackedDuelCollectionEnabled())
 		return;
 
 	runtime = &g_trackedDuels[ent->s.number];
@@ -937,7 +937,7 @@ void G_FinishTrackedDuel(gentity_t *winner, gentity_t *loser, int duelType, qboo
 	tracked_duel_runtime_t *winnerSlot;
 	tracked_duel_runtime_t *loserSlot;
 
-	if (!G_IsTrackedDuelEnabled() || !winner || !loser || !winner->client || !loser->client)
+	if (!G_IsTrackedDuelCollectionEnabled() || !winner || !loser || !winner->client || !loser->client)
 		return;
 
 	winnerSlot = &g_trackedDuels[winner->s.number];
