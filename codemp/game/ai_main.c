@@ -11723,6 +11723,12 @@ static float BotGetLowHangingFruitDistance(void)
 {
 	float distance = bot_lowhanginfruitDistance.value;
 
+	if (bot_lowhangingfruitdistance.value != 1024.0f ||
+		bot_lowhanginfruitDistance.value == 1024.0f)
+	{
+		distance = bot_lowhangingfruitdistance.value;
+	}
+
 	if (distance < 0.0f)
 	{
 		distance = 0.0f;
