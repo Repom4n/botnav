@@ -504,7 +504,7 @@ static void G_ArcadeStartRound(void)
 			level.arcadeScore[i] = savedScore;
 			level.arcadeTotalKills[i] = savedTotalKills;
 		}
-		level.arcadeParticipant[i] = (ent->client->sess.sessionTeam == TEAM_RED);
+		level.arcadeParticipant[i] = shouldParticipate;
 	}
 
 	level.arcadeRoundBotsTarget = humans + extraBots;
