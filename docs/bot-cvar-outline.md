@@ -126,7 +126,7 @@ Notes:
 | Cvar | Default | Description |
 |------|---------|-------------|
 | `bot_nochat` | `0` | Disable bot chat. |
-| `bot_tutorial` | `0` | Enable concise private trainer tells from bots after tracked duels; messages are rate-limited and capped per duel. |
+| `bot_tutorial` | `0` | Enable concise private trainer tells from bots after tracked duels; requires `bot_dueltracking`, and messages are rate-limited and capped per duel. |
 | `bot_dueltracking` | `0` | Record duel summaries, per-player force-spend stats, and sequential duel events for logged-in users, bots, and anonymous IPs. |
 | `bot_yawswitch` | `10` | Legacy/unused cvar; current wall-escape yaw behavior is hardcoded in `ai_main.c`. |
 | `bot_forcepowers` | `1` | Enable bots using force powers. |

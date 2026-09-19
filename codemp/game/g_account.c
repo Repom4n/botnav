@@ -249,7 +249,7 @@ static void G_GetTrackingIPKey(gentity_t *ent, char *out, int outSize)
 		if (closingBracket)
 		{
 			*closingBracket = '\0';
-			memmove(ip, ip + 1, strlen(ip));
+			memmove(ip, ip + 1, strlen(ip + 1) + 1);
 		}
 	}
 	else
@@ -8697,7 +8697,8 @@ void InitGameAccountStuff( void ) { //Called every mapload , move the create tab
 
 	CALL_SQLITE (open (LOCAL_DB_PATH, & db));
 	G_EnsureLocalArcadeSchema(db);
-	G_EnsureLocalDuelTrackingSchema(db);
+	if (bot_dueltracking.integer)
+		G_EnsureLocalDuelTrackingSchema(db);
 
 	//sqlite_exec(db, "VACUUM;", 0, 0);
 	//index LocalRun on RANK
