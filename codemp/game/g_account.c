@@ -229,6 +229,8 @@ static void G_GetTrackingIPKey(gentity_t *ent, char *out, int outSize)
 {
 	char ip[NET_ADDRSTRMAXLEN];
 	char *colon;
+	char *closingBracket;
+	int colonCount = 0;
 
 	if (!out || outSize < 1)
 		return;
@@ -238,9 +240,29 @@ static void G_GetTrackingIPKey(gentity_t *ent, char *out, int outSize)
 		return;
 
 	Q_strncpyz(ip, ent->client->sess.IP, sizeof(ip));
-	colon = strchr(ip, ':');
-	if (colon)
-		*colon = '\0';
+	if (ip[0] == '[')
+	{
+		closingBracket = strchr(ip, ']');
+		if (closingBracket)
+		{
+			*closingBracket = '\0';
+			memmove(ip, ip + 1, strlen(ip));
+		}
+	}
+	else
+	{
+		for (colon = ip; *colon; colon++)
+		{
+			if (*colon == ':')
+				colonCount++;
+		}
+		if (colonCount == 1)
+		{
+			colon = strchr(ip, ':');
+			if (colon)
+				*colon = '\0';
+		}
+	}
 	if (ip[0])
 		Com_sprintf(out, outSize, "ip:%s", ip);
 }
@@ -587,7 +609,7 @@ static duel_track_power_t G_InferTrackedPowerSpend(gentity_t *ent, tracked_duel_
 	return G_MapForcePowerToTrackedPower(runtime->lastSelectedPower);
 }
 
-static void G_InsertTrackedParticipant(sqlite3 *db, sqlite3_int64 summaryId, tracked_duel_runtime_t *runtime, qboolean won)
+static void G_InsertTrackedParticipant(sqlite3 *db, sqlite3_int64 summaryId, tracked_duel_runtime_t *runtime, int won)
 {
 	sqlite3_stmt *stmt = NULL;
 	char *sql;
@@ -605,7 +627,10 @@ static void G_InsertTrackedParticipant(sqlite3 *db, sqlite3_int64 summaryId, tra
 	CALL_SQLITE(bind_text(stmt, 3, runtime->identityLabel, -1, SQLITE_STATIC));
 	CALL_SQLITE(bind_int(stmt, 4, runtime->identityKind));
 	CALL_SQLITE(bind_text(stmt, 5, runtime->opponentKey, -1, SQLITE_STATIC));
-	CALL_SQLITE(bind_int(stmt, 6, won ? 1 : 0));
+	if (won < 0)
+		CALL_SQLITE(bind_null(stmt, 6));
+	else
+		CALL_SQLITE(bind_int(stmt, 6, won ? 1 : 0));
 	CALL_SQLITE(bind_int(stmt, 7, runtime->side));
 	CALL_SQLITE(bind_int(stmt, 8, runtime->opponentSide));
 	CALL_SQLITE(bind_int(stmt, 9, matchup));
@@ -678,49 +703,32 @@ static void G_InsertTrackedEvents(sqlite3 *db, sqlite3_int64 summaryId, tracked_
 	CALL_SQLITE(finalize(stmt));
 }
 
-static void G_UpdateTrackedAggregate(sqlite3 *db, tracked_duel_runtime_t *runtime, qboolean won)
+static void G_UpdateTrackedAggregate(sqlite3 *db, tracked_duel_runtime_t *runtime, qboolean won, qboolean draw)
 {
 	sqlite3_stmt *stmt = NULL;
 	char *sql;
 	int s;
 	int matchup;
-	int exists = 0;
 
 	if (!runtime)
 		return;
 
 	matchup = G_GetTrackedMatchup(runtime->side, runtime->opponentSide);
-	sql = "SELECT COUNT(*) FROM LocalDuelTrackAggregate WHERE participant_key = ? AND participant_kind = ? AND side = ? AND matchup = ?";
+	sql = "INSERT OR IGNORE INTO LocalDuelTrackAggregate(participant_key, participant_kind, side, matchup, duels, wins, losses, total_force_spent, total_force_regen, low_force_deaths, grip_cripples, saber_throw_punishes, force_push, force_pull, force_grip, force_drain, force_rage, force_absorb, force_protect, force_heal, force_speed, force_seeing, force_unknown) VALUES (?, ?, ?, ?, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)";
 	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
 	CALL_SQLITE(bind_text(stmt, 1, runtime->identityKey, -1, SQLITE_STATIC));
 	CALL_SQLITE(bind_int(stmt, 2, runtime->identityKind));
 	CALL_SQLITE(bind_int(stmt, 3, runtime->side));
 	CALL_SQLITE(bind_int(stmt, 4, matchup));
 	s = sqlite3_step(stmt);
-	if (s == SQLITE_ROW)
-		exists = sqlite3_column_int(stmt, 0);
-	else if (s != SQLITE_DONE)
-		G_ErrorPrint("ERROR: SQL Select Failed (LocalDuelTrackAggregate exists)", s);
+	if (s != SQLITE_DONE)
+		G_ErrorPrint("ERROR: SQL Insert Failed (LocalDuelTrackAggregate init)", s);
 	CALL_SQLITE(finalize(stmt));
-
-	if (!exists)
-	{
-		sql = "INSERT INTO LocalDuelTrackAggregate(participant_key, participant_kind, side, matchup, duels, wins, losses, total_force_spent, total_force_regen, low_force_deaths, grip_cripples, saber_throw_punishes, force_push, force_pull, force_grip, force_drain, force_rage, force_absorb, force_protect, force_heal, force_speed, force_seeing, force_unknown) VALUES (?, ?, ?, ?, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)";
-		CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
-		CALL_SQLITE(bind_text(stmt, 1, runtime->identityKey, -1, SQLITE_STATIC));
-		CALL_SQLITE(bind_int(stmt, 2, runtime->identityKind));
-		CALL_SQLITE(bind_int(stmt, 3, runtime->side));
-		CALL_SQLITE(bind_int(stmt, 4, matchup));
-		s = sqlite3_step(stmt);
-		if (s != SQLITE_DONE)
-			G_ErrorPrint("ERROR: SQL Insert Failed (LocalDuelTrackAggregate init)", s);
-		CALL_SQLITE(finalize(stmt));
-	}
 
 	sql = "UPDATE LocalDuelTrackAggregate SET duels = duels + 1, wins = wins + ?, losses = losses + ?, total_force_spent = total_force_spent + ?, total_force_regen = total_force_regen + ?, low_force_deaths = low_force_deaths + ?, grip_cripples = grip_cripples + ?, saber_throw_punishes = saber_throw_punishes + ?, force_push = force_push + ?, force_pull = force_pull + ?, force_grip = force_grip + ?, force_drain = force_drain + ?, force_rage = force_rage + ?, force_absorb = force_absorb + ?, force_protect = force_protect + ?, force_heal = force_heal + ?, force_speed = force_speed + ?, force_seeing = force_seeing + ?, force_unknown = force_unknown + ? WHERE participant_key = ? AND participant_kind = ? AND side = ? AND matchup = ?";
 	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
-	CALL_SQLITE(bind_int(stmt, 1, won ? 1 : 0));
-	CALL_SQLITE(bind_int(stmt, 2, won ? 0 : 1));
+	CALL_SQLITE(bind_int(stmt, 1, (won && !draw) ? 1 : 0));
+	CALL_SQLITE(bind_int(stmt, 2, (!won && !draw) ? 1 : 0));
 	CALL_SQLITE(bind_int(stmt, 3, runtime->totalForceSpent));
 	CALL_SQLITE(bind_int(stmt, 4, runtime->totalForceRegen));
 	CALL_SQLITE(bind_int(stmt, 5, runtime->didDieLowForce));
@@ -793,12 +801,12 @@ static void G_PersistTrackedDuel(tracked_duel_runtime_t *winnerRuntime, tracked_
 	CALL_SQLITE(finalize(stmt));
 	summaryId = sqlite3_last_insert_rowid(db);
 
-	G_InsertTrackedParticipant(db, summaryId, winnerRuntime, draw ? qfalse : qtrue);
-	G_InsertTrackedParticipant(db, summaryId, loserRuntime, qfalse);
+	G_InsertTrackedParticipant(db, summaryId, winnerRuntime, draw ? -1 : 1);
+	G_InsertTrackedParticipant(db, summaryId, loserRuntime, draw ? -1 : 0);
 	G_InsertTrackedEvents(db, summaryId, winnerRuntime);
 	G_InsertTrackedEvents(db, summaryId, loserRuntime);
-	G_UpdateTrackedAggregate(db, winnerRuntime, draw ? qfalse : qtrue);
-	G_UpdateTrackedAggregate(db, loserRuntime, qfalse);
+	G_UpdateTrackedAggregate(db, winnerRuntime, qtrue, draw);
+	G_UpdateTrackedAggregate(db, loserRuntime, qfalse, draw);
 
 	CALL_SQLITE(close(db));
 }
