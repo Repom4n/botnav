@@ -831,6 +831,7 @@ static void G_PersistTrackedDuel(tracked_duel_runtime_t *winnerRuntime, tracked_
 	startTimestamp = endTimestamp - durationSeconds;
 
 	CALL_SQLITE(open(LOCAL_DB_PATH, &db));
+	G_EnsureLocalArcadeSchema(db);
 	if (!g_duelTrackingSchemaReady || Q_stricmp(g_duelTrackingSchemaPath, LOCAL_DB_PATH))
 		G_EnsureLocalDuelTrackingSchema(db);
 
@@ -841,17 +842,17 @@ static void G_PersistTrackedDuel(tracked_duel_runtime_t *winnerRuntime, tracked_
 	CALL_SQLITE(bind_int(stmt, 3, durationSeconds));
 	CALL_SQLITE(bind_int(stmt, 4, duelType));
 	CALL_SQLITE(bind_text(stmt, 5, level.rawmapname, -1, SQLITE_STATIC));
-	CALL_SQLITE(bind_text(stmt, 6, winnerRuntime->identityKey, -1, SQLITE_STATIC));
-	CALL_SQLITE(bind_text(stmt, 7, winnerRuntime->identityLabel, -1, SQLITE_STATIC));
-	CALL_SQLITE(bind_int(stmt, 8, winnerRuntime->identityKind));
-	CALL_SQLITE(bind_int(stmt, 9, winnerRuntime->side));
-	CALL_SQLITE(bind_text(stmt, 10, loserRuntime->identityKey, -1, SQLITE_STATIC));
-	CALL_SQLITE(bind_text(stmt, 11, loserRuntime->identityLabel, -1, SQLITE_STATIC));
-	CALL_SQLITE(bind_int(stmt, 12, loserRuntime->identityKind));
-	CALL_SQLITE(bind_int(stmt, 13, loserRuntime->side));
+	CALL_SQLITE(bind_text(stmt, 6, draw ? "" : winnerRuntime->identityKey, -1, SQLITE_STATIC));
+	CALL_SQLITE(bind_text(stmt, 7, draw ? "" : winnerRuntime->identityLabel, -1, SQLITE_STATIC));
+	CALL_SQLITE(bind_int(stmt, 8, draw ? 0 : winnerRuntime->identityKind));
+	CALL_SQLITE(bind_int(stmt, 9, draw ? 0 : winnerRuntime->side));
+	CALL_SQLITE(bind_text(stmt, 10, draw ? "" : loserRuntime->identityKey, -1, SQLITE_STATIC));
+	CALL_SQLITE(bind_text(stmt, 11, draw ? "" : loserRuntime->identityLabel, -1, SQLITE_STATIC));
+	CALL_SQLITE(bind_int(stmt, 12, draw ? 0 : loserRuntime->identityKind));
+	CALL_SQLITE(bind_int(stmt, 13, draw ? 0 : loserRuntime->side));
 	CALL_SQLITE(bind_int(stmt, 14, draw ? 1 : 0));
-	CALL_SQLITE(bind_text(stmt, 15, winnerRuntime->openingTactic, -1, SQLITE_STATIC));
-	CALL_SQLITE(bind_text(stmt, 16, loserRuntime->openingTactic, -1, SQLITE_STATIC));
+	CALL_SQLITE(bind_text(stmt, 15, draw ? "" : winnerRuntime->openingTactic, -1, SQLITE_STATIC));
+	CALL_SQLITE(bind_text(stmt, 16, draw ? "" : loserRuntime->openingTactic, -1, SQLITE_STATIC));
 	s = sqlite3_step(stmt);
 	if (s != SQLITE_DONE)
 		G_ErrorPrint("ERROR: SQL Insert Failed (LocalDuelTrackSummary)", s);
