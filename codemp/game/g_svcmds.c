@@ -1614,6 +1614,7 @@ void Svcmd_DeleteAccount_f( void );
 void Svcmd_RenameAccount_f( void );
 void Svcmd_ClearIP_f( void );
 void Svcmd_DBInfo_f( void );
+void Svcmd_ExportDuelTrack_f(void);
 #if _ELORANKING
 #if 0
 void G_TestAddDuel( void );
@@ -1675,6 +1676,7 @@ svcmd_t svcmds[] = {
 
 	{ "entityinfo",					Svcmd_EntityInfo_f,					qfalse },
 	{ "entitylist",					Svcmd_EntityList_f,					qfalse },
+	{ "exportDuelTrack",			Svcmd_ExportDuelTrack_f,			qfalse },
 	{ "flagAccount",				Svcmd_FlagAccount_f,				qfalse },
 	{ "forceteam",					Svcmd_ForceTeam_f,					qfalse },
 	{ "gametype",					Svcmd_ChangeGametype_f,				qfalse },

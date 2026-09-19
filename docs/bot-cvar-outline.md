@@ -126,7 +126,7 @@ Notes:
 | Cvar | Default | Description |
 |------|---------|-------------|
 | `bot_nochat` | `0` | Disable bot chat. |
-| `bot_tutorial` | `0` | Enable concise private trainer tells from bots after tracked duels; requires `bot_dueltracking`, and messages are rate-limited and capped per duel. |
+| `bot_tutorial` | `0` | Enable concise private trainer tells from bots after tracked duels; requires `bot_dueltracking`, messages are rate-limited/capped per duel, and coaching text follows the FF manual progression + pattern-confidence gating. |
 | `bot_dueltracking` | `0` | Record duel summaries, per-player force-spend stats, and sequential duel events for logged-in users, bots, and anonymous IP-derived identities. |
 | `bot_yawswitch` | `10` | Legacy/unused cvar; current wall-escape yaw behavior is hardcoded in `ai_main.c`. |
 | `bot_forcepowers` | `1` | Enable bots using force powers. |
@@ -137,6 +137,14 @@ Notes:
 | `bot_team` | `0` | Force bot team. |
 | `g_flipKickDamageScale` | `1` | Scale flipkick damage. |
 | `g_movementStyle` | `1` | Movement physics style (affects bot movement code paths). |
+
+Tracked duel data access:
+- Stored in SQLite at `fs_homepath/fs_game/data.db` (fallback: `fs_game/data.db`).
+- Use server console command `exportDuelTrack [prefix]` to export timestamped CSV files for:
+  - `LocalDuelTrackSummary`
+  - `LocalDuelTrackParticipant`
+  - `LocalDuelTrackEvent`
+  - `LocalDuelTrackAggregate`
 
 ## Skill Tuning (Debug)
 
