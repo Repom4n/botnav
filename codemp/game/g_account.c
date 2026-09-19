@@ -937,7 +937,7 @@ void Cmd_DuelTop10_f(gentity_t *ent) {
 			CALL_SQLITE (prepare_v2 (db, sql, strlen (sql) + 1, & stmt, NULL));
 			CALL_SQLITE (bind_int (stmt, 1, start));
 
-			trap->SendServerCommand(ent-g_entities, "print \"Topscore results for arcade:\n    ^5Username           Score       Level     Kills\n\"");
+			trap->SendServerCommand(ent-g_entities, "print \"Topscore results for arcade:\n ^5#   Username           Score      Level  Kills\n\"");
 			while (1) {
 				s = sqlite3_step(stmt);
 				if (s == SQLITE_ROW) {
@@ -949,7 +949,7 @@ void Cmd_DuelTop10_f(gentity_t *ent) {
 					levelReached = sqlite3_column_int(stmt, 2);
 					kills = sqlite3_column_int(stmt, 3);
 
-					tmpMsg = va("^5%2i^3: ^3%-18s ^3%-11i ^3%-9i %i\n", start+row, username, score, levelReached, kills);
+					tmpMsg = va("^5%-3i ^3%-18s ^3%-10i ^3%-6i %i\n", start+row, username, score, levelReached, kills);
 					if (strlen(msg) + strlen(tmpMsg) >= sizeof(msg)) {
 						trap->SendServerCommand(ent-g_entities, va("print \"%s\"", msg));
 						msg[0] = '\0';
@@ -1099,6 +1099,49 @@ void G_AddArcadeScore(char *username, int score, int levelReached, int kills, in
 	}
 	CALL_SQLITE(finalize(stmt));
 	CALL_SQLITE(close(db));
+}
+
+qboolean G_GetArcadeTopScore(int *scoreOut, char *usernameOut, int usernameOutSize)
+{
+	sqlite3 *db;
+	sqlite3_stmt *stmt;
+	char *sql;
+	int s;
+	qboolean found = qfalse;
+
+	if (scoreOut)
+	{
+		*scoreOut = 0;
+	}
+	if (usernameOut && usernameOutSize > 0)
+	{
+		usernameOut[0] = '\0';
+	}
+
+	CALL_SQLITE(open(LOCAL_DB_PATH, &db));
+	sql = "SELECT username, score FROM LocalArcade ORDER BY score DESC, end_time DESC LIMIT 1";
+	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
+	s = sqlite3_step(stmt);
+	if (s == SQLITE_ROW)
+	{
+		if (scoreOut)
+		{
+			*scoreOut = sqlite3_column_int(stmt, 1);
+		}
+		if (usernameOut && usernameOutSize > 0)
+		{
+			const unsigned char *name = sqlite3_column_text(stmt, 0);
+			Q_strncpyz(usernameOut, name ? (const char *)name : "", usernameOutSize);
+		}
+		found = qtrue;
+	}
+	else if (s != SQLITE_DONE)
+	{
+		G_ErrorPrint("ERROR: SQL Select Failed (G_GetArcadeTopScore)", s);
+	}
+	CALL_SQLITE(finalize(stmt));
+	CALL_SQLITE(close(db));
+	return found;
 }
 
 #if 0

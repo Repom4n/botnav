@@ -1557,6 +1557,7 @@ typedef struct level_locals_s {
 	int			arcadeGameOverTime;
 	int			arcadeScore[MAX_CLIENTS];
 	int			arcadeRoundKills[MAX_CLIENTS];
+	int			arcadeTotalKills[MAX_CLIENTS];
 	qboolean	arcadeEliminated[MAX_CLIENTS];
 	qboolean	arcadeInitialized;
 } level_locals_t;
@@ -1893,6 +1894,7 @@ void SendScoreboardMessageToAllClients( void );
 const char *G_GetStringEdString(char *refSection, char *refName);
 void G_ArcadeHandlePlayerDeath(gentity_t *self, gentity_t *attacker);
 void G_AddArcadeScore(char *username, int score, int level, int kills, int end_time);
+qboolean G_GetArcadeTopScore(int *scoreOut, char *usernameOut, int usernameOutSize);
 
 //
 // g_client.c
