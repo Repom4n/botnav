@@ -20,7 +20,7 @@ static char LOCAL_DB_PATH[MAX_OSPATH];
 #define TRACKED_DUEL_TUTORIAL_MAX_MESSAGES 3
 #define TRACKED_DUEL_TUTORIAL_COOLDOWN_MS 7000
 #define TRACKED_DUEL_LOW_FORCE_THRESHOLD 25
-#define TRACKED_DUEL_ADVICE_BASIC_WINDOW 3
+#define TRACKED_DUEL_ADVICE_BASIC_WINDOW 5
 #define TRACKED_DUEL_ADVICE_MIN_OBSERVATIONS 3
 #define TRACKED_DUEL_ADVICE_REPEAT_THRESHOLD 2
 #define LOCAL_ARCADE_SCORE_ORDER "score DESC, end_time DESC"
@@ -685,6 +685,114 @@ static void G_QueueBotTutorialMessage(int botClientNum, int targetClientNum, con
 		queue->nextSendTime = level.time;
 }
 
+static int G_GetTrackedIssueConfidence(const duel_advice_session_state_t *session, duel_track_issue_t issue)
+{
+	if (!session || issue < 0 || issue >= DUEL_TRACK_ISSUE_COUNT)
+		return 0;
+	return session->sessionIssueCounts[issue] + session->historyIssueCounts[issue];
+}
+
+static void G_QueueManualBasicsAdvice(int botClientNum, int targetClientNum, int duelIndex)
+{
+	int slot;
+	static const char *manualBasics[] = {
+		"Level 1 foundation: bind GK and throw so you can throw/aim with push-pull ready; your first break tools are pull and push.",
+		"Level 2 core: PK is bread-and-butter. Pull windows are force use, post push/pull, airborne, knockdown, or saber swing states.",
+		"Fundamental rule: pull recovers faster and you can pull 4x per grip while push tops at 3x—spend force accordingly.",
+		"Early progression: balance offense lanes (PTK/pull-throw, saber pressure, GK threat). Imbalanced offense gets hard-countered.",
+		"Defensive base: strafe-jump entries, keep sticky crosshair, and avoid linear approaches so your setup stays unreadable."
+	};
+
+	slot = duelIndex;
+	if (slot < 0)
+		slot = 0;
+	slot %= (int)(sizeof(manualBasics) / sizeof(manualBasics[0]));
+	G_QueueBotTutorialMessage(botClientNum, targetClientNum, manualBasics[slot]);
+}
+
+static void G_QueueManualGenericAdvice(int botClientNum, int targetClientNum, tracked_duel_runtime_t *runtime, qboolean loggedIn, duel_advice_session_state_t *session)
+{
+	int rotation;
+	static const char *manualGeneric[] = {
+		"Manual tempo: keep a 1/3 offense mix—PTK/pull-throws, saber pressure, and GK—to prevent copy-cat catch-on counters.",
+		"Drain discipline: use taps instead of panic holds; keep force ending in 5/0 when possible for cleaner drain efficiency.",
+		"Knockdown discipline: staying flat often reduces flipkick vulnerability; stand only when the punish lane is gone.",
+		"Toss defense: track incoming blade with crosshair and use crouch-jump timing near walls to cut throw angles.",
+		"GK control: vary kick types and turn angles; predictable 90/180 rhythm is easy to break compared to mixed 120/150/210 turns.",
+		"Entry strategy: use movement time-gap and strafe pressure before force commit; win initiative, then spend.",
+		"Anti-drain set: rotate jump, throw, seeing/speed, and drain responses so opponents cannot farm one repeat pattern.",
+		"Map tactics: hide/chase routes matter—learn efficient room-to-room paths and force ranges to avoid undergrip/empty drain."
+	};
+
+	rotation = (session ? session->duelsSeen : 0) + (runtime ? runtime->eventCount : 0);
+	if (rotation < 0)
+		rotation = 0;
+	rotation %= (int)(sizeof(manualGeneric) / sizeof(manualGeneric[0]));
+	G_QueueBotTutorialMessage(botClientNum, targetClientNum, manualGeneric[rotation]);
+
+	if (loggedIn && session && session->historyDuels > 0)
+		G_QueueBotTutorialMessage(botClientNum, targetClientNum, "Historical blend active: repeating manual errors are now weighted above one-off duel noise.");
+	else
+		G_QueueBotTutorialMessage(botClientNum, targetClientNum, "Session coaching active: keep fundamentals clean and we will escalate into precise counters.");
+}
+
+static void G_QueueManualIssueAdvice(int botClientNum, int targetClientNum, duel_track_issue_t issue, duel_advice_session_state_t *session)
+{
+	int variant;
+	int confidence = G_GetTrackedIssueConfidence(session, issue);
+
+	variant = confidence > 0 ? confidence - 1 : 0;
+	variant %= 2;
+
+	switch (issue)
+	{
+	case DUEL_TRACK_ISSUE_LOW_FORCE:
+		if (variant == 0)
+			G_QueueBotTutorialMessage(botClientNum, targetClientNum, "Pattern confirmed: low-force collapses repeat. Bank reserve, drain-tap efficiently, and avoid panic spend.");
+		else
+			G_QueueBotTutorialMessage(botClientNum, targetClientNum, "Pattern confirmed: force economy is leaking. Stop over-drain, preserve escape force, then relaunch offense.");
+		break;
+	case DUEL_TRACK_ISSUE_GRIP_CONTROL:
+		if (variant == 0)
+			G_QueueBotTutorialMessage(botClientNum, targetClientNum, "Pattern confirmed: GK control is too clean on you. Randomize breakout direction and deny train-track rhythm.");
+		else
+			G_QueueBotTutorialMessage(botClientNum, targetClientNum, "Pattern confirmed: grip lanes are predictable. Use pull first, stay down on knock, and break with mixed timing.");
+		break;
+	case DUEL_TRACK_ISSUE_SABER_THROW:
+		if (variant == 0)
+			G_QueueBotTutorialMessage(botClientNum, targetClientNum, "Pattern confirmed: throw punish windows repeat. Read blade path first, then punish return timing.");
+		else
+			G_QueueBotTutorialMessage(botClientNum, targetClientNum, "Pattern confirmed: toss defense is late. Keep sticky crosshair and use crouch-jump rejection on entry.");
+		break;
+	case DUEL_TRACK_ISSUE_KNOCKDOWN:
+		if (variant == 0)
+			G_QueueBotTutorialMessage(botClientNum, targetClientNum, "Pattern confirmed: knockdown follow-ups are costing rounds. Recover with roll-drain or crouch pull/push exits.");
+		else
+			G_QueueBotTutorialMessage(botClientNum, targetClientNum, "Pattern confirmed: getup timing is punishable. Stay flat when threatened, then reset movement before commit.");
+		break;
+	case DUEL_TRACK_ISSUE_LATE_DEFENSE:
+		if (variant == 0)
+			G_QueueBotTutorialMessage(botClientNum, targetClientNum, "Pattern confirmed: defense activates late. Pre-empt with absorb/protect/rage windows before choke damage.");
+		else
+			G_QueueBotTutorialMessage(botClientNum, targetClientNum, "Pattern confirmed: collapse-point reactions repeat. Stabilize early, then counter with controlled force trade.");
+		break;
+	case DUEL_TRACK_ISSUE_FORCED_ENTRIES:
+		if (variant == 0)
+			G_QueueBotTutorialMessage(botClientNum, targetClientNum, "Pattern confirmed: entries are forced into prepared defense. Feint saber first, then PTK/GK on reaction.");
+		else
+			G_QueueBotTutorialMessage(botClientNum, targetClientNum, "Pattern confirmed: approach timing is readable. Use lateral movement gap to desync their counter window.");
+		break;
+	case DUEL_TRACK_ISSUE_LINEAR_ENTRIES:
+		if (variant == 0)
+			G_QueueBotTutorialMessage(botClientNum, targetClientNum, "Pattern confirmed: linear entries are readable. Rotate angle changes and keep offense tri-lane balanced.");
+		else
+			G_QueueBotTutorialMessage(botClientNum, targetClientNum, "Pattern confirmed: your line of attack repeats. Shift from straight chase to strafe-fan and staged PTK threats.");
+		break;
+	default:
+		break;
+	}
+}
+
 static void G_MaybeQueueBotTutorial(tracked_duel_runtime_t *loserRuntime, gentity_t *winner, gentity_t *loser)
 {
 	int botClientNum;
@@ -715,57 +823,23 @@ static void G_MaybeQueueBotTutorial(tracked_duel_runtime_t *loserRuntime, gentit
 		(session->duelsSeen <= TRACKED_DUEL_ADVICE_BASIC_WINDOW);
 	if (basicsWindow)
 	{
-		if (session->duelsSeen == 1)
-			G_QueueBotTutorialMessage(botClientNum, loser->s.number, "Opening read: keep a balanced offense lane (PTK/pull-throw, saber pressure, and Grip Kick threat).");
-		else if (session->duelsSeen == 2)
-			G_QueueBotTutorialMessage(botClientNum, loser->s.number, "Foundational reset: preserve force reserve so panic spend never controls your duel tempo.");
-		else
-			G_QueueBotTutorialMessage(botClientNum, loser->s.number, "Core full-force discipline: strafe-jump entry, saber feint first, then commit force only on reaction.");
+		G_QueueManualBasicsAdvice(botClientNum, loser->s.number, session->duelsSeen - 1);
 		return;
 	}
 
 	if (issue < DUEL_TRACK_ISSUE_COUNT && G_TrackedAdviceIsSpecificAllowed(session, issue))
 	{
-		switch (issue)
-		{
-		case DUEL_TRACK_ISSUE_LOW_FORCE:
-			G_QueueBotTutorialMessage(botClientNum, loser->s.number, "Pattern confirmed: low-force collapses are recurring. Bank reserve for escape, then restart pressure.");
-			break;
-		case DUEL_TRACK_ISSUE_GRIP_CONTROL:
-			G_QueueBotTutorialMessage(botClientNum, loser->s.number, "Pattern confirmed: Grip control windows are too clean. Break line, alter yaw rhythm, deny the GK setup.");
-			break;
-		case DUEL_TRACK_ISSUE_SABER_THROW:
-			G_QueueBotTutorialMessage(botClientNum, loser->s.number, "Pattern confirmed: saber-throw punish windows repeat. Track blade path first, then re-enter safely.");
-			break;
-		case DUEL_TRACK_ISSUE_KNOCKDOWN:
-			G_QueueBotTutorialMessage(botClientNum, loser->s.number, "Pattern confirmed: knockdown follow-ups are costing rounds. Recover, move, then commit to offense.");
-			break;
-		case DUEL_TRACK_ISSUE_LATE_DEFENSE:
-			G_QueueBotTutorialMessage(botClientNum, loser->s.number, "Pattern confirmed: defense activates too late. Stabilize earlier before spending absorb/protect.");
-			break;
-		case DUEL_TRACK_ISSUE_FORCED_ENTRIES:
-			G_QueueBotTutorialMessage(botClientNum, loser->s.number, "Pattern confirmed: entries are forced into active defense. Win saber initiative before force commitment.");
-			break;
-		case DUEL_TRACK_ISSUE_LINEAR_ENTRIES:
-			G_QueueBotTutorialMessage(botClientNum, loser->s.number, "Pattern confirmed: linear entries are readable. Rotate PTK, saber pressure, and GK threat angles.");
-			break;
-		default:
-			break;
-		}
+		G_QueueManualIssueAdvice(botClientNum, loser->s.number, issue, session);
 	}
 	else
 	{
-		G_QueueBotTutorialMessage(botClientNum, loser->s.number, "Pattern scan still building. Keep offense balanced and prioritize controlled entries over rushed commits.");
-		if (loggedIn && session->historyDuels > 0)
-			G_QueueBotTutorialMessage(botClientNum, loser->s.number, "Historical blend active: maintain strategic tempo until repeat mistakes become statistically reliable.");
-		else
-			G_QueueBotTutorialMessage(botClientNum, loser->s.number, "Session coaching active: demonstrate clean fundamentals and we’ll escalate to targeted counters.");
+		G_QueueManualGenericAdvice(botClientNum, loser->s.number, loserRuntime, loggedIn, session);
 	}
 
 	if ((loserRuntime->spentByState[DUEL_TRACK_STATE_PANIC] >= 20 || loserRuntime->lateDefenseSpends >= 1) &&
 		G_TrackedAdviceIsSpecificAllowed(session, DUEL_TRACK_ISSUE_LATE_DEFENSE))
 	{
-		G_QueueBotTutorialMessage(botClientNum, loser->s.number, "Secondary pattern: late defensive spend is repeating. Reset earlier to avoid collapse-point reactions.");
+		G_QueueBotTutorialMessage(botClientNum, loser->s.number, "Secondary pattern: defense timing repeats late—stabilize before choke windows and hold anti-drain structure.");
 	}
 }
 
