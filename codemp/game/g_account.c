@@ -5014,11 +5014,19 @@ void Svcmd_ExportDuelTrack_f(void)
 	if (trap->Argc() >= 2)
 	{
 		char token[64];
+		size_t curLen;
+		size_t tokenLen;
+		size_t needed;
 		trap->Argv(1, optionalPrefix, sizeof(optionalPrefix));
 		for (i = 2; i < trap->Argc(); i++)
 		{
 			trap->Argv(i, token, sizeof(token));
-			if (optionalPrefix[0] && strlen(optionalPrefix) + 1 < sizeof(optionalPrefix))
+			curLen = strlen(optionalPrefix);
+			tokenLen = strlen(token);
+			needed = tokenLen + ((optionalPrefix[0]) ? 1 : 0);
+			if (curLen + needed >= sizeof(optionalPrefix))
+				break;
+			if (optionalPrefix[0])
 				Q_strcat(optionalPrefix, sizeof(optionalPrefix), "_");
 			Q_strcat(optionalPrefix, sizeof(optionalPrefix), token);
 		}
