@@ -143,6 +143,7 @@ typedef struct
 static tracked_duel_runtime_t g_trackedDuels[MAX_CLIENTS];
 static bot_tutorial_queue_t g_botTutorialQueues[MAX_CLIENTS];
 static qboolean g_duelTrackingSchemaReady = qfalse;
+static char g_duelTrackingSchemaPath[MAX_OSPATH];
 
 static void G_EnsureLocalDuelTrackingSchema(sqlite3 *db)
 {
@@ -204,6 +205,7 @@ static void G_EnsureLocalDuelTrackingSchema(sqlite3 *db)
 		G_ErrorPrint("ERROR: SQL Create Failed (LocalDuelTrackAggregate)", s);
 	CALL_SQLITE(finalize(stmt));
 	g_duelTrackingSchemaReady = qtrue;
+	Q_strncpyz(g_duelTrackingSchemaPath, LOCAL_DB_PATH, sizeof(g_duelTrackingSchemaPath));
 }
 
 static void G_ClearTrackedDuelRuntime(int clientNum)
@@ -829,7 +831,7 @@ static void G_PersistTrackedDuel(tracked_duel_runtime_t *winnerRuntime, tracked_
 	startTimestamp = endTimestamp - durationSeconds;
 
 	CALL_SQLITE(open(LOCAL_DB_PATH, &db));
-	if (!g_duelTrackingSchemaReady)
+	if (!g_duelTrackingSchemaReady || Q_stricmp(g_duelTrackingSchemaPath, LOCAL_DB_PATH))
 		G_EnsureLocalDuelTrackingSchema(db);
 
 	sql = "INSERT INTO LocalDuelTrackSummary(start_time, end_time, duration, type, mapname, winner_key, winner_label, winner_kind, winner_side, loser_key, loser_label, loser_kind, loser_side, draw, winner_opening, loser_opening) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
@@ -1001,6 +1003,7 @@ void G_FinishTrackedDuel(gentity_t *winner, gentity_t *loser, int duelType, qboo
 	loserSlot->endingForce = loser->client->ps.fd.forcePower;
 	loserSlot->endingHP = loser->health;
 	loserSlot->endingArmor = loser->client->ps.stats[STAT_ARMOR];
+	winnerSlot->didDieLowForce = (winnerSlot->endingForce <= TRACKED_DUEL_LOW_FORCE_THRESHOLD || winnerSlot->lowestForce <= TRACKED_DUEL_LOW_FORCE_THRESHOLD) ? 1 : 0;
 	loserSlot->didDieLowForce = (loserSlot->endingForce <= TRACKED_DUEL_LOW_FORCE_THRESHOLD || loserSlot->lowestForce <= TRACKED_DUEL_LOW_FORCE_THRESHOLD) ? 1 : 0;
 	G_SetTrackedPrimaryIssue(winnerSlot);
 	G_SetTrackedPrimaryIssue(loserSlot);
@@ -8709,6 +8712,8 @@ void InitGameAccountStuff( void ) { //Called every mapload , move the create tab
 	} else {
 		Com_sprintf(LOCAL_DB_PATH, sizeof(LOCAL_DB_PATH), "%s/data.db", fs_game);
 	}
+	g_duelTrackingSchemaReady = qfalse;
+	g_duelTrackingSchemaPath[0] = '\0';
 
 	CALL_SQLITE (open (LOCAL_DB_PATH, & db));
 	G_EnsureLocalArcadeSchema(db);
