@@ -4489,7 +4489,10 @@ void ClientThink_real( gentity_t *ent ) {
 					}
 					if (ent->client->pers.lastUserName[0] && duelAgainst->client->pers.lastUserName[0]) {//loda
 						if (!(ent->client->sess.accountFlags & JAPRO_ACCOUNTFLAG_NODUEL) && !(duelAgainst->client->sess.accountFlags & JAPRO_ACCOUNTFLAG_NODUEL))
+						{
+							G_FinishTrackedDuel(ent, duelAgainst, dueltypes[ent->client->ps.clientNum], qfalse);
 							G_AddDuel(ent->client->pers.lastUserName, duelAgainst->client->pers.lastUserName, ent->client->pers.duelStartTime, dueltypes[ent->client->ps.clientNum], ent->client->ps.stats[STAT_HEALTH], ent->client->ps.stats[STAT_ARMOR]);
+						}
 					}
 					ent->client->ps.stats[STAT_HEALTH] = ent->health = ent->client->ps.stats[STAT_MAX_HEALTH];
 					ent->client->ps.stats[STAT_ARMOR] = 25;//JAPRO
@@ -4517,6 +4520,7 @@ void ClientThink_real( gentity_t *ent ) {
 							ent->client->pers.netname, G_GetStringEdString("MP_SVGAME", "PLDUELTIE"), duelAgainst->client->pers.netname));
 					}
 					G_LogPrintf("Duel end: %s^7 tied %s^7 in type %i\n", ent->client->pers.netname, duelAgainst->client->pers.netname, dueltypes[ent->client->ps.clientNum]);
+					G_FinishTrackedDuel(ent, duelAgainst, dueltypes[ent->client->ps.clientNum], qtrue);
 				}
 				ent->client->pers.stats.duelDamageGiven = 0;
 				duelAgainst->client->pers.stats.duelDamageGiven = 0;

@@ -1865,6 +1865,9 @@ void RemoveDetpacks(gentity_t *ent);
 void MoveClientToIntermission (gentity_t *client);
 void G_SetStats (gentity_t *ent);
 void DeathmatchScoreboardMessage (gentity_t *client);
+void G_StartTrackedDuel(gentity_t *first, gentity_t *second, int duelType);
+void G_UpdateTrackedDuelFrame(gentity_t *ent);
+void G_FinishTrackedDuel(gentity_t *winner, gentity_t *loser, int duelType, qboolean draw);
 
 //
 // g_cmds.c
