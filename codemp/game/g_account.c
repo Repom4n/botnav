@@ -1,4 +1,5 @@
 #include "g_local.h"
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -141,6 +142,7 @@ typedef struct
 
 static tracked_duel_runtime_t g_trackedDuels[MAX_CLIENTS];
 static bot_tutorial_queue_t g_botTutorialQueues[MAX_CLIENTS];
+static qboolean g_duelTrackingSchemaReady = qfalse;
 
 static void G_EnsureLocalDuelTrackingSchema(sqlite3 *db)
 {
@@ -201,6 +203,7 @@ static void G_EnsureLocalDuelTrackingSchema(sqlite3 *db)
 	if (s != SQLITE_DONE)
 		G_ErrorPrint("ERROR: SQL Create Failed (LocalDuelTrackAggregate)", s);
 	CALL_SQLITE(finalize(stmt));
+	g_duelTrackingSchemaReady = qtrue;
 }
 
 static void G_ClearTrackedDuelRuntime(int clientNum)
@@ -267,8 +270,26 @@ static void G_GetTrackingIPKey(gentity_t *ent, char *out, int outSize)
 		Com_sprintf(out, outSize, "ip:%s", ip);
 }
 
+static void G_NormalizeTrackedIdentityComponent(const char *in, char *out, int outSize)
+{
+	int i;
+
+	if (!out || outSize < 1)
+		return;
+
+	out[0] = '\0';
+	if (!in)
+		return;
+
+	Q_strncpyz(out, in, outSize);
+	for (i = 0; out[i]; i++)
+		out[i] = tolower((unsigned char)out[i]);
+}
+
 static qboolean G_GetDuelTrackingIdentity(gentity_t *ent, char *key, int keySize, char *label, int labelSize, int *kind)
 {
+	char normalized[128];
+
 	if (!ent || !ent->client || !key || keySize < 1)
 		return qfalse;
 
@@ -280,16 +301,26 @@ static qboolean G_GetDuelTrackingIdentity(gentity_t *ent, char *key, int keySize
 
 	if (ent->r.svFlags & SVF_BOT)
 	{
+		char userinfo[MAX_INFO_STRING];
+		char personality[MAX_QPATH];
+
 		if (kind)
 			*kind = DUEL_TRACK_ID_BOT;
-		Com_sprintf(key, keySize, "bot:%s", ent->client->pers.netname);
+		trap->GetUserinfo(ent->s.number, userinfo, sizeof(userinfo));
+		Q_strncpyz(personality, Info_ValueForKey(userinfo, "personality"), sizeof(personality));
+		G_NormalizeTrackedIdentityComponent(personality, normalized, sizeof(normalized));
+		if (normalized[0])
+			Com_sprintf(key, keySize, "bot:%s", normalized);
+		else
+			Com_sprintf(key, keySize, "botclient:%d", ent->s.number);
 		return qtrue;
 	}
 	if (ent->client->pers.userName[0])
 	{
 		if (kind)
 			*kind = DUEL_TRACK_ID_LOGIN;
-		Com_sprintf(key, keySize, "user:%s", ent->client->pers.userName);
+		G_NormalizeTrackedIdentityComponent(ent->client->pers.userName, normalized, sizeof(normalized));
+		Com_sprintf(key, keySize, "user:%s", normalized);
 		if (label && labelSize > 0)
 			Q_strncpyz(label, ent->client->pers.userName, labelSize);
 		return qtrue;
@@ -779,6 +810,8 @@ static void G_PersistTrackedDuel(tracked_duel_runtime_t *winnerRuntime, tracked_
 	startTimestamp = endTimestamp - (duration / 1000);
 
 	CALL_SQLITE(open(LOCAL_DB_PATH, &db));
+	if (!g_duelTrackingSchemaReady)
+		G_EnsureLocalDuelTrackingSchema(db);
 
 	sql = "INSERT INTO LocalDuelTrackSummary(start_time, end_time, duration, type, mapname, winner_key, winner_label, winner_kind, winner_side, loser_key, loser_label, loser_kind, loser_side, draw, winner_opening, loser_opening) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
@@ -943,6 +976,8 @@ void G_FinishTrackedDuel(gentity_t *winner, gentity_t *loser, int duelType, qboo
 	winnerSlot = &g_trackedDuels[winner->s.number];
 	loserSlot = &g_trackedDuels[loser->s.number];
 	if (!winnerSlot->active || !loserSlot->active)
+		return;
+	if (winnerSlot->opponentClientNum != loser->s.number || loserSlot->opponentClientNum != winner->s.number)
 		return;
 
 	winnerSlot->endingForce = winner->client->ps.fd.forcePower;
