@@ -978,7 +978,7 @@ void Cmd_DuelTop10_f(gentity_t *ent) {
 		if (type == 21)
 		{
 			G_EnsureLocalArcadeSchema(db);
-			sql = "SELECT username, score, level, kills FROM LocalArcade WHERE mapname = ? ORDER BY score DESC LIMIT ?, 10";
+			sql = "SELECT username, score, level, kills FROM LocalArcade WHERE mapname = ? ORDER BY score DESC, end_time ASC LIMIT ?, 10";
 			CALL_SQLITE (prepare_v2 (db, sql, strlen (sql) + 1, & stmt, NULL));
 			CALL_SQLITE (bind_text (stmt, 1, level.rawmapname, -1, SQLITE_STATIC));
 			CALL_SQLITE (bind_int (stmt, 2, start));
@@ -1172,7 +1172,7 @@ qboolean G_GetArcadeTopScore(const char *mapname, int *scoreOut, char *usernameO
 
 	CALL_SQLITE(open(LOCAL_DB_PATH, &db));
 	G_EnsureLocalArcadeSchema(db);
-	sql = "SELECT username, score FROM LocalArcade WHERE mapname = ? ORDER BY score DESC, end_time DESC LIMIT 1";
+	sql = "SELECT username, score FROM LocalArcade WHERE mapname = ? ORDER BY score DESC, end_time ASC LIMIT 1";
 	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
 	CALL_SQLITE(bind_text(stmt, 1, mapname, -1, SQLITE_TRANSIENT));
 	s = sqlite3_step(stmt);

@@ -450,7 +450,6 @@ static void G_ArcadeStartRound(void)
 			continue;
 		}
 
-		level.arcadeParticipant[i] = qtrue;
 		if (ent->client->sess.sessionTeam != TEAM_RED)
 		{
 			SetTeam(ent, "red", qfalse);
@@ -459,6 +458,7 @@ static void G_ArcadeStartRound(void)
 		{
 			ClientSpawn(ent);
 		}
+		level.arcadeParticipant[i] = (ent->client->sess.sessionTeam == TEAM_RED);
 	}
 
 	G_ArcadeKickAllBots();
