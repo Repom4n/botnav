@@ -742,6 +742,71 @@ void SV_RebuildElo_f() {
 	Com_Printf("Duel ranks cleared in %i ms.\n", trap->Milliseconds() - time1);
 }
 
+void SV_BotEloReset_f(void) {
+	char input[32];
+	char botName[16];
+	sqlite3 *db;
+	char *sql;
+	sqlite3_stmt *stmt;
+	int botLevel;
+	int s;
+	int winnerRows = 0;
+	int loserRows = 0;
+
+	if (trap->Argc() != 2) {
+		trap->Print("Usage: bot_eloreset <botlvl1-10|1-10>\n");
+		return;
+	}
+
+	trap->Argv(1, input, sizeof(input));
+	Q_strlwr(input);
+	Q_CleanStr(input);
+
+	if (input[0] >= '0' && input[0] <= '9') {
+		botLevel = atoi(input);
+		Com_sprintf(botName, sizeof(botName), "botlvl%i", botLevel);
+	}
+	else {
+		Q_strncpyz(botName, input, sizeof(botName));
+	}
+
+	botLevel = G_ParseBotLevelName(botName);
+	if (!botLevel) {
+		trap->Print("Usage: bot_eloreset <botlvl1-10|1-10>\n");
+		return;
+	}
+
+	CALL_SQLITE (open (LOCAL_DB_PATH, & db));
+
+	sql = "UPDATE LocalDuel SET winner_elo = 1000 WHERE winner = ?";
+	CALL_SQLITE (prepare_v2 (db, sql, strlen (sql) + 1, & stmt, NULL));
+	CALL_SQLITE (bind_text (stmt, 1, botName, -1, SQLITE_TRANSIENT));
+	s = sqlite3_step(stmt);
+	if (s != SQLITE_DONE) {
+		G_ErrorPrint("ERROR: SQL Update Failed (SV_BotEloReset_f winner)", s);
+	}
+	else {
+		winnerRows = sqlite3_changes(db);
+	}
+	CALL_SQLITE (finalize(stmt));
+
+	sql = "UPDATE LocalDuel SET loser_elo = 1000 WHERE loser = ?";
+	CALL_SQLITE (prepare_v2 (db, sql, strlen (sql) + 1, & stmt, NULL));
+	CALL_SQLITE (bind_text (stmt, 1, botName, -1, SQLITE_TRANSIENT));
+	s = sqlite3_step(stmt);
+	if (s != SQLITE_DONE) {
+		G_ErrorPrint("ERROR: SQL Update Failed (SV_BotEloReset_f loser)", s);
+	}
+	else {
+		loserRows = sqlite3_changes(db);
+	}
+	CALL_SQLITE (finalize(stmt));
+
+	CALL_SQLITE (close(db));
+
+	trap->Print("bot_eloreset: reset %s ELO to 1000 in %i winner rows and %i loser rows.\n", botName, winnerRows, loserRows);
+}
+
 int DuelTypeToInteger(char *style) {
 	Q_strlwr(style);
 	Q_CleanStr(style);
