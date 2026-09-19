@@ -493,6 +493,8 @@ static void G_QueueBotTutorialMessage(int botClientNum, int targetClientNum, con
 		return;
 
 	queue = &g_botTutorialQueues[botClientNum];
+	if (queue->queuedCount > queue->nextMessageIndex && queue->targetClientNum != targetClientNum)
+		return;
 	if (queue->queuedCount >= TRACKED_DUEL_TUTORIAL_MAX_MESSAGES)
 		return;
 
@@ -799,6 +801,7 @@ static void G_PersistTrackedDuel(tracked_duel_runtime_t *winnerRuntime, tracked_
 	sqlite3_int64 summaryId;
 	time_t rawtime;
 	const int duration = (winnerRuntime && winnerRuntime->duelStartTime > 0) ? (level.time - winnerRuntime->duelStartTime) : 0;
+	const int durationSeconds = duration / 1000;
 	int endTimestamp;
 	int startTimestamp;
 
@@ -807,7 +810,7 @@ static void G_PersistTrackedDuel(tracked_duel_runtime_t *winnerRuntime, tracked_
 
 	time(&rawtime);
 	endTimestamp = (int)rawtime;
-	startTimestamp = endTimestamp - (duration / 1000);
+	startTimestamp = endTimestamp - durationSeconds;
 
 	CALL_SQLITE(open(LOCAL_DB_PATH, &db));
 	if (!g_duelTrackingSchemaReady)
@@ -817,7 +820,7 @@ static void G_PersistTrackedDuel(tracked_duel_runtime_t *winnerRuntime, tracked_
 	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
 	CALL_SQLITE(bind_int(stmt, 1, startTimestamp));
 	CALL_SQLITE(bind_int(stmt, 2, endTimestamp));
-	CALL_SQLITE(bind_int(stmt, 3, duration));
+	CALL_SQLITE(bind_int(stmt, 3, durationSeconds));
 	CALL_SQLITE(bind_int(stmt, 4, duelType));
 	CALL_SQLITE(bind_text(stmt, 5, level.rawmapname, -1, SQLITE_STATIC));
 	CALL_SQLITE(bind_text(stmt, 6, winnerRuntime->identityKey, -1, SQLITE_STATIC));
@@ -852,10 +855,6 @@ void G_StartTrackedDuel(gentity_t *first, gentity_t *second, int duelType)
 	if (!G_IsTrackedDuelCollectionEnabled() || !first || !second || !first->client || !second->client)
 		return;
 
-	if (first->r.svFlags & SVF_BOT)
-		G_ClearBotTutorialQueue(first->s.number);
-	if (second->r.svFlags & SVF_BOT)
-		G_ClearBotTutorialQueue(second->s.number);
 	G_InitTrackedDuelRuntimeForClient(first, second, duelType);
 	G_InitTrackedDuelRuntimeForClient(second, first, duelType);
 }
