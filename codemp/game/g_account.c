@@ -847,6 +847,8 @@ int DuelTypeToInteger(char *style) {
 		return 19;
 	if (!Q_stricmp(style, "all"))
 		return 20;
+	if (!Q_stricmp(style, "arcade"))
+		return 21;
 	return -1;
 }
 
@@ -870,6 +872,7 @@ void IntegerToDuelType(int type, char *typeString, size_t typeStringSize) {
 		case 18: Q_strncpyz(typeString, "bryar pistol", typeStringSize); break;
 		case 19: Q_strncpyz(typeString, "stun baton", typeStringSize); break;
 		case 20: Q_strncpyz(typeString, "all weapons", typeStringSize); break;
+		case 21: Q_strncpyz(typeString, "arcade", typeStringSize); break;
 		default: Q_strncpyz(typeString, "ERROR", typeStringSize); break;
 	}
 }
@@ -927,6 +930,46 @@ void Cmd_DuelTop10_f(gentity_t *ent) {
 		char msg[1024-128] = {0};
 
 		CALL_SQLITE (open (LOCAL_DB_PATH, & db));
+
+		if (type == 21)
+		{
+			sql = "SELECT username, score, level, kills FROM LocalArcade ORDER BY score DESC LIMIT ?, 10";
+			CALL_SQLITE (prepare_v2 (db, sql, strlen (sql) + 1, & stmt, NULL));
+			CALL_SQLITE (bind_int (stmt, 1, start));
+
+			trap->SendServerCommand(ent-g_entities, "print \"Topscore results for arcade:\n    ^5Username           Score       Level     Kills\n\"");
+			while (1) {
+				s = sqlite3_step(stmt);
+				if (s == SQLITE_ROW) {
+					char *tmpMsg = NULL;
+					int score = 0, levelReached = 0, kills = 0;
+
+					Q_strncpyz(username, (char*)sqlite3_column_text(stmt, 0), sizeof(username));
+					score = sqlite3_column_int(stmt, 1);
+					levelReached = sqlite3_column_int(stmt, 2);
+					kills = sqlite3_column_int(stmt, 3);
+
+					tmpMsg = va("^5%2i^3: ^3%-18s ^3%-11i ^3%-9i %i\n", start+row, username, score, levelReached, kills);
+					if (strlen(msg) + strlen(tmpMsg) >= sizeof(msg)) {
+						trap->SendServerCommand(ent-g_entities, va("print \"%s\"", msg));
+						msg[0] = '\0';
+					}
+					Q_strcat(msg, sizeof(msg), tmpMsg);
+					row++;
+				}
+				else if (s == SQLITE_DONE) {
+					trap->SendServerCommand(ent-g_entities, va("print \"%s\"", msg));
+					break;
+				}
+				else {
+					G_ErrorPrint("ERROR: SQL Select Failed (Cmd_DuelTop10_f arcade)", s);
+					break;
+				}
+			}
+			CALL_SQLITE (finalize(stmt));
+			CALL_SQLITE (close(db));
+			return;
+		}
 
 		//We dont need to select from loser since we know a users highscore will always be from a winning duel.  And we can ignore users who have never won a duel(?)
 		//How to get count?
@@ -1017,6 +1060,7 @@ void G_AddDuel(char *winner, char *loser, int start_time, int type, int winner_h
 			{
 				G_AddDuelElo(winner, loser, type, duration, winner_hp, winner_shield, 0, rawtime, db);
 			}
+
 			else
 			{
 				G_AddDuelToDBWithHandle(db, winner, loser, type, duration, winner_hp, winner_shield, rawtime);
@@ -1026,6 +1070,35 @@ void G_AddDuel(char *winner, char *loser, int start_time, int type, int winner_h
 	}
 #endif
 
+}
+
+void G_AddArcadeScore(char *username, int score, int levelReached, int kills, int end_time)
+{
+	sqlite3 *db;
+	sqlite3_stmt *stmt;
+	char *sql;
+	int s;
+
+	if (!username || !username[0])
+	{
+		return;
+	}
+
+	CALL_SQLITE(open(LOCAL_DB_PATH, &db));
+	sql = "INSERT INTO LocalArcade(username, score, level, kills, end_time) VALUES (?, ?, ?, ?, ?)";
+	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
+	CALL_SQLITE(bind_text(stmt, 1, username, -1, SQLITE_TRANSIENT));
+	CALL_SQLITE(bind_int(stmt, 2, score));
+	CALL_SQLITE(bind_int(stmt, 3, levelReached));
+	CALL_SQLITE(bind_int(stmt, 4, kills));
+	CALL_SQLITE(bind_int(stmt, 5, end_time));
+	s = sqlite3_step(stmt);
+	if (s != SQLITE_DONE)
+	{
+		G_ErrorPrint("ERROR: SQL Insert Failed (G_AddArcadeScore)", s);
+	}
+	CALL_SQLITE(finalize(stmt));
+	CALL_SQLITE(close(db));
 }
 
 #if 0
@@ -7588,6 +7661,13 @@ void InitGameAccountStuff( void ) { //Called every mapload , move the create tab
 	s = sqlite3_step(stmt);
 	if (s != SQLITE_DONE)
 		G_ErrorPrint("ERROR: SQL Create Failed (InitGameAccountStuff 3)", s);
+	CALL_SQLITE (finalize(stmt));
+
+	sql = "CREATE TABLE IF NOT EXISTS LocalArcade(id INTEGER PRIMARY KEY, username VARCHAR(16), score UNSIGNED INTEGER, level UNSIGNED SMALLINT, kills UNSIGNED SMALLINT, end_time UNSIGNED INTEGER)";
+	CALL_SQLITE (prepare_v2 (db, sql, strlen (sql) + 1, & stmt, NULL));
+	s = sqlite3_step(stmt);
+	if (s != SQLITE_DONE)
+		G_ErrorPrint("ERROR: SQL Create Failed (InitGameAccountStuff arcade)", s);
 	CALL_SQLITE (finalize(stmt));
 
 	sql = "CREATE TABLE IF NOT EXISTS LocalTeam(id INTEGER PRIMARY KEY, name VARCHAR(16), tag VARCHAR(16), longname VARCHAR(24), flags UNSIGNED TINYINT)";

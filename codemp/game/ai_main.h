@@ -354,6 +354,7 @@ typedef struct bot_state_s
 	int					saberPowerTime;
 
 	int					botChallengingTime;
+	int					botDuelRequestThrottleUntil; // minimum spacing between any duel send/accept action
 
 	char				forceinfo[MAX_FORCE_INFO_SIZE];
 

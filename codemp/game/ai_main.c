@@ -105,6 +105,7 @@ static qboolean BotTargetModeAllowsBotEnemies(int targetMode);
 static qboolean BotTargetModePassesScanFilter(int targetMode, gentity_t *ent, qboolean preferredHumansOnly);
 static qboolean BotTargetModeIsForceDuelOnly(int targetMode);
 static qboolean NewBotAI_InFFAExploreWindow(bot_state_t *bs, int targetMode);
+static void NewBotAI_RunNavigationOrAlone(bot_state_t *bs, float thinktime);
 static qboolean NewBotAI_ClassifyForwardObstacle(bot_state_t *bs, const vec3_t moveDir, qboolean *requiresHopOut, int *hitEntityOut);
 static qboolean NewBotAI_HasReachableFloorAtProbe(bot_state_t *bs, const vec3_t probeOrigin, float dropHeight, float *floorZOut);
 static qboolean NewBotAI_TouchingWallNotEnemy(bot_state_t *bs);
@@ -136,6 +137,7 @@ static float BotGetLightningMaxDistance(bot_state_t *bs);
 static float BotGetLightningStartDistance(bot_state_t *bs);
 static qboolean NewBotAI_IsWithinLightningRange(bot_state_t *bs);
 static int NewBotAI_GetLightningWeight(bot_state_t *bs);
+static int NewBotAI_GetSpeedAttackWeight(bot_state_t *bs);
 static int NewBotAI_GetPTKWeight(bot_state_t *bs);
 static qboolean NewBotAI_IsGetupAnim(int anim);
 static qboolean NewBotAI_IsForceGetupAnim(int anim);
@@ -9162,7 +9164,13 @@ void NewBotAI_Draining(bot_state_t *bs)
 
 void NewBotAI_Speeding(bot_state_t *bs)
 {
-	if ((g_entities[bs->client].health) < 50 || (bs->cur_ps.fd.forcePower < 20)) {
+	const qboolean enemyKnockedDown = (bs->currentEnemy && bs->currentEnemy->client &&
+		BG_InKnockDown(bs->currentEnemy->client->ps.legsAnim)) ? qtrue : qfalse;
+
+	if (enemyKnockedDown ||
+		(g_entities[bs->client].health) < 50 ||
+		(bs->cur_ps.fd.forcePower < 20))
+	{
 		level.clients[bs->client].ps.fd.forcePowerSelected = FP_SPEED;
 		trap->EA_ForcePower(bs->client);
 	}
@@ -11527,8 +11535,7 @@ static int BotGetNewBotAITargetMode(void)
 }
 
 //-3 and -4 both prefer human targets first, then fall back to allowing bot-vs-bot
-//targeting once no humans are active; -4 additionally allows bot duel challenges to
-//build ELO (see NewBotAI_ShouldIssueBotDuelChallenge).
+//targeting once no humans are active; only -4 uses duel challenge flow.
 static qboolean BotTargetModePrefersHumansThenBots(int targetMode)
 {
 	return (targetMode == NEWBOTAI_TARGET_PREFER_HUMANS || targetMode == NEWBOTAI_TARGET_PREFER_HUMANS_DUEL);
@@ -11536,14 +11543,12 @@ static qboolean BotTargetModePrefersHumansThenBots(int targetMode)
 
 static qboolean BotTargetModeAllowsBotDuelChallenges(int targetMode)
 {
-	return (targetMode == NEWBOTAI_TARGET_PREFER_HUMANS ||
-		targetMode == NEWBOTAI_TARGET_PREFER_HUMANS_DUEL);
+	return (targetMode == NEWBOTAI_TARGET_PREFER_HUMANS_DUEL);
 }
 
 static qboolean BotTargetModeUsesExtendedBotDuelCooldown(int targetMode)
 {
-	return (targetMode == NEWBOTAI_TARGET_PREFER_HUMANS ||
-		targetMode == NEWBOTAI_TARGET_PREFER_HUMANS_DUEL);
+	return (targetMode == NEWBOTAI_TARGET_PREFER_HUMANS_DUEL);
 }
 
 static qboolean BotTargetModeIsForceDuelOnly(int targetMode)
@@ -11620,29 +11625,12 @@ static qboolean NewBotAI_InFFAExploreWindow(bot_state_t *bs, int targetMode)
 	return (bs->duelCompletedCount >= bot_duelcountmax.integer) ? qtrue : qfalse;
 }
 
-static qboolean NewBotAI_IsBotVsBotDuelCooldownActive(bot_state_t *bs, gentity_t *enemy, int targetMode)
-{
-	if (!bs || !enemy)
-	{
-		return qfalse;
-	}
-	if (!BotTargetModeAllowsBotDuelChallenges(targetMode))
-	{
-		return qfalse;
-	}
-	if (!(g_entities[bs->client].r.svFlags & SVF_BOT) || !(enemy->r.svFlags & SVF_BOT))
-	{
-		return qfalse;
-	}
-
-	return (bs->botChallengingTime > level.time) ? qtrue : qfalse;
-}
-
 //Bots may only request a duel once every 7 seconds by default; bot-initiated bot-vs-bot
 //offers are throttled much harder (2 minutes) in -3/-4 target modes so human duel
 //opportunities are not crowded out by rapid bot challenge loops.
 #define NEWBOTAI_DUEL_REQUEST_COOLDOWN_MS 7000
 #define NEWBOTAI_DUEL_REQUEST_BOT_VS_BOT_COOLDOWN_MS 120000
+#define NEWBOTAI_DUEL_REQUEST_MIN_INTERVAL_MS 1000
 
 static qboolean NewBotAI_ShouldIssueBotDuelChallenge(bot_state_t *bs, int targetMode)
 {
@@ -11662,7 +11650,11 @@ static qboolean NewBotAI_ShouldIssueBotDuelChallenge(bot_state_t *bs, int target
 	{
 		return qfalse;
 	}
-	if (bs->cur_ps.duelInProgress || bs->currentEnemy->client->ps.duelInProgress || bs->botChallengingTime > level.time)
+	if (bs->cur_ps.duelInProgress || bs->currentEnemy->client->ps.duelInProgress)
+	{
+		return qfalse;
+	}
+	if (bs->botDuelRequestThrottleUntil > level.time || bs->botChallengingTime > level.time)
 	{
 		return qfalse;
 	}
@@ -11703,6 +11695,7 @@ static qboolean NewBotAI_TryIssueBotDuelChallenge(bot_state_t *bs, int targetMod
 		BotTargetModeUsesExtendedBotDuelCooldown(targetMode) ? 1 : 0,
 		(g_entities[bs->client].r.svFlags & SVF_BOT) ? 1 : 0,
 		(bs->currentEnemy->r.svFlags & SVF_BOT) ? 1 : 0);
+	bs->botDuelRequestThrottleUntil = level.time + NEWBOTAI_DUEL_REQUEST_MIN_INTERVAL_MS;
 	bs->duelNoStrafeUntil = level.time + Com_Clampi(0, 10000, bot_duel_nostrafetime.integer);
 	bs->beStill = level.time + 250;
 	bs->doAttack = 0;
@@ -12368,6 +12361,10 @@ static int NewBotAI_GetLightningWeight(bot_state_t *bs)
 	{
 		return 0;
 	}
+	if (bs->currentEnemy && bs->currentEnemy->health > 0 && bs->currentEnemy->health < 9)
+	{
+		return 100;
+	}
 
 	aggressionBias = BotGetAggressionBias(bs);
 
@@ -12423,6 +12420,104 @@ static int NewBotAI_GetLightningWeight(bot_state_t *bs)
 		weight = 100;
 	}
 
+	return weight;
+}
+
+static qboolean NewBotAI_ShouldDisengageLongRangeLightningTrade(bot_state_t *bs)
+{
+	int ourHealth;
+	int enemyHealth;
+	float aggressionBias;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return qfalse;
+	}
+	ourHealth = g_entities[bs->client].health;
+	enemyHealth = bs->currentEnemy->health;
+	aggressionBias = BotGetAggressionBias(bs);
+	if (!bs->frame_Enemy_Vis || !NewBotAI_IsWithinLightningRange(bs))
+	{
+		return qfalse;
+	}
+	if (bs->frame_Enemy_Len <= BotGetLightningStartDistance(bs))
+	{
+		return qfalse;
+	}
+	if (!(bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_LIGHTNING)) ||
+		bs->cur_ps.electrifyTime < level.time)
+	{
+		return qfalse;
+	}
+
+	return (ourHealth < enemyHealth || aggressionBias <= 0.0f) ? qtrue : qfalse;
+}
+
+static int NewBotAI_GetSpeedAttackWeight(bot_state_t *bs)
+{
+	float speedBias;
+	float aggressionBias;
+	int ourHealth;
+	int enemyHealth;
+	int ourForce;
+	int enemyForce;
+	int healthLead;
+	int forceLead;
+	int weight;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return 0;
+	}
+
+	speedBias = BotGetChanceBiasPercent(bot_speedbias.value);
+	aggressionBias = BotGetAggressionBias(bs);
+	ourHealth = g_entities[bs->client].health;
+	enemyHealth = bs->currentEnemy->health;
+	ourForce = bs->cur_ps.fd.forcePower;
+	enemyForce = bs->currentEnemy->client->ps.fd.forcePower;
+	healthLead = ourHealth - enemyHealth;
+	forceLead = ourForce - enemyForce;
+
+	if (speedBias <= 0.0f)
+	{
+		return 0;
+	}
+	if (g_forcePowerDisable.integer & (1 << FP_SPEED))
+	{
+		return 0;
+	}
+	if (!(bs->cur_ps.fd.forcePowersKnown & (1 << FP_SPEED)))
+	{
+		return 0;
+	}
+	if (ourHealth <= 70 || aggressionBias < 0.35f)
+	{
+		return 0;
+	}
+	if (healthLead < 25 || forceLead < 15)
+	{
+		return 0;
+	}
+	if (ourForce < 70 || !bs->frame_Enemy_Vis || bs->frame_Enemy_Len < 96.0f || bs->frame_Enemy_Len > 640.0f)
+	{
+		return 0;
+	}
+
+	weight = (int)((speedBias / 100.0f) * 70.0f);
+	weight += NewBotAI_GetAntiDrainWeight(bs) / 2;
+	if (NewBotAI_GetPTKWeight(bs) > 0)
+	{
+		weight += 20;
+	}
+	if (ourForce >= 90)
+	{
+		weight += 15;
+	}
+	if (weight > 100)
+	{
+		weight = 100;
+	}
 	return weight;
 }
 
@@ -15047,13 +15142,10 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 		//trap->Print("Gripping -- Pull: %i, Push: %i, Drain: %i, Grip: %i\n", pullWeight, pushWeight, drainWeight, gripWeight);
 	}
 
-	if (!useTheForce && !(g_forcePowerDisable.integer & (1 << FP_SPEED)) && (bs->cur_ps.fd.forcePowersKnown & (1 << FP_SPEED)) && (bs->frame_Enemy_Len > 90)) {
-		if (bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB)) {
-			if (g_entities[bs->client].health > 80 && (bs->cur_ps.fd.forcePower > 70)) {
-				level.clients[bs->client].ps.fd.forcePowerSelected = FP_SPEED;
-				useTheForce = qtrue;
-			}
-		}
+	if (!useTheForce && NewBotAI_GetSpeedAttackWeight(bs) > minWeight)
+	{
+		level.clients[bs->client].ps.fd.forcePowerSelected = FP_SPEED;
+		useTheForce = qtrue;
 	}
 
 	//Never rage - bots don't use force rage at all anymore.
@@ -15266,14 +15358,10 @@ void NewBotAI_GetLSForcepower(bot_state_t *bs)
 		useTheForce = qtrue;
 		//trap->Print("Heal - Weights -- Pull: %i, Push: %i, Absorb: %i, Protect: %i, Heal %i\n", pullWeight, pushWeight, absorbWeight, protectWeight, healWeight);
 	}
-	if (!useTheForce && !(g_forcePowerDisable.integer & (1 << FP_SPEED)) && (bs->cur_ps.fd.forcePowersKnown & (1 << FP_SPEED)) && (bs->frame_Enemy_Len > 90) && (bs->frame_Enemy_Len < 384) && bs->frame_Enemy_Vis) {
-		//if (bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB)) {
-		if (bs->cur_ps.fd.forcePowersActive & (1 << FP_ABSORB)) {
-			if (g_entities[bs->client].health >= 100 && bs->cur_ps.stats[STAT_ARMOR] >= 25 && (bs->cur_ps.fd.forcePower > 85)) {
-				level.clients[bs->client].ps.fd.forcePowerSelected = FP_SPEED;
-				useTheForce = qtrue;
-			}
-		}
+	if (!useTheForce && NewBotAI_GetSpeedAttackWeight(bs) > minWeight)
+	{
+		level.clients[bs->client].ps.fd.forcePowerSelected = FP_SPEED;
+		useTheForce = qtrue;
 	}
 	//Speed, team heal,
 
@@ -15358,6 +15446,16 @@ void NewBotAI_DSvDS(bot_state_t *bs)
 		NewBotAI_Draining(bs);
 		return;
 	}
+	if (NewBotAI_ShouldDisengageLongRangeLightningTrade(bs))
+	{
+		if (BotGetAggressionBias(bs) <= 0.0f && NewBotAI_HasWaypointNavigation())
+		{
+			NewBotAI_PrepareWaypointHandoff(bs, qfalse);
+			NewBotAI_RunNavigationOrAlone(bs, 0.0f);
+			return;
+		}
+		trap->EA_MoveForward(bs->client);
+	}
 
 	if (bs->cur_ps.fd.forcePowersActive & (1 << FP_SPEED)) {
 		NewBotAI_Speeding(bs);
@@ -15394,6 +15492,16 @@ void NewBotAI_DSvLS(bot_state_t *bs)
 	if (bs->cur_ps.fd.forcePowersActive & (1 << FP_DRAIN)) {
 		NewBotAI_Draining(bs);//y return? y not getmovement?
 		return;
+	}
+	if (NewBotAI_ShouldDisengageLongRangeLightningTrade(bs))
+	{
+		if (BotGetAggressionBias(bs) <= 0.0f && NewBotAI_HasWaypointNavigation())
+		{
+			NewBotAI_PrepareWaypointHandoff(bs, qfalse);
+			NewBotAI_RunNavigationOrAlone(bs, 0.0f);
+			return;
+		}
+		trap->EA_MoveForward(bs->client);
 	}
 
 	if (bs->cur_ps.fd.forcePowersActive & (1 << FP_SPEED)) {
@@ -16177,6 +16285,10 @@ static qboolean BotTryAcceptAnyDuelChallenge(bot_state_t *bs, int targetMode)
 	{
 		return qfalse;
 	}
+	if (bs->botDuelRequestThrottleUntil > level.time)
+	{
+		return qfalse;
+	}
 
 	if (NewBotAI_InFFAExploreWindow(bs, targetMode))
 	{
@@ -16197,11 +16309,6 @@ static qboolean BotTryAcceptAnyDuelChallenge(bot_state_t *bs, int targetMode)
 		{
 			continue;
 		}
-		if (NewBotAI_IsBotVsBotDuelCooldownActive(bs, challenger, targetMode))
-		{
-			continue;
-		}
-
 		duelType = dueltypes[challenger->client->ps.clientNum];
 		if (BotTargetModeAllowsBotDuelChallenges(targetMode) && duelType != 1)
 		{
@@ -16220,7 +16327,7 @@ static qboolean BotTryAcceptAnyDuelChallenge(bot_state_t *bs, int targetMode)
 		bs->currentEnemy = challenger;
 		bs->doAttack = 0;
 		bs->doAltAttack = 0;
-		bs->botChallengingTime = level.time + NEWBOTAI_DUEL_REQUEST_COOLDOWN_MS;
+		bs->botDuelRequestThrottleUntil = level.time + NEWBOTAI_DUEL_REQUEST_MIN_INTERVAL_MS;
 		bs->duelNoStrafeUntil = level.time + Com_Clampi(0, 10000, bot_duel_nostrafetime.integer);
 		bs->beStill = level.time + 2500;
 		return qtrue;
@@ -16231,41 +16338,25 @@ static qboolean BotTryAcceptAnyDuelChallenge(bot_state_t *bs, int targetMode)
 
 static void NewBotAI_RunForceDuelOnly(bot_state_t *bs)
 {
-	const int ourHealth = g_entities[bs->client].health;
-	//Only briefly fall back to retreat/heal/drain right after actually taking damage -
-	//otherwise this mode should keep closing on and aiming at its target so it can get
-	//into force-duel challenge range, instead of perpetually running away from it.
-	const qboolean recentlyHurt = (bs->lastHurtTime > level.time - 2000) ? qtrue : qfalse;
-
 	bs->doAttack = 0;
 	bs->doAltAttack = 0;
 
 	NewBotAI_GetAim(bs);
 
-	if (!recentlyHurt)
+	if (!bs->currentEnemy || !bs->currentEnemy->client)
 	{
-		if (bs->frame_Enemy_Vis && bs->frame_Enemy_Len > 96.0f)
-		{
-			trap->EA_MoveForward(bs->client);
-		}
+		NewBotAI_RunNavigationOrAlone(bs, 0.0f);
 		return;
 	}
 
-	if (!NewBotAI_ShouldPressAdvantage(bs) && ourHealth < 100 && (bs->cur_ps.fd.forcePowersKnown & (1 << FP_HEAL)) &&
-		!(g_forcePowerDisable.integer & (1 << FP_HEAL)) && bs->cur_ps.fd.forcePower >= 25)
+	if (bs->frame_Enemy_Vis && bs->frame_Enemy_Len > 96.0f)
 	{
-		level.clients[bs->client].ps.fd.forcePowerSelected = FP_HEAL;
-		trap->EA_ForcePower(bs->client);
+		trap->EA_MoveForward(bs->client);
 	}
-	else if (bs->frame_Enemy_Vis && bs->frame_Enemy_Len <= MAX_DRAIN_DISTANCE &&
-		(bs->cur_ps.fd.forcePowersKnown & (1 << FP_DRAIN)) &&
-		!(g_forcePowerDisable.integer & (1 << FP_DRAIN)) && bs->cur_ps.fd.forcePower >= 21)
+	else if (!bs->frame_Enemy_Vis && NewBotAI_HasWaypointNavigation())
 	{
-		level.clients[bs->client].ps.fd.forcePowerSelected = FP_DRAIN;
-		trap->EA_ForcePower(bs->client);
+		NewBotAI_RunNavigationOrAlone(bs, 0.0f);
 	}
-
-	NewBotAI_RetreatDiagonal(bs, (level.framenum & 1) ? qtrue : qfalse);
 }
 
 static qboolean NewBotAI_IsDirectPathToEnemyBlocked(bot_state_t *bs)
@@ -16595,13 +16686,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	{
 		return;
 	}
-	//While in the post-duel-limit FFA explore window, -4 must not lock onto chasing
-	//its old target with RunForceDuelOnly (which never attacks and never navigates
-	//away) - fall through into normal combat/navigation so it actually fights and
-	//explores for a new opponent, same as -3 already does.
-	if (BotTargetModeIsForceDuelOnly(targetMode) && !bs->cur_ps.duelInProgress &&
-		!NewBotAI_InFFAExploreWindow(bs, targetMode) &&
-		!NewBotAI_IsBotVsBotDuelCooldownActive(bs, bs->currentEnemy, targetMode))
+	if (BotTargetModeIsForceDuelOnly(targetMode) && !bs->cur_ps.duelInProgress)
 	{
 		NewBotAI_RunForceDuelOnly(bs);
 		return;

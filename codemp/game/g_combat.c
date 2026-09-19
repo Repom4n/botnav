@@ -2741,6 +2741,10 @@ extern void RunEmplacedWeapon( gentity_t *ent, usercmd_t **ucmd );
 	self->client->ps.persistant[PERS_KILLED]++;
 	if (meansOfDeath != MOD_TEAM_CHANGE)//Dont count deaths in racemode
 		G_AddSimpleStat(self, attacker, 2);
+	if (level.gametype == GT_ARCADE)
+	{
+		G_ArcadeHandlePlayerDeath(self, attacker);
+	}
 
 	if (self == attacker)
 	{
