@@ -137,6 +137,7 @@ typedef struct
 	int nextSendTime;
 	int queuedCount;
 	int nextMessageIndex;
+	int immediateIndex;
 	char messages[TRACKED_DUEL_TUTORIAL_MAX_MESSAGES][MAX_SAY_TEXT];
 } bot_tutorial_queue_t;
 
@@ -224,6 +225,7 @@ static void G_ClearBotTutorialQueue(int clientNum)
 
 	memset(&g_botTutorialQueues[clientNum], 0, sizeof(g_botTutorialQueues[clientNum]));
 	g_botTutorialQueues[clientNum].targetClientNum = -1;
+	g_botTutorialQueues[clientNum].immediateIndex = -1;
 }
 
 static qboolean G_IsTrackedDuelCollectionEnabled(void)
@@ -512,11 +514,13 @@ static void G_QueueBotTutorialMessage(int botClientNum, int targetClientNum, con
 		return;
 
 	queue = &g_botTutorialQueues[botClientNum];
-	if (queue->queuedCount > queue->nextMessageIndex)
+	if (queue->queuedCount > queue->nextMessageIndex && queue->targetClientNum != targetClientNum)
 		return;
 	if (queue->queuedCount >= TRACKED_DUEL_TUTORIAL_MAX_MESSAGES)
 		return;
 
+	if (queue->queuedCount > queue->nextMessageIndex && queue->immediateIndex < 0)
+		queue->immediateIndex = queue->queuedCount;
 	queue->targetClientNum = targetClientNum;
 	Q_strncpyz(queue->messages[queue->queuedCount], message, sizeof(queue->messages[queue->queuedCount]));
 	queue->queuedCount++;
@@ -604,6 +608,11 @@ static void G_ProcessBotTutorialQueue(gentity_t *ent)
 	if (queue->nextMessageIndex >= queue->queuedCount)
 	{
 		G_ClearBotTutorialQueue(ent->s.number);
+	}
+	else if (queue->immediateIndex >= 0 && queue->nextMessageIndex >= queue->immediateIndex)
+	{
+		queue->nextSendTime = level.time;
+		queue->immediateIndex = -1;
 	}
 	else
 	{
@@ -841,8 +850,7 @@ static void G_PersistTrackedDuel(tracked_duel_runtime_t *winnerRuntime, tracked_
 
 	CALL_SQLITE(open(LOCAL_DB_PATH, &db));
 	G_EnsureLocalArcadeSchema(db);
-	if (!g_duelTrackingSchemaReady || Q_stricmp(g_duelTrackingSchemaPath, LOCAL_DB_PATH))
-		G_EnsureLocalDuelTrackingSchema(db);
+	G_EnsureLocalDuelTrackingSchema(db);
 
 	sql = "INSERT INTO LocalDuelTrackSummary(start_time, end_time, duration, type, mapname, winner_key, winner_label, winner_kind, winner_side, loser_key, loser_label, loser_kind, loser_side, draw, winner_opening, loser_opening) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
