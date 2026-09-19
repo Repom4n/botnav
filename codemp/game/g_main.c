@@ -269,7 +269,7 @@ static float G_ArcadeSkillForBotLevel(int botLevel)
 	return skill;
 }
 
-void G_ArcadeResetClientState(int clientNum)
+void G_ArcadeResetClientRunState(int clientNum)
 {
 	if (clientNum < 0 || clientNum >= MAX_CLIENTS)
 	{
@@ -289,7 +289,7 @@ static void G_ArcadeResetScores(void)
 
 	for (i = 0; i < MAX_CLIENTS; i++)
 	{
-		G_ArcadeResetClientState(i);
+		G_ArcadeResetClientRunState(i);
 	}
 }
 

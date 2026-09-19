@@ -2917,7 +2917,7 @@ char *ClientConnect( int clientNum, qboolean firstTime, qboolean isBot ) {
 	// they can connect
 	client = &level.clients[ clientNum ];
 	ent->client = client;
-	G_ArcadeResetClientState(clientNum);
+	G_ArcadeResetClientRunState(clientNum);
 
 	//assign the pointer for bg entity access
 	ent->playerState = &ent->client->ps;
@@ -4894,7 +4894,7 @@ void ClientDisconnect( int clientNum ) {
 			ent->client->pers.stats.racetime = 0.0f;
 		}
 	}
-	G_ArcadeResetClientState(clientNum);
+	G_ArcadeResetClientRunState(clientNum);
 
 //JAPRO - Serverside - Stop those pesky reconnect whores - End
 
@@ -5037,4 +5037,3 @@ void ClientDisconnect( int clientNum ) {
 
 	G_ClearClientLog(clientNum);
 }
-
