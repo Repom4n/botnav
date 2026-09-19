@@ -628,9 +628,13 @@ static void G_InsertTrackedParticipant(sqlite3 *db, sqlite3_int64 summaryId, tra
 	CALL_SQLITE(bind_int(stmt, 4, runtime->identityKind));
 	CALL_SQLITE(bind_text(stmt, 5, runtime->opponentKey, -1, SQLITE_STATIC));
 	if (won < 0)
+	{
 		CALL_SQLITE(bind_null(stmt, 6));
+	}
 	else
+	{
 		CALL_SQLITE(bind_int(stmt, 6, won ? 1 : 0));
+	}
 	CALL_SQLITE(bind_int(stmt, 7, runtime->side));
 	CALL_SQLITE(bind_int(stmt, 8, runtime->opponentSide));
 	CALL_SQLITE(bind_int(stmt, 9, matchup));
