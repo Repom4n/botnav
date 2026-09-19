@@ -1525,9 +1525,16 @@ void SetTeam( gentity_t *ent, char *s, qboolean forcedToJoin ) {//JAPRO - Modifi
 	if (client->ps.duelInProgress) {
 		gentity_t *duelAgainst = &g_entities[client->ps.duelIndex];
 
+		G_ClearTrackedDuelIfMismatched(ent, duelAgainst);
+		if (duelAgainst->client) {
+			G_FinishTrackedDuel(duelAgainst, ent, dueltypes[ent->client->ps.clientNum], qfalse);
+		}
+
 		if (ent->client->pers.lastUserName[0] && duelAgainst->client && duelAgainst->client->pers.lastUserName[0]) {
 			if (!(ent->client->sess.accountFlags & JAPRO_ACCOUNTFLAG_NODUEL) && !(duelAgainst->client->sess.accountFlags & JAPRO_ACCOUNTFLAG_NODUEL))
+			{
 				G_AddDuel(duelAgainst->client->pers.lastUserName, ent->client->pers.lastUserName, duelAgainst->client->pers.duelStartTime, dueltypes[ent->client->ps.clientNum], duelAgainst->client->ps.stats[STAT_HEALTH], duelAgainst->client->ps.stats[STAT_ARMOR]);
+			}
 		}
 	}
 
@@ -4471,6 +4478,7 @@ void Cmd_EngageDuel_f(gentity_t *ent, int dueltype)//JAPRO - Serverside - Fullfo
 			Q_strncpyz(challenged->client->pers.lastUserName, challengedDuelName, sizeof(challenged->client->pers.lastUserName));
 			ent->client->pers.duelStartTime = level.time;
 			challenged->client->pers.duelStartTime = level.time;
+			G_StartTrackedDuel(ent, challenged, dueltypes[ent->client->ps.clientNum]);
 		}
 		else
 		{

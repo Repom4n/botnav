@@ -4877,10 +4877,17 @@ void ClientDisconnect( int clientNum ) {
 	if (ent->client->ps.duelInProgress) {
 		gentity_t *duelAgainst = &g_entities[ent->client->ps.duelIndex];
 
+		G_ClearTrackedDuelIfMismatched(ent, duelAgainst);
+		if (duelAgainst->client) {
+			G_FinishTrackedDuel(duelAgainst, ent, dueltypes[ent->client->ps.clientNum], qfalse);
+		}
+
 		if (ent->client->pers.lastUserName[0] && duelAgainst->client && duelAgainst->client->pers.lastUserName[0]) {
 			//Trying to dodge the duel, no no no
 			if (!(ent->client->sess.accountFlags & JAPRO_ACCOUNTFLAG_NODUEL) && !(duelAgainst->client->sess.accountFlags & JAPRO_ACCOUNTFLAG_NODUEL))
+			{
 				G_AddDuel(duelAgainst->client->pers.lastUserName, ent->client->pers.lastUserName, duelAgainst->client->pers.duelStartTime, dueltypes[ent->client->ps.clientNum], duelAgainst->client->ps.stats[STAT_HEALTH], duelAgainst->client->ps.stats[STAT_ARMOR]);
+			}
 		}
 	}
 

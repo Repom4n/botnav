@@ -4736,6 +4736,7 @@ void G_RunFrame( int levelTime ) {
 				else {
 					ent->client->pers.stats.lowestHP = 0;
 				}
+				G_UpdateTrackedDuelFrame(ent);
 			}
 
 			if (g_allowNPC.integer)
