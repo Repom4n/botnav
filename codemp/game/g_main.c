@@ -557,6 +557,11 @@ static int G_ArcadeKickManagedBots(int maxKickCount, qboolean spectatorOnly)
 			level.arcadeManagedBot[i] = qfalse;
 			continue;
 		}
+		if (ent->client->pers.connected == CON_DISCONNECTED)
+		{
+			level.arcadeManagedBot[i] = qfalse;
+			continue;
+		}
 		if (ent->client->pers.connected != CON_CONNECTED)
 		{
 			continue;
