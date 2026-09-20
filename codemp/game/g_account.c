@@ -91,6 +91,7 @@ typedef struct
 	unsigned char power;
 	unsigned char state;
 	unsigned char rangeBucket;
+	unsigned char hasGeometry;
 	vec3_t selfOrigin;
 	vec3_t enemyOrigin;
 	vec3_t selfVelocity;
@@ -287,6 +288,15 @@ static qboolean G_IsTrackedDuelCollectionEnabled(void)
 static qboolean G_IsTrackedGeometryEnabled(void)
 {
 	return (bot_dueltracking_geometry.integer > 0) ? qtrue : qfalse;
+}
+
+static qboolean G_ShouldCaptureTrackedGeometryEvent(int eventType)
+{
+	if (!G_IsTrackedGeometryEnabled())
+		return qfalse;
+	if (bot_dueltracking_geometry.integer >= 2)
+		return qtrue;
+	return (eventType == 2 || eventType == 3 || eventType == 4 || eventType == 5) ? qtrue : qfalse;
 }
 
 static qboolean G_IsTrackedDuelEligible(gentity_t *first, gentity_t *second)
@@ -672,7 +682,7 @@ static void G_AddTrackedDuelEvent(tracked_duel_runtime_t *runtime, int eventType
 	event->power = (unsigned char)power;
 	event->state = (unsigned char)state;
 	event->rangeBucket = (unsigned char)rangeBucket;
-	if (G_IsTrackedGeometryEnabled() && self && enemy && self->client && enemy->client)
+	if (G_ShouldCaptureTrackedGeometryEvent(eventType) && self && enemy && self->client && enemy->client)
 	{
 		VectorCopy(self->client->ps.origin, event->selfOrigin);
 		VectorCopy(enemy->client->ps.origin, event->enemyOrigin);
@@ -680,6 +690,7 @@ static void G_AddTrackedDuelEvent(tracked_duel_runtime_t *runtime, int eventType
 		VectorCopy(enemy->client->ps.velocity, event->enemyVelocity);
 		event->selfYaw = self->client->ps.viewangles[YAW];
 		event->enemyYaw = enemy->client->ps.viewangles[YAW];
+		event->hasGeometry = 1;
 	}
 	if (note)
 		Q_strncpyz(event->note, note, sizeof(event->note));
@@ -1143,7 +1154,7 @@ static void G_InsertTrackedEvents(sqlite3 *db, sqlite3_int64 summaryId, tracked_
 			G_ErrorPrint("ERROR: SQL Insert Failed (LocalDuelTrackEvent)", s);
 		CALL_SQLITE(reset(stmt));
 		CALL_SQLITE(clear_bindings(stmt));
-		if (captureGeometry)
+		if (captureGeometry && event->hasGeometry)
 		{
 			CALL_SQLITE(bind_int64(geomStmt, 1, summaryId));
 			CALL_SQLITE(bind_text(geomStmt, 2, runtime->identityKey, -1, SQLITE_STATIC));
