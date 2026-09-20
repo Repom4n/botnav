@@ -256,11 +256,11 @@ static int G_ArcadeExtraBotLevelForLevel(int arcadeLevel)
 
 static float G_ArcadeSkillForBotLevel(int botLevel)
 {
-	float skill = 1.0f + ((float)(botLevel - ARCADE_PRIMARY_BOT_LEVEL_MIN) /
-		(float)(ARCADE_PRIMARY_BOT_LEVEL_MAX - ARCADE_PRIMARY_BOT_LEVEL_MIN)) * 4.0f;
-	if (skill < 1.0f)
+	float skill = 3.0f + ((float)(botLevel - ARCADE_PRIMARY_BOT_LEVEL_MIN) /
+		(float)(ARCADE_PRIMARY_BOT_LEVEL_MAX - ARCADE_PRIMARY_BOT_LEVEL_MIN)) * 2.0f;
+	if (skill < 3.0f)
 	{
-		skill = 1.0f;
+		skill = 3.0f;
 	}
 	if (skill > 5.0f)
 	{
@@ -353,7 +353,7 @@ static void G_ArcadeSendCenterMessage(gentity_t *ent, const char *headline, int 
 	}
 }
 
-static int G_ArcadeCountHumans(qboolean activeOnly)
+static int G_ArcadeCountRoundHumans(void)
 {
 	int i, count = 0;
 	for (i = 0; i < MAX_CLIENTS; i++)
@@ -364,11 +364,10 @@ static int G_ArcadeCountHumans(qboolean activeOnly)
 		{
 			continue;
 		}
-		if (activeOnly && ent->client->sess.sessionTeam != TEAM_RED)
+		if (ent->client->sess.sessionTeam == TEAM_RED || level.arcadeParticipant[i])
 		{
-			continue;
+			count++;
 		}
-		count++;
 	}
 	return count;
 }
@@ -430,7 +429,7 @@ static void G_ArcadeKickAllBots(void)
 static void G_ArcadeStartRound(void)
 {
 	int i;
-	const int humans = G_ArcadeCountHumans(qfalse);
+	const int humans = G_ArcadeCountRoundHumans();
 	const int progressionLevel = G_ArcadeGetProgressionLevel(level.arcadeLevel);
 	const int primaryLevel = G_ArcadeClampPrimaryBotLevel(progressionLevel);
 	const int extraBots = G_ArcadeExtraBotCountForLevel(progressionLevel);
@@ -640,7 +639,7 @@ static void G_ArcadeRunFrame(void)
 		return;
 	}
 
-	if (aliveHumans <= 0 && G_ArcadeCountHumans(qfalse) > 0)
+	if (aliveHumans <= 0 && G_ArcadeCountRoundHumans() > 0)
 	{
 		G_ArcadeFinishRound(qtrue, qfalse);
 		level.arcadeRoundStartTime = 0;
