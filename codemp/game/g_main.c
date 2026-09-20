@@ -535,7 +535,11 @@ static void G_ArcadeKickAllBots(void)
 	int i;
 	for (i = 0; i < MAX_CLIENTS; i++)
 	{
-		if (level.arcadeManagedBot[i])
+		if (level.arcadeManagedBot[i] &&
+			g_entities[i].inuse &&
+			g_entities[i].client &&
+			(g_entities[i].r.svFlags & SVF_BOT) &&
+			g_entities[i].client->pers.connected == CON_CONNECTED)
 		{
 			trap->SendConsoleCommand(EXEC_APPEND, va("clientkick %i\n", i));
 		}

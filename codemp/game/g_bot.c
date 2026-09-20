@@ -557,7 +557,10 @@ static void G_AddRandomBotInternal( int team, qboolean arcadeManaged ) {
 				else teamstr = "";
 				Q_strncpyz(netname, value, sizeof(netname));
 				Q_CleanStr(netname);
-				trap->SendConsoleCommand( EXEC_INSERT, va("addbot \"%s\" %.2f %s %i \"\" %i\n", netname, skill, teamstr, 0, arcadeManaged ? 1 : 0) );
+				if (arcadeManaged)
+					trap->SendConsoleCommand( EXEC_INSERT, va("addbot \"%s\" %.2f %s %i \"\" 1\n", netname, skill, teamstr, 0) );
+				else
+					trap->SendConsoleCommand( EXEC_INSERT, va("addbot \"%s\" %.2f %s %i\n", netname, skill, teamstr, 0) );
 				return;
 			}
 		}
