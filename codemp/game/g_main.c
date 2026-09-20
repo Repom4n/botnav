@@ -503,6 +503,16 @@ static int G_ArcadeKickManagedBots(int maxKickCount, qboolean spectatorOnly)
 	return kicked;
 }
 
+static void G_ArcadeKickManagedBot(gentity_t *ent)
+{
+	if (!ent || !ent->client)
+	{
+		return;
+	}
+
+	trap->SendConsoleCommand(EXEC_APPEND, va("clientkick %i\n", ent->s.number));
+}
+
 static void G_ArcadeRestorePlayer(gentity_t *ent)
 {
 	if (!ent || !ent->client)
@@ -592,36 +602,28 @@ static void G_ArcadeShutdown(qboolean kickBots)
 static void G_ArcadeEnsureWaitingBot(void)
 {
 	gentity_t *waitingBot;
-	gentity_t *spectatorBot;
-	int connectedManagedBots;
+	const int connectedManagedBots = G_ArcadeCountManagedBots(qtrue);
+	const int activeManagedBots = G_ArcadeCountManagedBots(qfalse);
 	const int progressionLevel = G_ArcadeGetProgressionLevel(level.arcadeLevel > 0 ? level.arcadeLevel : ARCADE_START_LEVEL);
 	const int primaryLevel = G_ArcadeClampPrimaryBotLevel(progressionLevel);
 	const float primarySkill = G_ArcadeSkillForBotLevel(primaryLevel);
-	connectedManagedBots = G_ArcadeCountManagedBots(qtrue);
 
 	waitingBot = G_ArcadeFindManagedBot(qfalse);
-	if (waitingBot && connectedManagedBots == 1)
+	if (connectedManagedBots > activeManagedBots)
+	{
+		G_ArcadeKickManagedBots(connectedManagedBots - activeManagedBots, qtrue);
+		return;
+	}
+
+	if (activeManagedBots > 1)
+	{
+		G_ArcadeKickManagedBots(activeManagedBots - 1, qfalse);
+		return;
+	}
+
+	if (waitingBot)
 	{
 		G_ArcadeRestorePlayer(waitingBot);
-		return;
-	}
-
-	spectatorBot = G_ArcadeFindManagedBot(qtrue);
-	if (!waitingBot && spectatorBot && connectedManagedBots == 1)
-	{
-		SetTeam(spectatorBot, "free", qtrue);
-		G_ArcadeRestorePlayer(spectatorBot);
-		return;
-	}
-
-	if (connectedManagedBots > 1)
-	{
-		const int extras = connectedManagedBots - 1;
-		int kicked = G_ArcadeKickManagedBots(extras, qtrue);
-		if (kicked < extras)
-		{
-			G_ArcadeKickManagedBots(extras - kicked, qfalse);
-		}
 		return;
 	}
 
@@ -651,6 +653,7 @@ static void G_ArcadeStartRound(void)
 	const int humans = G_ArcadeCountIngameHumans();
 	int activeManagedBots = G_ArcadeCountManagedBots(qfalse);
 	int targetBots;
+	const int connectedManagedBots = G_ArcadeCountManagedBots(qtrue);
 	const int progressionLevel = G_ArcadeGetProgressionLevel(level.arcadeLevel);
 	const int primaryLevel = G_ArcadeClampPrimaryBotLevel(progressionLevel);
 	const float primarySkill = G_ArcadeSkillForBotLevel(primaryLevel);
@@ -665,28 +668,16 @@ static void G_ArcadeStartRound(void)
 
 	targetBots = humans;
 
-	while (activeManagedBots < targetBots)
+	if (connectedManagedBots > activeManagedBots)
 	{
-		gentity_t *spectatorBot = G_ArcadeFindManagedBot(qtrue);
-		if (!spectatorBot)
-		{
-			break;
-		}
-		SetTeam(spectatorBot, "free", qtrue);
-		G_ArcadeRestorePlayer(spectatorBot);
-		activeManagedBots++;
+		G_ArcadeKickManagedBots(connectedManagedBots - activeManagedBots, qtrue);
 	}
 
 	{
-		const int totalManagedBots = G_ArcadeCountManagedBots(qtrue);
-		if (totalManagedBots > targetBots)
+		if (activeManagedBots > targetBots)
 		{
-			const int extras = totalManagedBots - targetBots;
-			int kicked = G_ArcadeKickManagedBots(extras, qtrue);
-			if (kicked < extras)
-			{
-				G_ArcadeKickManagedBots(extras - kicked, qfalse);
-			}
+			G_ArcadeKickManagedBots(activeManagedBots - targetBots, qfalse);
+			activeManagedBots = targetBots;
 		}
 	}
 
@@ -762,6 +753,13 @@ void G_ArcadeHandlePlayerDeath(gentity_t *self, gentity_t *attacker)
 	if (self->s.number >= 0 && self->s.number < MAX_CLIENTS)
 	{
 		level.arcadeEliminated[self->s.number] = qtrue;
+	}
+	if ((self->r.svFlags & SVF_BOT) &&
+		self->s.number >= 0 && self->s.number < MAX_CLIENTS &&
+		level.arcadeManagedBot[self->s.number])
+	{
+		G_ArcadeKickManagedBot(self);
+		return;
 	}
 	if (self->client->sess.sessionTeam != TEAM_SPECTATOR)
 	{
