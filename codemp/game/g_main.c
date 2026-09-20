@@ -555,11 +555,6 @@ static int G_ArcadeKickManagedBots(int maxKickCount, qboolean spectatorOnly)
 		if (!ent->inuse || !ent->client || !(ent->r.svFlags & SVF_BOT))
 		{
 			level.arcadeManagedBot[i] = qfalse;
-			kicked++;
-			if (kicked >= maxKickCount)
-			{
-				break;
-			}
 			continue;
 		}
 		if (ent->client->pers.connected != CON_CONNECTED)
