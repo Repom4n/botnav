@@ -2962,6 +2962,7 @@ char *ClientConnect( int clientNum, qboolean firstTime, qboolean isBot ) {
 		client->sess.sessionTeam = TEAM_SPECTATOR;
 	}
 
+	ent->r.svFlags &= ~SVF_BOT;
 	if( isBot ) {
 		ent->r.svFlags |= SVF_BOT;
 		ent->inuse = qtrue;
