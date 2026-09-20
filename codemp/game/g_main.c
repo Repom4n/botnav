@@ -567,7 +567,7 @@ static int G_ArcadeKickManagedBots(int maxKickCount, qboolean spectatorOnly)
 			continue;
 		}
 		level.arcadeManagedBot[i] = qfalse;
-		trap->SendConsoleCommand(EXEC_APPEND, va("clientkick %i\n", i));
+		trap->DropClient(i, "Arcade bot cleanup");
 		kicked++;
 		if (kicked >= maxKickCount)
 		{
@@ -588,7 +588,7 @@ static void G_ArcadeKickManagedBot(gentity_t *ent)
 	if (ent->s.number >= 0 && ent->s.number < MAX_CLIENTS)
 	{
 		level.arcadeManagedBot[ent->s.number] = qfalse;
-		trap->SendConsoleCommand(EXEC_APPEND, va("clientkick %i\n", ent->s.number));
+		trap->DropClient(ent->s.number, "Arcade bot cleanup");
 	}
 }
 
@@ -728,7 +728,7 @@ static void G_ArcadeKickAllBots(void)
 			g_entities[i].client->pers.connected == CON_CONNECTED)
 		{
 			level.arcadeManagedBot[i] = qfalse;
-			trap->SendConsoleCommand(EXEC_APPEND, va("clientkick %i\n", i));
+			trap->DropClient(i, "Arcade bot cleanup");
 		}
 	}
 }
