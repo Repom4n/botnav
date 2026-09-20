@@ -552,8 +552,7 @@ static int G_ArcadeKickManagedBots(int maxKickCount, qboolean spectatorOnly)
 		{
 			continue;
 		}
-		if (!ent->inuse || !ent->client || !(ent->r.svFlags & SVF_BOT) ||
-			ent->client->pers.connected != CON_CONNECTED)
+		if (!ent->inuse || !ent->client || !(ent->r.svFlags & SVF_BOT))
 		{
 			level.arcadeManagedBot[i] = qfalse;
 			kicked++;
@@ -561,6 +560,10 @@ static int G_ArcadeKickManagedBots(int maxKickCount, qboolean spectatorOnly)
 			{
 				break;
 			}
+			continue;
+		}
+		if (ent->client->pers.connected != CON_CONNECTED)
+		{
 			continue;
 		}
 		if (spectatorOnly && ent->client->sess.sessionTeam != TEAM_SPECTATOR)
