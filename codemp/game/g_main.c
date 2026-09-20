@@ -650,7 +650,7 @@ static void G_ArcadeStartRound(void)
 	int i;
 	const int humans = G_ArcadeCountIngameHumans();
 	int activeManagedBots = G_ArcadeCountManagedBots(qfalse);
-	const int targetBots = humans;
+	int targetBots;
 	const int progressionLevel = G_ArcadeGetProgressionLevel(level.arcadeLevel);
 	const int primaryLevel = G_ArcadeClampPrimaryBotLevel(progressionLevel);
 	const float primarySkill = G_ArcadeSkillForBotLevel(primaryLevel);
@@ -662,6 +662,8 @@ static void G_ArcadeStartRound(void)
 		G_ArcadeEnsureWaitingBot();
 		return;
 	}
+
+	targetBots = humans;
 
 	while (activeManagedBots < targetBots)
 	{
@@ -675,7 +677,7 @@ static void G_ArcadeStartRound(void)
 		activeManagedBots++;
 	}
 
-	if (targetBots > 0 && G_ArcadeCountManagedBots(qtrue) > targetBots)
+	if (G_ArcadeCountManagedBots(qtrue) > targetBots)
 	{
 		const int extras = G_ArcadeCountManagedBots(qtrue) - targetBots;
 		int kicked = G_ArcadeKickManagedBots(extras, qtrue);
