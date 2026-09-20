@@ -521,29 +521,6 @@ static gentity_t *G_ArcadeFindManagedBot(qboolean spectator)
 	return NULL;
 }
 
-static int G_ArcadeCountManagedBots(qboolean includeSpectators)
-{
-	int i, count = 0;
-
-	for (i = 0; i < MAX_CLIENTS; i++)
-	{
-		gentity_t *ent = &g_entities[i];
-		if (!level.arcadeManagedBot[i] ||
-			!ent->inuse || !ent->client || !(ent->r.svFlags & SVF_BOT) ||
-			ent->client->pers.connected != CON_CONNECTED)
-		{
-			continue;
-		}
-		if (!includeSpectators && ent->client->sess.sessionTeam == TEAM_SPECTATOR)
-		{
-			continue;
-		}
-		count++;
-	}
-
-	return count;
-}
-
 static int G_ArcadeCountManagedBotSlots(void)
 {
 	int i, count = 0;
