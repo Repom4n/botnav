@@ -20,7 +20,6 @@ static char LOCAL_DB_PATH[MAX_OSPATH];
 #define TRACKED_DUEL_MAX_EVENTS 128
 #define TRACKED_DUEL_TUTORIAL_MAX_MESSAGES 3
 #define TRACKED_DUEL_TUTORIAL_COOLDOWN_MS 7000
-#define TRACKED_DUEL_TUTORIAL_FAST_COOLDOWN_MS 2500
 #define TRACKED_DUEL_TUTORIAL_MIN_DELAY_MS 1500
 #define TRACKED_DUEL_TUTORIAL_MAX_DELAY_MS 2500
 #define TRACKED_DUEL_LOW_FORCE_THRESHOLD 25
@@ -191,6 +190,7 @@ typedef struct
 	int adviceRotation;
 	unsigned int lastAdviceHash;
 	int lastLoginPromptDuel;
+	qboolean loginReminderSent;
 } duel_advice_session_state_t;
 
 typedef enum
@@ -327,6 +327,7 @@ static qboolean G_IsTrackedDuelEligible(gentity_t *first, gentity_t *second)
 {
 	if (!first || !second)
 		return qfalse;
+	// keep bot-vs-bot duels out of tracked datasets
 	if ((first->r.svFlags & SVF_BOT) && (second->r.svFlags & SVF_BOT))
 		return qfalse;
 	return qtrue;
@@ -926,12 +927,12 @@ static void G_QueueManualBasicsAdvice(int botClientNum, int targetClientNum, int
 {
 	int slot;
 	static const char *manualBasics[] = {
-		"Quick base: GK is Grip Kick. Keep your grip and throw binds clean so your reactions stay smooth.",
-		"PK means Pull Kick. Good pull windows are after movement commits, knockdowns, or saber recovery frames.",
-		"Core economy: pull recovers faster and gives more repeats than push in a grip window, so budget force around that.",
-		"PTK means Pull-Throw-Kick. Mix PTK pressure with saber pressure and GK threat so entries stay harder to read.",
-		"Movement first: strafe-jump on approach and avoid long straight lines into your opponent’s crosshair.",
-		"Simple defense tip: if the punish lane is still live, stay down briefly instead of panic-standing into damage."
+		"Entry first: strafe-jump your approach and avoid long straight lanes into crosshair.",
+		"Force economy first: preserve exit force before re-committing into pressure.",
+		"Offense mix wins: rotate PTK, saber pressure, and GK so your rhythm stays unreadable.",
+		"GK means Grip Kick. Keep grip and kick binds clean so timing stays sharp under pressure.",
+		"PK means Pull Kick. Best windows are after movement commits, knockdowns, or saber recovery.",
+		"PTK means Pull-Throw-Kick. Use it to threaten space, then convert only on real recovery."
 	};
 
 	slot = duelIndex;
@@ -944,12 +945,12 @@ static void G_QueueManualBasicsAdvice(int botClientNum, int targetClientNum, int
 static void G_QueueManualMetaAdvice(int botClientNum, int targetClientNum, int rotation, duel_advice_session_state_t *session)
 {
 	static const char *manualMeta[] = {
-		"Meta read: win initiative first—bait a response, then spend force into the lane they just exposed.",
-		"Meta read: rotate your entry timing every exchange so they can’t lock onto one rhythm.",
-		"Meta read: keep escape force reserved, then convert advantage with short, controlled checks.",
-		"Meta read: spacing and camera control come before hard commits like grip or deep pull chains.",
-		"Meta read: hide your panic moments; keep movement quality high so low-health tells stay less obvious.",
-		"Meta read: if they copy your last option, change lane immediately and punish the copycat habit."
+		"Meta tempo: bait first, then spend into the lane they just exposed.",
+		"Meta rhythm: rotate entry timing each exchange so they cannot pre-read cadence.",
+		"Meta reserve: keep exit force banked, then convert advantage with short checks.",
+		"Meta spacing: camera and footwork should be clean before hard grip/pull commits.",
+		"Meta composure: hide panic tells by keeping movement quality steady at low HP.",
+		"Meta punish: if they copy your last option, change lane immediately and counter."
 	};
 	int slot = rotation;
 	if (slot < 0)
@@ -961,11 +962,11 @@ static void G_QueueManualMetaAdvice(int botClientNum, int targetClientNum, int r
 static void G_QueueManualIntermediateAdvice(int botClientNum, int targetClientNum, int rotation, duel_advice_session_state_t *session)
 {
 	static const char *manualIntermediate[] = {
-		"Intermediate: pull pressure into throw feints, then convert only when recovery is actually exposed.",
-		"Intermediate: advantage is tempo—spend in bursts, reset, then re-enter off lateral movement.",
-		"Intermediate: vary anti-grip exits (delay, down-state, mixed direction) so break timing stays hard to solve.",
-		"Intermediate: use side kick as a spacing interrupt, but respect the force-regen pause while airborne.",
-		"Intermediate: against repeated saber throws, track return path and punish the recall window, not the launch."
+		"Intermediate: shape pull pressure with throw feints, then convert only on exposed recovery.",
+		"Intermediate tempo: spend in bursts, reset, then re-enter from lateral movement.",
+		"Intermediate anti-grip: vary delay, down-state, and exit direction to break reads.",
+		"Intermediate side-kick: use it as spacing control, but respect regen pause until landing.",
+		"Intermediate anti-throw: punish recall windows and return path, not just launch timing."
 	};
 	int slot = rotation;
 	if (slot < 0)
@@ -978,16 +979,16 @@ static void G_QueueManualGenericAdvice(int botClientNum, int targetClientNum, tr
 {
 	int rotation;
 	static const char *manualGeneric[] = {
-		"Manual tempo: keep the offense mix balanced between PTK/pull-throw, saber pressure, and GK.",
-		"Drain discipline: tap drain instead of panic holding; cleaner force endings help efficiency.",
-		"Knockdown discipline: staying flat can deny free flipkick follow-ups; stand when danger actually clears.",
-		"Toss defense: track blade path with crosshair and contest return timing, not just launch timing.",
-		"GK control: vary kick types and angle changes so your breakout timing can’t be pre-read.",
-		"Entry strategy: use movement gap and strafe pressure before committing force.",
-		"Anti-drain set: rotate answers so opponents can’t farm one repeated anti-drain response.",
-		"Map tactics: route knowledge matters—know chase paths, hide paths, and force ranges before hard commits.",
-		"Advanced spacing: close only when your camera and footwork keep their snap options constrained.",
-		"Advanced offense: short saber checks can set up safer pull/grip conversions than raw force-first entries."
+		"Balanced offense rule: split pressure across PTK/pull-throw, saber checks, and GK.",
+		"Drain discipline: controlled taps beat panic holds and keep force economy efficient.",
+		"If punish lane is still live, delay stand-up to deny free follow-up damage.",
+		"Anti-throw discipline: track blade return path and punish recall windows.",
+		"GK variation wins: rotate kick type, turn angle, and yank timing every attempt.",
+		"Entry strategy: use movement gap and strafe pressure before force commitment.",
+		"Anti-drain strategy: rotate counters so one repeated answer cannot be farmed.",
+		"Map strategy: know chase routes, hide routes, and force ranges before hard commits.",
+		"Spacing control: close only when camera and footwork constrain snap answers.",
+		"Short saber checks can create safer pull/grip conversions than force-first entries."
 	};
 
 	rotation = (session ? session->duelsSeen : 0) + (runtime ? runtime->eventCount : 0);
@@ -1098,21 +1099,10 @@ static void G_QueueManualIssueAdvice(int botClientNum, int targetClientNum, duel
 static void G_MaybeQueueTrackedLoginAdvice(int botClientNum, int targetClientNum, duel_advice_session_state_t *session, qboolean loggedIn)
 {
 	static const char *loginAdvice[] = {
-		"Save the progression: /login or /register keeps your duel history and coaching data between sessions.",
-		"Want this coaching and your progress to persist? Use /login after the round so the bot can keep your history.",
-		"Account nudge: /login lets the bot remember your repeat patterns and saves progress across reconnects."
+		"Tip: use /login or /register once to save progress and coaching history between sessions."
 	};
 
-	if (!session || loggedIn)
-	{
-		return;
-	}
-
-	if (!NewBotAI_ShouldQueueLoginReminder(
-		session->duelsSeen,
-		TRACKED_DUEL_ADVICE_LOGIN_START,
-		TRACKED_DUEL_ADVICE_LOGIN_INTERVAL,
-		session->lastLoginPromptDuel))
+	if (!session || loggedIn || session->loginReminderSent)
 	{
 		return;
 	}
@@ -1120,6 +1110,7 @@ static void G_MaybeQueueTrackedLoginAdvice(int botClientNum, int targetClientNum
 	G_QueueRotatingTutorialMessage(botClientNum, targetClientNum, loginAdvice,
 		(int)(sizeof(loginAdvice) / sizeof(loginAdvice[0])), session->duelsSeen, session);
 	session->lastLoginPromptDuel = session->duelsSeen;
+	session->loginReminderSent = qtrue;
 }
 
 static void G_MaybeQueueBotTutorial(tracked_duel_runtime_t *loserRuntime, gentity_t *winner, gentity_t *loser)
@@ -1155,10 +1146,7 @@ static void G_MaybeQueueBotTutorial(tracked_duel_runtime_t *loserRuntime, gentit
 		duelDuration < TRACKED_DUEL_PATTERN_MIN_DURATION_MS) ? qtrue : qfalse;
 	allowSpecificIssue = (issue < DUEL_TRACK_ISSUE_COUNT && G_TrackedAdviceIsSpecificAllowed(loserRuntime, session, issue)) ? qtrue : qfalse;
 	skillBand = G_GetTrackedSkillBand(loserRuntime, session, 1, 0);
-	if (allowSpecificIssue && session->sessionIssueCounts[issue] >= 2)
-		g_botTutorialQueues[botClientNum].cooldownMs = TRACKED_DUEL_TUTORIAL_FAST_COOLDOWN_MS;
-	else
-		g_botTutorialQueues[botClientNum].cooldownMs = TRACKED_DUEL_TUTORIAL_COOLDOWN_MS;
+	g_botTutorialQueues[botClientNum].cooldownMs = TRACKED_DUEL_TUTORIAL_COOLDOWN_MS;
 
 	basicsWindow = (skillBand == DUEL_TRACK_SKILL_BEGINNER) &&
 		((!loggedIn || (session->historyDuels <= 0)) ||
@@ -1286,7 +1274,7 @@ void G_QueueArcadeBotTutorial(gentity_t *speaker, gentity_t *listener, int round
 	int rotation;
 	bot_tutorial_queue_t *queue;
 
-	if (bot_tutorial.integer < 2 || bot_nochat.integer || !speaker || !listener ||
+	if (bot_tutorial.integer < 1 || bot_nochat.integer || !speaker || !listener ||
 		!speaker->client || !listener->client)
 	{
 		return;
@@ -1337,7 +1325,7 @@ void G_QueueArcadeBotTutorial(gentity_t *speaker, gentity_t *listener, int round
 
 	if (queue->queuedCount > queue->nextMessageIndex)
 	{
-		queue->publicBroadcast = qtrue;
+		queue->publicBroadcast = (bot_tutorial.integer >= 2) ? qtrue : qfalse;
 		G_SetBotTutorialInitialDelay(queue);
 	}
 }

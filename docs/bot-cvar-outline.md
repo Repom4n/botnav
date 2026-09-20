@@ -126,7 +126,7 @@ Notes:
 | Cvar | Default | Description |
 |------|---------|-------------|
 | `bot_nochat` | `0` | Disable bot chat. |
-| `bot_tutorial` | `0` | Enable concise private trainer tells from bots after tracked duels; requires `bot_dueltracking`, explains core abbreviations early (PK/GK/PTK), escalates to intermediate/meta coaching, and rate-limits repeated tells. |
+| `bot_tutorial` | `0` | Enable concise trainer tells from bots after tracked duels; at `1` tells are private, at `2+` tells may broadcast publicly. Messages are capped to 3 per burst with a 7s cooldown between sends, and unregistered reminders are sent once per session. |
 | `bot_dueltracking` | `0` | Record duel summaries, per-player force-spend stats, and sequential duel events for human-vs-human and human-vs-bot duels only (bot-vs-bot excluded). |
 | `bot_dueltracking_geometry` | `0` | Optional geometry capture for tracked duel events. `1` logs only key spatial events (damage/range/air/knockdown), `2` logs all tracked events. Off by default to keep overhead low. |
 | `bot_yawswitch` | `10` | Legacy/unused cvar; current wall-escape yaw behavior is hardcoded in `ai_main.c`. |
