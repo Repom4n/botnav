@@ -31,6 +31,7 @@ static char LOCAL_DB_PATH[MAX_OSPATH];
 #define TRACKED_DUEL_SKILL_MIN_WINRATE_DUELS 5
 #define TRACKED_DUEL_SKILL_HIGH_WINRATE 55
 #define TRACKED_DUEL_SKILL_LOW_WINRATE 35
+#define TRACKED_DUEL_ADVICE_LOGIN_MIN_DUELS 3
 #define LOCAL_ARCADE_SCORE_ORDER "score DESC, end_time DESC"
 //#define GLOBAL_DB_PATH sv_globalDBPath.string
 //#define MAX_TMP_RACELOG_SIZE 80 * 1024
@@ -1099,7 +1100,8 @@ static void G_MaybeQueueTrackedLoginAdvice(int botClientNum, int targetClientNum
 		"Tip: use /login or /register once to save progress and coaching history between sessions."
 	};
 
-	if (!session || loggedIn || session->loginReminderSent)
+	if (!session || loggedIn || session->loginReminderSent ||
+		session->duelsSeen < TRACKED_DUEL_ADVICE_LOGIN_MIN_DUELS)
 	{
 		return;
 	}
