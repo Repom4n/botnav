@@ -479,8 +479,13 @@ static qboolean G_ArcadeEnsureHumanReserveSlots(void)
 		const int kicked = G_ArcadeKickBotsForReserve(neededSlots);
 		if (kicked > 0)
 		{
-			trap->SendServerCommand(-1, va("print \"Arcade: freed %d bot slot%s for human players.\n\"",
-				kicked, (kicked == 1) ? "" : "s"));
+			const qboolean canAnnounce = (level.time >= level.arcadeReserveAnnounceTime) ? qtrue : qfalse;
+			level.arcadeReserveAnnounceTime = level.time + 5000;
+			if (canAnnounce)
+			{
+				trap->SendServerCommand(-1, va("print \"Arcade: freed %d bot slot%s for human players.\n\"",
+					kicked, (kicked == 1) ? "" : "s"));
+			}
 		}
 	}
 
@@ -769,6 +774,7 @@ static void G_ArcadeShutdown(qboolean kickBots)
 	level.arcadeRoundBotsTarget = 0;
 	level.arcadeRoundQueuedStart = 0;
 	level.arcadeGameOverTime = 0;
+	level.arcadeReserveAnnounceTime = 0;
 }
 
 static void G_ArcadeEnsureWaitingBot(void)
