@@ -527,10 +527,18 @@ static int G_ArcadeCountManagedBotSlots(void)
 
 	for (i = 0; i < MAX_CLIENTS; i++)
 	{
-		if (level.arcadeManagedBot[i])
+		gentity_t *ent = &g_entities[i];
+		if (!level.arcadeManagedBot[i])
 		{
-			count++;
+			continue;
 		}
+		if (!ent->inuse || !ent->client || !(ent->r.svFlags & SVF_BOT) ||
+			ent->client->pers.connected == CON_DISCONNECTED)
+		{
+			level.arcadeManagedBot[i] = qfalse;
+			continue;
+		}
+		count++;
 	}
 
 	return count;
