@@ -544,7 +544,6 @@ static void G_ArcadeKickAllBots(void)
 			ent->client->pers.connected == CON_CONNECTED &&
 			level.arcadeManagedBot[i])
 		{
-			level.arcadeManagedBot[i] = qfalse;
 			trap->SendConsoleCommand(EXEC_APPEND, va("clientkick %i\n", i));
 		}
 	}
