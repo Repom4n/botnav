@@ -353,26 +353,6 @@ static void G_ArcadeSendCenterMessage(gentity_t *ent, const char *headline, int 
 	}
 }
 
-static int G_ArcadeCountHumans(qboolean activeOnly)
-{
-	int i, count = 0;
-	for (i = 0; i < MAX_CLIENTS; i++)
-	{
-		gentity_t *ent = &g_entities[i];
-		if (!ent->inuse || !ent->client || (ent->r.svFlags & SVF_BOT) ||
-			ent->client->pers.connected != CON_CONNECTED)
-		{
-			continue;
-		}
-		if (activeOnly && ent->client->sess.sessionTeam != TEAM_RED)
-		{
-			continue;
-		}
-		count++;
-	}
-	return count;
-}
-
 static int G_ArcadeCountRoundHumans(void)
 {
 	int i, count = 0;
