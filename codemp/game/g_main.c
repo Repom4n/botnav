@@ -470,9 +470,14 @@ static int G_ArcadeCountManagedBots(qboolean includeSpectators)
 	return count;
 }
 
-static qboolean G_ArcadeKickManagedBot(qboolean spectatorOnly)
+static int G_ArcadeKickManagedBots(int maxKickCount, qboolean spectatorOnly)
 {
-	int i;
+	int i, kicked = 0;
+
+	if (maxKickCount <= 0)
+	{
+		return 0;
+	}
 
 	for (i = 0; i < MAX_CLIENTS; i++)
 	{
@@ -488,10 +493,14 @@ static qboolean G_ArcadeKickManagedBot(qboolean spectatorOnly)
 			continue;
 		}
 		trap->SendConsoleCommand(EXEC_APPEND, va("clientkick %i\n", i));
-		return qtrue;
+		kicked++;
+		if (kicked >= maxKickCount)
+		{
+			break;
+		}
 	}
 
-	return qfalse;
+	return kicked;
 }
 
 static void G_ArcadeRestorePlayer(gentity_t *ent)
@@ -607,9 +616,11 @@ static void G_ArcadeEnsureWaitingBot(void)
 
 	if (connectedManagedBots > 1)
 	{
-		if (!G_ArcadeKickManagedBot(qtrue))
+		const int extras = connectedManagedBots - 1;
+		int kicked = G_ArcadeKickManagedBots(extras, qtrue);
+		if (kicked < extras)
 		{
-			G_ArcadeKickManagedBot(qfalse);
+			G_ArcadeKickManagedBots(extras - kicked, qfalse);
 		}
 		return;
 	}
@@ -666,9 +677,11 @@ static void G_ArcadeStartRound(void)
 
 	if (G_ArcadeCountManagedBots(qtrue) > targetBots)
 	{
-		if (!G_ArcadeKickManagedBot(qtrue) && !G_ArcadeKickManagedBot(qfalse))
+		const int extras = G_ArcadeCountManagedBots(qtrue) - targetBots;
+		int kicked = G_ArcadeKickManagedBots(extras, qtrue);
+		if (kicked < extras)
 		{
-			return;
+			G_ArcadeKickManagedBots(extras - kicked, qfalse);
 		}
 	}
 
