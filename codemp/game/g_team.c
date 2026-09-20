@@ -238,13 +238,6 @@ qboolean OnSameTeam( gentity_t *ent1, gentity_t *ent2 ) {
 		return qfalse;
 	}
 
-	if (level.gametype == GT_ARCADE)
-	{
-		const qboolean ent1IsBot = (ent1->r.svFlags & SVF_BOT) ? qtrue : qfalse;
-		const qboolean ent2IsBot = (ent2->r.svFlags & SVF_BOT) ? qtrue : qfalse;
-		return (ent1IsBot == ent2IsBot) ? qtrue : qfalse;
-	}
-
 	if ( level.gametype < GT_TEAM ) {
 		return qfalse;
 	}
@@ -1788,5 +1781,4 @@ Targets will be fired when someone spawns in on them.
 */
 void SP_team_CTF_bluespawn(gentity_t *ent) {
 }
-
 

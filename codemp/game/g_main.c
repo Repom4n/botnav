@@ -423,6 +423,35 @@ static void G_ArcadeRestorePlayer(gentity_t *ent)
 	ent->client->damage_blood = 0;
 }
 
+static void G_ArcadeRespawnParticipant(gentity_t *ent, qboolean preservePosition)
+{
+	vec3_t savedOrigin;
+	vec3_t savedAngles;
+
+	if (!ent || !ent->client)
+	{
+		return;
+	}
+
+	if (preservePosition)
+	{
+		VectorCopy(ent->client->ps.origin, savedOrigin);
+		VectorCopy(ent->client->ps.viewangles, savedAngles);
+	}
+
+	SetTeam(ent, "free", qtrue);
+	G_ArcadeRestorePlayer(ent);
+
+	if (preservePosition)
+	{
+		G_SetOrigin(ent, savedOrigin);
+		VectorCopy(savedOrigin, ent->client->ps.origin);
+		SetClientViewAngle(ent, savedAngles);
+		VectorClear(ent->client->ps.velocity);
+		trap->LinkEntity((sharedEntity_t *)ent);
+	}
+}
+
 static void G_ArcadeKickAllBots(void);
 
 static void G_ArcadeEnsureWaitingBot(void)
@@ -526,14 +555,8 @@ static void G_ArcadeStartRound(void)
 			continue;
 		}
 
-		if (wasParticipant && ent->client->sess.sessionTeam != TEAM_SPECTATOR && ent->health > 0)
-		{
-			G_ArcadeRestorePlayer(ent);
-		}
-		else
-		{
-			SetTeam(ent, "free", qtrue);
-		}
+		G_ArcadeRespawnParticipant(ent,
+			(wasParticipant && ent->client->sess.sessionTeam != TEAM_SPECTATOR && ent->health > 0) ? qtrue : qfalse);
 		if (wasParticipant)
 		{
 			level.arcadeScore[i] = savedScore;
@@ -679,6 +702,7 @@ static void G_ArcadeRunFrame(void)
 	{
 		if (G_ArcadeCountRoundHumans() <= 0)
 		{
+			level.arcadeRoundQueuedStart = 0;
 			G_ArcadeEnsureWaitingBot();
 		}
 		else if (!level.arcadeRoundQueuedStart)
