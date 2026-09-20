@@ -723,7 +723,7 @@ static void G_ArcadeRunFrame(void)
 	if (level.gametype != GT_ARCADE)
 	{
 		if (level.arcadeInitialized || level.arcadeRoundStartTime || level.arcadeRoundQueuedStart ||
-			level.arcadeGameOverTime || level.arcadeRoundBotsTarget)
+			level.arcadeGameOverTime || level.arcadeRoundBotsTarget || G_ArcadeHasManagedBots())
 		{
 			G_ArcadeShutdown(qtrue);
 		}

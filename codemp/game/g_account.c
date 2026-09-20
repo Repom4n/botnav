@@ -1047,6 +1047,7 @@ static void G_MaybeQueueBotTutorial(tracked_duel_runtime_t *loserRuntime, gentit
 	if (basicsWindow)
 	{
 		const int queuedCountBefore = g_botTutorialQueues[botClientNum].queuedCount;
+		const qboolean queueWasEmpty = (queuedCountBefore <= g_botTutorialQueues[botClientNum].nextMessageIndex);
 
 		if (session->duelsSeen <= 1)
 		G_QueueManualBasicsAdvice(botClientNum, loser->s.number, session->duelsSeen - 1, session);
@@ -1058,10 +1059,15 @@ static void G_MaybeQueueBotTutorial(tracked_duel_runtime_t *loserRuntime, gentit
 		if (g_botTutorialQueues[botClientNum].queuedCount > queuedCountBefore)
 		{
 			g_botTutorialQueues[botClientNum].publicBroadcast = (bot_tutorial.integer >= 2) ? qtrue : qfalse;
-			G_SetBotTutorialInitialDelay(&g_botTutorialQueues[botClientNum]);
+			if (queueWasEmpty)
+				G_SetBotTutorialInitialDelay(&g_botTutorialQueues[botClientNum]);
 		}
 		return;
 	}
+
+	{
+		const int queuedCountBefore = g_botTutorialQueues[botClientNum].queuedCount;
+		const qboolean queueWasEmpty = (queuedCountBefore <= g_botTutorialQueues[botClientNum].nextMessageIndex);
 
 	if (issue < DUEL_TRACK_ISSUE_COUNT && G_TrackedAdviceIsSpecificAllowed(session, issue))
 	{
@@ -1089,8 +1095,13 @@ static void G_MaybeQueueBotTutorial(tracked_duel_runtime_t *loserRuntime, gentit
 		(int)(sizeof(lateDefenseFollowups) / sizeof(lateDefenseFollowups[0])), session->duelsSeen, session);
 	}
 
-	g_botTutorialQueues[botClientNum].publicBroadcast = (bot_tutorial.integer >= 2) ? qtrue : qfalse;
-	G_SetBotTutorialInitialDelay(&g_botTutorialQueues[botClientNum]);
+		if (g_botTutorialQueues[botClientNum].queuedCount > queuedCountBefore)
+		{
+			g_botTutorialQueues[botClientNum].publicBroadcast = (bot_tutorial.integer >= 2) ? qtrue : qfalse;
+			if (queueWasEmpty)
+				G_SetBotTutorialInitialDelay(&g_botTutorialQueues[botClientNum]);
+		}
+	}
 }
 
 static void G_ProcessBotTutorialQueue(gentity_t *ent)
