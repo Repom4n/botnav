@@ -2016,7 +2016,7 @@ void CG_DrawHUD(centity_t	*cent)
 				}
 				else
 				{	// Don't draw a bias.
-					if (cg_drawScore.integer > 1 && cgs.gametype >= GT_TEAM && cgs.gametype != GT_SIEGE) {
+					if (cg_drawScore.integer > 1 && cgs.gametype >= GT_TEAM && cgs.gametype != GT_SIEGE && cgs.gametype != GT_ARCADE) {
 						int teamscore;
 						int teamscorebias;
 						char teamscoreStr[16];
@@ -2085,7 +2085,7 @@ void CG_DrawHUD(centity_t	*cent)
 
 					CG_DrawSimpleForcePower(cent);
 
-					if (cg_drawScore.integer > 1 && cgs.gametype >= GT_TEAM && cgs.gametype != GT_SIEGE)
+					if (cg_drawScore.integer > 1 && cgs.gametype >= GT_TEAM && cgs.gametype != GT_SIEGE && cgs.gametype != GT_ARCADE)
 						CG_DrawScaledProportionalString(SCREEN_WIDTH - 112 * cgs.widthRatioCoef, SCREEN_HEIGHT - 34, scoreStr, UI_RIGHT | UI_DROPSHADOW, colorTable[CT_WHITE], 0.7f);
 					else
 						CG_DrawScaledProportionalString(SCREEN_WIDTH - 100 * cgs.widthRatioCoef, SCREEN_HEIGHT - 20, scoreStr, UI_RIGHT | UI_DROPSHADOW, colorTable[CT_WHITE], 0.7f);
@@ -2097,7 +2097,7 @@ void CG_DrawHUD(centity_t	*cent)
 					return;
 				}
 
-				if (cgs.gametype >= GT_TEAM && cgs.gametype != GT_SIEGE)
+				if (cgs.gametype >= GT_TEAM && cgs.gametype != GT_SIEGE && cgs.gametype != GT_ARCADE)
 				{	// tint the hud items based on team (JAPRO - Clientside - Tint hud in team gamemode toggle)
 					if (cg.snap->ps.persistant[PERS_TEAM] == TEAM_RED && cg_tintHud.integer && cg_hudFiles.integer != 3)
 						hudTintColor = redhudtint;
@@ -4272,7 +4272,7 @@ static float CG_DrawMiniScoreboard ( float y )
 		return y;
 	}
 
-	if ( cgs.gametype >= GT_TEAM && cg_drawScores.integer != 3)
+	if ( cgs.gametype >= GT_TEAM && cgs.gametype != GT_ARCADE && cg_drawScores.integer != 3)
 	{
 		if (cg_drawScores.integer == 1) {
 		Q_strncpyz( temp, va( "%s: ", CG_GetStringEdString( "MP_INGAME", "RED" ) ), sizeof( temp ) );
