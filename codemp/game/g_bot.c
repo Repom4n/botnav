@@ -482,7 +482,7 @@ static void G_ForcePowersSetSide(char *forcePowers, int forceSide)
 	Q_strncpyz(forcePowers, updated, DEFAULT_FORCEPOWERS_LEN+1);
 }
 
-void G_AddRandomBot( int team ) {
+static void G_AddRandomBotInternal( int team, qboolean arcadeManaged ) {
 	int		i, n, num;
 	float	skill;
 	char	*value, netname[36], *teamstr;
@@ -557,11 +557,19 @@ void G_AddRandomBot( int team ) {
 				else teamstr = "";
 				Q_strncpyz(netname, value, sizeof(netname));
 				Q_CleanStr(netname);
-				trap->SendConsoleCommand( EXEC_INSERT, va("addbot \"%s\" %.2f %s %i\n", netname, skill, teamstr, 0) );
+				trap->SendConsoleCommand( EXEC_INSERT, va("addbot \"%s\" %.2f %s %i \"\" %i\n", netname, skill, teamstr, 0, arcadeManaged ? 1 : 0) );
 				return;
 			}
 		}
 	}
+}
+
+void G_AddRandomBot( int team ) {
+	G_AddRandomBotInternal( team, qfalse );
+}
+
+void G_AddRandomBotManaged( int team ) {
+	G_AddRandomBotInternal( team, qtrue );
 }
 
 /*
@@ -901,10 +909,9 @@ qboolean G_BotConnect( int clientNum, qboolean restart ) {
 G_AddBot
 ===============
 */
-static void G_AddBot( const char *name, float skill, const char *team, int delay, char *altname) {
+static void G_AddBot( const char *name, float skill, const char *team, int delay, char *altname, qboolean arcadeManaged) {
 	gentity_t		*bot = NULL;
 	int				clientNum, preTeam = TEAM_FREE;
-	qboolean		arcadeManaged = qfalse;
 	char			userinfo[MAX_INFO_STRING] = {0},
 					*botinfo = NULL, *key = NULL, *s = NULL, *botname = NULL, *model = NULL;
 
@@ -913,23 +920,19 @@ static void G_AddBot( const char *name, float skill, const char *team, int delay
 	if ( clientNum == -1 ) {
 //		trap->Print( S_COLOR_RED "Unable to add bot.  All player slots are in use.\n" );
 //		trap->Print( S_COLOR_RED "Start server with more 'open' slots.\n" );
-		level.arcadeMarkNextBot = qfalse;
 		trap->SendServerCommand( -1, va("print \"%s\n\"", G_GetStringEdString("MP_SVGAME", "UNABLE_TO_ADD_BOT")));
 		return;
 	}
 
-	if (level.gametype == GT_ARCADE && level.arcadeMarkNextBot)
+	if (level.gametype == GT_ARCADE && arcadeManaged)
 	{
 		level.arcadeManagedBot[clientNum] = qtrue;
-		level.arcadeMarkNextBot = qfalse;
-		arcadeManaged = qtrue;
 	}
 
 	// get the botinfo from bots.txt
 	botinfo = G_GetBotInfoByName( name );
 	if ( !botinfo ) {
 		trap->Print( S_COLOR_RED "Error: Bot '%s' not defined\n", name );
-		level.arcadeMarkNextBot = qfalse;
 		if (arcadeManaged)
 			level.arcadeManagedBot[clientNum] = qfalse;
 		trap->BotFreeClient( clientNum );
@@ -1163,6 +1166,7 @@ Svcmd_AddBot_f
 void Svcmd_AddBot_f( void ) {
 	float			skill;
 	int				delay;
+	qboolean		arcadeManaged;
 	char			name[MAX_TOKEN_CHARS];
 	char			altname[MAX_TOKEN_CHARS];
 	char			string[MAX_TOKEN_CHARS];
@@ -1177,7 +1181,7 @@ void Svcmd_AddBot_f( void ) {
 	// name
 	trap->Argv( 1, name, sizeof( name ) );
 	if ( !name[0] ) {
-		trap->Print( "Usage: Addbot <botname> [skill 1-5] [team] [msec delay] [altname]\n" );
+		trap->Print( "Usage: Addbot <botname> [skill 1-5] [team] [msec delay] [altname] [arcademanaged]\n" );
 		return;
 	}
 
@@ -1210,8 +1214,10 @@ void Svcmd_AddBot_f( void ) {
 
 	// alternative name
 	trap->Argv( 5, altname, sizeof( altname ) );
+	trap->Argv( 6, string, sizeof( string ) );
+	arcadeManaged = string[0] ? atoi( string ) != 0 : qfalse;
 
-	G_AddBot( name, skill, team, delay, altname );
+	G_AddBot( name, skill, team, delay, altname, arcadeManaged );
 
 	// if this was issued during gameplay and we are playing locally,
 	// go ahead and load the bot's media immediately

@@ -1561,7 +1561,6 @@ typedef struct level_locals_s {
 	qboolean	arcadeEliminated[MAX_CLIENTS];
 	qboolean	arcadeParticipant[MAX_CLIENTS];
 	qboolean	arcadeManagedBot[MAX_CLIENTS];
-	qboolean	arcadeMarkNextBot;
 	qboolean	arcadeInitialized;
 } level_locals_t;
 
@@ -1974,6 +1973,7 @@ void G_CheckBotSpawn( void );
 void G_RemoveQueuedBotBegin( int clientNum );
 qboolean G_BotConnect( int clientNum, qboolean restart );
 void G_AddRandomBot( int team );
+void G_AddRandomBotManaged( int team );
 void Svcmd_AddBot_f( void );
 void Svcmd_BotList_f( void );
 void BotInterbreedEndMatch( void );
