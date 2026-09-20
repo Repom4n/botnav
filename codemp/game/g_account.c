@@ -171,8 +171,6 @@ typedef struct
 	int duelsSeen;
 	int historyDuels;
 	qboolean historyLoaded;
-	qboolean glossaryGiven;
-	unsigned int adviceMask;
 	char identityKey[64];
 	int sessionIssueCounts[DUEL_TRACK_ISSUE_COUNT];
 	int historyIssueCounts[DUEL_TRACK_ISSUE_COUNT];
@@ -919,11 +917,8 @@ static void G_MaybeQueueBotTutorial(tracked_duel_runtime_t *loserRuntime, gentit
 		(session->duelsSeen <= TRACKED_DUEL_ADVICE_BASIC_WINDOW);
 	if (basicsWindow)
 	{
-		if (!session->glossaryGiven)
-		{
+		if (session->duelsSeen <= 1)
 			G_QueueManualBasicsAdvice(botClientNum, loser->s.number, session->duelsSeen - 1);
-			session->glossaryGiven = qtrue;
-		}
 		else
 		{
 			G_QueueManualMetaAdvice(botClientNum, loser->s.number, session->duelsSeen);
@@ -5155,13 +5150,6 @@ void Svcmd_ExportDuelTrack_f(void)
 	int msPart;
 	char pathSep;
 
-	trackedTables[trackedTableCount++] = "LocalDuelTrackSummary";
-	trackedTables[trackedTableCount++] = "LocalDuelTrackParticipant";
-	trackedTables[trackedTableCount++] = "LocalDuelTrackEvent";
-	if (bot_dueltracking_geometry.integer > 0)
-		trackedTables[trackedTableCount++] = "LocalDuelTrackGeometry";
-	trackedTables[trackedTableCount++] = "LocalDuelTrackAggregate";
-
 	optionalPrefix[0] = '\0';
 	if (trap->Argc() >= 2)
 	{
@@ -5200,6 +5188,12 @@ void Svcmd_ExportDuelTrack_f(void)
 		trap->Print("exportDuelTrack failed: unable to open local duel database.\n");
 		return;
 	}
+	trackedTables[trackedTableCount++] = "LocalDuelTrackSummary";
+	trackedTables[trackedTableCount++] = "LocalDuelTrackParticipant";
+	trackedTables[trackedTableCount++] = "LocalDuelTrackEvent";
+	if (G_DoesTrackedDuelTableExist(db, "LocalDuelTrackGeometry"))
+		trackedTables[trackedTableCount++] = "LocalDuelTrackGeometry";
+	trackedTables[trackedTableCount++] = "LocalDuelTrackAggregate";
 
 	Q_strncpyz(dbDir, effectiveDbPath, sizeof(dbDir));
 	slashPos = strrchr(dbDir, '/');
