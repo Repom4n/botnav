@@ -924,17 +924,20 @@ static void G_MaybeQueueBotTutorial(tracked_duel_runtime_t *loserRuntime, gentit
 			G_QueueManualBasicsAdvice(botClientNum, loser->s.number, session->duelsSeen - 1);
 			session->glossaryGiven = qtrue;
 		}
-		G_QueueManualMetaAdvice(botClientNum, loser->s.number, session->duelsSeen);
+		else
+		{
+			G_QueueManualMetaAdvice(botClientNum, loser->s.number, session->duelsSeen);
+		}
 		return;
 	}
 
-	if (G_IsTrackedIntermediateCandidate(loserRuntime))
-	{
-		G_QueueManualIntermediateAdvice(botClientNum, loser->s.number, session->duelsSeen + issue);
-	}
-	else if (issue < DUEL_TRACK_ISSUE_COUNT && G_TrackedAdviceIsSpecificAllowed(session, issue))
+	if (issue < DUEL_TRACK_ISSUE_COUNT && G_TrackedAdviceIsSpecificAllowed(session, issue))
 	{
 		G_QueueManualIssueAdvice(botClientNum, loser->s.number, issue, session);
+	}
+	else if (G_IsTrackedIntermediateCandidate(loserRuntime))
+	{
+		G_QueueManualIntermediateAdvice(botClientNum, loser->s.number, session->duelsSeen + issue);
 	}
 	else
 	{
@@ -5134,13 +5137,8 @@ static qboolean G_OpenTrackedLocalDB(sqlite3 **dbOut, char *resolvedPath, int re
 
 void Svcmd_ExportDuelTrack_f(void)
 {
-	static const char *trackedTables[] = {
-		"LocalDuelTrackSummary",
-		"LocalDuelTrackParticipant",
-		"LocalDuelTrackEvent",
-		"LocalDuelTrackGeometry",
-		"LocalDuelTrackAggregate"
-	};
+	const char *trackedTables[5];
+	int trackedTableCount = 0;
 	sqlite3 *db;
 	char dbDir[MAX_OSPATH];
 	char effectiveDbPath[MAX_OSPATH];
@@ -5156,6 +5154,13 @@ void Svcmd_ExportDuelTrack_f(void)
 	int rows;
 	int msPart;
 	char pathSep;
+
+	trackedTables[trackedTableCount++] = "LocalDuelTrackSummary";
+	trackedTables[trackedTableCount++] = "LocalDuelTrackParticipant";
+	trackedTables[trackedTableCount++] = "LocalDuelTrackEvent";
+	if (bot_dueltracking_geometry.integer > 0)
+		trackedTables[trackedTableCount++] = "LocalDuelTrackGeometry";
+	trackedTables[trackedTableCount++] = "LocalDuelTrackAggregate";
 
 	optionalPrefix[0] = '\0';
 	if (trap->Argc() >= 2)
@@ -5238,7 +5243,7 @@ void Svcmd_ExportDuelTrack_f(void)
 	}
 	msPart = trap->Milliseconds() % 1000;
 
-	for (i = 0; i < (int)(sizeof(trackedTables) / sizeof(trackedTables[0])); i++)
+	for (i = 0; i < trackedTableCount; i++)
 	{
 		if (!G_DoesTrackedDuelTableExist(db, trackedTables[i]))
 		{
