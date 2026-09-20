@@ -58,6 +58,7 @@ void G_ShutdownGame				( int restart );
 void CheckExitRules				( void );
 void PrintStats(int client);
 void G_ROFF_NotetrackCallback	( gentity_t *cent, const char *notetrack);
+void SetTeamQuick(gentity_t *ent, int team, qboolean doBegin);
 
 extern stringID_table_t setTable[];
 
@@ -208,7 +209,7 @@ void G_CacheMapname( const vmCvar_t *mapname )
 #define ARCADE_PRIMARY_BOT_LEVEL_MAX 10
 #define ARCADE_GAME_START_DELAY_MS 3500
 #define ARCADE_JOIN_QUEUE_DELAY_MS 1000
-#define ARCADE_BETWEEN_LEVEL_DELAY_MS 2000
+#define ARCADE_BETWEEN_LEVEL_DELAY_MS 1500
 #define ARCADE_GAME_OVER_DELAY_MS 7000
 
 static int G_ArcadeGetProgressionLevel(int arcadeLevel)
@@ -503,6 +504,29 @@ static int G_ArcadeKickManagedBots(int maxKickCount, qboolean spectatorOnly)
 	return kicked;
 }
 
+static int G_ArcadeKickUnmanagedSpectatorBots(void)
+{
+	int i, kicked = 0;
+
+	for (i = 0; i < MAX_CLIENTS; i++)
+	{
+		gentity_t *ent = &g_entities[i];
+		if (!ent->inuse || !ent->client || !(ent->r.svFlags & SVF_BOT) ||
+			ent->client->pers.connected != CON_CONNECTED)
+		{
+			continue;
+		}
+		if (level.arcadeManagedBot[i] || ent->client->sess.sessionTeam != TEAM_SPECTATOR)
+		{
+			continue;
+		}
+		trap->SendConsoleCommand(EXEC_APPEND, va("clientkick %i\n", i));
+		kicked++;
+	}
+
+	return kicked;
+}
+
 static void G_ArcadeKickManagedBot(gentity_t *ent)
 {
 	if (!ent || !ent->client)
@@ -609,6 +633,7 @@ static void G_ArcadeEnsureWaitingBot(void)
 	const float primarySkill = G_ArcadeSkillForBotLevel(primaryLevel);
 
 	waitingBot = G_ArcadeFindManagedBot(qfalse);
+	G_ArcadeKickUnmanagedSpectatorBots();
 	if (connectedManagedBots > activeManagedBots)
 	{
 		G_ArcadeKickManagedBots(connectedManagedBots - activeManagedBots, qtrue);
@@ -667,6 +692,7 @@ static void G_ArcadeStartRound(void)
 	}
 
 	targetBots = humans;
+	G_ArcadeKickUnmanagedSpectatorBots();
 
 	if (connectedManagedBots > activeManagedBots)
 	{
@@ -763,7 +789,7 @@ void G_ArcadeHandlePlayerDeath(gentity_t *self, gentity_t *attacker)
 	}
 	if (self->client->sess.sessionTeam != TEAM_SPECTATOR)
 	{
-		SetTeam(self, "s", qfalse);
+		SetTeamQuick(self, TEAM_SPECTATOR, qfalse);
 	}
 }
 
@@ -1990,7 +2016,7 @@ void CalculateRanks( void ) {
 		sizeof(level.sortedClients[0]), SortRanks );
 
 	// set the rank value for all clients that are connected and not spectators
-	if ( level.gametype >= GT_TEAM ) {
+	if ( level.gametype >= GT_TEAM && level.gametype != GT_ARCADE ) {
 		// in team games, rank is just the order of the teams, 0=red, 1=blue, 2=tied
 		for ( i = 0;  i < level.numConnectedClients; i++ ) {
 			cl = &level.clients[ level.sortedClients[i] ];
@@ -2025,7 +2051,7 @@ void CalculateRanks( void ) {
 	}
 
 	// set the CS_SCORES1/2 configstrings, which will be visible to everyone
-	if ( level.gametype >= GT_TEAM ) {
+	if ( level.gametype >= GT_TEAM && level.gametype != GT_ARCADE ) {
 		trap->SetConfigstring( CS_SCORES1, va("%i", level.teamScores[TEAM_RED] ) );
 		trap->SetConfigstring( CS_SCORES2, va("%i", level.teamScores[TEAM_BLUE] ) );
 	} else {
