@@ -677,13 +677,16 @@ static void G_ArcadeStartRound(void)
 		activeManagedBots++;
 	}
 
-	if (G_ArcadeCountManagedBots(qtrue) > targetBots)
 	{
-		const int extras = G_ArcadeCountManagedBots(qtrue) - targetBots;
-		int kicked = G_ArcadeKickManagedBots(extras, qtrue);
-		if (kicked < extras)
+		const int totalManagedBots = G_ArcadeCountManagedBots(qtrue);
+		if (totalManagedBots > targetBots)
 		{
-			G_ArcadeKickManagedBots(extras - kicked, qfalse);
+			const int extras = totalManagedBots - targetBots;
+			int kicked = G_ArcadeKickManagedBots(extras, qtrue);
+			if (kicked < extras)
+			{
+				G_ArcadeKickManagedBots(extras - kicked, qfalse);
+			}
 		}
 	}
 
