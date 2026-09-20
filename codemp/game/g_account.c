@@ -19,6 +19,7 @@ static char LOCAL_DB_PATH[MAX_OSPATH];
 #define TRACKED_DUEL_MAX_EVENTS 128
 #define TRACKED_DUEL_TUTORIAL_MAX_MESSAGES 3
 #define TRACKED_DUEL_TUTORIAL_COOLDOWN_MS 7000
+#define TRACKED_DUEL_TUTORIAL_FAST_COOLDOWN_MS 2500
 #define TRACKED_DUEL_LOW_FORCE_THRESHOLD 25
 #define TRACKED_DUEL_ADVICE_BASIC_WINDOW 5
 #define TRACKED_DUEL_ADVICE_MIN_OBSERVATIONS 3
@@ -90,6 +91,12 @@ typedef struct
 	unsigned char power;
 	unsigned char state;
 	unsigned char rangeBucket;
+	vec3_t selfOrigin;
+	vec3_t enemyOrigin;
+	vec3_t selfVelocity;
+	vec3_t enemyVelocity;
+	float selfYaw;
+	float enemyYaw;
 	char note[32];
 } tracked_duel_event_t;
 
@@ -138,6 +145,7 @@ typedef struct
 {
 	int targetClientNum;
 	int nextSendTime;
+	int cooldownMs;
 	int queuedCount;
 	int nextMessageIndex;
 	int immediateIndex;
@@ -163,6 +171,8 @@ typedef struct
 	int duelsSeen;
 	int historyDuels;
 	qboolean historyLoaded;
+	qboolean glossaryGiven;
+	unsigned int adviceMask;
 	char identityKey[64];
 	int sessionIssueCounts[DUEL_TRACK_ISSUE_COUNT];
 	int historyIssueCounts[DUEL_TRACK_ISSUE_COUNT];
@@ -223,6 +233,18 @@ static void G_EnsureLocalDuelTrackingSchema(sqlite3 *db)
 		G_ErrorPrint("ERROR: SQL Create Failed (LocalDuelTrackEvent)", s);
 	CALL_SQLITE(finalize(stmt));
 
+	sql = "CREATE TABLE IF NOT EXISTS LocalDuelTrackGeometry("
+		"id INTEGER PRIMARY KEY, summary_id INTEGER, participant_key VARCHAR(64), opponent_key VARCHAR(64), "
+		"rel_time UNSIGNED INTEGER, event_index UNSIGNED SMALLINT, "
+		"self_x REAL, self_y REAL, self_z REAL, enemy_x REAL, enemy_y REAL, enemy_z REAL, "
+		"self_vx REAL, self_vy REAL, self_vz REAL, enemy_vx REAL, enemy_vy REAL, enemy_vz REAL, "
+		"self_yaw REAL, enemy_yaw REAL)";
+	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
+	s = sqlite3_step(stmt);
+	if (s != SQLITE_DONE)
+		G_ErrorPrint("ERROR: SQL Create Failed (LocalDuelTrackGeometry)", s);
+	CALL_SQLITE(finalize(stmt));
+
 	sql = "CREATE TABLE IF NOT EXISTS LocalDuelTrackAggregate("
 		"participant_key VARCHAR(64), participant_kind UNSIGNED TINYINT, side UNSIGNED TINYINT, matchup UNSIGNED TINYINT, "
 		"duels UNSIGNED INTEGER, wins UNSIGNED INTEGER, losses UNSIGNED INTEGER, total_force_spent UNSIGNED INTEGER, "
@@ -256,11 +278,26 @@ static void G_ClearBotTutorialQueue(int clientNum)
 	memset(&g_botTutorialQueues[clientNum], 0, sizeof(g_botTutorialQueues[clientNum]));
 	g_botTutorialQueues[clientNum].targetClientNum = -1;
 	g_botTutorialQueues[clientNum].immediateIndex = -1;
+	g_botTutorialQueues[clientNum].cooldownMs = TRACKED_DUEL_TUTORIAL_COOLDOWN_MS;
 }
 
 static qboolean G_IsTrackedDuelCollectionEnabled(void)
 {
 	return bot_dueltracking.integer ? qtrue : qfalse;
+}
+
+static qboolean G_IsTrackedGeometryEnabled(void)
+{
+	return (bot_dueltracking_geometry.integer > 0) ? qtrue : qfalse;
+}
+
+static qboolean G_IsTrackedDuelEligible(gentity_t *first, gentity_t *second)
+{
+	if (!first || !second)
+		return qfalse;
+	if ((first->r.svFlags & SVF_BOT) && (second->r.svFlags & SVF_BOT))
+		return qfalse;
+	return qtrue;
 }
 
 static void G_ClearDuelAdviceSession(int clientNum)
@@ -621,7 +658,7 @@ static void G_SetTrackedOpeningIfEmpty(tracked_duel_runtime_t *runtime, duel_tra
 		Q_strncpyz(runtime->openingTactic, fallback, sizeof(runtime->openingTactic));
 }
 
-static void G_AddTrackedDuelEvent(tracked_duel_runtime_t *runtime, int eventType, int relTime, int amount, duel_track_power_t power, int state, int rangeBucket, const char *note)
+static void G_AddTrackedDuelEvent(tracked_duel_runtime_t *runtime, int eventType, int relTime, int amount, duel_track_power_t power, int state, int rangeBucket, const char *note, gentity_t *self, gentity_t *enemy)
 {
 	tracked_duel_event_t *event;
 
@@ -637,6 +674,15 @@ static void G_AddTrackedDuelEvent(tracked_duel_runtime_t *runtime, int eventType
 	event->power = (unsigned char)power;
 	event->state = (unsigned char)state;
 	event->rangeBucket = (unsigned char)rangeBucket;
+	if (G_IsTrackedGeometryEnabled() && self && enemy && self->client && enemy->client)
+	{
+		VectorCopy(self->client->ps.origin, event->selfOrigin);
+		VectorCopy(enemy->client->ps.origin, event->enemyOrigin);
+		VectorCopy(self->client->ps.velocity, event->selfVelocity);
+		VectorCopy(enemy->client->ps.velocity, event->enemyVelocity);
+		event->selfYaw = self->client->ps.viewangles[YAW];
+		event->enemyYaw = enemy->client->ps.viewangles[YAW];
+	}
 	if (note)
 		Q_strncpyz(event->note, note, sizeof(event->note));
 }
@@ -665,6 +711,7 @@ static void G_SetTrackedPrimaryIssue(tracked_duel_runtime_t *runtime, qboolean l
 static void G_QueueBotTutorialMessage(int botClientNum, int targetClientNum, const char *message)
 {
 	bot_tutorial_queue_t *queue;
+	int i;
 
 	if (!message || !message[0] || botClientNum < 0 || botClientNum >= MAX_CLIENTS ||
 		targetClientNum < 0 || targetClientNum >= MAX_CLIENTS)
@@ -673,6 +720,11 @@ static void G_QueueBotTutorialMessage(int botClientNum, int targetClientNum, con
 	queue = &g_botTutorialQueues[botClientNum];
 	if (queue->queuedCount > queue->nextMessageIndex && queue->targetClientNum != targetClientNum)
 		return;
+	for (i = queue->nextMessageIndex; i < queue->queuedCount; i++)
+	{
+		if (!Q_stricmp(queue->messages[i], message))
+			return;
+	}
 	if (queue->queuedCount >= TRACKED_DUEL_TUTORIAL_MAX_MESSAGES)
 		return;
 
@@ -692,14 +744,25 @@ static int G_GetTrackedIssueConfidence(const duel_advice_session_state_t *sessio
 	return session->sessionIssueCounts[issue] + session->historyIssueCounts[issue];
 }
 
+static qboolean G_IsTrackedIntermediateCandidate(const tracked_duel_runtime_t *runtime)
+{
+	if (!runtime)
+		return qfalse;
+	if (runtime->totalForceSpent >= 80 && runtime->lowForceWindows <= 1 && runtime->lateDefenseSpends <= 0)
+		return qtrue;
+	if (runtime->spentByState[DUEL_TRACK_STATE_ADVANTAGE] >= 20)
+		return qtrue;
+	return qfalse;
+}
+
 static void G_QueueManualBasicsAdvice(int botClientNum, int targetClientNum, int duelIndex)
 {
 	int slot;
 	static const char *manualBasics[] = {
-		"Level 1 foundation: bind GK and throw so you can throw/aim with push-pull ready; your first break tools are pull and push.",
-		"Level 2 core: PK is bread-and-butter. Pull windows are force use, post push/pull, airborne, knockdown, or saber swing states.",
+		"Level 1 foundation: GK means Grip Kick. Bind grip kick and throw so push-pull and throw/aim stay ready.",
+		"Level 2 core: PK means Pull Kick. Pull windows are force use, post push/pull, airborne, knockdown, or saber swing states.",
 		"Fundamental rule: pull recovers faster and you can pull 4x per grip while push tops at 3x—spend force accordingly.",
-		"Early progression: balance offense lanes (PTK/pull-throw, saber pressure, GK threat). Imbalanced offense gets hard-countered.",
+		"Early progression: PTK means Pull-Throw-Kick. Balance PTK/pull-throw, saber pressure, and GK threat to avoid hard counters.",
 		"Defensive base: strafe-jump entries, keep sticky crosshair, and avoid linear approaches so your setup stays unreadable."
 	};
 
@@ -710,11 +773,40 @@ static void G_QueueManualBasicsAdvice(int botClientNum, int targetClientNum, int
 	G_QueueBotTutorialMessage(botClientNum, targetClientNum, manualBasics[slot]);
 }
 
+static void G_QueueManualMetaAdvice(int botClientNum, int targetClientNum, int rotation)
+{
+	static const char *manualMeta[] = {
+		"Meta priority: force initiative before commitment—bait reaction, then spend into the punished lane only.",
+		"Meta priority: rotate offense tri-lanes every exchange; never repeat the same entry timing twice.",
+		"Meta priority: preserve escape force first, then convert advantage into controlled close-range checks.",
+		"Meta priority: win spacing and camera control, then commit pull/grip only when response options are constrained."
+	};
+	int slot = rotation;
+	if (slot < 0)
+		slot = 0;
+	slot %= (int)(sizeof(manualMeta) / sizeof(manualMeta[0]));
+	G_QueueBotTutorialMessage(botClientNum, targetClientNum, manualMeta[slot]);
+}
+
+static void G_QueueManualIntermediateAdvice(int botClientNum, int targetClientNum, int rotation)
+{
+	static const char *manualIntermediate[] = {
+		"Intermediate: chain pull pressure into throw feints, then convert only when recovery windows are confirmed.",
+		"Intermediate: force advantage means tempo advantage—spend in bursts, reset, then re-enter off lateral movement.",
+		"Intermediate: vary anti-grip exits (delay, down-state, mixed direction) so your breakout rhythm cannot be solved."
+	};
+	int slot = rotation;
+	if (slot < 0)
+		slot = 0;
+	slot %= (int)(sizeof(manualIntermediate) / sizeof(manualIntermediate[0]));
+	G_QueueBotTutorialMessage(botClientNum, targetClientNum, manualIntermediate[slot]);
+}
+
 static void G_QueueManualGenericAdvice(int botClientNum, int targetClientNum, tracked_duel_runtime_t *runtime, qboolean loggedIn, duel_advice_session_state_t *session)
 {
 	int rotation;
 	static const char *manualGeneric[] = {
-		"Manual tempo: keep a 1/3 offense mix—PTK/pull-throws, saber pressure, and GK—to prevent copy-cat catch-on counters.",
+		"Manual tempo: keep a 1/3 offense mix—PTK (Pull-Throw-Kick) and pull-throws, saber pressure, and GK (Grip Kick).",
 		"Drain discipline: use taps instead of panic holds; keep force ending in 5/0 when possible for cleaner drain efficiency.",
 		"Knockdown discipline: staying flat often reduces flipkick vulnerability; stand only when the punish lane is gone.",
 		"Toss defense: track incoming blade with crosshair and use crouch-jump timing near walls to cut throw angles.",
@@ -754,7 +846,7 @@ static void G_QueueManualIssueAdvice(int botClientNum, int targetClientNum, duel
 		break;
 	case DUEL_TRACK_ISSUE_GRIP_CONTROL:
 		if (variant == 0)
-			G_QueueBotTutorialMessage(botClientNum, targetClientNum, "Pattern confirmed: GK control is too clean on you. Randomize breakout direction and deny train-track rhythm.");
+			G_QueueBotTutorialMessage(botClientNum, targetClientNum, "Pattern confirmed: grip kick (GK) control is too clean on you. Randomize breakout direction and deny train-track rhythm.");
 		else
 			G_QueueBotTutorialMessage(botClientNum, targetClientNum, "Pattern confirmed: grip lanes are predictable. Use pull first, stay down on knock, and break with mixed timing.");
 		break;
@@ -778,7 +870,7 @@ static void G_QueueManualIssueAdvice(int botClientNum, int targetClientNum, duel
 		break;
 	case DUEL_TRACK_ISSUE_FORCED_ENTRIES:
 		if (variant == 0)
-			G_QueueBotTutorialMessage(botClientNum, targetClientNum, "Pattern confirmed: entries are forced into prepared defense. Feint saber first, then PTK/GK on reaction.");
+			G_QueueBotTutorialMessage(botClientNum, targetClientNum, "Pattern confirmed: entries are forced into prepared defense. Feint saber first, then PTK (Pull-Throw-Kick) or GK (Grip Kick) on reaction.");
 		else
 			G_QueueBotTutorialMessage(botClientNum, targetClientNum, "Pattern confirmed: approach timing is readable. Use lateral movement gap to desync their counter window.");
 		break;
@@ -818,16 +910,29 @@ static void G_MaybeQueueBotTutorial(tracked_duel_runtime_t *loserRuntime, gentit
 	issue = G_MapPrimaryIssueToTrackedIssue(loserRuntime->primaryIssue);
 	if (issue < DUEL_TRACK_ISSUE_COUNT)
 		session->sessionIssueCounts[issue]++;
+	if (session->duelsSeen >= 3)
+		g_botTutorialQueues[botClientNum].cooldownMs = TRACKED_DUEL_TUTORIAL_FAST_COOLDOWN_MS;
+	else
+		g_botTutorialQueues[botClientNum].cooldownMs = TRACKED_DUEL_TUTORIAL_COOLDOWN_MS;
 
 	basicsWindow = (!loggedIn || (session->historyDuels <= 0)) &&
 		(session->duelsSeen <= TRACKED_DUEL_ADVICE_BASIC_WINDOW);
 	if (basicsWindow)
 	{
-		G_QueueManualBasicsAdvice(botClientNum, loser->s.number, session->duelsSeen - 1);
+		if (!session->glossaryGiven)
+		{
+			G_QueueManualBasicsAdvice(botClientNum, loser->s.number, session->duelsSeen - 1);
+			session->glossaryGiven = qtrue;
+		}
+		G_QueueManualMetaAdvice(botClientNum, loser->s.number, session->duelsSeen);
 		return;
 	}
 
-	if (issue < DUEL_TRACK_ISSUE_COUNT && G_TrackedAdviceIsSpecificAllowed(session, issue))
+	if (G_IsTrackedIntermediateCandidate(loserRuntime))
+	{
+		G_QueueManualIntermediateAdvice(botClientNum, loser->s.number, session->duelsSeen + issue);
+	}
+	else if (issue < DUEL_TRACK_ISSUE_COUNT && G_TrackedAdviceIsSpecificAllowed(session, issue))
 	{
 		G_QueueManualIssueAdvice(botClientNum, loser->s.number, issue, session);
 	}
@@ -847,6 +952,7 @@ static void G_ProcessBotTutorialQueue(gentity_t *ent)
 {
 	bot_tutorial_queue_t *queue;
 	gentity_t *target;
+	int cooldown;
 
 	if (!ent || !ent->client || !(ent->r.svFlags & SVF_BOT))
 		return;
@@ -882,7 +988,8 @@ static void G_ProcessBotTutorialQueue(gentity_t *ent)
 	}
 	else
 	{
-		queue->nextSendTime = level.time + TRACKED_DUEL_TUTORIAL_COOLDOWN_MS;
+		cooldown = queue->cooldownMs > 0 ? queue->cooldownMs : TRACKED_DUEL_TUTORIAL_COOLDOWN_MS;
+		queue->nextSendTime = level.time + cooldown;
 	}
 }
 
@@ -1034,6 +1141,49 @@ static void G_InsertTrackedEvents(sqlite3 *db, sqlite3_int64 summaryId, tracked_
 	CALL_SQLITE(finalize(stmt));
 }
 
+static void G_InsertTrackedGeometry(sqlite3 *db, sqlite3_int64 summaryId, tracked_duel_runtime_t *runtime)
+{
+	sqlite3_stmt *stmt = NULL;
+	char *sql;
+	int i;
+	int s;
+
+	if (!G_IsTrackedGeometryEnabled() || !runtime || runtime->eventCount <= 0)
+		return;
+
+	sql = "INSERT INTO LocalDuelTrackGeometry(summary_id, participant_key, opponent_key, rel_time, event_index, self_x, self_y, self_z, enemy_x, enemy_y, enemy_z, self_vx, self_vy, self_vz, enemy_vx, enemy_vy, enemy_vz, self_yaw, enemy_yaw) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
+	for (i = 0; i < runtime->eventCount; i++)
+	{
+		tracked_duel_event_t *event = &runtime->events[i];
+		CALL_SQLITE(bind_int64(stmt, 1, summaryId));
+		CALL_SQLITE(bind_text(stmt, 2, runtime->identityKey, -1, SQLITE_STATIC));
+		CALL_SQLITE(bind_text(stmt, 3, runtime->opponentKey, -1, SQLITE_STATIC));
+		CALL_SQLITE(bind_int(stmt, 4, event->relTime));
+		CALL_SQLITE(bind_int(stmt, 5, event->eventIndex));
+		CALL_SQLITE(bind_double(stmt, 6, event->selfOrigin[0]));
+		CALL_SQLITE(bind_double(stmt, 7, event->selfOrigin[1]));
+		CALL_SQLITE(bind_double(stmt, 8, event->selfOrigin[2]));
+		CALL_SQLITE(bind_double(stmt, 9, event->enemyOrigin[0]));
+		CALL_SQLITE(bind_double(stmt, 10, event->enemyOrigin[1]));
+		CALL_SQLITE(bind_double(stmt, 11, event->enemyOrigin[2]));
+		CALL_SQLITE(bind_double(stmt, 12, event->selfVelocity[0]));
+		CALL_SQLITE(bind_double(stmt, 13, event->selfVelocity[1]));
+		CALL_SQLITE(bind_double(stmt, 14, event->selfVelocity[2]));
+		CALL_SQLITE(bind_double(stmt, 15, event->enemyVelocity[0]));
+		CALL_SQLITE(bind_double(stmt, 16, event->enemyVelocity[1]));
+		CALL_SQLITE(bind_double(stmt, 17, event->enemyVelocity[2]));
+		CALL_SQLITE(bind_double(stmt, 18, event->selfYaw));
+		CALL_SQLITE(bind_double(stmt, 19, event->enemyYaw));
+		s = sqlite3_step(stmt);
+		if (s != SQLITE_DONE)
+			G_ErrorPrint("ERROR: SQL Insert Failed (LocalDuelTrackGeometry)", s);
+		CALL_SQLITE(reset(stmt));
+		CALL_SQLITE(clear_bindings(stmt));
+	}
+	CALL_SQLITE(finalize(stmt));
+}
+
 static void G_UpdateTrackedAggregate(sqlite3 *db, tracked_duel_runtime_t *runtime, qboolean won, qboolean draw)
 {
 	sqlite3_stmt *stmt = NULL;
@@ -1146,6 +1296,8 @@ static void G_PersistTrackedDuel(tracked_duel_runtime_t *winnerRuntime, tracked_
 	G_InsertTrackedParticipant(db, summaryId, loserRuntime, draw ? -1 : 0);
 	G_InsertTrackedEvents(db, summaryId, winnerRuntime);
 	G_InsertTrackedEvents(db, summaryId, loserRuntime);
+	G_InsertTrackedGeometry(db, summaryId, winnerRuntime);
+	G_InsertTrackedGeometry(db, summaryId, loserRuntime);
 	G_UpdateTrackedAggregate(db, winnerRuntime, qtrue, draw);
 	G_UpdateTrackedAggregate(db, loserRuntime, qfalse, draw);
 
@@ -1155,6 +1307,8 @@ static void G_PersistTrackedDuel(tracked_duel_runtime_t *winnerRuntime, tracked_
 void G_StartTrackedDuel(gentity_t *first, gentity_t *second, int duelType)
 {
 	if (!G_IsTrackedDuelCollectionEnabled() || !first || !second || !first->client || !second->client)
+		return;
+	if (!G_IsTrackedDuelEligible(first, second))
 		return;
 
 	G_InitTrackedDuelRuntimeForClient(first, second, duelType);
@@ -1214,12 +1368,12 @@ void G_UpdateTrackedDuelFrame(gentity_t *ent)
 			(ent->health <= 45 || state == DUEL_TRACK_STATE_PANIC || state == DUEL_TRACK_STATE_DISADVANTAGE))
 			runtime->lateDefenseSpends++;
 		G_SetTrackedOpeningIfEmpty(runtime, power, NULL);
-		G_AddTrackedDuelEvent(runtime, 0, level.time - runtime->duelStartTime, spent, power, state, curRangeBucket, NULL);
+		G_AddTrackedDuelEvent(runtime, 0, level.time - runtime->duelStartTime, spent, power, state, curRangeBucket, NULL, ent, opponent);
 	}
 	else if (forceDelta > 0)
 	{
 		runtime->totalForceRegen += forceDelta;
-		G_AddTrackedDuelEvent(runtime, 1, level.time - runtime->duelStartTime, forceDelta, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, NULL);
+		G_AddTrackedDuelEvent(runtime, 1, level.time - runtime->duelStartTime, forceDelta, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, NULL, ent, opponent);
 	}
 
 	healthDelta = curHealthArmor - runtime->lastHealthArmor;
@@ -1233,22 +1387,22 @@ void G_UpdateTrackedDuelFrame(gentity_t *ent)
 			note = "saberthrow";
 			G_SetTrackedOpeningIfEmpty(runtime, DUEL_TRACK_POWER_UNKNOWN, "saberthrow");
 		}
-		G_AddTrackedDuelEvent(runtime, 2, level.time - runtime->duelStartTime, taken, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, note);
+		G_AddTrackedDuelEvent(runtime, 2, level.time - runtime->duelStartTime, taken, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, note, ent, opponent);
 	}
 
 	if (ent->client->ps.fd.forceGripCripple && !runtime->lastGripCripple)
 		runtime->gripCrippleEvents++;
 
 	if (curRangeBucket != runtime->lastRangeBucket)
-		G_AddTrackedDuelEvent(runtime, 3, level.time - runtime->duelStartTime, curRangeBucket, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, NULL);
+		G_AddTrackedDuelEvent(runtime, 3, level.time - runtime->duelStartTime, curRangeBucket, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, NULL, ent, opponent);
 
 	if (airborne != runtime->lastAirborne)
-		G_AddTrackedDuelEvent(runtime, 4, level.time - runtime->duelStartTime, airborne, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, airborne ? "airborne" : "landed");
+		G_AddTrackedDuelEvent(runtime, 4, level.time - runtime->duelStartTime, airborne, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, airborne ? "airborne" : "landed", ent, opponent);
 
 	if (knockedDown && !runtime->lastKnockdown)
 	{
 		runtime->knockdownEvents++;
-		G_AddTrackedDuelEvent(runtime, 5, level.time - runtime->duelStartTime, 1, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, "knockdown");
+		G_AddTrackedDuelEvent(runtime, 5, level.time - runtime->duelStartTime, 1, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, "knockdown", ent, opponent);
 	}
 
 	if (curForce < runtime->lowestForce)
@@ -4992,6 +5146,7 @@ void Svcmd_ExportDuelTrack_f(void)
 		"LocalDuelTrackSummary",
 		"LocalDuelTrackParticipant",
 		"LocalDuelTrackEvent",
+		"LocalDuelTrackGeometry",
 		"LocalDuelTrackAggregate"
 	};
 	sqlite3 *db;

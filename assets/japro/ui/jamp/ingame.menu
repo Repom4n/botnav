@@ -272,7 +272,7 @@
 			backcolor			0 0 0 0
 			visible				1
 			cvartest			"g_gametype"
-			showcvar			{ "0", "1", "2", "3", "4", "5", "6", "8" }
+			showcvar			{ "0", "1", "2", "3", "4", "5", "6", "8", "9" }
 			action 
 			{ 
 				play			"sound/interface/button1.wav" ;
