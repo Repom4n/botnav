@@ -2917,7 +2917,10 @@ char *ClientConnect( int clientNum, qboolean firstTime, qboolean isBot ) {
 	// they can connect
 	client = &level.clients[ clientNum ];
 	ent->client = client;
-	G_ArcadeResetClientRunState(clientNum);
+	if (level.gametype != GT_ARCADE || firstTime || level.newSession)
+	{
+		G_ArcadeResetClientRunState(clientNum);
+	}
 
 	//assign the pointer for bg entity access
 	ent->playerState = &ent->client->ps;
