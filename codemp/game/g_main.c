@@ -412,10 +412,6 @@ static void G_ArcadeRestorePlayer(gentity_t *ent)
 		return;
 	}
 
-	ent->client->pers.maxHealth = 100;
-	ent->client->ps.stats[STAT_MAX_HEALTH] = 100;
-	ent->maxHealth = 100;
-	ent->s.maxhealth = 100;
 	ent->health = 100;
 	ent->client->ps.stats[STAT_HEALTH] = 100;
 	ent->client->ps.stats[STAT_ARMOR] = 100;

@@ -975,6 +975,7 @@ static void G_ProcessBotTutorialQueue(gentity_t *ent)
 		return;
 	if (queue->targetClientNum < 0 || queue->targetClientNum >= MAX_CLIENTS)
 	{
+		queue->publicBroadcast = qfalse;
 		G_ClearBotTutorialQueue(ent->s.number);
 		return;
 	}
@@ -982,6 +983,7 @@ static void G_ProcessBotTutorialQueue(gentity_t *ent)
 	target = &g_entities[queue->targetClientNum];
 	if (!target->inuse || !target->client || target->client->pers.connected != CON_CONNECTED)
 	{
+		queue->publicBroadcast = qfalse;
 		G_ClearBotTutorialQueue(ent->s.number);
 		return;
 	}
@@ -991,6 +993,7 @@ static void G_ProcessBotTutorialQueue(gentity_t *ent)
 	queue->nextMessageIndex++;
 	if (queue->nextMessageIndex >= queue->queuedCount)
 	{
+		queue->publicBroadcast = qfalse;
 		G_ClearBotTutorialQueue(ent->s.number);
 	}
 	else if (queue->immediateIndex >= 0 && queue->nextMessageIndex >= queue->immediateIndex)
