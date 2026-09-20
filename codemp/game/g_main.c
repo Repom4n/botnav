@@ -256,6 +256,7 @@ void G_ArcadeResetClientRunState(int clientNum)
 	level.arcadeTotalKills[clientNum] = 0;
 	level.arcadeEliminated[clientNum] = qfalse;
 	level.arcadeParticipant[clientNum] = qfalse;
+	level.arcadeManagedBot[clientNum] = qfalse;
 }
 
 static void G_ArcadeResetScores(void)
@@ -460,6 +461,25 @@ static void G_ArcadeRespawnParticipant(gentity_t *ent, qboolean preservePosition
 
 static void G_ArcadeKickAllBots(void);
 
+static qboolean G_ArcadeHasManagedBots(void)
+{
+	int i;
+
+	for (i = 0; i < MAX_CLIENTS; i++)
+	{
+		if (level.arcadeManagedBot[i] &&
+			g_entities[i].inuse &&
+			g_entities[i].client &&
+			(g_entities[i].r.svFlags & SVF_BOT) &&
+			g_entities[i].client->pers.connected == CON_CONNECTED)
+		{
+			return qtrue;
+		}
+	}
+
+	return qfalse;
+}
+
 static void G_ArcadeShutdown(qboolean kickBots)
 {
 	G_ArcadeResetScores();
@@ -523,6 +543,7 @@ static void G_ArcadeKickAllBots(void)
 		if (ent->inuse && ent->client && (ent->r.svFlags & SVF_BOT) &&
 			ent->client->pers.connected == CON_CONNECTED)
 		{
+			level.arcadeManagedBot[i] = qfalse;
 			trap->SendConsoleCommand(EXEC_APPEND, va("clientkick %i\n", i));
 		}
 	}
@@ -701,7 +722,7 @@ static void G_ArcadeRunFrame(void)
 	if (level.gametype != GT_ARCADE)
 	{
 		if (level.arcadeInitialized || level.arcadeRoundStartTime || level.arcadeRoundQueuedStart ||
-			level.arcadeGameOverTime || level.arcadeRoundBotsTarget)
+			level.arcadeGameOverTime || level.arcadeRoundBotsTarget || G_ArcadeHasManagedBots())
 		{
 			G_ArcadeShutdown(qtrue);
 		}

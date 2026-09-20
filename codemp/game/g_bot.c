@@ -1051,6 +1051,7 @@ static void G_AddBot( const char *name, float skill, const char *team, int delay
 
 	if ( level.gametype == GT_ARCADE )
 	{
+		level.arcadeManagedBot[clientNum] = qtrue;
 		bot->client->sess.sessionTeam = TEAM_FREE;
 	}
 	else if ( level.gametype >= GT_TEAM )
