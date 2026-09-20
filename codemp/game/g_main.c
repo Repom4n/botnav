@@ -228,32 +228,6 @@ static int G_ArcadeClampPrimaryBotLevel(int arcadeLevel)
 	return arcadeLevel;
 }
 
-static int G_ArcadeExtraBotCountForLevel(int arcadeLevel)
-{
-	if (arcadeLevel <= 10)
-	{
-		return 0;
-	}
-	if (arcadeLevel <= 13)
-	{
-		return 1;
-	}
-	return 2;
-}
-
-static int G_ArcadeExtraBotLevelForLevel(int arcadeLevel)
-{
-	if (arcadeLevel <= 11)
-	{
-		return 5;
-	}
-	if (arcadeLevel == 12)
-	{
-		return 7;
-	}
-	return 10;
-}
-
 static float G_ArcadeSkillForBotLevel(int botLevel)
 {
 	float skill = 3.0f + ((float)(botLevel - ARCADE_PRIMARY_BOT_LEVEL_MIN) /
@@ -412,25 +386,6 @@ static int G_ArcadeCountAliveBots(void)
 	return count;
 }
 
-static gentity_t *G_ArcadeFindConnectedHuman(void)
-{
-	int i;
-
-	for (i = 0; i < MAX_CLIENTS; i++)
-	{
-		gentity_t *ent = &g_entities[i];
-		if (!ent->inuse || !ent->client || (ent->r.svFlags & SVF_BOT) ||
-			ent->client->pers.connected != CON_CONNECTED ||
-			ent->client->sess.sessionTeam == TEAM_SPECTATOR)
-		{
-			continue;
-		}
-		return ent;
-	}
-
-	return NULL;
-}
-
 static gentity_t *G_ArcadeFindConnectedBot(void)
 {
 	int i;
@@ -457,9 +412,15 @@ static void G_ArcadeRestorePlayer(gentity_t *ent)
 		return;
 	}
 
+	ent->client->pers.maxHealth = 100;
+	ent->client->ps.stats[STAT_MAX_HEALTH] = 100;
+	ent->maxHealth = 100;
+	ent->s.maxhealth = 100;
 	ent->health = 100;
 	ent->client->ps.stats[STAT_HEALTH] = 100;
 	ent->client->ps.stats[STAT_ARMOR] = 100;
+	ent->client->damage_armor = 0;
+	ent->client->damage_blood = 0;
 }
 
 static void G_ArcadeKickAllBots(void);
@@ -565,20 +526,13 @@ static void G_ArcadeStartRound(void)
 			continue;
 		}
 
-		if (ent->client->sess.sessionTeam == TEAM_SPECTATOR || ent->health < 1 || wasParticipant)
+		if (wasParticipant && ent->client->sess.sessionTeam != TEAM_SPECTATOR && ent->health > 0)
 		{
-			if (wasParticipant && ent->client->sess.sessionTeam != TEAM_SPECTATOR && ent->health > 0)
-			{
-				G_ArcadeRestorePlayer(ent);
-			}
-			else
-			{
-				SetTeam(ent, "free", qtrue);
-			}
+			G_ArcadeRestorePlayer(ent);
 		}
 		else
 		{
-			G_ArcadeRestorePlayer(ent);
+			SetTeam(ent, "free", qtrue);
 		}
 		if (wasParticipant)
 		{
@@ -592,14 +546,6 @@ static void G_ArcadeStartRound(void)
 	level.arcadeRoundStartTime = level.time;
 	level.arcadeRoundQueuedStart = 0;
 	trap->SendServerCommand(-1, va("cp \"^2ARCADE LEVEL %i\n^7Fight!\n\"", level.arcadeLevel));
-	{
-		gentity_t *human = G_ArcadeFindConnectedHuman();
-		gentity_t *bot = G_ArcadeFindConnectedBot();
-		if (human && bot)
-		{
-			G_QueueArcadeBotTutorial(bot, human, level.arcadeLevel, qtrue);
-		}
-	}
 }
 
 void G_ArcadeHandlePlayerDeath(gentity_t *self, gentity_t *attacker)
