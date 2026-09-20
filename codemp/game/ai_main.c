@@ -12700,6 +12700,22 @@ static int NewBotAI_GetPTKWeight(bot_state_t *bs)
 		weight += (int)(aggressionWeight * 0.35f);
 	}
 
+	//Conversion discipline: don't keep forcing PTK plans when we are low on reserve and
+	//not materially ahead in force. This reduces panic spend loops that end in low-force deaths.
+	if (ourForce < 35 && hisForce >= ourForce)
+	{
+		weight -= 20;
+	}
+	if (ourHealth < 45 && ourForce < 45)
+	{
+		weight -= 15;
+	}
+	if (bs->cur_ps.fd.forcePowerSelected == FP_PULL &&
+		bs->lastGripkickSuccessTime < level.time - 3500)
+	{
+		weight -= 10;
+	}
+
 	weight += BotGetAggressionWeightedBonus(bs, aggressionWeight, 35, qtrue);
 	weight += NewBotAI_GetAntiDrainWeight(bs);
 	if (bs->lastGripkickSuccessTime > level.time - 3000)
@@ -14162,6 +14178,11 @@ int NewBotAI_GetPull(bot_state_t *bs) {
 		//conserve briefly and re-enter PTK once we cross the budget threshold.
 		return 0;
 	}
+	if (ptkWeight <= 0 && ourForce <= 30 && hisForce >= ourForce)
+	{
+		//No strong PTK conversion window and reserve is low: keep FP for exits/recovery.
+		return 0;
+	}
 
 	if (bs->currentEnemy->client->ps.saberInFlight) {
 		const qboolean enemySaberReturning = NewBotAI_IsEnemySaberReturning(bs);
@@ -14229,6 +14250,15 @@ int NewBotAI_GetPull(bot_state_t *bs) {
 	if (bs->lastGripkickSuccessTime > level.time - 3000)
 	{
 		weight += 35.0f;
+	}
+	if (bs->cur_ps.fd.forcePowerSelected == FP_PULL &&
+		bs->lastGripkickSuccessTime < level.time - 3500)
+	{
+		weight *= 0.85f;
+	}
+	if (ourForce < 35 && hisForce >= ourForce && hisHealth > 30)
+	{
+		weight *= 0.75f;
 	}
 
 	if ((hisForce < 20 || NewBotAI_IsPullkickDrainWindow(bs)) && ourForce > hisForce)
@@ -14672,6 +14702,8 @@ int NewBotAI_GetDrain(bot_state_t *bs) {
 		return 0;
 	if (bs->currentEnemy->client->ps.saberInFlight)
 		return 0;
+	if (!healDrainlock && ourForce < 35 && hisForce >= ourForce)
+		return 0;
 
 	if (healDrainlock && drainTapTargetCost > 0 &&
 		(ourForce >= drainTapTargetCost || continuingLatchedHealDrain))
@@ -14702,6 +14734,10 @@ int NewBotAI_GetDrain(bot_state_t *bs) {
 		if (weight > 120)
 		{
 			weight = 120;
+		}
+		if (bs->cur_ps.fd.forcePowerSelected == FP_DRAIN && ourForce < 45 && hisForce < 25)
+		{
+			weight -= 20;
 		}
 		return weight;
 	}

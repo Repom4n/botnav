@@ -414,9 +414,90 @@ static void G_ArcadeWarnNoRoomForPlayers(void)
 	trap->SendServerCommand(-1, "print \"can't add more bots, not enough room for players\n\"");
 }
 
+static int G_ArcadeKickBotsForReserve(int neededSlots)
+{
+	int pass;
+	int i;
+	int kicked = 0;
+
+	if (neededSlots <= 0)
+	{
+		return 0;
+	}
+
+	for (pass = 0; pass < 4 && kicked < neededSlots; pass++)
+	{
+		for (i = 0; i < MAX_CLIENTS && kicked < neededSlots; i++)
+		{
+			gentity_t *ent = &g_entities[i];
+			const qboolean isManaged = level.arcadeManagedBot[i];
+			const qboolean isSpectator = (ent->client && ent->client->sess.sessionTeam == TEAM_SPECTATOR) ? qtrue : qfalse;
+
+			if (!ent->inuse || !ent->client || !(ent->r.svFlags & SVF_BOT) ||
+				ent->client->pers.connected != CON_CONNECTED)
+			{
+				continue;
+			}
+
+			if (pass == 0 && (!isManaged || !isSpectator))
+			{
+				continue;
+			}
+			if (pass == 1 && !isManaged)
+			{
+				continue;
+			}
+			if (pass == 2 && (isManaged || !isSpectator))
+			{
+				continue;
+			}
+			if (pass == 3 && isManaged)
+			{
+				continue;
+			}
+
+			level.arcadeManagedBot[i] = qfalse;
+			trap->DropClient(i, "Arcade reserve slot for human players");
+			kicked++;
+		}
+	}
+
+	return kicked;
+}
+
+static qboolean G_ArcadeEnsureHumanReserveSlots(void)
+{
+	int freeSlots = sv_maxclients.integer - G_ArcadeCountConnectedClients();
+	int neededSlots = ARCADE_RESERVED_PLAYER_SLOTS - freeSlots;
+
+	if (neededSlots <= 0)
+	{
+		return qtrue;
+	}
+
+	{
+		const int kicked = G_ArcadeKickBotsForReserve(neededSlots);
+		if (kicked > 0)
+		{
+			trap->SendServerCommand(-1, va("print \"Arcade: freed %d bot slot%s for human players.\n\"",
+				kicked, (kicked == 1) ? "" : "s"));
+		}
+	}
+
+	freeSlots = sv_maxclients.integer - G_ArcadeCountConnectedClients();
+	return (freeSlots >= ARCADE_RESERVED_PLAYER_SLOTS) ? qtrue : qfalse;
+}
+
 static qboolean G_ArcadeTryAddManagedBot(float skill)
 {
 	int maxConnectedBeforeReserve = sv_maxclients.integer - ARCADE_RESERVED_PLAYER_SLOTS;
+
+	if (!G_ArcadeEnsureHumanReserveSlots())
+	{
+		G_ArcadeWarnNoRoomForPlayers();
+		return qfalse;
+	}
+
 	if (maxConnectedBeforeReserve < 0)
 	{
 		maxConnectedBeforeReserve = 0;
@@ -960,6 +1041,7 @@ static void G_ArcadeRunFrame(void)
 		level.arcadeRoundQueuedStart = level.time + ARCADE_GAME_START_DELAY_MS;
 		trap->SendServerCommand(-1, va("cp \"^2Good Luck!\n^7Arcade Level %i\n\"", level.arcadeLevel));
 	}
+	(void)G_ArcadeEnsureHumanReserveSlots();
 	if (level.arcadeGameOverTime && level.time > level.arcadeGameOverTime + ARCADE_GAME_OVER_DELAY_MS)
 	{
 		level.arcadeGameOverTime = 0;
