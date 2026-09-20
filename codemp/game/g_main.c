@@ -467,11 +467,7 @@ static qboolean G_ArcadeHasManagedBots(void)
 
 	for (i = 0; i < MAX_CLIENTS; i++)
 	{
-		if (level.arcadeManagedBot[i] &&
-			g_entities[i].inuse &&
-			g_entities[i].client &&
-			(g_entities[i].r.svFlags & SVF_BOT) &&
-			g_entities[i].client->pers.connected == CON_CONNECTED)
+		if (level.arcadeManagedBot[i])
 		{
 			return qtrue;
 		}
@@ -539,10 +535,7 @@ static void G_ArcadeKickAllBots(void)
 	int i;
 	for (i = 0; i < MAX_CLIENTS; i++)
 	{
-		gentity_t *ent = &g_entities[i];
-		if (ent->inuse && ent->client && (ent->r.svFlags & SVF_BOT) &&
-			ent->client->pers.connected == CON_CONNECTED &&
-			level.arcadeManagedBot[i])
+		if (level.arcadeManagedBot[i])
 		{
 			trap->SendConsoleCommand(EXEC_APPEND, va("clientkick %i\n", i));
 		}

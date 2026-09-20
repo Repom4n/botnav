@@ -924,6 +924,11 @@ static void G_AddBot( const char *name, float skill, const char *team, int delay
 		return;
 	}
 
+	if (arcadeManaged)
+	{
+		level.arcadeManagedBot[clientNum] = qtrue;
+	}
+
 	// get the botinfo from bots.txt
 	botinfo = G_GetBotInfoByName( name );
 	if ( !botinfo ) {
@@ -990,7 +995,7 @@ static void G_AddBot( const char *name, float skill, const char *team, int delay
 	{
 		char forcePowers[DEFAULT_FORCEPOWERS_LEN+1];
 		Q_strncpyz(forcePowers, s, sizeof(forcePowers));
-		if (level.gametype == GT_ARCADE)
+		if (level.gametype == GT_ARCADE && arcadeManaged)
 		{
 			G_ForcePowersSetSide(forcePowers, FORCE_DARKSIDE);
 		}
@@ -1082,12 +1087,9 @@ static void G_AddBot( const char *name, float skill, const char *team, int delay
 	// have it connect to the game as a normal client
 	if ( ClientConnect( clientNum, qtrue, qtrue ) )
 	{
+		if (arcadeManaged)
+			level.arcadeManagedBot[clientNum] = qfalse;
 		return;
-	}
-
-	if (level.gametype == GT_ARCADE && arcadeManaged)
-	{
-		level.arcadeManagedBot[clientNum] = qtrue;
 	}
 
 	if ( bot->client->sess.sessionTeam != preTeam )
@@ -1116,8 +1118,6 @@ static void G_AddBot( const char *name, float skill, const char *team, int delay
 		G_ReadSessionData( bot->client );
 		if ( !ClientUserinfoChanged( clientNum ) )
 		{
-			if (arcadeManaged)
-				level.arcadeManagedBot[clientNum] = qfalse;
 			return;
 		}
 	}
