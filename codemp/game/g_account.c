@@ -1019,6 +1019,7 @@ void G_QueueArcadeBotTutorial(gentity_t *speaker, gentity_t *listener, int round
 		return;
 	}
 
+	G_ClearBotTutorialQueue(speaker->s.number);
 	g_botTutorialQueues[speaker->s.number].publicBroadcast = qtrue;
 
 	rotation = roundNumber;

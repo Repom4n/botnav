@@ -443,11 +443,14 @@ static void G_ArcadeRespawnParticipant(gentity_t *ent, qboolean preservePosition
 
 	if (preservePosition)
 	{
-		G_SetOrigin(ent, savedOrigin);
-		VectorCopy(savedOrigin, ent->client->ps.origin);
-		SetClientViewAngle(ent, savedAngles);
-		VectorClear(ent->client->ps.velocity);
-		trap->LinkEntity((sharedEntity_t *)ent);
+		if (!SpotWouldTelefrag3(savedOrigin))
+		{
+			G_SetOrigin(ent, savedOrigin);
+			VectorCopy(savedOrigin, ent->client->ps.origin);
+			SetClientViewAngle(ent, savedAngles);
+			VectorClear(ent->client->ps.velocity);
+			trap->LinkEntity((sharedEntity_t *)ent);
+		}
 	}
 
 	G_ArcadeRestorePlayer(ent);
