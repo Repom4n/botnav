@@ -150,6 +150,7 @@ typedef struct
 	int queuedCount;
 	int nextMessageIndex;
 	int immediateIndex;
+	qboolean publicBroadcast;
 	char messages[TRACKED_DUEL_TUTORIAL_MAX_MESSAGES][MAX_SAY_TEXT];
 } bot_tutorial_queue_t;
 
@@ -985,7 +986,7 @@ static void G_ProcessBotTutorialQueue(gentity_t *ent)
 		return;
 	}
 
-	sayMode = (bot_tutorial.integer >= 2) ? SAY_ALL : SAY_TELL;
+	sayMode = queue->publicBroadcast ? SAY_ALL : SAY_TELL;
 	G_Say(ent, target, sayMode, queue->messages[queue->nextMessageIndex]);
 	queue->nextMessageIndex++;
 	if (queue->nextMessageIndex >= queue->queuedCount)
@@ -1017,6 +1018,8 @@ void G_QueueArcadeBotTutorial(gentity_t *speaker, gentity_t *listener, int round
 	{
 		return;
 	}
+
+	g_botTutorialQueues[speaker->s.number].publicBroadcast = qtrue;
 
 	rotation = roundNumber;
 	if (rotation < 0)

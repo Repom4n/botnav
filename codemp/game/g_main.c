@@ -440,7 +440,6 @@ static void G_ArcadeRespawnParticipant(gentity_t *ent, qboolean preservePosition
 	}
 
 	SetTeam(ent, "free", qtrue);
-	G_ArcadeRestorePlayer(ent);
 
 	if (preservePosition)
 	{
@@ -450,6 +449,8 @@ static void G_ArcadeRespawnParticipant(gentity_t *ent, qboolean preservePosition
 		VectorClear(ent->client->ps.velocity);
 		trap->LinkEntity((sharedEntity_t *)ent);
 	}
+
+	G_ArcadeRestorePlayer(ent);
 }
 
 static void G_ArcadeKickAllBots(void);
@@ -517,6 +518,7 @@ static void G_ArcadeStartRound(void)
 
 	if (humans <= 0)
 	{
+		level.arcadeRoundStartTime = 0;
 		level.arcadeRoundQueuedStart = 0;
 		G_ArcadeEnsureWaitingBot();
 		return;
@@ -589,7 +591,7 @@ void G_ArcadeHandlePlayerDeath(gentity_t *self, gentity_t *attacker)
 	{
 		level.arcadeEliminated[self->s.number] = qtrue;
 	}
-	if (attacker && attacker->client && (attacker->r.svFlags & SVF_BOT) &&
+	if (level.gametype == GT_ARCADE && attacker && attacker->client && (attacker->r.svFlags & SVF_BOT) &&
 		self->client->pers.connected == CON_CONNECTED && !(self->r.svFlags & SVF_BOT))
 	{
 		G_QueueArcadeBotTutorial(attacker, self, level.arcadeLevel, qfalse);
