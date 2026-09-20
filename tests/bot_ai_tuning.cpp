@@ -84,6 +84,15 @@ BOOST_AUTO_TEST_CASE( anti_dark_push_and_drain_bonuses_require_advantage_windows
 	BOOST_CHECK_EQUAL( NewBotAI_GetAntiDarkDrainBonus( 1, 0, 15, 1 ), 0 );
 }
 
+BOOST_AUTO_TEST_CASE( login_reminder_cadence_starts_and_repeats_on_interval )
+{
+	BOOST_CHECK( !NewBotAI_ShouldQueueLoginReminder( 2, 3, 3, 0 ) );
+	BOOST_CHECK( NewBotAI_ShouldQueueLoginReminder( 3, 3, 3, 0 ) );
+	BOOST_CHECK( !NewBotAI_ShouldQueueLoginReminder( 3, 3, 3, 3 ) );
+	BOOST_CHECK( !NewBotAI_ShouldQueueLoginReminder( 4, 3, 3, 0 ) );
+	BOOST_CHECK( NewBotAI_ShouldQueueLoginReminder( 6, 3, 3, 3 ) );
+}
+
 BOOST_AUTO_TEST_CASE( immediate_flipkick_contact_widens_yaw_tolerance )
 {
 	BOOST_CHECK_EQUAL( NewBotAI_GetImmediateFlipkickYawTolerance( 0 ), 35.0f );

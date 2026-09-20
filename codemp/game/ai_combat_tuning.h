@@ -165,6 +165,22 @@ static inline int NewBotAI_GetAntiDarkDrainBonus(
 	return bonus;
 }
 
+static inline int NewBotAI_ShouldQueueLoginReminder(
+	int duelsSeen, int startAtDuel, int repeatInterval, int lastPromptDuel)
+{
+	if (duelsSeen < startAtDuel || repeatInterval <= 0)
+	{
+		return 0;
+	}
+
+	if (lastPromptDuel == duelsSeen)
+	{
+		return 0;
+	}
+
+	return ((duelsSeen - startAtDuel) % repeatInterval) == 0 ? 1 : 0;
+}
+
 static inline float NewBotAI_GetImmediateFlipkickYawTolerance(int immediateContact)
 {
 	return immediateContact ? 60.0f : 35.0f;

@@ -450,6 +450,8 @@ static void G_ForcePowersSetSide(char *forcePowers, int forceSide)
 {
 	char *firstSep;
 	char *secondSep;
+	char updated[DEFAULT_FORCEPOWERS_LEN+1];
+	int prefixLen;
 
 	if (!forcePowers || !forcePowers[0])
 	{
@@ -463,12 +465,21 @@ static void G_ForcePowersSetSide(char *forcePowers, int forceSide)
 	}
 
 	secondSep = strchr(firstSep + 1, '-');
-	if (!secondSep || secondSep != firstSep + 2)
+	if (!secondSep)
 	{
 		return;
 	}
 
-	firstSep[1] = '0' + forceSide;
+	prefixLen = (int)(firstSep - forcePowers + 1);
+	if (prefixLen < 0 || prefixLen + 1 + (int)strlen(secondSep) >= (int)sizeof(updated))
+	{
+		return;
+	}
+
+	memcpy(updated, forcePowers, prefixLen);
+	updated[prefixLen] = '0' + forceSide;
+	Q_strncpyz(updated + prefixLen + 1, secondSep, sizeof(updated) - (prefixLen + 1));
+	Q_strncpyz(forcePowers, updated, DEFAULT_FORCEPOWERS_LEN+1);
 }
 
 void G_AddRandomBot( int team ) {

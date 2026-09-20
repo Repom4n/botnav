@@ -61,6 +61,10 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
 #define BOT_THINK_TIME	0
 #define NEWBOTAI_PTK_FORCE_BUDGET 40
 #define NEWBOTAI_ABSORB_BAIT_WINDOW_MS 1500
+#define NEWBOTAI_FLIPKICK_PREFERRED_RANGE 180.0f
+#define NEWBOTAI_IMMEDIATE_FLIPKICK_RANGE 135.0f
+#define NEWBOTAI_IMMEDIATE_FLIPKICK_CONTACT_RANGE 90.0f
+#define NEWBOTAI_PULL_STUN_ONLY_RANGE 220.0f
 
 //bot states
 bot_state_t	*botstates[MAX_CLIENTS];
@@ -7308,13 +7312,6 @@ static qboolean NewBotAI_CanAttemptFlipkick(bot_state_t *bs)
 
 	return qtrue;
 }
-
-//A free flipkick always beats holding/charging a saber throw once the enemy has closed
-//into kick range - otherwise the two bots just collide while we sit on the charge.
-#define NEWBOTAI_FLIPKICK_PREFERRED_RANGE 180.0f
-#define NEWBOTAI_IMMEDIATE_FLIPKICK_RANGE 135.0f
-#define NEWBOTAI_IMMEDIATE_FLIPKICK_CONTACT_RANGE 90.0f
-#define NEWBOTAI_PULL_STUN_ONLY_RANGE 220.0f
 
 // Item 4: for this long after a fresh grip session begins, levels 1-9 never successfully
 // pull/push free of the grip (see NewBotAI_ReactToBeingGripped) - giving a human player's

@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "sqlite3.h"
+#include "ai_combat_tuning.h"
 
 #define _USE_CURL 0
 
@@ -997,17 +998,11 @@ static void G_MaybeQueueTrackedLoginAdvice(int botClientNum, int targetClientNum
 		return;
 	}
 
-	if (session->duelsSeen < TRACKED_DUEL_ADVICE_LOGIN_START)
-	{
-		return;
-	}
-
-	if (((session->duelsSeen - TRACKED_DUEL_ADVICE_LOGIN_START) % TRACKED_DUEL_ADVICE_LOGIN_INTERVAL) != 0)
-	{
-		return;
-	}
-
-	if (session->lastLoginPromptDuel == session->duelsSeen)
+	if (!NewBotAI_ShouldQueueLoginReminder(
+		session->duelsSeen,
+		TRACKED_DUEL_ADVICE_LOGIN_START,
+		TRACKED_DUEL_ADVICE_LOGIN_INTERVAL,
+		session->lastLoginPromptDuel))
 	{
 		return;
 	}
