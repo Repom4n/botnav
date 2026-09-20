@@ -1215,7 +1215,7 @@ void SetTeam( gentity_t *ent, char *s, qboolean forcedToJoin ) {//JAPRO - Modifi
 		}
 		team = TEAM_SPECTATOR;
 		specState = SPECTATOR_FREE;
-	} else if ( level.gametype >= GT_TEAM ) {
+	} else if ( level.gametype >= GT_TEAM && level.gametype != GT_ARCADE ) {
 		// if running a team game, assign player to one of the teams
 		specState = SPECTATOR_NOT;
 		if ( !Q_stricmp(s, "red") || !Q_stricmp(s, "r"))
@@ -3170,7 +3170,7 @@ void Cmd_CallVote_f( gentity_t *ent ) {
 
 	// can't vote as a spectator, except in (power)duel.. fuck this logic
 
-	if (ent->client->sess.sessionTeam == TEAM_SPECTATOR || (ent->client->sess.sessionTeam == TEAM_FREE && level.gametype >= GT_TEAM)) { //If we are in spec or racemode
+	if (ent->client->sess.sessionTeam == TEAM_SPECTATOR || (ent->client->sess.sessionTeam == TEAM_FREE && level.gametype >= GT_TEAM && level.gametype != GT_ARCADE)) { //If we are in spec or racemode
 		if (level.gametype == GT_SIEGE && g_tweakVote.integer & TV_ALLOW_SIEGESPECVOTE) {
 		}
 		else if (level.gametype >= GT_TEAM && g_tweakVote.integer & TV_ALLOW_CTFTFFASPECVOTE) {

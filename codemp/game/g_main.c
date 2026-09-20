@@ -207,7 +207,8 @@ void G_CacheMapname( const vmCvar_t *mapname )
 #define ARCADE_PRIMARY_BOT_LEVEL_MIN 3
 #define ARCADE_PRIMARY_BOT_LEVEL_MAX 10
 #define ARCADE_GAME_START_DELAY_MS 3500
-#define ARCADE_BETWEEN_LEVEL_DELAY_MS 6000
+#define ARCADE_JOIN_QUEUE_DELAY_MS 1000
+#define ARCADE_BETWEEN_LEVEL_DELAY_MS 2000
 #define ARCADE_GAME_OVER_DELAY_MS 7000
 
 static int G_ArcadeGetProgressionLevel(int arcadeLevel)
@@ -226,32 +227,6 @@ static int G_ArcadeClampPrimaryBotLevel(int arcadeLevel)
 		return ARCADE_PRIMARY_BOT_LEVEL_MAX;
 	}
 	return arcadeLevel;
-}
-
-static int G_ArcadeExtraBotCountForLevel(int arcadeLevel)
-{
-	if (arcadeLevel <= 10)
-	{
-		return 0;
-	}
-	if (arcadeLevel <= 13)
-	{
-		return 1;
-	}
-	return 2;
-}
-
-static int G_ArcadeExtraBotLevelForLevel(int arcadeLevel)
-{
-	if (arcadeLevel <= 11)
-	{
-		return 5;
-	}
-	if (arcadeLevel == 12)
-	{
-		return 7;
-	}
-	return 10;
 }
 
 static float G_ArcadeSkillForBotLevel(int botLevel)
@@ -364,7 +339,7 @@ static int G_ArcadeCountRoundHumans(void)
 		{
 			continue;
 		}
-		if (ent->client->sess.sessionTeam == TEAM_RED || level.arcadeParticipant[i])
+		if (ent->client->sess.sessionTeam == TEAM_FREE || level.arcadeParticipant[i])
 		{
 			count++;
 		}
@@ -383,7 +358,7 @@ static int G_ArcadeCountAliveHumans(void)
 		{
 			continue;
 		}
-		if (ent->client->sess.sessionTeam != TEAM_RED || ent->health < 1)
+		if (!level.arcadeParticipant[i] || ent->client->sess.sessionTeam == TEAM_SPECTATOR || ent->health < 1)
 		{
 			continue;
 		}
@@ -403,13 +378,124 @@ static int G_ArcadeCountAliveBots(void)
 		{
 			continue;
 		}
-		if (ent->client->sess.sessionTeam != TEAM_BLUE || ent->health < 1)
+		if (ent->client->sess.sessionTeam == TEAM_SPECTATOR || ent->health < 1)
 		{
 			continue;
 		}
 		count++;
 	}
 	return count;
+}
+
+static gentity_t *G_ArcadeFindConnectedBot(void)
+{
+	int i;
+
+	for (i = 0; i < MAX_CLIENTS; i++)
+	{
+		gentity_t *ent = &g_entities[i];
+		if (!ent->inuse || !ent->client || !(ent->r.svFlags & SVF_BOT) ||
+			ent->client->pers.connected != CON_CONNECTED ||
+			ent->client->sess.sessionTeam == TEAM_SPECTATOR)
+		{
+			continue;
+		}
+		return ent;
+	}
+
+	return NULL;
+}
+
+static void G_ArcadeRestorePlayer(gentity_t *ent)
+{
+	if (!ent || !ent->client)
+	{
+		return;
+	}
+
+	ent->health = 100;
+	ent->client->ps.stats[STAT_HEALTH] = 100;
+	ent->client->ps.stats[STAT_ARMOR] = 100;
+	ent->client->damage_armor = 0;
+	ent->client->damage_blood = 0;
+}
+
+static void G_ArcadeRespawnParticipant(gentity_t *ent, qboolean preservePosition)
+{
+	vec3_t savedOrigin;
+	vec3_t savedAngles;
+
+	if (!ent || !ent->client)
+	{
+		return;
+	}
+
+	if (preservePosition)
+	{
+		VectorCopy(ent->client->ps.origin, savedOrigin);
+		VectorCopy(ent->client->ps.viewangles, savedAngles);
+	}
+
+	if (ent->client->sess.sessionTeam == TEAM_FREE)
+	{
+		ClientSpawn(ent);
+	}
+	else
+	{
+		SetTeam(ent, "free", qtrue);
+	}
+
+	if (preservePosition)
+	{
+		G_SetOrigin(ent, savedOrigin);
+		VectorCopy(savedOrigin, ent->client->ps.origin);
+		SetClientViewAngle(ent, savedAngles);
+		VectorClear(ent->client->ps.velocity);
+		trap->LinkEntity((sharedEntity_t *)ent);
+		G_KillBox(ent);
+	}
+
+	G_ArcadeRestorePlayer(ent);
+}
+
+static void G_ArcadeKickAllBots(void);
+
+static void G_ArcadeEnsureWaitingBot(void)
+{
+	int i;
+	int connectedBots = 0;
+	gentity_t *waitingBot;
+	const int progressionLevel = G_ArcadeGetProgressionLevel(level.arcadeLevel > 0 ? level.arcadeLevel : ARCADE_START_LEVEL);
+	const int primaryLevel = G_ArcadeClampPrimaryBotLevel(progressionLevel);
+	const float primarySkill = G_ArcadeSkillForBotLevel(primaryLevel);
+
+	for (i = 0; i < MAX_CLIENTS; i++)
+	{
+		gentity_t *ent = &g_entities[i];
+		if (!ent->inuse || !ent->client || !(ent->r.svFlags & SVF_BOT) ||
+			ent->client->pers.connected != CON_CONNECTED ||
+			ent->client->sess.sessionTeam == TEAM_SPECTATOR)
+		{
+			continue;
+		}
+		connectedBots++;
+	}
+
+	if (connectedBots > 1)
+	{
+		G_ArcadeKickAllBots();
+		connectedBots = 0;
+	}
+
+	waitingBot = G_ArcadeFindConnectedBot();
+	if (waitingBot)
+	{
+		G_ArcadeRestorePlayer(waitingBot);
+		return;
+	}
+
+	trap->Cvar_Set("g_npcspskill", va("%.2f", primarySkill));
+	G_AddRandomBot(TEAM_FREE);
 }
 
 static void G_ArcadeKickAllBots(void)
@@ -430,47 +516,30 @@ static void G_ArcadeStartRound(void)
 {
 	int i;
 	const int humans = G_ArcadeCountRoundHumans();
+	const int targetBots = (humans > 1) ? humans : 1;
 	const int progressionLevel = G_ArcadeGetProgressionLevel(level.arcadeLevel);
 	const int primaryLevel = G_ArcadeClampPrimaryBotLevel(progressionLevel);
-	const int extraBots = G_ArcadeExtraBotCountForLevel(progressionLevel);
-	const int extraLevel = G_ArcadeExtraBotLevelForLevel(progressionLevel);
 	const float primarySkill = G_ArcadeSkillForBotLevel(primaryLevel);
-	const float extraSkill = G_ArcadeSkillForBotLevel(extraLevel);
 
 	if (humans <= 0)
 	{
-		level.arcadeRoundQueuedStart = level.time + 1000;
+		level.arcadeRoundStartTime = 0;
+		level.arcadeRoundQueuedStart = 0;
+		G_ArcadeEnsureWaitingBot();
 		return;
 	}
 
 	for (i = 0; i < MAX_CLIENTS; i++)
 	{
-		gentity_t *ent = &g_entities[i];
-		const qboolean wasParticipant = level.arcadeParticipant[i];
 		level.arcadeRoundKills[i] = 0;
 		level.arcadeEliminated[i] = qfalse;
-		if (!ent->inuse || !ent->client || (ent->r.svFlags & SVF_BOT) ||
-			ent->client->pers.connected != CON_CONNECTED)
-		{
-			continue;
-		}
-		level.arcadeParticipant[i] = qfalse;
-		if (ent->client->sess.sessionTeam == TEAM_RED || ent->client->sess.sessionTeam == TEAM_SPECTATOR)
-		{
-			level.arcadeParticipant[i] = wasParticipant;
-		}
 	}
 
 	G_ArcadeKickAllBots();
-	for (i = 0; i < humans; i++)
+	for (i = 0; i < targetBots; i++)
 	{
 		trap->Cvar_Set("g_npcspskill", va("%.2f", primarySkill));
-		G_AddRandomBot(TEAM_BLUE);
-	}
-	for (i = 0; i < extraBots; i++)
-	{
-		trap->Cvar_Set("g_npcspskill", va("%.2f", extraSkill));
-		G_AddRandomBot(TEAM_BLUE);
+		G_AddRandomBot(TEAM_FREE);
 	}
 	for (i = 0; i < MAX_CLIENTS; i++)
 	{
@@ -478,7 +547,7 @@ static void G_ArcadeStartRound(void)
 		const qboolean wasParticipant = level.arcadeParticipant[i];
 		const qboolean shouldParticipate = ent->inuse && ent->client && !(ent->r.svFlags & SVF_BOT) &&
 			ent->client->pers.connected == CON_CONNECTED &&
-			(wasParticipant || ent->client->sess.sessionTeam == TEAM_RED);
+			(wasParticipant || ent->client->sess.sessionTeam == TEAM_FREE);
 		const int savedScore = level.arcadeScore[i];
 		const int savedTotalKills = level.arcadeTotalKills[i];
 		if (!ent->inuse || !ent->client || (ent->r.svFlags & SVF_BOT) ||
@@ -493,11 +562,8 @@ static void G_ArcadeStartRound(void)
 			continue;
 		}
 
-		if (ent->client->sess.sessionTeam == TEAM_RED)
-		{
-			SetTeam(ent, "s", qtrue);
-		}
-		SetTeam(ent, "red", qtrue);
+		G_ArcadeRespawnParticipant(ent,
+			(wasParticipant && ent->client->sess.sessionTeam != TEAM_SPECTATOR && ent->health > 0) ? qtrue : qfalse);
 		if (wasParticipant)
 		{
 			level.arcadeScore[i] = savedScore;
@@ -506,7 +572,7 @@ static void G_ArcadeStartRound(void)
 		level.arcadeParticipant[i] = shouldParticipate;
 	}
 
-	level.arcadeRoundBotsTarget = humans + extraBots;
+	level.arcadeRoundBotsTarget = targetBots;
 	level.arcadeRoundStartTime = level.time;
 	level.arcadeRoundQueuedStart = 0;
 	trap->SendServerCommand(-1, va("cp \"^2ARCADE LEVEL %i\n^7Fight!\n\"", level.arcadeLevel));
@@ -526,6 +592,13 @@ void G_ArcadeHandlePlayerDeath(gentity_t *self, gentity_t *attacker)
 		level.arcadeTotalKills[attacker->s.number]++;
 	}
 
+	if (level.gametype == GT_ARCADE && attacker && attacker->client && (attacker->r.svFlags & SVF_BOT) &&
+		self->client->pers.connected == CON_CONNECTED && !(self->r.svFlags & SVF_BOT) &&
+		self->s.number >= 0 && self->s.number < MAX_CLIENTS &&
+		level.arcadeParticipant[self->s.number] && !level.arcadeEliminated[self->s.number])
+	{
+		G_QueueArcadeBotTutorial(attacker, self, level.arcadeLevel, qfalse);
+	}
 	if (self->s.number >= 0 && self->s.number < MAX_CLIENTS)
 	{
 		level.arcadeEliminated[self->s.number] = qtrue;
@@ -636,6 +709,15 @@ static void G_ArcadeRunFrame(void)
 	}
 	if (level.arcadeRoundStartTime <= 0)
 	{
+		if (G_ArcadeCountRoundHumans() <= 0)
+		{
+			level.arcadeRoundQueuedStart = 0;
+			G_ArcadeEnsureWaitingBot();
+		}
+		else if (!level.arcadeRoundQueuedStart)
+		{
+			level.arcadeRoundQueuedStart = level.time + ARCADE_JOIN_QUEUE_DELAY_MS;
+		}
 		return;
 	}
 
@@ -2622,7 +2704,7 @@ void PrintStats(int client) {
 			continue;
 
 		cl = &level.clients[i];
-		if (cl->pers.netname[0] && /*!(cl->ps.pm_flags & PMF_FOLLOW) &&*/ (cl->sess.sessionTeam != TEAM_SPECTATOR) && !(level.gametype >= GT_TEAM && cl->sess.sessionTeam == TEAM_FREE)) //sad
+		if (cl->pers.netname[0] && /*!(cl->ps.pm_flags & PMF_FOLLOW) &&*/ (cl->sess.sessionTeam != TEAM_SPECTATOR) && !(level.gametype >= GT_TEAM && level.gametype != GT_ARCADE && cl->sess.sessionTeam == TEAM_FREE)) //sad
 		{
 			float accuracy = 0, dmgPerDeath = cl->pers.stats.damageGiven, drainRatio = 0;
 

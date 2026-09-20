@@ -1833,6 +1833,7 @@ int TeamLeader( int team );
 team_t PickTeam( int ignoreClientNum );
 void SetClientViewAngle( gentity_t *ent, vec3_t angle );
 gentity_t *SelectSpawnPoint ( vec3_t avoidPoint, vec3_t origin, vec3_t angles, team_t team, qboolean isbot );
+qboolean SpotWouldTelefrag3( vec3_t spot );
 void MaintainBodyQueue(gentity_t *ent);
 void ClientRespawn (gentity_t *ent);
 void BeginIntermission (void);
@@ -1870,6 +1871,7 @@ void G_UpdateTrackedDuelFrame(gentity_t *ent);
 void G_FinishTrackedDuel(gentity_t *winner, gentity_t *loser, int duelType, qboolean draw);
 void G_ClearTrackedDuelIfMismatched(gentity_t *ent, gentity_t *opponent);
 void G_ClearTrackedDuelClientState(int clientNum);
+void G_QueueArcadeBotTutorial(gentity_t *speaker, gentity_t *listener, int roundNumber, qboolean betweenRounds);
 
 //
 // g_cmds.c

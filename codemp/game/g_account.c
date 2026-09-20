@@ -150,6 +150,7 @@ typedef struct
 	int queuedCount;
 	int nextMessageIndex;
 	int immediateIndex;
+	qboolean publicBroadcast;
 	char messages[TRACKED_DUEL_TUTORIAL_MAX_MESSAGES][MAX_SAY_TEXT];
 } bot_tutorial_queue_t;
 
@@ -962,6 +963,7 @@ static void G_ProcessBotTutorialQueue(gentity_t *ent)
 	bot_tutorial_queue_t *queue;
 	gentity_t *target;
 	int cooldown;
+	int sayMode;
 
 	if (!ent || !ent->client || !(ent->r.svFlags & SVF_BOT))
 		return;
@@ -973,6 +975,7 @@ static void G_ProcessBotTutorialQueue(gentity_t *ent)
 		return;
 	if (queue->targetClientNum < 0 || queue->targetClientNum >= MAX_CLIENTS)
 	{
+		queue->publicBroadcast = qfalse;
 		G_ClearBotTutorialQueue(ent->s.number);
 		return;
 	}
@@ -980,14 +983,17 @@ static void G_ProcessBotTutorialQueue(gentity_t *ent)
 	target = &g_entities[queue->targetClientNum];
 	if (!target->inuse || !target->client || target->client->pers.connected != CON_CONNECTED)
 	{
+		queue->publicBroadcast = qfalse;
 		G_ClearBotTutorialQueue(ent->s.number);
 		return;
 	}
 
-	G_Say(ent, target, SAY_TELL, queue->messages[queue->nextMessageIndex]);
+	sayMode = queue->publicBroadcast ? SAY_ALL : SAY_TELL;
+	G_Say(ent, (sayMode == SAY_ALL) ? NULL : target, sayMode, queue->messages[queue->nextMessageIndex]);
 	queue->nextMessageIndex++;
 	if (queue->nextMessageIndex >= queue->queuedCount)
 	{
+		queue->publicBroadcast = qfalse;
 		G_ClearBotTutorialQueue(ent->s.number);
 	}
 	else if (queue->immediateIndex >= 0 && queue->nextMessageIndex >= queue->immediateIndex)
@@ -999,6 +1005,66 @@ static void G_ProcessBotTutorialQueue(gentity_t *ent)
 	{
 		cooldown = queue->cooldownMs > 0 ? queue->cooldownMs : TRACKED_DUEL_TUTORIAL_COOLDOWN_MS;
 		queue->nextSendTime = level.time + cooldown;
+	}
+}
+
+void G_QueueArcadeBotTutorial(gentity_t *speaker, gentity_t *listener, int roundNumber, qboolean betweenRounds)
+{
+	int rotation;
+	bot_tutorial_queue_t *queue;
+
+	if (bot_tutorial.integer < 2 || bot_nochat.integer || !speaker || !listener ||
+		!speaker->client || !listener->client)
+	{
+		return;
+	}
+	if (!(speaker->r.svFlags & SVF_BOT) || (listener->r.svFlags & SVF_BOT))
+	{
+		return;
+	}
+	if (speaker->s.number < 0 || speaker->s.number >= MAX_CLIENTS)
+	{
+		return;
+	}
+
+	queue = &g_botTutorialQueues[speaker->s.number];
+	if (queue->queuedCount > queue->nextMessageIndex)
+	{
+		return;
+	}
+
+	G_ClearBotTutorialQueue(speaker->s.number);
+	queue = &g_botTutorialQueues[speaker->s.number];
+
+	rotation = roundNumber;
+	if (rotation < 0)
+	{
+		rotation = 0;
+	}
+
+	if (betweenRounds)
+	{
+		if (rotation <= 2)
+		{
+			G_QueueManualBasicsAdvice(speaker->s.number, listener->s.number, rotation);
+		}
+		else if ((rotation % 2) == 0)
+		{
+			G_QueueManualMetaAdvice(speaker->s.number, listener->s.number, rotation);
+		}
+		else
+		{
+			G_QueueManualIntermediateAdvice(speaker->s.number, listener->s.number, rotation);
+		}
+	}
+	else
+	{
+		G_QueueManualGenericAdvice(speaker->s.number, listener->s.number, NULL, qfalse, NULL);
+	}
+
+	if (queue->queuedCount > queue->nextMessageIndex)
+	{
+		queue->publicBroadcast = qtrue;
 	}
 }
 
