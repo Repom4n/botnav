@@ -31,8 +31,6 @@ static char LOCAL_DB_PATH[MAX_OSPATH];
 #define TRACKED_DUEL_SKILL_MIN_WINRATE_DUELS 5
 #define TRACKED_DUEL_SKILL_HIGH_WINRATE 55
 #define TRACKED_DUEL_SKILL_LOW_WINRATE 35
-#define TRACKED_DUEL_ADVICE_LOGIN_START 3
-#define TRACKED_DUEL_ADVICE_LOGIN_INTERVAL 3
 #define LOCAL_ARCADE_SCORE_ORDER "score DESC, end_time DESC"
 //#define GLOBAL_DB_PATH sv_globalDBPath.string
 //#define MAX_TMP_RACELOG_SIZE 80 * 1024
@@ -189,7 +187,6 @@ typedef struct
 	int sessionWins;
 	int adviceRotation;
 	unsigned int lastAdviceHash;
-	int lastLoginPromptDuel;
 	qboolean loginReminderSent;
 } duel_advice_session_state_t;
 
@@ -1109,7 +1106,6 @@ static void G_MaybeQueueTrackedLoginAdvice(int botClientNum, int targetClientNum
 
 	G_QueueRotatingTutorialMessage(botClientNum, targetClientNum, loginAdvice,
 		(int)(sizeof(loginAdvice) / sizeof(loginAdvice[0])), session->duelsSeen, session);
-	session->lastLoginPromptDuel = session->duelsSeen;
 	session->loginReminderSent = qtrue;
 }
 
