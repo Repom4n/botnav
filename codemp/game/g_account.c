@@ -1123,6 +1123,7 @@ static void G_InsertTrackedEvents(sqlite3 *db, sqlite3_int64 summaryId, tracked_
 	int i;
 	int s;
 	qboolean captureGeometry = qfalse;
+	qboolean hasAnyGeometry = qfalse;
 
 	if (!runtime || runtime->eventCount <= 0)
 		return;
@@ -1131,6 +1132,17 @@ static void G_InsertTrackedEvents(sqlite3 *db, sqlite3_int64 summaryId, tracked_
 	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
 	captureGeometry = G_IsTrackedGeometryEnabled();
 	if (captureGeometry)
+	{
+		for (i = 0; i < runtime->eventCount; i++)
+		{
+			if (runtime->events[i].hasGeometry)
+			{
+				hasAnyGeometry = qtrue;
+				break;
+			}
+		}
+	}
+	if (captureGeometry && hasAnyGeometry)
 	{
 		sql = "INSERT INTO LocalDuelTrackGeometry(summary_id, participant_key, opponent_key, rel_time, event_index, self_x, self_y, self_z, enemy_x, enemy_y, enemy_z, self_vx, self_vy, self_vz, enemy_vx, enemy_vy, enemy_vz, self_yaw, enemy_yaw) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 		CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &geomStmt, NULL));
@@ -1154,7 +1166,7 @@ static void G_InsertTrackedEvents(sqlite3 *db, sqlite3_int64 summaryId, tracked_
 			G_ErrorPrint("ERROR: SQL Insert Failed (LocalDuelTrackEvent)", s);
 		CALL_SQLITE(reset(stmt));
 		CALL_SQLITE(clear_bindings(stmt));
-		if (captureGeometry && event->hasGeometry)
+		if (captureGeometry && hasAnyGeometry && event->hasGeometry)
 		{
 			CALL_SQLITE(bind_int64(geomStmt, 1, summaryId));
 			CALL_SQLITE(bind_text(geomStmt, 2, runtime->identityKey, -1, SQLITE_STATIC));
@@ -1183,7 +1195,7 @@ static void G_InsertTrackedEvents(sqlite3 *db, sqlite3_int64 summaryId, tracked_
 		}
 	}
 	CALL_SQLITE(finalize(stmt));
-	if (captureGeometry)
+	if (captureGeometry && hasAnyGeometry)
 		CALL_SQLITE(finalize(geomStmt));
 }
 
