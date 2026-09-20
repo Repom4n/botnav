@@ -32,6 +32,16 @@ static char LOCAL_DB_PATH[MAX_OSPATH];
 #define TRACKED_DUEL_SKILL_HIGH_WINRATE 55
 #define TRACKED_DUEL_SKILL_LOW_WINRATE 35
 #define TRACKED_DUEL_ADVICE_LOGIN_MIN_DUELS 3
+#define TRACKED_DUEL_SCORE_LOW_FORCE_FINISH_BONUS 5
+#define TRACKED_DUEL_SCORE_SPENT_PANIC_DIVISOR 15
+#define TRACKED_DUEL_SCORE_GRIP_EVENT_WEIGHT 2
+#define TRACKED_DUEL_SCORE_SABER_THROW_PUNISH_WEIGHT 2
+#define TRACKED_DUEL_SCORE_KNOCKDOWN_EVENT_WEIGHT 2
+#define TRACKED_DUEL_SCORE_LATE_DEFENSE_WEIGHT 2
+#define TRACKED_DUEL_SCORE_FORCED_ENTRY_SPENT_GAP 30
+#define TRACKED_DUEL_SCORE_FORCED_ENTRY_SPENT_BONUS 3
+#define TRACKED_DUEL_SCORE_FORCED_ENTRY_NO_CONFIRM_BONUS 2
+#define TRACKED_DUEL_SCORE_LINEAR_FALLBACK_BASE 1
 #define LOCAL_ARCADE_SCORE_ORDER "score DESC, end_time DESC"
 //#define GLOBAL_DB_PATH sv_globalDBPath.string
 //#define MAX_TMP_RACELOG_SIZE 80 * 1024
@@ -90,6 +100,19 @@ typedef enum
 	DUEL_TRACK_STATE_FINISHING
 } duel_track_state_t;
 
+typedef enum
+{
+	DUEL_TRACK_EVENT_FORCE = 0,
+	DUEL_TRACK_EVENT_REGEN,
+	DUEL_TRACK_EVENT_DAMAGE,
+	DUEL_TRACK_EVENT_RANGE,
+	DUEL_TRACK_EVENT_AIR,
+	DUEL_TRACK_EVENT_KNOCKDOWN,
+	DUEL_TRACK_EVENT_PRESSURE_SUCCESS,
+	DUEL_TRACK_EVENT_RESET_SUCCESS,
+	DUEL_TRACK_EVENT_OVERCOMMIT
+} duel_track_event_type_t;
+
 typedef struct
 {
 	int relTime;
@@ -141,6 +164,11 @@ typedef struct
 	int opponentSide;
 	int identityKind;
 	int didDieLowForce;
+	int pendingResetRecovery;
+	int punishConfirmEvents;
+	int resetSuccessEvents;
+	int antiThrowSuccessEvents;
+	int overcommitEvents;
 	char identityKey[64];
 	char identityLabel[MAX_NETNAME];
 	char opponentKey[64];
@@ -737,12 +765,15 @@ static const char *G_GetTrackedEventTypeName(int eventType)
 {
 	switch (eventType)
 	{
-	case 0: return "force";
-	case 1: return "regen";
-	case 2: return "damage";
-	case 3: return "range";
-	case 4: return "air";
-	case 5: return "knockdown";
+	case DUEL_TRACK_EVENT_FORCE: return "force";
+	case DUEL_TRACK_EVENT_REGEN: return "regen";
+	case DUEL_TRACK_EVENT_DAMAGE: return "damage";
+	case DUEL_TRACK_EVENT_RANGE: return "range";
+	case DUEL_TRACK_EVENT_AIR: return "air";
+	case DUEL_TRACK_EVENT_KNOCKDOWN: return "knockdown";
+	case DUEL_TRACK_EVENT_PRESSURE_SUCCESS: return "pressure_success";
+	case DUEL_TRACK_EVENT_RESET_SUCCESS: return "reset_success";
+	case DUEL_TRACK_EVENT_OVERCOMMIT: return "overcommit";
 	default: return "note";
 	}
 }
@@ -855,23 +886,78 @@ static void G_AddTrackedDuelEvent(tracked_duel_runtime_t *runtime, int eventType
 
 static void G_SetTrackedPrimaryIssue(tracked_duel_runtime_t *runtime, qboolean lowForceFinish)
 {
+	int lowForceScore;
+	int gripScore;
+	int saberThrowScore;
+	int knockdownScore;
+	int lateDefenseScore;
+	int forcedEntryScore;
+	int linearScore;
+	int totalConfirms;
+	int bestScore;
+	const char *bestIssue;
+
 	if (!runtime)
 		return;
 
-	if (lowForceFinish || runtime->spentByState[DUEL_TRACK_STATE_PANIC] >= 25)
-		Q_strncpyz(runtime->primaryIssue, "low_force", sizeof(runtime->primaryIssue));
-	else if (runtime->gripCrippleEvents >= 2)
-		Q_strncpyz(runtime->primaryIssue, "grip_control", sizeof(runtime->primaryIssue));
-	else if (runtime->saberThrowPunishes >= 2)
-		Q_strncpyz(runtime->primaryIssue, "saber_throw", sizeof(runtime->primaryIssue));
-	else if (runtime->knockdownEvents >= 2)
-		Q_strncpyz(runtime->primaryIssue, "knockdown", sizeof(runtime->primaryIssue));
-	else if (runtime->lateDefenseSpends >= 2)
-		Q_strncpyz(runtime->primaryIssue, "late_defense", sizeof(runtime->primaryIssue));
-	else if (runtime->opponentSide == FORCE_LIGHTSIDE)
-		Q_strncpyz(runtime->primaryIssue, "forced_entries", sizeof(runtime->primaryIssue));
-	else
-		Q_strncpyz(runtime->primaryIssue, "linear_entries", sizeof(runtime->primaryIssue));
+	lowForceScore = ((lowForceFinish || runtime->didDieLowForce) ? TRACKED_DUEL_SCORE_LOW_FORCE_FINISH_BONUS : 0) +
+		(runtime->spentByState[DUEL_TRACK_STATE_PANIC] / TRACKED_DUEL_SCORE_SPENT_PANIC_DIVISOR) +
+		runtime->lowForceWindows;
+	gripScore = runtime->gripCrippleEvents * TRACKED_DUEL_SCORE_GRIP_EVENT_WEIGHT;
+	saberThrowScore = (runtime->saberThrowPunishes * TRACKED_DUEL_SCORE_SABER_THROW_PUNISH_WEIGHT) - runtime->antiThrowSuccessEvents;
+	knockdownScore = runtime->knockdownEvents * TRACKED_DUEL_SCORE_KNOCKDOWN_EVENT_WEIGHT;
+	lateDefenseScore = (runtime->lateDefenseSpends * TRACKED_DUEL_SCORE_LATE_DEFENSE_WEIGHT) + runtime->overcommitEvents;
+	totalConfirms = runtime->punishConfirmEvents;
+	forcedEntryScore = 0;
+	if (runtime->spentByState[DUEL_TRACK_STATE_DISADVANTAGE] >= runtime->spentByState[DUEL_TRACK_STATE_ADVANTAGE] + TRACKED_DUEL_SCORE_FORCED_ENTRY_SPENT_GAP)
+	{
+		forcedEntryScore += TRACKED_DUEL_SCORE_FORCED_ENTRY_SPENT_BONUS;
+	}
+	if (runtime->spentByState[DUEL_TRACK_STATE_FINISHING] > runtime->spentByState[DUEL_TRACK_STATE_ADVANTAGE] &&
+		totalConfirms <= 0)
+	{
+		forcedEntryScore += TRACKED_DUEL_SCORE_FORCED_ENTRY_NO_CONFIRM_BONUS;
+	}
+	linearScore = (totalConfirms <= 0) ? TRACKED_DUEL_SCORE_LINEAR_FALLBACK_BASE : 0;
+
+	bestIssue = "linear_entries";
+	bestScore = linearScore;
+	if (lowForceScore > bestScore)
+	{
+		bestScore = lowForceScore;
+		bestIssue = "low_force";
+	}
+	if (gripScore > bestScore)
+	{
+		bestScore = gripScore;
+		bestIssue = "grip_control";
+	}
+	if (saberThrowScore > bestScore)
+	{
+		bestScore = saberThrowScore;
+		bestIssue = "saber_throw";
+	}
+	if (knockdownScore > bestScore)
+	{
+		bestScore = knockdownScore;
+		bestIssue = "knockdown";
+	}
+	if (lateDefenseScore > bestScore)
+	{
+		bestScore = lateDefenseScore;
+		bestIssue = "late_defense";
+	}
+	if (forcedEntryScore > bestScore)
+	{
+		bestScore = forcedEntryScore;
+		bestIssue = "forced_entries";
+	}
+
+	if (bestScore <= 0)
+	{
+		bestIssue = (runtime->opponentSide == FORCE_LIGHTSIDE) ? "forced_entries" : "linear_entries";
+	}
+	Q_strncpyz(runtime->primaryIssue, bestIssue, sizeof(runtime->primaryIssue));
 }
 
 static void G_QueueBotTutorialMessage(int botClientNum, int targetClientNum, const char *message)
@@ -925,12 +1011,12 @@ static void G_QueueManualBasicsAdvice(int botClientNum, int targetClientNum, int
 {
 	int slot;
 	static const char *manualBasics[] = {
-		"Entry first: strafe-jump your approach and avoid long straight lanes into crosshair.",
-		"Force economy first: preserve exit force before re-committing into pressure.",
-		"Offense mix wins: rotate PTK, saber pressure, and GK so your rhythm stays unreadable.",
-		"GK means Grip Kick. Keep grip and kick binds clean so timing stays sharp under pressure.",
-		"PK means Pull Kick. Best windows are after movement commits, knockdowns, or saber recovery.",
-		"PTK means Pull-Throw-Kick. Use it to threaten space, then convert only on real recovery."
+		"PK means Pull Kick. Use it after committed movement, knockdowns, or saber recovery windows.",
+		"GK means Grip Kick. Keep grip and kick binds clean so timing stays reliable under pressure.",
+		"PTK means Pull-Throw-Kick. Threaten space first, then convert only on real recovery windows.",
+		"Force management first: preserve exit force before re-committing to pressure.",
+		"Lane basics: a lane is your approach angle into threat range; rotate lanes to stay less readable.",
+		"After lane basics are stable, layer movement variation and timing changes into your entries."
 	};
 
 	slot = duelIndex;
@@ -1365,6 +1451,7 @@ static void G_InitTrackedDuelRuntimeForClient(gentity_t *ent, gentity_t *opponen
 	runtime->lastAirborne = (ent->client->ps.groundEntityNum == ENTITYNUM_NONE) ? 1 : 0;
 	runtime->lastKnockdown = BG_InKnockDown(ent->client->ps.legsAnim) ? 1 : 0;
 	runtime->lastGripCripple = ent->client->ps.fd.forceGripCripple ? 1 : 0;
+	runtime->pendingResetRecovery = 0;
 	runtime->side = G_GetTrackedParticipantSide(ent);
 	runtime->opponentSide = G_GetTrackedParticipantSide(opponent);
 	G_GetDuelTrackingIdentity(ent, runtime->identityKey, sizeof(runtime->identityKey), runtime->identityLabel, sizeof(runtime->identityLabel), &runtime->identityKind);
@@ -1725,6 +1812,11 @@ void G_UpdateTrackedDuelFrame(gentity_t *ent)
 	airborne = (ent->client->ps.groundEntityNum == ENTITYNUM_NONE) ? 1 : 0;
 	knockedDown = BG_InKnockDown(ent->client->ps.legsAnim) ? 1 : 0;
 	state = G_InferTrackedForceState(ent, opponent);
+	if ((state == DUEL_TRACK_STATE_PANIC || state == DUEL_TRACK_STATE_DISADVANTAGE) &&
+		curForce <= TRACKED_DUEL_LOW_FORCE_THRESHOLD)
+	{
+		runtime->pendingResetRecovery = 1;
+	}
 
 	forceDelta = curForce - runtime->lastForce;
 	if (forceDelta < 0)
@@ -1734,18 +1826,31 @@ void G_UpdateTrackedDuelFrame(gentity_t *ent)
 		runtime->totalForceSpent += spent;
 		runtime->forceSpentByPower[power] += spent;
 		runtime->spentByState[state] += spent;
+		if (spent >= 20 && (state == DUEL_TRACK_STATE_PANIC || state == DUEL_TRACK_STATE_DISADVANTAGE))
+		{
+			runtime->overcommitEvents++;
+			G_AddTrackedDuelEvent(runtime, DUEL_TRACK_EVENT_OVERCOMMIT, level.time - runtime->duelStartTime, spent, power, state, curRangeBucket, "overcommit", ent, opponent);
+		}
 		if (state == DUEL_TRACK_STATE_PANIC && curForce <= TRACKED_DUEL_LOW_FORCE_THRESHOLD)
 			runtime->lowForceWindows++;
 		if ((power == DUEL_TRACK_POWER_ABSORB || power == DUEL_TRACK_POWER_PROTECT) &&
 			(ent->health <= 45 || state == DUEL_TRACK_STATE_PANIC || state == DUEL_TRACK_STATE_DISADVANTAGE))
 			runtime->lateDefenseSpends++;
 		G_SetTrackedOpeningIfEmpty(runtime, power, NULL);
-		G_AddTrackedDuelEvent(runtime, 0, level.time - runtime->duelStartTime, spent, power, state, curRangeBucket, NULL, ent, opponent);
+		G_AddTrackedDuelEvent(runtime, DUEL_TRACK_EVENT_FORCE, level.time - runtime->duelStartTime, spent, power, state, curRangeBucket, NULL, ent, opponent);
 	}
 	else if (forceDelta > 0)
 	{
 		runtime->totalForceRegen += forceDelta;
-		G_AddTrackedDuelEvent(runtime, 1, level.time - runtime->duelStartTime, forceDelta, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, NULL, ent, opponent);
+		G_AddTrackedDuelEvent(runtime, DUEL_TRACK_EVENT_REGEN, level.time - runtime->duelStartTime, forceDelta, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, NULL, ent, opponent);
+		if (runtime->pendingResetRecovery &&
+			runtime->lastForce <= TRACKED_DUEL_LOW_FORCE_THRESHOLD &&
+			curForce > TRACKED_DUEL_LOW_FORCE_THRESHOLD)
+		{
+			runtime->resetSuccessEvents++;
+			runtime->pendingResetRecovery = 0;
+			G_AddTrackedDuelEvent(runtime, DUEL_TRACK_EVENT_RESET_SUCCESS, level.time - runtime->duelStartTime, forceDelta, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, "reset", ent, opponent);
+		}
 	}
 
 	healthDelta = curHealthArmor - runtime->lastHealthArmor;
@@ -1759,22 +1864,22 @@ void G_UpdateTrackedDuelFrame(gentity_t *ent)
 			note = "saberthrow";
 			G_SetTrackedOpeningIfEmpty(runtime, DUEL_TRACK_POWER_UNKNOWN, "saberthrow");
 		}
-		G_AddTrackedDuelEvent(runtime, 2, level.time - runtime->duelStartTime, taken, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, note, ent, opponent);
+		G_AddTrackedDuelEvent(runtime, DUEL_TRACK_EVENT_DAMAGE, level.time - runtime->duelStartTime, taken, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, note, ent, opponent);
 	}
 
 	if (ent->client->ps.fd.forceGripCripple && !runtime->lastGripCripple)
 		runtime->gripCrippleEvents++;
 
 	if (curRangeBucket != runtime->lastRangeBucket)
-		G_AddTrackedDuelEvent(runtime, 3, level.time - runtime->duelStartTime, curRangeBucket, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, NULL, ent, opponent);
+		G_AddTrackedDuelEvent(runtime, DUEL_TRACK_EVENT_RANGE, level.time - runtime->duelStartTime, curRangeBucket, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, NULL, ent, opponent);
 
 	if (airborne != runtime->lastAirborne)
-		G_AddTrackedDuelEvent(runtime, 4, level.time - runtime->duelStartTime, airborne, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, airborne ? "airborne" : "landed", ent, opponent);
+		G_AddTrackedDuelEvent(runtime, DUEL_TRACK_EVENT_AIR, level.time - runtime->duelStartTime, airborne, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, airborne ? "airborne" : "landed", ent, opponent);
 
 	if (knockedDown && !runtime->lastKnockdown)
 	{
 		runtime->knockdownEvents++;
-		G_AddTrackedDuelEvent(runtime, 5, level.time - runtime->duelStartTime, 1, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, "knockdown", ent, opponent);
+		G_AddTrackedDuelEvent(runtime, DUEL_TRACK_EVENT_KNOCKDOWN, level.time - runtime->duelStartTime, 1, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, "knockdown", ent, opponent);
 	}
 
 	if (curForce < runtime->lowestForce)
