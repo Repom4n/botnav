@@ -489,6 +489,7 @@ static void G_ArcadeShutdown(qboolean kickBots)
 	level.arcadeRoundBotsTarget = 0;
 	level.arcadeRoundQueuedStart = 0;
 	level.arcadeGameOverTime = 0;
+	level.arcadeMarkNextBot = qfalse;
 
 	if (kickBots)
 	{
@@ -531,6 +532,7 @@ static void G_ArcadeEnsureWaitingBot(void)
 	}
 
 	trap->Cvar_Set("g_npcspskill", va("%.2f", primarySkill));
+	level.arcadeMarkNextBot = qtrue;
 	G_AddRandomBot(TEAM_FREE);
 }
 
@@ -541,7 +543,8 @@ static void G_ArcadeKickAllBots(void)
 	{
 		gentity_t *ent = &g_entities[i];
 		if (ent->inuse && ent->client && (ent->r.svFlags & SVF_BOT) &&
-			ent->client->pers.connected == CON_CONNECTED)
+			ent->client->pers.connected == CON_CONNECTED &&
+			level.arcadeManagedBot[i])
 		{
 			level.arcadeManagedBot[i] = qfalse;
 			trap->SendConsoleCommand(EXEC_APPEND, va("clientkick %i\n", i));
@@ -576,6 +579,7 @@ static void G_ArcadeStartRound(void)
 	for (i = 0; i < targetBots; i++)
 	{
 		trap->Cvar_Set("g_npcspskill", va("%.2f", primarySkill));
+		level.arcadeMarkNextBot = qtrue;
 		G_AddRandomBot(TEAM_FREE);
 	}
 	for (i = 0; i < MAX_CLIENTS; i++)

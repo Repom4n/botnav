@@ -912,6 +912,7 @@ static void G_AddBot( const char *name, float skill, const char *team, int delay
 	if ( clientNum == -1 ) {
 //		trap->Print( S_COLOR_RED "Unable to add bot.  All player slots are in use.\n" );
 //		trap->Print( S_COLOR_RED "Start server with more 'open' slots.\n" );
+		level.arcadeMarkNextBot = qfalse;
 		trap->SendServerCommand( -1, va("print \"%s\n\"", G_GetStringEdString("MP_SVGAME", "UNABLE_TO_ADD_BOT")));
 		return;
 	}
@@ -920,6 +921,7 @@ static void G_AddBot( const char *name, float skill, const char *team, int delay
 	botinfo = G_GetBotInfoByName( name );
 	if ( !botinfo ) {
 		trap->Print( S_COLOR_RED "Error: Bot '%s' not defined\n", name );
+		level.arcadeMarkNextBot = qfalse;
 		trap->BotFreeClient( clientNum );
 		return;
 	}
@@ -1051,7 +1053,11 @@ static void G_AddBot( const char *name, float skill, const char *team, int delay
 
 	if ( level.gametype == GT_ARCADE )
 	{
-		level.arcadeManagedBot[clientNum] = qtrue;
+		if (level.arcadeMarkNextBot)
+		{
+			level.arcadeManagedBot[clientNum] = qtrue;
+			level.arcadeMarkNextBot = qfalse;
+		}
 		bot->client->sess.sessionTeam = TEAM_FREE;
 	}
 	else if ( level.gametype >= GT_TEAM )

@@ -1561,6 +1561,7 @@ typedef struct level_locals_s {
 	qboolean	arcadeEliminated[MAX_CLIENTS];
 	qboolean	arcadeParticipant[MAX_CLIENTS];
 	qboolean	arcadeManagedBot[MAX_CLIENTS];
+	qboolean	arcadeMarkNextBot;
 	qboolean	arcadeInitialized;
 } level_locals_t;
 
