@@ -933,6 +933,8 @@ static void G_AddBot( const char *name, float skill, const char *team, int delay
 	botinfo = G_GetBotInfoByName( name );
 	if ( !botinfo ) {
 		trap->Print( S_COLOR_RED "Error: Bot '%s' not defined\n", name );
+		if (arcadeManaged)
+			level.arcadeManagedBot[clientNum] = qfalse;
 		trap->BotFreeClient( clientNum );
 		return;
 	}
@@ -1118,6 +1120,8 @@ static void G_AddBot( const char *name, float skill, const char *team, int delay
 		G_ReadSessionData( bot->client );
 		if ( !ClientUserinfoChanged( clientNum ) )
 		{
+			if (arcadeManaged)
+				level.arcadeManagedBot[clientNum] = qfalse;
 			return;
 		}
 	}
