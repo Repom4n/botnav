@@ -173,7 +173,7 @@ static inline int NewBotAI_ShouldQueueLoginReminder(
 		return 0;
 	}
 
-	if (lastPromptDuel == duelsSeen)
+	if (lastPromptDuel >= duelsSeen)
 	{
 		return 0;
 	}

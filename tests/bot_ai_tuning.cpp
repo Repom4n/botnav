@@ -91,6 +91,7 @@ BOOST_AUTO_TEST_CASE( login_reminder_cadence_starts_and_repeats_on_interval )
 	BOOST_CHECK( !NewBotAI_ShouldQueueLoginReminder( 3, 3, 3, 3 ) );
 	BOOST_CHECK( !NewBotAI_ShouldQueueLoginReminder( 4, 3, 3, 0 ) );
 	BOOST_CHECK( NewBotAI_ShouldQueueLoginReminder( 6, 3, 3, 3 ) );
+	BOOST_CHECK( !NewBotAI_ShouldQueueLoginReminder( 5, 3, 3, 6 ) );
 }
 
 BOOST_AUTO_TEST_CASE( login_reminder_state_updates_prevent_repeat_until_next_interval )

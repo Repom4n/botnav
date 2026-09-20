@@ -269,6 +269,16 @@ static void G_ArcadeResetScores(void)
 	}
 }
 
+static void G_ArcadeClearManagedBotState(void)
+{
+	int i;
+
+	for (i = 0; i < MAX_CLIENTS; i++)
+	{
+		level.arcadeManagedBot[i] = qfalse;
+	}
+}
+
 static int G_ArcadeGetArmorResource(const gentity_t *ent)
 {
 	return ent->client->ps.stats[STAT_ARMOR];
@@ -482,6 +492,7 @@ static void G_ArcadeShutdown(qboolean kickBots)
 	{
 		G_ArcadeKickAllBots();
 	}
+	G_ArcadeClearManagedBotState();
 
 	G_ArcadeResetScores();
 	level.arcadeInitialized = qfalse;
