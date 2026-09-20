@@ -2331,7 +2331,8 @@ void UpdateForceStatus()
 		else
 		{
 			// Set or reset buttons based on choices
-			if (atoi(Info_ValueForKey(info, "g_gametype")) >= GT_TEAM)
+			if (atoi(Info_ValueForKey(info, "g_gametype")) >= GT_TEAM &&
+				atoi(Info_ValueForKey(info, "g_gametype")) != GT_ARCADE)
 			{	// This is a team-based game.
 				Menu_ShowItemByName(menu, "playerforcespectate", qtrue);
 
@@ -2390,7 +2391,8 @@ void UpdateForceStatus()
 		default:
 			trap->GetConfigString( CS_SERVERINFO, info, sizeof(info) );
 
-			if (atoi(Info_ValueForKey(info, "g_gametype")) >= GT_TEAM)
+			if (atoi(Info_ValueForKey(info, "g_gametype")) >= GT_TEAM &&
+				atoi(Info_ValueForKey(info, "g_gametype")) != GT_ARCADE)
 			{
 				uiSkinColor = TEAM_FREE;
 			}

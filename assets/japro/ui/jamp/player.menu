@@ -219,8 +219,8 @@
 		{
 			name				profilebutton
 			group				toprow
-			text				@MENUS_PROFILE
-			descText			@MENUS_PROFILE_DESC
+			text				"Account"
+			descText			"Login, register, or logout from your account."
 			style				WINDOW_STYLE_EMPTY
 			type				ITEM_TYPE_BUTTON
 			rect				170 126 130 24
@@ -233,13 +233,18 @@
 			forecolor			1 1 1 1
 			visible			1
 
+			action
+			{
+				play			"sound/interface/button1.wav" ;
+				open			accountmenu
+			}
 			mouseEnter 
-			{ 
-				//show			profilebutton_glow 
+			{
+				show			profilebutton_glow
 			}
 			mouseExit 
 			{ 
-				//hide			profilebutton_glow 
+				hide			profilebutton_glow 
 			}	  	  
 		}
 

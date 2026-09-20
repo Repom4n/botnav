@@ -446,6 +446,31 @@ static void PlayerIntroSound( const char *modelAndSkin ) {
 G_AddRandomBot
 ===============
 */
+static void G_ForcePowersSetSide(char *forcePowers, int forceSide)
+{
+	char *firstSep;
+	char *secondSep;
+
+	if (!forcePowers || !forcePowers[0])
+	{
+		return;
+	}
+
+	firstSep = strchr(forcePowers, '-');
+	if (!firstSep || !firstSep[1])
+	{
+		return;
+	}
+
+	secondSep = strchr(firstSep + 1, '-');
+	if (!secondSep || secondSep != firstSep + 2)
+	{
+		return;
+	}
+
+	firstSep[1] = '0' + forceSide;
+}
+
 void G_AddRandomBot( int team ) {
 	int		i, n, num;
 	float	skill;
@@ -943,7 +968,15 @@ static void G_AddBot( const char *name, float skill, const char *team, int delay
 	key = "forcepowers";
 	s = Info_ValueForKey( botinfo, key );
 	if ( !*s )	s = DEFAULT_FORCEPOWERS;
-	Info_SetValueForKey( userinfo, key, s );
+	{
+		char forcePowers[DEFAULT_FORCEPOWERS_LEN+1];
+		Q_strncpyz(forcePowers, s, sizeof(forcePowers));
+		if (level.gametype == GT_ARCADE)
+		{
+			G_ForcePowersSetSide(forcePowers, FORCE_DARKSIDE);
+		}
+		Info_SetValueForKey( userinfo, key, forcePowers );
+	}
 
 	key = "cg_predictItems";
 	s = Info_ValueForKey( botinfo, key );

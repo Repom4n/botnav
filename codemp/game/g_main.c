@@ -460,6 +460,22 @@ static void G_ArcadeRespawnParticipant(gentity_t *ent, qboolean preservePosition
 
 static void G_ArcadeKickAllBots(void);
 
+static void G_ArcadeShutdown(qboolean kickBots)
+{
+	G_ArcadeResetScores();
+	level.arcadeInitialized = qfalse;
+	level.arcadeLevel = 0;
+	level.arcadeRoundStartTime = 0;
+	level.arcadeRoundBotsTarget = 0;
+	level.arcadeRoundQueuedStart = 0;
+	level.arcadeGameOverTime = 0;
+
+	if (kickBots)
+	{
+		G_ArcadeKickAllBots();
+	}
+}
+
 static void G_ArcadeEnsureWaitingBot(void)
 {
 	int i;
@@ -684,6 +700,11 @@ static void G_ArcadeRunFrame(void)
 
 	if (level.gametype != GT_ARCADE)
 	{
+		if (level.arcadeInitialized || level.arcadeRoundStartTime || level.arcadeRoundQueuedStart ||
+			level.arcadeGameOverTime || level.arcadeRoundBotsTarget)
+		{
+			G_ArcadeShutdown(qtrue);
+		}
 		return;
 	}
 	if (!level.arcadeInitialized)

@@ -20,10 +20,14 @@ static char LOCAL_DB_PATH[MAX_OSPATH];
 #define TRACKED_DUEL_TUTORIAL_MAX_MESSAGES 3
 #define TRACKED_DUEL_TUTORIAL_COOLDOWN_MS 7000
 #define TRACKED_DUEL_TUTORIAL_FAST_COOLDOWN_MS 2500
+#define TRACKED_DUEL_TUTORIAL_MIN_DELAY_MS 1500
+#define TRACKED_DUEL_TUTORIAL_MAX_DELAY_MS 2500
 #define TRACKED_DUEL_LOW_FORCE_THRESHOLD 25
 #define TRACKED_DUEL_ADVICE_BASIC_WINDOW 5
 #define TRACKED_DUEL_ADVICE_MIN_OBSERVATIONS 3
 #define TRACKED_DUEL_ADVICE_REPEAT_THRESHOLD 2
+#define TRACKED_DUEL_ADVICE_LOGIN_START 3
+#define TRACKED_DUEL_ADVICE_LOGIN_INTERVAL 3
 #define LOCAL_ARCADE_SCORE_ORDER "score DESC, end_time DESC"
 //#define GLOBAL_DB_PATH sv_globalDBPath.string
 //#define MAX_TMP_RACELOG_SIZE 80 * 1024
@@ -176,6 +180,9 @@ typedef struct
 	char identityKey[64];
 	int sessionIssueCounts[DUEL_TRACK_ISSUE_COUNT];
 	int historyIssueCounts[DUEL_TRACK_ISSUE_COUNT];
+	int adviceRotation;
+	unsigned int lastAdviceHash;
+	int lastLoginPromptDuel;
 } duel_advice_session_state_t;
 
 static tracked_duel_runtime_t g_trackedDuels[MAX_CLIENTS];
@@ -187,6 +194,7 @@ static char g_duelTrackingSchemaPath[MAX_OSPATH];
 static void G_EnsureLocalArcadeSchema(sqlite3 *db);
 static qboolean G_DoesTrackedDuelTableExist(sqlite3 *db, const char *tableName);
 static qboolean G_OpenTrackedLocalDB(sqlite3 **dbOut, char *resolvedPath, int resolvedPathSize);
+static void G_QueueBotTutorialMessage(int botClientNum, int targetClientNum, const char *message);
 static void G_EnsureLocalDuelTrackingSchema(sqlite3 *db)
 {
 	sqlite3_stmt *stmt = NULL;
@@ -338,6 +346,51 @@ static unsigned int G_HashTrackedIdentityString(const char *value)
 	}
 
 	return hash;
+}
+
+static void G_SetBotTutorialInitialDelay(bot_tutorial_queue_t *queue)
+{
+	if (!queue || queue->queuedCount <= queue->nextMessageIndex)
+	{
+		return;
+	}
+
+	queue->nextSendTime = level.time + Q_irand(TRACKED_DUEL_TUTORIAL_MIN_DELAY_MS, TRACKED_DUEL_TUTORIAL_MAX_DELAY_MS);
+}
+
+static void G_QueueRotatingTutorialMessage(int botClientNum, int targetClientNum,
+	const char **messages, int messageCount, int preferredIndex, duel_advice_session_state_t *session)
+{
+	int index;
+	unsigned int hash = 0;
+
+	if (!messages || messageCount <= 0)
+	{
+		return;
+	}
+
+	index = preferredIndex;
+	if (index < 0)
+	{
+		index = 0;
+	}
+	index %= messageCount;
+
+	if (session)
+	{
+		index = (index + (session->adviceRotation % messageCount)) % messageCount;
+		session->adviceRotation++;
+		hash = G_HashTrackedIdentityString(messages[index]);
+
+		if (messageCount > 1 && hash == session->lastAdviceHash)
+		{
+			index = (index + 1) % messageCount;
+			hash = G_HashTrackedIdentityString(messages[index]);
+		}
+		session->lastAdviceHash = hash;
+	}
+
+	G_QueueBotTutorialMessage(botClientNum, targetClientNum, messages[index]);
 }
 
 static void G_GetTrackingIPKey(gentity_t *ent, char *out, int outSize)
@@ -765,7 +818,7 @@ static qboolean G_IsTrackedIntermediateCandidate(const tracked_duel_runtime_t *r
 	return qfalse;
 }
 
-static void G_QueueManualBasicsAdvice(int botClientNum, int targetClientNum, int duelIndex)
+static void G_QueueManualBasicsAdvice(int botClientNum, int targetClientNum, int duelIndex, duel_advice_session_state_t *session)
 {
 	int slot;
 	static const char *manualBasics[] = {
@@ -779,11 +832,11 @@ static void G_QueueManualBasicsAdvice(int botClientNum, int targetClientNum, int
 	slot = duelIndex;
 	if (slot < 0)
 		slot = 0;
-	slot %= (int)(sizeof(manualBasics) / sizeof(manualBasics[0]));
-	G_QueueBotTutorialMessage(botClientNum, targetClientNum, manualBasics[slot]);
+	G_QueueRotatingTutorialMessage(botClientNum, targetClientNum, manualBasics,
+		(int)(sizeof(manualBasics) / sizeof(manualBasics[0])), slot, session);
 }
 
-static void G_QueueManualMetaAdvice(int botClientNum, int targetClientNum, int rotation)
+static void G_QueueManualMetaAdvice(int botClientNum, int targetClientNum, int rotation, duel_advice_session_state_t *session)
 {
 	static const char *manualMeta[] = {
 		"Meta priority: force initiative before commitment—bait reaction, then spend into the punished lane only.",
@@ -794,11 +847,11 @@ static void G_QueueManualMetaAdvice(int botClientNum, int targetClientNum, int r
 	int slot = rotation;
 	if (slot < 0)
 		slot = 0;
-	slot %= (int)(sizeof(manualMeta) / sizeof(manualMeta[0]));
-	G_QueueBotTutorialMessage(botClientNum, targetClientNum, manualMeta[slot]);
+	G_QueueRotatingTutorialMessage(botClientNum, targetClientNum, manualMeta,
+		(int)(sizeof(manualMeta) / sizeof(manualMeta[0])), slot, session);
 }
 
-static void G_QueueManualIntermediateAdvice(int botClientNum, int targetClientNum, int rotation)
+static void G_QueueManualIntermediateAdvice(int botClientNum, int targetClientNum, int rotation, duel_advice_session_state_t *session)
 {
 	static const char *manualIntermediate[] = {
 		"Intermediate: chain pull pressure into throw feints, then convert only when recovery windows are confirmed.",
@@ -808,8 +861,8 @@ static void G_QueueManualIntermediateAdvice(int botClientNum, int targetClientNu
 	int slot = rotation;
 	if (slot < 0)
 		slot = 0;
-	slot %= (int)(sizeof(manualIntermediate) / sizeof(manualIntermediate[0]));
-	G_QueueBotTutorialMessage(botClientNum, targetClientNum, manualIntermediate[slot]);
+	G_QueueRotatingTutorialMessage(botClientNum, targetClientNum, manualIntermediate,
+		(int)(sizeof(manualIntermediate) / sizeof(manualIntermediate[0])), slot, session);
 }
 
 static void G_QueueManualGenericAdvice(int botClientNum, int targetClientNum, tracked_duel_runtime_t *runtime, qboolean loggedIn, duel_advice_session_state_t *session)
@@ -829,70 +882,139 @@ static void G_QueueManualGenericAdvice(int botClientNum, int targetClientNum, tr
 	rotation = (session ? session->duelsSeen : 0) + (runtime ? runtime->eventCount : 0);
 	if (rotation < 0)
 		rotation = 0;
-	rotation %= (int)(sizeof(manualGeneric) / sizeof(manualGeneric[0]));
-	G_QueueBotTutorialMessage(botClientNum, targetClientNum, manualGeneric[rotation]);
+	G_QueueRotatingTutorialMessage(botClientNum, targetClientNum, manualGeneric,
+		(int)(sizeof(manualGeneric) / sizeof(manualGeneric[0])), rotation, session);
 
 	if (loggedIn && session && session->historyDuels > 0)
-		G_QueueBotTutorialMessage(botClientNum, targetClientNum, "Historical blend active: repeating manual errors are now weighted above one-off duel noise.");
+	{
+		static const char *historyBlend[] = {
+			"Historical blend active: repeating manual errors are now weighted above one-off duel noise.",
+			"History loaded: recurring mistakes now outrank one-off rounds, so coaching will stay focused on the repeat leak."
+		};
+		G_QueueRotatingTutorialMessage(botClientNum, targetClientNum, historyBlend,
+			(int)(sizeof(historyBlend) / sizeof(historyBlend[0])), rotation, session);
+	}
 	else
-		G_QueueBotTutorialMessage(botClientNum, targetClientNum, "Session coaching active: keep fundamentals clean and we will escalate into precise counters.");
+	{
+		static const char *sessionCoaching[] = {
+			"Session coaching active: keep fundamentals clean and we will escalate into precise counters.",
+			"Session coaching active: stay disciplined and the next advice layer will tighten into matchup-specific counters."
+		};
+		G_QueueRotatingTutorialMessage(botClientNum, targetClientNum, sessionCoaching,
+			(int)(sizeof(sessionCoaching) / sizeof(sessionCoaching[0])), rotation, session);
+	}
 }
 
 static void G_QueueManualIssueAdvice(int botClientNum, int targetClientNum, duel_track_issue_t issue, duel_advice_session_state_t *session)
 {
-	int variant;
-	int confidence = G_GetTrackedIssueConfidence(session, issue);
-
-	variant = confidence > 0 ? confidence - 1 : 0;
-	variant %= 2;
-
 	switch (issue)
 	{
 	case DUEL_TRACK_ISSUE_LOW_FORCE:
-		if (variant == 0)
-			G_QueueBotTutorialMessage(botClientNum, targetClientNum, "Pattern confirmed: low-force collapses repeat. Bank reserve, drain-tap efficiently, and avoid panic spend.");
-		else
-			G_QueueBotTutorialMessage(botClientNum, targetClientNum, "Pattern confirmed: force economy is leaking. Stop over-drain, preserve escape force, then relaunch offense.");
+	{
+		static const char *messages[] = {
+			"Pattern confirmed: low-force collapses repeat. Bank reserve, drain-tap efficiently, and avoid panic spend.",
+			"Pattern confirmed: force economy is leaking. Stop over-drain, preserve escape force, then relaunch offense."
+		};
+		G_QueueRotatingTutorialMessage(botClientNum, targetClientNum, messages,
+			(int)(sizeof(messages) / sizeof(messages[0])), G_GetTrackedIssueConfidence(session, issue), session);
 		break;
+	}
 	case DUEL_TRACK_ISSUE_GRIP_CONTROL:
-		if (variant == 0)
-			G_QueueBotTutorialMessage(botClientNum, targetClientNum, "Pattern confirmed: grip kick (GK) control is too clean on you. Randomize breakout direction and deny train-track rhythm.");
-		else
-			G_QueueBotTutorialMessage(botClientNum, targetClientNum, "Pattern confirmed: grip lanes are predictable. Use pull first, stay down on knock, and break with mixed timing.");
+	{
+		static const char *messages[] = {
+			"Pattern confirmed: grip kick (GK) control is too clean on you. Randomize breakout direction and deny train-track rhythm.",
+			"Pattern confirmed: grip lanes are predictable. Use pull first, stay down on knock, and break with mixed timing."
+		};
+		G_QueueRotatingTutorialMessage(botClientNum, targetClientNum, messages,
+			(int)(sizeof(messages) / sizeof(messages[0])), G_GetTrackedIssueConfidence(session, issue), session);
 		break;
+	}
 	case DUEL_TRACK_ISSUE_SABER_THROW:
-		if (variant == 0)
-			G_QueueBotTutorialMessage(botClientNum, targetClientNum, "Pattern confirmed: throw punish windows repeat. Read blade path first, then punish return timing.");
-		else
-			G_QueueBotTutorialMessage(botClientNum, targetClientNum, "Pattern confirmed: toss defense is late. Keep sticky crosshair and use crouch-jump rejection on entry.");
+	{
+		static const char *messages[] = {
+			"Pattern confirmed: throw punish windows repeat. Read blade path first, then punish return timing.",
+			"Pattern confirmed: toss defense is late. Keep sticky crosshair and use crouch-jump rejection on entry."
+		};
+		G_QueueRotatingTutorialMessage(botClientNum, targetClientNum, messages,
+			(int)(sizeof(messages) / sizeof(messages[0])), G_GetTrackedIssueConfidence(session, issue), session);
 		break;
+	}
 	case DUEL_TRACK_ISSUE_KNOCKDOWN:
-		if (variant == 0)
-			G_QueueBotTutorialMessage(botClientNum, targetClientNum, "Pattern confirmed: knockdown follow-ups are costing rounds. Recover with roll-drain or crouch pull/push exits.");
-		else
-			G_QueueBotTutorialMessage(botClientNum, targetClientNum, "Pattern confirmed: getup timing is punishable. Stay flat when threatened, then reset movement before commit.");
+	{
+		static const char *messages[] = {
+			"Pattern confirmed: knockdown follow-ups are costing rounds. Recover with roll-drain or crouch pull/push exits.",
+			"Pattern confirmed: getup timing is punishable. Stay flat when threatened, then reset movement before commit."
+		};
+		G_QueueRotatingTutorialMessage(botClientNum, targetClientNum, messages,
+			(int)(sizeof(messages) / sizeof(messages[0])), G_GetTrackedIssueConfidence(session, issue), session);
 		break;
+	}
 	case DUEL_TRACK_ISSUE_LATE_DEFENSE:
-		if (variant == 0)
-			G_QueueBotTutorialMessage(botClientNum, targetClientNum, "Pattern confirmed: defense activates late. Pre-empt with absorb/protect/rage windows before choke damage.");
-		else
-			G_QueueBotTutorialMessage(botClientNum, targetClientNum, "Pattern confirmed: collapse-point reactions repeat. Stabilize early, then counter with controlled force trade.");
+	{
+		static const char *messages[] = {
+			"Pattern confirmed: defense activates late. Pre-empt with absorb/protect/rage windows before choke damage.",
+			"Pattern confirmed: collapse-point reactions repeat. Stabilize early, then counter with controlled force trade."
+		};
+		G_QueueRotatingTutorialMessage(botClientNum, targetClientNum, messages,
+			(int)(sizeof(messages) / sizeof(messages[0])), G_GetTrackedIssueConfidence(session, issue), session);
 		break;
+	}
 	case DUEL_TRACK_ISSUE_FORCED_ENTRIES:
-		if (variant == 0)
-			G_QueueBotTutorialMessage(botClientNum, targetClientNum, "Pattern confirmed: entries are forced into prepared defense. Feint saber first, then PTK (Pull-Throw-Kick) or GK (Grip Kick) on reaction.");
-		else
-			G_QueueBotTutorialMessage(botClientNum, targetClientNum, "Pattern confirmed: approach timing is readable. Use lateral movement gap to desync their counter window.");
+	{
+		static const char *messages[] = {
+			"Pattern confirmed: entries are forced into prepared defense. Feint saber first, then PTK (Pull-Throw-Kick) or GK (Grip Kick) on reaction.",
+			"Pattern confirmed: approach timing is readable. Use lateral movement gap to desync their counter window."
+		};
+		G_QueueRotatingTutorialMessage(botClientNum, targetClientNum, messages,
+			(int)(sizeof(messages) / sizeof(messages[0])), G_GetTrackedIssueConfidence(session, issue), session);
 		break;
+	}
 	case DUEL_TRACK_ISSUE_LINEAR_ENTRIES:
-		if (variant == 0)
-			G_QueueBotTutorialMessage(botClientNum, targetClientNum, "Pattern confirmed: linear entries are readable. Rotate angle changes and keep offense tri-lane balanced.");
-		else
-			G_QueueBotTutorialMessage(botClientNum, targetClientNum, "Pattern confirmed: your line of attack repeats. Shift from straight chase to strafe-fan and staged PTK threats.");
+	{
+		static const char *messages[] = {
+			"Pattern confirmed: linear entries are readable. Rotate angle changes and keep offense tri-lane balanced.",
+			"Pattern confirmed: your line of attack repeats. Shift from straight chase to strafe-fan and staged PTK threats."
+		};
+		G_QueueRotatingTutorialMessage(botClientNum, targetClientNum, messages,
+			(int)(sizeof(messages) / sizeof(messages[0])), G_GetTrackedIssueConfidence(session, issue), session);
 		break;
+	}
 	default:
 		break;
 	}
+}
+
+static void G_MaybeQueueTrackedLoginAdvice(int botClientNum, int targetClientNum, duel_advice_session_state_t *session, qboolean loggedIn)
+{
+	static const char *loginAdvice[] = {
+		"Save the progression: /login or /register keeps your duel history and coaching data between sessions.",
+		"Want this coaching and your progress to persist? Use /login after the round so the bot can keep your history.",
+		"Account nudge: /login lets the bot remember your repeat patterns and saves progress across reconnects."
+	};
+
+	if (!session || loggedIn)
+	{
+		return;
+	}
+
+	if (session->duelsSeen < TRACKED_DUEL_ADVICE_LOGIN_START)
+	{
+		return;
+	}
+
+	if (((session->duelsSeen - TRACKED_DUEL_ADVICE_LOGIN_START) % TRACKED_DUEL_ADVICE_LOGIN_INTERVAL) != 0)
+	{
+		return;
+	}
+
+	if (session->lastLoginPromptDuel == session->duelsSeen)
+	{
+		return;
+	}
+
+	G_QueueRotatingTutorialMessage(botClientNum, targetClientNum, loginAdvice,
+		(int)(sizeof(loginAdvice) / sizeof(loginAdvice[0])), session->duelsSeen, session);
+	session->lastLoginPromptDuel = session->duelsSeen;
 }
 
 static void G_MaybeQueueBotTutorial(tracked_duel_runtime_t *loserRuntime, gentity_t *winner, gentity_t *loser)
@@ -930,32 +1052,45 @@ static void G_MaybeQueueBotTutorial(tracked_duel_runtime_t *loserRuntime, gentit
 	if (basicsWindow)
 	{
 		if (session->duelsSeen <= 1)
-			G_QueueManualBasicsAdvice(botClientNum, loser->s.number, session->duelsSeen - 1);
+		G_QueueManualBasicsAdvice(botClientNum, loser->s.number, session->duelsSeen - 1, session);
 		else
 		{
-			G_QueueManualMetaAdvice(botClientNum, loser->s.number, session->duelsSeen);
+		G_QueueManualMetaAdvice(botClientNum, loser->s.number, session->duelsSeen, session);
 		}
-		return;
+	G_MaybeQueueTrackedLoginAdvice(botClientNum, loser->s.number, session, loggedIn);
+	g_botTutorialQueues[botClientNum].publicBroadcast = (bot_tutorial.integer >= 2) ? qtrue : qfalse;
+	G_SetBotTutorialInitialDelay(&g_botTutorialQueues[botClientNum]);
+	return;
 	}
 
 	if (issue < DUEL_TRACK_ISSUE_COUNT && G_TrackedAdviceIsSpecificAllowed(session, issue))
 	{
-		G_QueueManualIssueAdvice(botClientNum, loser->s.number, issue, session);
+	G_QueueManualIssueAdvice(botClientNum, loser->s.number, issue, session);
 	}
 	else if (G_IsTrackedIntermediateCandidate(loserRuntime))
 	{
-		G_QueueManualIntermediateAdvice(botClientNum, loser->s.number, session->duelsSeen + issue);
+	G_QueueManualIntermediateAdvice(botClientNum, loser->s.number, session->duelsSeen + issue, session);
 	}
 	else
 	{
-		G_QueueManualGenericAdvice(botClientNum, loser->s.number, loserRuntime, loggedIn, session);
+	G_QueueManualGenericAdvice(botClientNum, loser->s.number, loserRuntime, loggedIn, session);
 	}
 
+	G_MaybeQueueTrackedLoginAdvice(botClientNum, loser->s.number, session, loggedIn);
+
 	if ((loserRuntime->spentByState[DUEL_TRACK_STATE_PANIC] >= 20 || loserRuntime->lateDefenseSpends >= 1) &&
-		G_TrackedAdviceIsSpecificAllowed(session, DUEL_TRACK_ISSUE_LATE_DEFENSE))
+	G_TrackedAdviceIsSpecificAllowed(session, DUEL_TRACK_ISSUE_LATE_DEFENSE))
 	{
-		G_QueueBotTutorialMessage(botClientNum, loser->s.number, "Secondary pattern: defense timing repeats late—stabilize before choke windows and hold anti-drain structure.");
+	static const char *lateDefenseFollowups[] = {
+		"Secondary pattern: defense timing repeats late—stabilize before choke windows and hold anti-drain structure.",
+		"Secondary pattern: your late-defense leak is still open—set the anti-drain layer earlier and stop waiting for the collapse frame."
+	};
+	G_QueueRotatingTutorialMessage(botClientNum, loser->s.number, lateDefenseFollowups,
+		(int)(sizeof(lateDefenseFollowups) / sizeof(lateDefenseFollowups[0])), session->duelsSeen, session);
 	}
+
+	g_botTutorialQueues[botClientNum].publicBroadcast = (bot_tutorial.integer >= 2) ? qtrue : qfalse;
+	G_SetBotTutorialInitialDelay(&g_botTutorialQueues[botClientNum]);
 }
 
 static void G_ProcessBotTutorialQueue(gentity_t *ent)
@@ -1046,15 +1181,15 @@ void G_QueueArcadeBotTutorial(gentity_t *speaker, gentity_t *listener, int round
 	{
 		if (rotation <= 2)
 		{
-			G_QueueManualBasicsAdvice(speaker->s.number, listener->s.number, rotation);
+			G_QueueManualBasicsAdvice(speaker->s.number, listener->s.number, rotation, NULL);
 		}
 		else if ((rotation % 2) == 0)
 		{
-			G_QueueManualMetaAdvice(speaker->s.number, listener->s.number, rotation);
+			G_QueueManualMetaAdvice(speaker->s.number, listener->s.number, rotation, NULL);
 		}
 		else
 		{
-			G_QueueManualIntermediateAdvice(speaker->s.number, listener->s.number, rotation);
+			G_QueueManualIntermediateAdvice(speaker->s.number, listener->s.number, rotation, NULL);
 		}
 	}
 	else
@@ -1065,6 +1200,7 @@ void G_QueueArcadeBotTutorial(gentity_t *speaker, gentity_t *listener, int round
 	if (queue->queuedCount > queue->nextMessageIndex)
 	{
 		queue->publicBroadcast = qtrue;
+		G_SetBotTutorialInitialDelay(queue);
 	}
 }
 
