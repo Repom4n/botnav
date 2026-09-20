@@ -919,7 +919,7 @@ static void G_MaybeQueueBotTutorial(tracked_duel_runtime_t *loserRuntime, gentit
 	issue = G_MapPrimaryIssueToTrackedIssue(loserRuntime->primaryIssue);
 	if (issue < DUEL_TRACK_ISSUE_COUNT)
 		session->sessionIssueCounts[issue]++;
-	if (session->duelsSeen >= 3)
+	if (issue < DUEL_TRACK_ISSUE_COUNT && session->sessionIssueCounts[issue] >= 2)
 		g_botTutorialQueues[botClientNum].cooldownMs = TRACKED_DUEL_TUTORIAL_FAST_COOLDOWN_MS;
 	else
 		g_botTutorialQueues[botClientNum].cooldownMs = TRACKED_DUEL_TUTORIAL_COOLDOWN_MS;
@@ -1124,6 +1124,7 @@ static void G_InsertTrackedEvents(sqlite3 *db, sqlite3_int64 summaryId, tracked_
 	int s;
 	qboolean captureGeometry = qfalse;
 	qboolean hasAnyGeometry = qfalse;
+	qboolean insertFailed = qfalse;
 
 	if (!runtime || runtime->eventCount <= 0)
 		return;
@@ -1164,7 +1165,11 @@ static void G_InsertTrackedEvents(sqlite3 *db, sqlite3_int64 summaryId, tracked_
 		CALL_SQLITE(bind_text(stmt, 11, event->note, -1, SQLITE_STATIC));
 		s = sqlite3_step(stmt);
 		if (s != SQLITE_DONE)
+		{
 			G_ErrorPrint("ERROR: SQL Insert Failed (LocalDuelTrackEvent)", s);
+			insertFailed = qtrue;
+			break;
+		}
 		CALL_SQLITE(reset(stmt));
 		CALL_SQLITE(clear_bindings(stmt));
 		if (captureGeometry && hasAnyGeometry && event->hasGeometry)
@@ -1190,12 +1195,23 @@ static void G_InsertTrackedEvents(sqlite3 *db, sqlite3_int64 summaryId, tracked_
 			CALL_SQLITE(bind_double(geomStmt, 19, event->enemyYaw));
 			s = sqlite3_step(geomStmt);
 			if (s != SQLITE_DONE)
+			{
 				G_ErrorPrint("ERROR: SQL Insert Failed (LocalDuelTrackGeometry)", s);
+				insertFailed = qtrue;
+				break;
+			}
 			CALL_SQLITE(reset(geomStmt));
 			CALL_SQLITE(clear_bindings(geomStmt));
 		}
 	}
-	CALL_SQLITE(exec(db, "COMMIT", NULL, NULL, NULL));
+	if (insertFailed)
+	{
+		CALL_SQLITE(exec(db, "ROLLBACK", NULL, NULL, NULL));
+	}
+	else
+	{
+		CALL_SQLITE(exec(db, "COMMIT", NULL, NULL, NULL));
+	}
 	CALL_SQLITE(finalize(stmt));
 	if (captureGeometry && hasAnyGeometry)
 		CALL_SQLITE(finalize(geomStmt));
