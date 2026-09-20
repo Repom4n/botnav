@@ -962,6 +962,7 @@ static void G_ProcessBotTutorialQueue(gentity_t *ent)
 	bot_tutorial_queue_t *queue;
 	gentity_t *target;
 	int cooldown;
+	int sayMode;
 
 	if (!ent || !ent->client || !(ent->r.svFlags & SVF_BOT))
 		return;
@@ -984,7 +985,8 @@ static void G_ProcessBotTutorialQueue(gentity_t *ent)
 		return;
 	}
 
-	G_Say(ent, target, SAY_TELL, queue->messages[queue->nextMessageIndex]);
+	sayMode = (bot_tutorial.integer >= 2) ? SAY_ALL : SAY_TELL;
+	G_Say(ent, target, sayMode, queue->messages[queue->nextMessageIndex]);
 	queue->nextMessageIndex++;
 	if (queue->nextMessageIndex >= queue->queuedCount)
 	{
@@ -999,6 +1001,47 @@ static void G_ProcessBotTutorialQueue(gentity_t *ent)
 	{
 		cooldown = queue->cooldownMs > 0 ? queue->cooldownMs : TRACKED_DUEL_TUTORIAL_COOLDOWN_MS;
 		queue->nextSendTime = level.time + cooldown;
+	}
+}
+
+void G_QueueArcadeBotTutorial(gentity_t *speaker, gentity_t *listener, int roundNumber, qboolean betweenRounds)
+{
+	int rotation;
+
+	if (bot_tutorial.integer < 2 || bot_nochat.integer || !speaker || !listener ||
+		!speaker->client || !listener->client)
+	{
+		return;
+	}
+	if (!(speaker->r.svFlags & SVF_BOT) || (listener->r.svFlags & SVF_BOT))
+	{
+		return;
+	}
+
+	rotation = roundNumber;
+	if (rotation < 0)
+	{
+		rotation = 0;
+	}
+
+	if (betweenRounds)
+	{
+		if (rotation <= 2)
+		{
+			G_QueueManualBasicsAdvice(speaker->s.number, listener->s.number, rotation);
+		}
+		else if ((rotation % 2) == 0)
+		{
+			G_QueueManualMetaAdvice(speaker->s.number, listener->s.number, rotation);
+		}
+		else
+		{
+			G_QueueManualIntermediateAdvice(speaker->s.number, listener->s.number, rotation);
+		}
+	}
+	else
+	{
+		G_QueueManualGenericAdvice(speaker->s.number, listener->s.number, NULL, qfalse, NULL);
 	}
 }
 

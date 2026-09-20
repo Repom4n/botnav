@@ -976,7 +976,7 @@ static void G_AddBot( const char *name, float skill, const char *team, int delay
 	Info_SetValueForKey( userinfo, key, s );
 
 	// initialize the bot settings
-	if (level.gametype >= GT_TEAM) {
+	if (level.gametype >= GT_TEAM && level.gametype != GT_ARCADE) {
 		if (bot_team.integer == 1)
 			team = "blue";
 		else if (bot_team.integer > 1)
@@ -984,7 +984,10 @@ static void G_AddBot( const char *name, float skill, const char *team, int delay
 	}
 
 	if ( !team || !*team ) {
-		if ( level.gametype >= GT_TEAM ) {
+		if ( level.gametype == GT_ARCADE ) {
+			team = "free";
+		}
+		else if ( level.gametype >= GT_TEAM ) {
 			if ( PickTeam( clientNum ) == TEAM_RED )
 				team = "red";
 			else
@@ -1002,7 +1005,11 @@ static void G_AddBot( const char *name, float skill, const char *team, int delay
 	// register the userinfo
 	trap->SetUserinfo( clientNum, userinfo );
 
-	if ( level.gametype >= GT_TEAM )
+	if ( level.gametype == GT_ARCADE )
+	{
+		bot->client->sess.sessionTeam = TEAM_FREE;
+	}
+	else if ( level.gametype >= GT_TEAM )
 	{
 		if ( team && !Q_stricmp( team, "red" ) )
 			bot->client->sess.sessionTeam = TEAM_RED;
