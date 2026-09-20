@@ -447,14 +447,12 @@ static void G_ArcadeRespawnParticipant(gentity_t *ent, qboolean preservePosition
 
 	if (preservePosition)
 	{
-		if (!SpotWouldTelefrag3(savedOrigin))
-		{
-			G_SetOrigin(ent, savedOrigin);
-			VectorCopy(savedOrigin, ent->client->ps.origin);
-			SetClientViewAngle(ent, savedAngles);
-			VectorClear(ent->client->ps.velocity);
-			trap->LinkEntity((sharedEntity_t *)ent);
-		}
+		G_SetOrigin(ent, savedOrigin);
+		VectorCopy(savedOrigin, ent->client->ps.origin);
+		SetClientViewAngle(ent, savedAngles);
+		VectorClear(ent->client->ps.velocity);
+		trap->LinkEntity((sharedEntity_t *)ent);
+		G_KillBox(ent);
 	}
 
 	G_ArcadeRestorePlayer(ent);
@@ -594,15 +592,16 @@ void G_ArcadeHandlePlayerDeath(gentity_t *self, gentity_t *attacker)
 		level.arcadeTotalKills[attacker->s.number]++;
 	}
 
+	if (level.gametype == GT_ARCADE && attacker && attacker->client && (attacker->r.svFlags & SVF_BOT) &&
+		self->client->pers.connected == CON_CONNECTED && !(self->r.svFlags & SVF_BOT) &&
+		self->s.number >= 0 && self->s.number < MAX_CLIENTS &&
+		level.arcadeParticipant[self->s.number] && !level.arcadeEliminated[self->s.number])
+	{
+		G_QueueArcadeBotTutorial(attacker, self, level.arcadeLevel, qfalse);
+	}
 	if (self->s.number >= 0 && self->s.number < MAX_CLIENTS)
 	{
 		level.arcadeEliminated[self->s.number] = qtrue;
-	}
-	if (level.gametype == GT_ARCADE && attacker && attacker->client && (attacker->r.svFlags & SVF_BOT) &&
-		self->client->pers.connected == CON_CONNECTED && !(self->r.svFlags & SVF_BOT) &&
-		self->s.number >= 0 && self->s.number < MAX_CLIENTS && level.arcadeParticipant[self->s.number])
-	{
-		G_QueueArcadeBotTutorial(attacker, self, level.arcadeLevel, qfalse);
 	}
 	if (self->client->sess.sessionTeam != TEAM_SPECTATOR)
 	{

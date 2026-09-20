@@ -1022,6 +1022,10 @@ void G_QueueArcadeBotTutorial(gentity_t *speaker, gentity_t *listener, int round
 	{
 		return;
 	}
+	if (speaker->s.number < 0 || speaker->s.number >= MAX_CLIENTS)
+	{
+		return;
+	}
 
 	queue = &g_botTutorialQueues[speaker->s.number];
 	if (queue->queuedCount > queue->nextMessageIndex)
