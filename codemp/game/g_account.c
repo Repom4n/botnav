@@ -1046,16 +1046,21 @@ static void G_MaybeQueueBotTutorial(tracked_duel_runtime_t *loserRuntime, gentit
 		(session->duelsSeen <= TRACKED_DUEL_ADVICE_BASIC_WINDOW);
 	if (basicsWindow)
 	{
+		const int queuedCountBefore = g_botTutorialQueues[botClientNum].queuedCount;
+
 		if (session->duelsSeen <= 1)
 		G_QueueManualBasicsAdvice(botClientNum, loser->s.number, session->duelsSeen - 1, session);
 		else
 		{
 		G_QueueManualMetaAdvice(botClientNum, loser->s.number, session->duelsSeen, session);
 		}
-	G_MaybeQueueTrackedLoginAdvice(botClientNum, loser->s.number, session, loggedIn);
-	g_botTutorialQueues[botClientNum].publicBroadcast = (bot_tutorial.integer >= 2) ? qtrue : qfalse;
-	G_SetBotTutorialInitialDelay(&g_botTutorialQueues[botClientNum]);
-	return;
+		G_MaybeQueueTrackedLoginAdvice(botClientNum, loser->s.number, session, loggedIn);
+		if (g_botTutorialQueues[botClientNum].queuedCount > queuedCountBefore)
+		{
+			g_botTutorialQueues[botClientNum].publicBroadcast = (bot_tutorial.integer >= 2) ? qtrue : qfalse;
+			G_SetBotTutorialInitialDelay(&g_botTutorialQueues[botClientNum]);
+		}
+		return;
 	}
 
 	if (issue < DUEL_TRACK_ISSUE_COUNT && G_TrackedAdviceIsSpecificAllowed(session, issue))
