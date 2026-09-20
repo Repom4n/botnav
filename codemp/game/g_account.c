@@ -1285,6 +1285,14 @@ void G_QueueArcadeBotTutorial(gentity_t *speaker, gentity_t *listener, int round
 	{
 		return;
 	}
+	if (bot_tutorial.integer == 1)
+	{
+		// trainer mode at 1 is strict private tell coaching only
+		if (betweenRounds || speaker == listener)
+		{
+			return;
+		}
+	}
 
 	queue = &g_botTutorialQueues[speaker->s.number];
 	if (queue->queuedCount > queue->nextMessageIndex)
@@ -1323,7 +1331,14 @@ void G_QueueArcadeBotTutorial(gentity_t *speaker, gentity_t *listener, int round
 
 	if (queue->queuedCount > queue->nextMessageIndex)
 	{
-		queue->publicBroadcast = (bot_tutorial.integer >= 2) ? qtrue : qfalse;
+		if (bot_tutorial.integer >= 2)
+		{
+			queue->publicBroadcast = qtrue;
+		}
+		else
+		{
+			queue->publicBroadcast = qfalse;
+		}
 		G_SetBotTutorialInitialDelay(queue);
 	}
 }
