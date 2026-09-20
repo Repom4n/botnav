@@ -675,7 +675,7 @@ static void G_ArcadeStartRound(void)
 		activeManagedBots++;
 	}
 
-	if (G_ArcadeCountManagedBots(qtrue) > targetBots)
+	if (targetBots > 0 && G_ArcadeCountManagedBots(qtrue) > targetBots)
 	{
 		const int extras = G_ArcadeCountManagedBots(qtrue) - targetBots;
 		int kicked = G_ArcadeKickManagedBots(extras, qtrue);
