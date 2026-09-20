@@ -1020,7 +1020,6 @@ void G_QueueArcadeBotTutorial(gentity_t *speaker, gentity_t *listener, int round
 	}
 
 	G_ClearBotTutorialQueue(speaker->s.number);
-	g_botTutorialQueues[speaker->s.number].publicBroadcast = qtrue;
 
 	rotation = roundNumber;
 	if (rotation < 0)
@@ -1047,6 +1046,8 @@ void G_QueueArcadeBotTutorial(gentity_t *speaker, gentity_t *listener, int round
 	{
 		G_QueueManualGenericAdvice(speaker->s.number, listener->s.number, NULL, qfalse, NULL);
 	}
+
+	g_botTutorialQueues[speaker->s.number].publicBroadcast = qtrue;
 }
 
 static void G_InitTrackedDuelRuntimeForClient(gentity_t *ent, gentity_t *opponent, int duelType)

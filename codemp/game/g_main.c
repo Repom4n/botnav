@@ -595,7 +595,8 @@ void G_ArcadeHandlePlayerDeath(gentity_t *self, gentity_t *attacker)
 		level.arcadeEliminated[self->s.number] = qtrue;
 	}
 	if (level.gametype == GT_ARCADE && attacker && attacker->client && (attacker->r.svFlags & SVF_BOT) &&
-		self->client->pers.connected == CON_CONNECTED && !(self->r.svFlags & SVF_BOT))
+		self->client->pers.connected == CON_CONNECTED && !(self->r.svFlags & SVF_BOT) &&
+		self->s.number >= 0 && self->s.number < MAX_CLIENTS && level.arcadeParticipant[self->s.number])
 	{
 		G_QueueArcadeBotTutorial(attacker, self, level.arcadeLevel, qfalse);
 	}
