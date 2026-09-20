@@ -446,7 +446,43 @@ static void PlayerIntroSound( const char *modelAndSkin ) {
 G_AddRandomBot
 ===============
 */
-void G_AddRandomBot( int team ) {
+static void G_ForcePowersSetSide(char *forcePowers, int forceSide)
+{
+	char *firstSep;
+	char *secondSep;
+	char updated[DEFAULT_FORCEPOWERS_LEN+1];
+	int prefixLen;
+
+	if (!forcePowers || !forcePowers[0])
+	{
+		return;
+	}
+
+	firstSep = strchr(forcePowers, '-');
+	if (!firstSep || !firstSep[1])
+	{
+		return;
+	}
+
+	secondSep = strchr(firstSep + 1, '-');
+	if (!secondSep)
+	{
+		return;
+	}
+
+	prefixLen = (int)(firstSep - forcePowers + 1);
+	if (prefixLen < 0 || prefixLen + 1 + (int)strlen(secondSep) >= (int)sizeof(updated))
+	{
+		return;
+	}
+
+	memcpy(updated, forcePowers, prefixLen);
+	updated[prefixLen] = '0' + forceSide;
+	Q_strncpyz(updated + prefixLen + 1, secondSep, sizeof(updated) - (prefixLen + 1));
+	Q_strncpyz(forcePowers, updated, DEFAULT_FORCEPOWERS_LEN+1);
+}
+
+static void G_AddRandomBotInternal( int team, qboolean arcadeManaged ) {
 	int		i, n, num;
 	float	skill;
 	char	*value, netname[36], *teamstr;
@@ -521,11 +557,22 @@ void G_AddRandomBot( int team ) {
 				else teamstr = "";
 				Q_strncpyz(netname, value, sizeof(netname));
 				Q_CleanStr(netname);
-				trap->SendConsoleCommand( EXEC_INSERT, va("addbot \"%s\" %.2f %s %i\n", netname, skill, teamstr, 0) );
+				if (arcadeManaged)
+					trap->SendConsoleCommand( EXEC_INSERT, va("addbot \"%s\" %.2f %s %i \"\" 1\n", netname, skill, teamstr, 0) );
+				else
+					trap->SendConsoleCommand( EXEC_INSERT, va("addbot \"%s\" %.2f %s %i\n", netname, skill, teamstr, 0) );
 				return;
 			}
 		}
 	}
+}
+
+void G_AddRandomBot( int team ) {
+	G_AddRandomBotInternal( team, qfalse );
+}
+
+void G_AddRandomBotManaged( int team ) {
+	G_AddRandomBotInternal( team, qtrue );
 }
 
 /*
@@ -865,7 +912,7 @@ qboolean G_BotConnect( int clientNum, qboolean restart ) {
 G_AddBot
 ===============
 */
-static void G_AddBot( const char *name, float skill, const char *team, int delay, char *altname) {
+static void G_AddBot( const char *name, float skill, const char *team, int delay, char *altname, qboolean arcadeManaged) {
 	gentity_t		*bot = NULL;
 	int				clientNum, preTeam = TEAM_FREE;
 	char			userinfo[MAX_INFO_STRING] = {0},
@@ -880,10 +927,17 @@ static void G_AddBot( const char *name, float skill, const char *team, int delay
 		return;
 	}
 
+	if (arcadeManaged)
+	{
+		level.arcadeManagedBot[clientNum] = qtrue;
+	}
+
 	// get the botinfo from bots.txt
 	botinfo = G_GetBotInfoByName( name );
 	if ( !botinfo ) {
 		trap->Print( S_COLOR_RED "Error: Bot '%s' not defined\n", name );
+		if (arcadeManaged)
+			level.arcadeManagedBot[clientNum] = qfalse;
 		trap->BotFreeClient( clientNum );
 		return;
 	}
@@ -943,7 +997,15 @@ static void G_AddBot( const char *name, float skill, const char *team, int delay
 	key = "forcepowers";
 	s = Info_ValueForKey( botinfo, key );
 	if ( !*s )	s = DEFAULT_FORCEPOWERS;
-	Info_SetValueForKey( userinfo, key, s );
+	{
+		char forcePowers[DEFAULT_FORCEPOWERS_LEN+1];
+		Q_strncpyz(forcePowers, s, sizeof(forcePowers));
+		if (level.gametype == GT_ARCADE && arcadeManaged)
+		{
+			G_ForcePowersSetSide(forcePowers, FORCE_DARKSIDE);
+		}
+		Info_SetValueForKey( userinfo, key, forcePowers );
+	}
 
 	key = "cg_predictItems";
 	s = Info_ValueForKey( botinfo, key );
@@ -1029,7 +1091,11 @@ static void G_AddBot( const char *name, float skill, const char *team, int delay
 
 	// have it connect to the game as a normal client
 	if ( ClientConnect( clientNum, qtrue, qtrue ) )
+	{
+		if (arcadeManaged)
+			level.arcadeManagedBot[clientNum] = qfalse;
 		return;
+	}
 
 	if ( bot->client->sess.sessionTeam != preTeam )
 	{
@@ -1056,7 +1122,11 @@ static void G_AddBot( const char *name, float skill, const char *team, int delay
 
 		G_ReadSessionData( bot->client );
 		if ( !ClientUserinfoChanged( clientNum ) )
+		{
+			if (arcadeManaged)
+				level.arcadeManagedBot[clientNum] = qfalse;
 			return;
+		}
 	}
 
 	if (level.gametype == GT_DUEL ||
@@ -1099,6 +1169,7 @@ Svcmd_AddBot_f
 void Svcmd_AddBot_f( void ) {
 	float			skill;
 	int				delay;
+	qboolean		arcadeManaged;
 	char			name[MAX_TOKEN_CHARS];
 	char			altname[MAX_TOKEN_CHARS];
 	char			string[MAX_TOKEN_CHARS];
@@ -1113,7 +1184,7 @@ void Svcmd_AddBot_f( void ) {
 	// name
 	trap->Argv( 1, name, sizeof( name ) );
 	if ( !name[0] ) {
-		trap->Print( "Usage: Addbot <botname> [skill 1-5] [team] [msec delay] [altname]\n" );
+		trap->Print( "Usage: Addbot <botname> [skill 1-5] [team] [msec delay] [altname] [arcademanaged]\n" );
 		return;
 	}
 
@@ -1146,8 +1217,10 @@ void Svcmd_AddBot_f( void ) {
 
 	// alternative name
 	trap->Argv( 5, altname, sizeof( altname ) );
+	trap->Argv( 6, string, sizeof( string ) );
+	arcadeManaged = string[0] ? atoi( string ) != 0 : qfalse;
 
-	G_AddBot( name, skill, team, delay, altname );
+	G_AddBot( name, skill, team, delay, altname, arcadeManaged );
 
 	// if this was issued during gameplay and we are playing locally,
 	// go ahead and load the bot's media immediately

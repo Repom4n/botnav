@@ -1015,7 +1015,7 @@
 		itemDef 
 		{
 			name				account
-			text				"Account"
+			text				"Profile"
 			type				1
 			style				WINDOW_STYLE_FILLED
 			rect				295 464 50 16
@@ -1031,7 +1031,7 @@
 			action 
 			{ 
 				play			"sound/interface/button1.wav" ;
-				open			accountmenu
+				open			playerMenu
 			} 
 			mouseenter 
 			{ 

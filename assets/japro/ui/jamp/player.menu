@@ -233,13 +233,18 @@
 			forecolor			1 1 1 1
 			visible			1
 
+			action
+			{
+				play			"sound/interface/button1.wav" ;
+				open			accountmenu
+			}
 			mouseEnter 
-			{ 
-				//show			profilebutton_glow 
+			{
+				show			profilebutton_glow
 			}
 			mouseExit 
 			{ 
-				//hide			profilebutton_glow 
+				hide			profilebutton_glow 
 			}	  	  
 		}
 

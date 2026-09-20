@@ -79,6 +79,108 @@ static inline int NewBotAI_GetPulledTowardEnemyPTKBonus(
 	return freePullkickWindow ? 140 : 90;
 }
 
+static inline int NewBotAI_IsAbsorbBaitWindow(
+	int airborne, int recentFlipkickWindow, float enemyDistance,
+	float immediateFlipkickRange, float pullkickRange)
+{
+	if (!airborne && !recentFlipkickWindow)
+	{
+		return 0;
+	}
+
+	return (enemyDistance > immediateFlipkickRange &&
+		enemyDistance <= pullkickRange) ? 1 : 0;
+}
+
+static inline int NewBotAI_GetAbsorbBiasBonus(
+	int biasPercent, int airborne, int recentFlipkickWindow, float enemyDistance,
+	float immediateFlipkickRange, float pullkickRange)
+{
+	int clampedBias = biasPercent;
+	int bonus;
+
+	if (!NewBotAI_IsAbsorbBaitWindow(
+		airborne, recentFlipkickWindow, enemyDistance, immediateFlipkickRange, pullkickRange))
+	{
+		return 0;
+	}
+
+	if (clampedBias < 0)
+	{
+		clampedBias = 0;
+	}
+	else if (clampedBias > 100)
+	{
+		clampedBias = 100;
+	}
+
+	bonus = 20 + (clampedBias * 45) / 100;
+	if (airborne)
+	{
+		bonus += 10;
+	}
+	if (recentFlipkickWindow)
+	{
+		bonus += 5;
+	}
+
+	return bonus;
+}
+
+static inline int NewBotAI_GetAntiDarkPushBonus(
+	int enemyDarkSide, int absorbAboutToEnd, int healthLead, float enemyDistance, float maxDistance)
+{
+	int bonus;
+
+	if (!enemyDarkSide || !absorbAboutToEnd || healthLead <= 0 || enemyDistance > maxDistance)
+	{
+		return 0;
+	}
+
+	bonus = 65 + ((healthLead < 25) ? healthLead : 25);
+	if (enemyDistance <= 160.0f)
+	{
+		bonus += 10;
+	}
+
+	return bonus;
+}
+
+static inline int NewBotAI_GetAntiDarkDrainBonus(
+	int enemyDarkSide, int enemyCanHeal, int healthLead, int enemyDamaged)
+{
+	int bonus;
+
+	if (!enemyDarkSide || !enemyCanHeal || healthLead <= 0)
+	{
+		return 0;
+	}
+
+	bonus = 60 + ((healthLead < 25) ? healthLead : 25);
+	if (enemyDamaged)
+	{
+		bonus += 15;
+	}
+
+	return bonus;
+}
+
+static inline int NewBotAI_ShouldQueueLoginReminder(
+	int duelsSeen, int startAtDuel, int repeatInterval, int lastPromptDuel)
+{
+	if (duelsSeen < startAtDuel || repeatInterval <= 0)
+	{
+		return 0;
+	}
+
+	if (lastPromptDuel >= duelsSeen)
+	{
+		return 0;
+	}
+
+	return ((duelsSeen - startAtDuel) % repeatInterval) == 0 ? 1 : 0;
+}
+
 static inline float NewBotAI_GetImmediateFlipkickYawTolerance(int immediateContact)
 {
 	return immediateContact ? 60.0f : 35.0f;

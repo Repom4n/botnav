@@ -256,6 +256,7 @@ void G_ArcadeResetClientRunState(int clientNum)
 	level.arcadeTotalKills[clientNum] = 0;
 	level.arcadeEliminated[clientNum] = qfalse;
 	level.arcadeParticipant[clientNum] = qfalse;
+	level.arcadeManagedBot[clientNum] = qfalse;
 }
 
 static void G_ArcadeResetScores(void)
@@ -265,6 +266,16 @@ static void G_ArcadeResetScores(void)
 	for (i = 0; i < MAX_CLIENTS; i++)
 	{
 		G_ArcadeResetClientRunState(i);
+	}
+}
+
+static void G_ArcadeClearManagedBotState(void)
+{
+	int i;
+
+	for (i = 0; i < MAX_CLIENTS; i++)
+	{
+		level.arcadeManagedBot[i] = qfalse;
 	}
 }
 
@@ -460,6 +471,38 @@ static void G_ArcadeRespawnParticipant(gentity_t *ent, qboolean preservePosition
 
 static void G_ArcadeKickAllBots(void);
 
+static qboolean G_ArcadeHasManagedBots(void)
+{
+	int i;
+
+	for (i = 0; i < MAX_CLIENTS; i++)
+	{
+		if (level.arcadeManagedBot[i])
+		{
+			return qtrue;
+		}
+	}
+
+	return qfalse;
+}
+
+static void G_ArcadeShutdown(qboolean kickBots)
+{
+	if (kickBots)
+	{
+		G_ArcadeKickAllBots();
+	}
+	G_ArcadeClearManagedBotState();
+
+	G_ArcadeResetScores();
+	level.arcadeInitialized = qfalse;
+	level.arcadeLevel = 0;
+	level.arcadeRoundStartTime = 0;
+	level.arcadeRoundBotsTarget = 0;
+	level.arcadeRoundQueuedStart = 0;
+	level.arcadeGameOverTime = 0;
+}
+
 static void G_ArcadeEnsureWaitingBot(void)
 {
 	int i;
@@ -495,7 +538,7 @@ static void G_ArcadeEnsureWaitingBot(void)
 	}
 
 	trap->Cvar_Set("g_npcspskill", va("%.2f", primarySkill));
-	G_AddRandomBot(TEAM_FREE);
+	G_AddRandomBotManaged(TEAM_FREE);
 }
 
 static void G_ArcadeKickAllBots(void)
@@ -503,9 +546,11 @@ static void G_ArcadeKickAllBots(void)
 	int i;
 	for (i = 0; i < MAX_CLIENTS; i++)
 	{
-		gentity_t *ent = &g_entities[i];
-		if (ent->inuse && ent->client && (ent->r.svFlags & SVF_BOT) &&
-			ent->client->pers.connected == CON_CONNECTED)
+		if (level.arcadeManagedBot[i] &&
+			g_entities[i].inuse &&
+			g_entities[i].client &&
+			(g_entities[i].r.svFlags & SVF_BOT) &&
+			g_entities[i].client->pers.connected == CON_CONNECTED)
 		{
 			trap->SendConsoleCommand(EXEC_APPEND, va("clientkick %i\n", i));
 		}
@@ -539,7 +584,7 @@ static void G_ArcadeStartRound(void)
 	for (i = 0; i < targetBots; i++)
 	{
 		trap->Cvar_Set("g_npcspskill", va("%.2f", primarySkill));
-		G_AddRandomBot(TEAM_FREE);
+		G_AddRandomBotManaged(TEAM_FREE);
 	}
 	for (i = 0; i < MAX_CLIENTS; i++)
 	{
@@ -684,6 +729,11 @@ static void G_ArcadeRunFrame(void)
 
 	if (level.gametype != GT_ARCADE)
 	{
+		if (level.arcadeInitialized || level.arcadeRoundStartTime || level.arcadeRoundQueuedStart ||
+			level.arcadeGameOverTime || level.arcadeRoundBotsTarget || G_ArcadeHasManagedBots())
+		{
+			G_ArcadeShutdown(qtrue);
+		}
 		return;
 	}
 	if (!level.arcadeInitialized)

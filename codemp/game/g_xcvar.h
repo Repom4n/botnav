@@ -414,6 +414,9 @@ XCVAR_DEF( bot_drainbias,				"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 // cvar-driven drainlock-deepening play. See
 // NewBotAI_ShouldDrainlockDeep / NewBotAI_GetDrainTapTargetCost.
 XCVAR_DEF( bot_drainlockbias,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
+// 0-100: extra weight for lightside absorb bait windows after flipkick takeoff/landing and
+// while airborne at pullkick spacing, encouraging re-absorb timing instead of immediate re-entry.
+XCVAR_DEF( bot_absorbbias,				"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_lightningbias,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_lightningdistance,		"400",		NULL,				CVAR_ARCHIVE,									qtrue )
 // How long (ms) the bot holds a chosen wall redirect (yaw/jump/turn/hop) before allowing

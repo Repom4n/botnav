@@ -60,6 +60,11 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
 
 #define BOT_THINK_TIME	0
 #define NEWBOTAI_PTK_FORCE_BUDGET 40
+#define NEWBOTAI_ABSORB_BAIT_WINDOW_MS 1500
+#define NEWBOTAI_FLIPKICK_PREFERRED_RANGE 180.0f
+#define NEWBOTAI_IMMEDIATE_FLIPKICK_RANGE 135.0f
+#define NEWBOTAI_IMMEDIATE_FLIPKICK_CONTACT_RANGE 90.0f
+#define NEWBOTAI_PULL_STUN_ONLY_RANGE 220.0f
 
 //bot states
 bot_state_t	*botstates[MAX_CLIENTS];
@@ -7040,6 +7045,14 @@ qboolean BG_SaberInAttack(int move);
 qboolean BG_InKnockDown(int anim);
 int NewBotAI_GetAbsorb(bot_state_t* bs) {
 	const int ourForce = bs->cur_ps.fd.forcePower;
+	const int absorbBias = (int)BotGetChanceBiasPercent(bot_absorbbias.value);
+	const int healthLead = g_entities[bs->client].health - bs->currentEnemy->health;
+	const qboolean airborne = (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE) ? qtrue : qfalse;
+	const qboolean recentFlipkickWindow =
+		(bs->lastFlipkickAttemptTime > level.time - (NEWBOTAI_ABSORB_BAIT_WINDOW_MS - 300)) ? qtrue : qfalse;
+	const qboolean lightsideVsDarkside =
+		(bs->cur_ps.fd.forceSide == FORCE_LIGHTSIDE &&
+		 bs->currentEnemy->client->ps.fd.forceSide == FORCE_DARKSIDE) ? qtrue : qfalse;
 
 	if (g_forcePowerDisable.integer & (1 << FP_ABSORB))
 		return 0;
@@ -7067,6 +7080,21 @@ int NewBotAI_GetAbsorb(bot_state_t* bs) {
 			if (bs->frame_Enemy_Len < 256 && (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE || BG_SaberInAttack(bs->cur_ps.saberMove) || BG_InKnockDown(bs->cur_ps.legsAnim)))//can actually be pulled towards a kick so stop that
 				return ourForce * 0.5f - 10;
 		}
+	}
+
+	if (lightsideVsDarkside && absorbBias > 0 &&
+		NewBotAI_GetAbsorbBiasBonus(
+			absorbBias, airborne, recentFlipkickWindow,
+			bs->frame_Enemy_Len, NEWBOTAI_IMMEDIATE_FLIPKICK_RANGE, NEWBOTAI_PULL_STUN_ONLY_RANGE) > 0)
+	{
+		int absorbBonus = NewBotAI_GetAbsorbBiasBonus(
+			absorbBias, airborne, recentFlipkickWindow,
+			bs->frame_Enemy_Len, NEWBOTAI_IMMEDIATE_FLIPKICK_RANGE, NEWBOTAI_PULL_STUN_ONLY_RANGE);
+		if (healthLead > 0)
+		{
+			absorbBonus += (healthLead < 15) ? (healthLead / 2) : 10;
+		}
+		return absorbBonus;
 	}
 
 	return 0;
@@ -7284,13 +7312,6 @@ static qboolean NewBotAI_CanAttemptFlipkick(bot_state_t *bs)
 
 	return qtrue;
 }
-
-//A free flipkick always beats holding/charging a saber throw once the enemy has closed
-//into kick range - otherwise the two bots just collide while we sit on the charge.
-#define NEWBOTAI_FLIPKICK_PREFERRED_RANGE 180.0f
-#define NEWBOTAI_IMMEDIATE_FLIPKICK_RANGE 135.0f
-#define NEWBOTAI_IMMEDIATE_FLIPKICK_CONTACT_RANGE 90.0f
-#define NEWBOTAI_PULL_STUN_ONLY_RANGE 220.0f
 
 // Item 4: for this long after a fresh grip session begins, levels 1-9 never successfully
 // pull/push free of the grip (see NewBotAI_ReactToBeingGripped) - giving a human player's
@@ -14269,6 +14290,12 @@ int NewBotAI_GetPull(bot_state_t *bs) {
 
 int NewBotAI_GetPush(bot_state_t *bs) {
 	const int ourHealth = g_entities[bs->client].health, ourForce = bs->cur_ps.fd.forcePower;
+	const int healthLead = ourHealth - bs->currentEnemy->health;
+	const qboolean absorbAboutToEnd =
+		((bs->cur_ps.fd.forcePowersActive & (1 << FP_ABSORB)) &&
+		 (ourForce <= 35 ||
+		  (bs->cur_ps.fd.forcePowerDuration[FP_ABSORB] > level.time &&
+		   bs->cur_ps.fd.forcePowerDuration[FP_ABSORB] - level.time <= NEWBOTAI_ABSORB_BAIT_WINDOW_MS))) ? qtrue : qfalse;
 
 	if (g_forcePowerDisable.integer & (1 << FP_PUSH))
 		return 0;
@@ -14287,6 +14314,21 @@ int NewBotAI_GetPush(bot_state_t *bs) {
 	if (NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bs) &&
 		NewBotAI_IsEnemySaberThreatImminent(bs))
 		return 0;
+
+	if (NewBotAI_GetAntiDarkPushBonus(
+		bs->currentEnemy->client->ps.fd.forceSide == FORCE_DARKSIDE,
+		absorbAboutToEnd,
+		healthLead,
+		bs->frame_Enemy_Len,
+		NEWBOTAI_PULL_STUN_ONLY_RANGE) > 0)
+	{
+		return NewBotAI_GetAntiDarkPushBonus(
+			bs->currentEnemy->client->ps.fd.forceSide == FORCE_DARKSIDE,
+			absorbAboutToEnd,
+			healthLead,
+			bs->frame_Enemy_Len,
+			NEWBOTAI_PULL_STUN_ONLY_RANGE);
+	}
 
 	if (NewBotAI_IsEnemyPullable(bs) && (ourHealth < 25) && (bs->frame_Enemy_Len < 160) && (bs->currentEnemy->client->ps.weapon == WP_SABER)) {
 		if (bs->currentEnemy->client->ps.groundEntityNum == ENTITYNUM_NONE)		//improve this, only if they are coming at us or in air?
@@ -14538,6 +14580,7 @@ static qboolean NewBotAI_IsDrainlockAdvantage(bot_state_t *bs)
 
 int NewBotAI_GetDrain(bot_state_t *bs) {
 	const int ourHealth = g_entities[bs->client].health, ourForce = bs->cur_ps.fd.forcePower, hisForce = bs->currentEnemy->client->ps.fd.forcePower;
+	const int hisHealth = bs->currentEnemy->health;
 	const int totalHealthDelta = NewBotAI_GetTotalHealthDelta(bs);
 	const qboolean safeDrainVsThrow = NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bs);
 	const qboolean pressureDrainVsThrow = (bs->currentEnemy->client->ps.saberInFlight &&
@@ -14637,6 +14680,28 @@ int NewBotAI_GetDrain(bot_state_t *bs) {
 		if (weight > 140)
 		{
 			weight = 140;
+		}
+		return weight;
+	}
+
+	if (NewBotAI_GetAntiDarkDrainBonus(
+		bs->currentEnemy->client->ps.fd.forceSide == FORCE_DARKSIDE,
+		(bs->currentEnemy->client->ps.fd.forcePowersKnown & (1 << FP_HEAL)) ? 1 : 0,
+		ourHealth - hisHealth,
+		(hisHealth < bs->currentEnemy->client->ps.stats[STAT_MAX_HEALTH]) ? 1 : 0) > 0)
+	{
+		weight = NewBotAI_GetAntiDarkDrainBonus(
+			bs->currentEnemy->client->ps.fd.forceSide == FORCE_DARKSIDE,
+			(bs->currentEnemy->client->ps.fd.forcePowersKnown & (1 << FP_HEAL)) ? 1 : 0,
+			ourHealth - hisHealth,
+			(hisHealth < bs->currentEnemy->client->ps.stats[STAT_MAX_HEALTH]) ? 1 : 0);
+		if (hisForce >= 25)
+		{
+			weight += 10;
+		}
+		if (weight > 120)
+		{
+			weight = 120;
 		}
 		return weight;
 	}
