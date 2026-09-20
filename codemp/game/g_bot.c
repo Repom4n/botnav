@@ -904,6 +904,7 @@ G_AddBot
 static void G_AddBot( const char *name, float skill, const char *team, int delay, char *altname) {
 	gentity_t		*bot = NULL;
 	int				clientNum, preTeam = TEAM_FREE;
+	qboolean		arcadeManaged = qfalse;
 	char			userinfo[MAX_INFO_STRING] = {0},
 					*botinfo = NULL, *key = NULL, *s = NULL, *botname = NULL, *model = NULL;
 
@@ -917,11 +918,20 @@ static void G_AddBot( const char *name, float skill, const char *team, int delay
 		return;
 	}
 
+	if (level.gametype == GT_ARCADE && level.arcadeMarkNextBot)
+	{
+		level.arcadeManagedBot[clientNum] = qtrue;
+		level.arcadeMarkNextBot = qfalse;
+		arcadeManaged = qtrue;
+	}
+
 	// get the botinfo from bots.txt
 	botinfo = G_GetBotInfoByName( name );
 	if ( !botinfo ) {
 		trap->Print( S_COLOR_RED "Error: Bot '%s' not defined\n", name );
 		level.arcadeMarkNextBot = qfalse;
+		if (arcadeManaged)
+			level.arcadeManagedBot[clientNum] = qfalse;
 		trap->BotFreeClient( clientNum );
 		return;
 	}
@@ -1053,11 +1063,6 @@ static void G_AddBot( const char *name, float skill, const char *team, int delay
 
 	if ( level.gametype == GT_ARCADE )
 	{
-		if (level.arcadeMarkNextBot)
-		{
-			level.arcadeManagedBot[clientNum] = qtrue;
-			level.arcadeMarkNextBot = qfalse;
-		}
 		bot->client->sess.sessionTeam = TEAM_FREE;
 	}
 	else if ( level.gametype >= GT_TEAM )
@@ -1080,7 +1085,11 @@ static void G_AddBot( const char *name, float skill, const char *team, int delay
 
 	// have it connect to the game as a normal client
 	if ( ClientConnect( clientNum, qtrue, qtrue ) )
+	{
+		if (arcadeManaged)
+			level.arcadeManagedBot[clientNum] = qfalse;
 		return;
+	}
 
 	if ( bot->client->sess.sessionTeam != preTeam )
 	{
@@ -1107,7 +1116,11 @@ static void G_AddBot( const char *name, float skill, const char *team, int delay
 
 		G_ReadSessionData( bot->client );
 		if ( !ClientUserinfoChanged( clientNum ) )
+		{
+			if (arcadeManaged)
+				level.arcadeManagedBot[clientNum] = qfalse;
 			return;
+		}
 	}
 
 	if (level.gametype == GT_DUEL ||
