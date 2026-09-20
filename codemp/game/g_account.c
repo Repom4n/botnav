@@ -1008,6 +1008,7 @@ static void G_ProcessBotTutorialQueue(gentity_t *ent)
 void G_QueueArcadeBotTutorial(gentity_t *speaker, gentity_t *listener, int roundNumber, qboolean betweenRounds)
 {
 	int rotation;
+	bot_tutorial_queue_t *queue;
 
 	if (bot_tutorial.integer < 2 || bot_nochat.integer || !speaker || !listener ||
 		!speaker->client || !listener->client)
@@ -1019,7 +1020,14 @@ void G_QueueArcadeBotTutorial(gentity_t *speaker, gentity_t *listener, int round
 		return;
 	}
 
+	queue = &g_botTutorialQueues[speaker->s.number];
+	if (queue->queuedCount > queue->nextMessageIndex)
+	{
+		return;
+	}
+
 	G_ClearBotTutorialQueue(speaker->s.number);
+	queue = &g_botTutorialQueues[speaker->s.number];
 
 	rotation = roundNumber;
 	if (rotation < 0)
@@ -1047,7 +1055,10 @@ void G_QueueArcadeBotTutorial(gentity_t *speaker, gentity_t *listener, int round
 		G_QueueManualGenericAdvice(speaker->s.number, listener->s.number, NULL, qfalse, NULL);
 	}
 
-	g_botTutorialQueues[speaker->s.number].publicBroadcast = qtrue;
+	if (queue->queuedCount > queue->nextMessageIndex)
+	{
+		queue->publicBroadcast = qtrue;
+	}
 }
 
 static void G_InitTrackedDuelRuntimeForClient(gentity_t *ent, gentity_t *opponent, int duelType)
