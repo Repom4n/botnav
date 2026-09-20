@@ -207,6 +207,7 @@ void G_CacheMapname( const vmCvar_t *mapname )
 #define ARCADE_PRIMARY_BOT_LEVEL_MIN 3
 #define ARCADE_PRIMARY_BOT_LEVEL_MAX 10
 #define ARCADE_GAME_START_DELAY_MS 3500
+#define ARCADE_JOIN_QUEUE_DELAY_MS 1000
 #define ARCADE_BETWEEN_LEVEL_DELAY_MS 2000
 #define ARCADE_GAME_OVER_DELAY_MS 7000
 
@@ -435,7 +436,14 @@ static void G_ArcadeRespawnParticipant(gentity_t *ent, qboolean preservePosition
 		VectorCopy(ent->client->ps.viewangles, savedAngles);
 	}
 
-	SetTeam(ent, "free", qtrue);
+	if (ent->client->sess.sessionTeam == TEAM_FREE)
+	{
+		ClientSpawn(ent);
+	}
+	else
+	{
+		SetTeam(ent, "free", qtrue);
+	}
 
 	if (preservePosition)
 	{
@@ -709,7 +717,7 @@ static void G_ArcadeRunFrame(void)
 		}
 		else if (!level.arcadeRoundQueuedStart)
 		{
-			level.arcadeRoundQueuedStart = level.time + 1000;
+			level.arcadeRoundQueuedStart = level.time + ARCADE_JOIN_QUEUE_DELAY_MS;
 		}
 		return;
 	}
