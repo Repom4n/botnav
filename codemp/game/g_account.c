@@ -1069,31 +1069,31 @@ static void G_MaybeQueueBotTutorial(tracked_duel_runtime_t *loserRuntime, gentit
 		const int queuedCountBefore = g_botTutorialQueues[botClientNum].queuedCount;
 		const qboolean queueWasEmpty = (queuedCountBefore <= g_botTutorialQueues[botClientNum].nextMessageIndex);
 
-	if (issue < DUEL_TRACK_ISSUE_COUNT && G_TrackedAdviceIsSpecificAllowed(session, issue))
-	{
-	G_QueueManualIssueAdvice(botClientNum, loser->s.number, issue, session);
-	}
-	else if (G_IsTrackedIntermediateCandidate(loserRuntime))
-	{
-	G_QueueManualIntermediateAdvice(botClientNum, loser->s.number, session->duelsSeen + issue, session);
-	}
-	else
-	{
-	G_QueueManualGenericAdvice(botClientNum, loser->s.number, loserRuntime, loggedIn, session);
-	}
+		if (issue < DUEL_TRACK_ISSUE_COUNT && G_TrackedAdviceIsSpecificAllowed(session, issue))
+		{
+			G_QueueManualIssueAdvice(botClientNum, loser->s.number, issue, session);
+		}
+		else if (G_IsTrackedIntermediateCandidate(loserRuntime))
+		{
+			G_QueueManualIntermediateAdvice(botClientNum, loser->s.number, session->duelsSeen + issue, session);
+		}
+		else
+		{
+			G_QueueManualGenericAdvice(botClientNum, loser->s.number, loserRuntime, loggedIn, session);
+		}
 
-	G_MaybeQueueTrackedLoginAdvice(botClientNum, loser->s.number, session, loggedIn);
+		G_MaybeQueueTrackedLoginAdvice(botClientNum, loser->s.number, session, loggedIn);
 
-	if ((loserRuntime->spentByState[DUEL_TRACK_STATE_PANIC] >= 20 || loserRuntime->lateDefenseSpends >= 1) &&
-	G_TrackedAdviceIsSpecificAllowed(session, DUEL_TRACK_ISSUE_LATE_DEFENSE))
-	{
-	static const char *lateDefenseFollowups[] = {
-		"Secondary pattern: defense timing repeats late—stabilize before choke windows and hold anti-drain structure.",
-		"Secondary pattern: your late-defense leak is still open—set the anti-drain layer earlier and stop waiting for the collapse frame."
-	};
-	G_QueueRotatingTutorialMessage(botClientNum, loser->s.number, lateDefenseFollowups,
-		(int)(sizeof(lateDefenseFollowups) / sizeof(lateDefenseFollowups[0])), session->duelsSeen, session);
-	}
+		if ((loserRuntime->spentByState[DUEL_TRACK_STATE_PANIC] >= 20 || loserRuntime->lateDefenseSpends >= 1) &&
+			G_TrackedAdviceIsSpecificAllowed(session, DUEL_TRACK_ISSUE_LATE_DEFENSE))
+		{
+			static const char *lateDefenseFollowups[] = {
+				"Secondary pattern: defense timing repeats late—stabilize before choke windows and hold anti-drain structure.",
+				"Secondary pattern: your late-defense leak is still open—set the anti-drain layer earlier and stop waiting for the collapse frame."
+			};
+			G_QueueRotatingTutorialMessage(botClientNum, loser->s.number, lateDefenseFollowups,
+				(int)(sizeof(lateDefenseFollowups) / sizeof(lateDefenseFollowups[0])), session->duelsSeen, session);
+		}
 
 		if (g_botTutorialQueues[botClientNum].queuedCount > queuedCountBefore)
 		{
