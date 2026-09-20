@@ -219,8 +219,8 @@
 		{
 			name				profilebutton
 			group				toprow
-			text				"Account"
-			descText			"Login, register, or logout from your account."
+			text				@MENUS_PROFILE
+			descText			@MENUS_PROFILE_DESC
 			style				WINDOW_STYLE_EMPTY
 			type				ITEM_TYPE_BUTTON
 			rect				170 126 130 24
