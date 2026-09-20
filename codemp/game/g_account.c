@@ -29,7 +29,9 @@ static char LOCAL_DB_PATH[MAX_OSPATH];
 #define TRACKED_DUEL_ADVICE_REPEAT_THRESHOLD 2
 #define TRACKED_DUEL_PATTERN_MIN_EVENTS 10
 #define TRACKED_DUEL_PATTERN_MIN_DURATION_MS 12000
-#define TRACKED_DUEL_PATTERN_LOW_SIGNAL_EVENTS 6
+#define TRACKED_DUEL_SKILL_MIN_WINRATE_DUELS 5
+#define TRACKED_DUEL_SKILL_HIGH_WINRATE 55
+#define TRACKED_DUEL_SKILL_LOW_WINRATE 35
 #define TRACKED_DUEL_ADVICE_LOGIN_START 3
 #define TRACKED_DUEL_ADVICE_LOGIN_INTERVAL 3
 #define LOCAL_ARCADE_SCORE_ORDER "score DESC, end_time DESC"
@@ -185,6 +187,7 @@ typedef struct
 	int sessionIssueCounts[DUEL_TRACK_ISSUE_COUNT];
 	int historyIssueCounts[DUEL_TRACK_ISSUE_COUNT];
 	int historyWins;
+	int sessionWins;
 	int adviceRotation;
 	unsigned int lastAdviceHash;
 	int lastLoginPromptDuel;
@@ -628,13 +631,29 @@ static duel_advice_session_state_t *G_GetTrackedAdviceSession(gentity_t *ent, tr
 	return session;
 }
 
+static void G_RecordTrackedSessionOutcome(gentity_t *ent, tracked_duel_runtime_t *runtime, qboolean won)
+{
+	duel_advice_session_state_t *session;
+
+	if (!ent || !ent->client || (ent->r.svFlags & SVF_BOT) || !runtime)
+		return;
+
+	session = G_GetTrackedAdviceSession(ent, runtime);
+	if (!session)
+		return;
+
+	session->duelsSeen++;
+	if (won)
+		session->sessionWins++;
+}
+
 static qboolean G_TrackedPatternConfidenceHigh(const tracked_duel_runtime_t *runtime, const duel_advice_session_state_t *session, duel_track_issue_t issue)
 {
 	int issueConfidence;
 	int observedDuels;
 	int duelDuration;
 
-	if (!runtime || !session || issue >= DUEL_TRACK_ISSUE_COUNT)
+	if (!runtime || !session || issue < 0 || issue >= DUEL_TRACK_ISSUE_COUNT)
 		return qfalse;
 
 	issueConfidence = session->sessionIssueCounts[issue] + session->historyIssueCounts[issue];
@@ -651,7 +670,7 @@ static qboolean G_TrackedPatternConfidenceHigh(const tracked_duel_runtime_t *run
 	return qtrue;
 }
 
-static duel_track_skill_band_t G_GetTrackedSkillBand(const tracked_duel_runtime_t *runtime, const duel_advice_session_state_t *session)
+static duel_track_skill_band_t G_GetTrackedSkillBand(const tracked_duel_runtime_t *runtime, const duel_advice_session_state_t *session, int extraDuels, int extraWins)
 {
 	int score = 0;
 	int observedDuels = 0;
@@ -678,18 +697,19 @@ static duel_track_skill_band_t G_GetTrackedSkillBand(const tracked_duel_runtime_
 
 	if (session)
 	{
-		observedDuels = session->duelsSeen + session->historyDuels;
-		if (session->historyDuels >= 5)
+		observedDuels = session->duelsSeen + session->historyDuels + extraDuels;
+		if (observedDuels >= TRACKED_DUEL_SKILL_MIN_WINRATE_DUELS)
 		{
-			const int winRate = (session->historyWins * 100) / session->historyDuels;
-			if (winRate >= 55)
+			const int totalWins = session->historyWins + session->sessionWins + extraWins;
+			const int winRate = (totalWins * 100) / observedDuels;
+			if (winRate >= TRACKED_DUEL_SKILL_HIGH_WINRATE)
 				score += 2;
-			else if (winRate <= 35)
+			else if (winRate <= TRACKED_DUEL_SKILL_LOW_WINRATE)
 				score -= 2;
 		}
 	}
 
-	if (observedDuels < 3 || score <= 0)
+	if ((observedDuels < TRACKED_DUEL_ADVICE_MIN_OBSERVATIONS && score <= 1) || score <= 0)
 		return DUEL_TRACK_SKILL_BEGINNER;
 	if (score >= 4)
 		return DUEL_TRACK_SKILL_ADVANCED;
@@ -1127,15 +1147,14 @@ static void G_MaybeQueueBotTutorial(tracked_duel_runtime_t *loserRuntime, gentit
 	loggedIn = (loserRuntime->identityKind == DUEL_TRACK_ID_LOGIN) ? qtrue : qfalse;
 	if (loggedIn)
 		G_LoadTrackedAdviceHistory(session);
-	session->duelsSeen++;
 	issue = G_MapPrimaryIssueToTrackedIssue(loserRuntime->primaryIssue);
 	if (issue < DUEL_TRACK_ISSUE_COUNT)
 		session->sessionIssueCounts[issue]++;
 	duelDuration = (loserRuntime->eventCount > 0) ? loserRuntime->events[loserRuntime->eventCount - 1].relTime : 0;
-	lowSignalDuel = (loserRuntime->eventCount < TRACKED_DUEL_PATTERN_LOW_SIGNAL_EVENTS ||
+	lowSignalDuel = (loserRuntime->eventCount < TRACKED_DUEL_PATTERN_MIN_EVENTS ||
 		duelDuration < TRACKED_DUEL_PATTERN_MIN_DURATION_MS) ? qtrue : qfalse;
 	allowSpecificIssue = (issue < DUEL_TRACK_ISSUE_COUNT && G_TrackedAdviceIsSpecificAllowed(loserRuntime, session, issue)) ? qtrue : qfalse;
-	skillBand = G_GetTrackedSkillBand(loserRuntime, session);
+	skillBand = G_GetTrackedSkillBand(loserRuntime, session, 1, 0);
 	if (allowSpecificIssue && session->sessionIssueCounts[issue] >= 2)
 		g_botTutorialQueues[botClientNum].cooldownMs = TRACKED_DUEL_TUTORIAL_FAST_COOLDOWN_MS;
 	else
@@ -1183,7 +1202,7 @@ static void G_MaybeQueueBotTutorial(tracked_duel_runtime_t *loserRuntime, gentit
 		}
 		else if (skillBand == DUEL_TRACK_SKILL_INTERMEDIATE || G_IsTrackedIntermediateCandidate(loserRuntime))
 		{
-			G_QueueManualIntermediateAdvice(botClientNum, loser->s.number, session->duelsSeen + issue, session);
+			G_QueueManualIntermediateAdvice(botClientNum, loser->s.number, session->duelsSeen + loserRuntime->eventCount, session);
 		}
 		else
 		{
@@ -1809,6 +1828,8 @@ void G_FinishTrackedDuel(gentity_t *winner, gentity_t *loser, int duelType, qboo
 	G_PersistTrackedDuel(&winnerRuntime, &loserRuntime, duelType, draw);
 	if (!draw)
 		G_MaybeQueueBotTutorial(&loserRuntime, winner, loser);
+	G_RecordTrackedSessionOutcome(winner, &winnerRuntime, draw ? qfalse : qtrue);
+	G_RecordTrackedSessionOutcome(loser, &loserRuntime, qfalse);
 }
 
 void G_ClearTrackedDuelIfMismatched(gentity_t *ent, gentity_t *opponent)

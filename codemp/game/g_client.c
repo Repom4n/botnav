@@ -2917,7 +2917,10 @@ char *ClientConnect( int clientNum, qboolean firstTime, qboolean isBot ) {
 	// they can connect
 	client = &level.clients[ clientNum ];
 	ent->client = client;
-	G_ArcadeResetClientRunState(clientNum);
+	if (level.gametype != GT_ARCADE || firstTime || level.newSession)
+	{
+		G_ArcadeResetClientRunState(clientNum);
+	}
 
 	//assign the pointer for bg entity access
 	ent->playerState = &ent->client->ps;
@@ -2957,12 +2960,6 @@ char *ClientConnect( int clientNum, qboolean firstTime, qboolean isBot ) {
 	else if (level.gametype == GT_POWERDUEL && client->sess.sessionTeam != TEAM_SPECTATOR)
 	{
 		client->sess.sessionTeam = TEAM_SPECTATOR;
-	}
-	else if (level.gametype == GT_ARCADE && !(ent->r.svFlags & SVF_BOT))
-	{
-		client->sess.sessionTeam = TEAM_FREE;
-		client->sess.spectatorState = SPECTATOR_NOT;
-		client->sess.spectatorClient = 0;
 	}
 
 	if( isBot ) {
