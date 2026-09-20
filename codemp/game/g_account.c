@@ -1147,6 +1147,7 @@ static void G_InsertTrackedEvents(sqlite3 *db, sqlite3_int64 summaryId, tracked_
 		sql = "INSERT INTO LocalDuelTrackGeometry(summary_id, participant_key, opponent_key, rel_time, event_index, self_x, self_y, self_z, enemy_x, enemy_y, enemy_z, self_vx, self_vy, self_vz, enemy_vx, enemy_vy, enemy_vz, self_yaw, enemy_yaw) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 		CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &geomStmt, NULL));
 	}
+	CALL_SQLITE(exec(db, "BEGIN TRANSACTION", NULL, NULL, NULL));
 	for (i = 0; i < runtime->eventCount; i++)
 	{
 		tracked_duel_event_t *event = &runtime->events[i];
@@ -1194,6 +1195,7 @@ static void G_InsertTrackedEvents(sqlite3 *db, sqlite3_int64 summaryId, tracked_
 			CALL_SQLITE(clear_bindings(geomStmt));
 		}
 	}
+	CALL_SQLITE(exec(db, "COMMIT", NULL, NULL, NULL));
 	CALL_SQLITE(finalize(stmt));
 	if (captureGeometry && hasAnyGeometry)
 		CALL_SQLITE(finalize(geomStmt));
