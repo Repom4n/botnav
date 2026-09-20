@@ -989,7 +989,7 @@ static void G_ProcessBotTutorialQueue(gentity_t *ent)
 	}
 
 	sayMode = queue->publicBroadcast ? SAY_ALL : SAY_TELL;
-	G_Say(ent, target, sayMode, queue->messages[queue->nextMessageIndex]);
+	G_Say(ent, (sayMode == SAY_ALL) ? NULL : target, sayMode, queue->messages[queue->nextMessageIndex]);
 	queue->nextMessageIndex++;
 	if (queue->nextMessageIndex >= queue->queuedCount)
 	{
