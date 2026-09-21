@@ -1056,7 +1056,7 @@ static void G_MarkTrackedIssueAdvice(duel_advice_session_state_t *session, const
 static void G_MaybeQueueTrackedSuccessAdvice(int botClientNum, int targetClientNum, const tracked_duel_runtime_t *runtime, duel_advice_session_state_t *session)
 {
 	static const char *successPressure[] = {
-		"One win signal: clean conversions often come after forcing disadvantage first. Keep that tempo shape.",
+		"One positive signal: cleaner conversions usually come after forcing disadvantage first.",
 		"Good conversion timing pattern: finish windows open after the opponent is forced into a bad state."
 	};
 	static const char *successDefense[] = {
@@ -1286,7 +1286,6 @@ static void G_MaybeQueueBotTutorial(tracked_duel_runtime_t *loserRuntime, gentit
 	qboolean allowSpecificIssue;
 	qboolean suppressRepeatedIssueAdvice;
 	int duelDuration;
-	tracked_duel_runtime_t *winnerRuntime;
 	const tracked_duel_runtime_t *successRuntime;
 
 	if (!bot_tutorial.integer || bot_nochat.integer || !loserRuntime || !winner || !loser ||
@@ -1296,8 +1295,7 @@ static void G_MaybeQueueBotTutorial(tracked_duel_runtime_t *loserRuntime, gentit
 		return;
 
 	botClientNum = winner->s.number;
-	winnerRuntime = (winner->s.number >= 0 && winner->s.number < MAX_CLIENTS) ? &g_trackedDuels[winner->s.number] : NULL;
-	successRuntime = (winnerRuntime && winnerRuntime->eventCount > 0) ? winnerRuntime : NULL;
+	successRuntime = loserRuntime;
 	session = G_GetTrackedAdviceSession(loser, loserRuntime);
 	if (!session)
 		return;
