@@ -439,6 +439,32 @@ int G_ArcadeCountReservedClientSlots(void)
 	return count;
 }
 
+int G_ArcadeCountActiveNonSpectatorClients(void)
+{
+	int i, count = 0;
+
+	for (i = 0; i < MAX_CLIENTS; i++)
+	{
+		gentity_t *ent = &g_entities[i];
+
+		if (!ent->inuse || !ent->client)
+		{
+			continue;
+		}
+		if (ent->client->pers.connected != CON_CONNECTED)
+		{
+			continue;
+		}
+		if (ent->client->sess.sessionTeam == TEAM_SPECTATOR)
+		{
+			continue;
+		}
+		count++;
+	}
+
+	return count;
+}
+
 static int G_ArcadeGetManagedBotCapacity(void)
 {
 	int maxBots = sv_maxclients.integer - G_ArcadeCountOccupiedHumans() - ARCADE_RESERVED_PLAYER_SLOTS;

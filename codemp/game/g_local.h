@@ -1912,6 +1912,7 @@ void G_AddArcadeScore(const char *username, const char *mapname, int score, int 
 qboolean G_GetArcadeTopScore(const char *mapname, int *scoreOut, char *usernameOut, int usernameOutSize);
 int G_ArcadeCountIngameHumans(void);
 int G_ArcadeCountReservedClientSlots(void);
+int G_ArcadeCountActiveNonSpectatorClients(void);
 qboolean G_ArcadeEnsureHumanReserveSlots(void);
 qboolean G_IsArcadeManagedBot(const gentity_t *ent);
 void G_ArcadeClearDuelState(gentity_t *ent, qboolean clearDuelType);
