@@ -653,8 +653,7 @@ static void G_ArcadeClearBotDuelState(gentity_t *ent)
 	}
 
 	if (opponent && opponent->client &&
-		opponent->client->ps.duelIndex == clientNum &&
-		G_IsArcadeManagedBot(opponent))
+		opponent->client->ps.duelIndex == clientNum)
 	{
 		G_ArcadeClearDuelPairState(ent, opponent);
 		return;
