@@ -845,6 +845,7 @@ static void G_ArcadeStartRound(void)
 	{
 		if (availableBotSlots + level.arcadeCleanupPendingBots >= targetBots)
 		{
+			level.arcadeCleanupPendingBots--;
 			level.arcadeRoundBotsTarget = targetBots;
 			level.arcadeRoundQueuedStart = 0;
 			level.arcadeCleanupRetryTime = level.time + ARCADE_CLEANUP_RETRY_DELAY_MS;
