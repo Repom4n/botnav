@@ -10196,12 +10196,13 @@ static qboolean NewBotAI_ShouldPreDefenseAgainstCollapse(bot_state_t *bs)
 
 static qboolean NewBotAI_IsStablePTKCommitWindow(bot_state_t *bs)
 {
-	const float closingSpeed = NewBotAI_GetEnemyClosingSpeed(bs);
+	float closingSpeed;
 
 	if (!bs)
 	{
 		return qfalse;
 	}
+	closingSpeed = NewBotAI_GetEnemyClosingSpeed(bs);
 	if (!bs->frame_Enemy_Vis || bs->frame_Enemy_Len < 96.0f || bs->frame_Enemy_Len > 384.0f)
 	{
 		return qfalse;

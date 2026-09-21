@@ -417,8 +417,7 @@ static int G_ArcadeCountReservedClientSlots(void)
 			}
 			continue;
 		}
-		if (ent->client->pers.connected == CON_CONNECTED &&
-			ent->client->sess.sessionTeam == TEAM_SPECTATOR)
+		if (ent->client->sess.sessionTeam == TEAM_SPECTATOR)
 		{
 			continue;
 		}

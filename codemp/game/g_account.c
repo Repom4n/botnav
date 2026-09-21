@@ -219,6 +219,7 @@ typedef struct
 	unsigned int lastOpponentHash;
 	int lastIssueAdvised;
 	int lastIssueAdviceTime;
+	int lastIssueAdviceDuel;
 	qboolean loginReminderSent;
 } duel_advice_session_state_t;
 
@@ -369,6 +370,7 @@ static void G_ClearDuelAdviceSession(int clientNum)
 
 	memset(&g_duelAdviceSessions[clientNum], 0, sizeof(g_duelAdviceSessions[clientNum]));
 	g_duelAdviceSessions[clientNum].lastIssueAdvised = -1;
+	g_duelAdviceSessions[clientNum].lastIssueAdviceDuel = -1;
 }
 
 void G_ClearTrackedDuelClientState(int clientNum)
@@ -657,6 +659,7 @@ static duel_advice_session_state_t *G_GetTrackedAdviceSession(gentity_t *ent, tr
 		memset(session, 0, sizeof(*session));
 		session->active = qtrue;
 		session->lastIssueAdvised = -1;
+		session->lastIssueAdviceDuel = -1;
 		session->identityKind = runtime->identityKind;
 		Q_strncpyz(session->identityKey, runtime->identityKey, sizeof(session->identityKey));
 	}
@@ -1025,6 +1028,10 @@ static qboolean G_ShouldSuppressRepeatedIssueAdvice(const tracked_duel_runtime_t
 	{
 		return qfalse;
 	}
+	if (session->lastIssueAdviceDuel != session->duelsSeen)
+	{
+		return qfalse;
+	}
 	if (session->lastOpponentHash != opponentHash)
 	{
 		return qfalse;
@@ -1042,6 +1049,7 @@ static void G_MarkTrackedIssueAdvice(duel_advice_session_state_t *session, const
 
 	session->lastIssueAdvised = issue;
 	session->lastIssueAdviceTime = level.time;
+	session->lastIssueAdviceDuel = session->duelsSeen;
 	session->lastOpponentHash = G_HashTrackedIdentityString(runtime->opponentKey);
 }
 
