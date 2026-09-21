@@ -361,7 +361,7 @@ static int G_ArcadeCountIngameHumans(void)
 	return count;
 }
 
-static int G_ArcadeCountConnectedHumans(void)
+static int G_ArcadeCountOccupiedHumans(void)
 {
 	int i, count = 0;
 	for (i = 0; i < MAX_CLIENTS; i++)
@@ -372,18 +372,37 @@ static int G_ArcadeCountConnectedHumans(void)
 		{
 			continue;
 		}
-		count++;
+		if (ent->client->sess.sessionTeam == TEAM_FREE)
+		{
+			count++;
+		}
 	}
 	return count;
 }
 
-static int G_ArcadeCountConnectedClients(void)
+static int G_ArcadeCountReservedClientSlots(void)
 {
 	int i, count = 0;
 	for (i = 0; i < MAX_CLIENTS; i++)
 	{
 		gentity_t *ent = &g_entities[i];
-		if (!ent->inuse || !ent->client || ent->client->pers.connected != CON_CONNECTED)
+		if (!ent->inuse || !ent->client)
+		{
+			continue;
+		}
+		if (ent->client->pers.connected == CON_DISCONNECTED)
+		{
+			continue;
+		}
+		if (ent->client->pers.connected == CON_CONNECTING)
+		{
+			if ((ent->r.svFlags & SVF_BOT) && level.arcadeManagedBot[i])
+			{
+				count++;
+			}
+			continue;
+		}
+		if (ent->client->sess.sessionTeam == TEAM_SPECTATOR)
 		{
 			continue;
 		}
@@ -394,7 +413,7 @@ static int G_ArcadeCountConnectedClients(void)
 
 static int G_ArcadeGetManagedBotCapacity(void)
 {
-	int maxBots = sv_maxclients.integer - G_ArcadeCountConnectedHumans() - ARCADE_RESERVED_PLAYER_SLOTS;
+	int maxBots = sv_maxclients.integer - G_ArcadeCountOccupiedHumans() - ARCADE_RESERVED_PLAYER_SLOTS;
 	if (maxBots < 0)
 	{
 		maxBots = 0;
@@ -467,7 +486,7 @@ static int G_ArcadeKickBotsForReserve(int neededSlots)
 
 static qboolean G_ArcadeEnsureHumanReserveSlots(void)
 {
-	int freeSlots = sv_maxclients.integer - G_ArcadeCountConnectedClients();
+	int freeSlots = sv_maxclients.integer - G_ArcadeCountReservedClientSlots();
 	int neededSlots = ARCADE_RESERVED_PLAYER_SLOTS - freeSlots;
 
 	if (neededSlots <= 0)
@@ -489,7 +508,7 @@ static qboolean G_ArcadeEnsureHumanReserveSlots(void)
 		}
 	}
 
-	freeSlots = sv_maxclients.integer - G_ArcadeCountConnectedClients();
+	freeSlots = sv_maxclients.integer - G_ArcadeCountReservedClientSlots();
 	return (freeSlots >= ARCADE_RESERVED_PLAYER_SLOTS) ? qtrue : qfalse;
 }
 
@@ -507,7 +526,7 @@ static qboolean G_ArcadeTryAddManagedBot(float skill)
 	{
 		maxConnectedBeforeReserve = 0;
 	}
-	if (G_ArcadeCountConnectedClients() >= maxConnectedBeforeReserve)
+	if (G_ArcadeCountReservedClientSlots() >= maxConnectedBeforeReserve)
 	{
 		G_ArcadeWarnNoRoomForPlayers();
 		return qfalse;

@@ -216,6 +216,10 @@ typedef struct
 	int sessionWins;
 	int adviceRotation;
 	unsigned int lastAdviceHash;
+	unsigned int lastOpponentHash;
+	int lastIssueAdvised;
+	int lastIssueAdviceTime;
+	int lastIssueAdviceDuel;
 	qboolean loginReminderSent;
 } duel_advice_session_state_t;
 
@@ -365,6 +369,8 @@ static void G_ClearDuelAdviceSession(int clientNum)
 		return;
 
 	memset(&g_duelAdviceSessions[clientNum], 0, sizeof(g_duelAdviceSessions[clientNum]));
+	g_duelAdviceSessions[clientNum].lastIssueAdvised = -1;
+	g_duelAdviceSessions[clientNum].lastIssueAdviceDuel = -1;
 }
 
 void G_ClearTrackedDuelClientState(int clientNum)
@@ -652,6 +658,8 @@ static duel_advice_session_state_t *G_GetTrackedAdviceSession(gentity_t *ent, tr
 	{
 		memset(session, 0, sizeof(*session));
 		session->active = qtrue;
+		session->lastIssueAdvised = -1;
+		session->lastIssueAdviceDuel = -1;
 		session->identityKind = runtime->identityKind;
 		Q_strncpyz(session->identityKey, runtime->identityKey, sizeof(session->identityKey));
 	}
@@ -1007,6 +1015,44 @@ static qboolean G_IsTrackedIntermediateCandidate(const tracked_duel_runtime_t *r
 	return qfalse;
 }
 
+static qboolean G_ShouldSuppressRepeatedIssueAdvice(const tracked_duel_runtime_t *runtime, duel_advice_session_state_t *session, duel_track_issue_t issue)
+{
+	unsigned int opponentHash;
+
+	if (!runtime || !session || issue < 0 || issue >= DUEL_TRACK_ISSUE_COUNT)
+	{
+		return qfalse;
+	}
+	opponentHash = G_HashTrackedIdentityString(runtime->opponentKey);
+	if (session->lastIssueAdvised != issue)
+	{
+		return qfalse;
+	}
+	if (session->lastIssueAdviceDuel != session->duelsSeen)
+	{
+		return qfalse;
+	}
+	if (session->lastOpponentHash != opponentHash)
+	{
+		return qfalse;
+	}
+
+	return (level.time < session->lastIssueAdviceTime + 20000) ? qtrue : qfalse;
+}
+
+static void G_MarkTrackedIssueAdvice(duel_advice_session_state_t *session, const tracked_duel_runtime_t *runtime, duel_track_issue_t issue)
+{
+	if (!session || !runtime || issue < 0 || issue >= DUEL_TRACK_ISSUE_COUNT)
+	{
+		return;
+	}
+
+	session->lastIssueAdvised = issue;
+	session->lastIssueAdviceTime = level.time;
+	session->lastIssueAdviceDuel = session->duelsSeen;
+	session->lastOpponentHash = G_HashTrackedIdentityString(runtime->opponentKey);
+}
+
 static void G_QueueManualBasicsAdvice(int botClientNum, int targetClientNum, int duelIndex, duel_advice_session_state_t *session)
 {
 	int slot;
@@ -1207,6 +1253,7 @@ static void G_MaybeQueueBotTutorial(tracked_duel_runtime_t *loserRuntime, gentit
 	qboolean basicsWindow;
 	qboolean lowSignalDuel;
 	qboolean allowSpecificIssue;
+	qboolean suppressRepeatedIssueAdvice;
 	int duelDuration;
 
 	if (!bot_tutorial.integer || bot_nochat.integer || !loserRuntime || !winner || !loser ||
@@ -1229,6 +1276,7 @@ static void G_MaybeQueueBotTutorial(tracked_duel_runtime_t *loserRuntime, gentit
 	lowSignalDuel = (loserRuntime->eventCount < TRACKED_DUEL_PATTERN_MIN_EVENTS ||
 		duelDuration < TRACKED_DUEL_PATTERN_MIN_DURATION_MS) ? qtrue : qfalse;
 	allowSpecificIssue = (issue < DUEL_TRACK_ISSUE_COUNT && G_TrackedAdviceIsSpecificAllowed(loserRuntime, session, issue)) ? qtrue : qfalse;
+	suppressRepeatedIssueAdvice = allowSpecificIssue ? G_ShouldSuppressRepeatedIssueAdvice(loserRuntime, session, issue) : qfalse;
 	skillBand = G_GetTrackedSkillBand(loserRuntime, session, 1, 0);
 	g_botTutorialQueues[botClientNum].cooldownMs = TRACKED_DUEL_TUTORIAL_COOLDOWN_MS;
 
@@ -1264,9 +1312,10 @@ static void G_MaybeQueueBotTutorial(tracked_duel_runtime_t *loserRuntime, gentit
 		{
 			G_QueueManualGenericAdvice(botClientNum, loser->s.number, loserRuntime, loggedIn, session);
 		}
-		else if (allowSpecificIssue)
+		else if (allowSpecificIssue && !suppressRepeatedIssueAdvice)
 		{
 			G_QueueManualIssueAdvice(botClientNum, loser->s.number, issue, session);
+			G_MarkTrackedIssueAdvice(session, loserRuntime, issue);
 		}
 		else if (skillBand == DUEL_TRACK_SKILL_ADVANCED)
 		{
@@ -1280,9 +1329,6 @@ static void G_MaybeQueueBotTutorial(tracked_duel_runtime_t *loserRuntime, gentit
 		{
 			G_QueueManualBasicsAdvice(botClientNum, loser->s.number, session->duelsSeen, session);
 		}
-
-		G_MaybeQueueTrackedLoginAdvice(botClientNum, loser->s.number, session, loggedIn);
-
 		if ((loserRuntime->spentByState[DUEL_TRACK_STATE_PANIC] >= 20 || loserRuntime->lateDefenseSpends >= 1) &&
 			G_TrackedAdviceIsSpecificAllowed(loserRuntime, session, DUEL_TRACK_ISSUE_LATE_DEFENSE))
 		{
