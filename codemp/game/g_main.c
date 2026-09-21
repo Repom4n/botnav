@@ -843,10 +843,14 @@ static void G_ArcadeStartRound(void)
 	availableBotSlots = G_ArcadeGetAvailableBotSlots();
 	if (level.arcadeCleanupPendingBots > 0 && availableBotSlots < targetBots)
 	{
-		level.arcadeRoundBotsTarget = targetBots;
-		level.arcadeRoundQueuedStart = 0;
-		level.arcadeCleanupRetryTime = level.time + ARCADE_CLEANUP_RETRY_DELAY_MS;
-		return;
+		if (availableBotSlots + level.arcadeCleanupPendingBots >= targetBots)
+		{
+			level.arcadeRoundBotsTarget = targetBots;
+			level.arcadeRoundQueuedStart = 0;
+			level.arcadeCleanupRetryTime = level.time + ARCADE_CLEANUP_RETRY_DELAY_MS;
+			return;
+		}
+		level.arcadeCleanupPendingBots = 0;
 	}
 	level.arcadeCleanupPendingBots = 0;
 	if (availableBotSlots < targetBots)
