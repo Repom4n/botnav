@@ -447,6 +447,19 @@ static int G_ArcadeGetManagedBotCapacity(void)
 	return maxBots;
 }
 
+static int G_ArcadeGetAvailableBotSlots(void)
+{
+	int maxConnectedBeforeReserve = sv_maxclients.integer - ARCADE_RESERVED_PLAYER_SLOTS;
+	int availableSlots = maxConnectedBeforeReserve - G_ArcadeCountReservedClientSlots();
+
+	if (availableSlots < 0)
+	{
+		availableSlots = 0;
+	}
+
+	return availableSlots;
+}
+
 static void G_ArcadeWarnNoRoomForPlayers(void)
 {
 	static int nextWarnTime = 0;
@@ -779,6 +792,8 @@ static void G_ArcadeStartRound(void)
 	const int humans = G_ArcadeCountIngameHumans();
 	int targetBots;
 	int botsToAdd;
+	int existingManagedBots;
+	int availableBotSlots;
 	const int maxManagedBots = G_ArcadeGetManagedBotCapacity();
 	const int progressionLevel = G_ArcadeGetProgressionLevel(level.arcadeLevel);
 	const int primaryLevel = G_ArcadeClampPrimaryBotLevel(progressionLevel);
@@ -801,10 +816,26 @@ static void G_ArcadeStartRound(void)
 		G_ArcadeWarnNoRoomForPlayers();
 	}
 
-	if (G_ArcadeCountManagedBotSlots() > 0)
+	existingManagedBots = G_ArcadeCountManagedBotSlots();
+	if (existingManagedBots > 0)
 	{
 		G_ArcadeKickAllBots();
 	}
+
+	availableBotSlots = G_ArcadeGetAvailableBotSlots();
+	if (availableBotSlots < targetBots)
+	{
+		if (existingManagedBots > 0)
+		{
+			level.arcadeRoundBotsTarget = targetBots;
+			level.arcadeRoundQueuedStart = level.time + ARCADE_JOIN_QUEUE_DELAY_MS;
+			return;
+		}
+
+		targetBots = availableBotSlots;
+		G_ArcadeWarnNoRoomForPlayers();
+	}
+
 	botsToAdd = targetBots;
 
 	for (i = 0; i < MAX_CLIENTS; i++)
