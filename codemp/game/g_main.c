@@ -825,7 +825,7 @@ static void G_ArcadeStartRound(void)
 		G_ArcadeKickAllBots();
 		if (G_ArcadeCountManagedBotSlots() > 0)
 		{
-			level.arcadeRoundBotsTarget = 0;
+			level.arcadeRoundBotsTarget = targetBots;
 			level.arcadeRoundQueuedStart = level.time + ARCADE_JOIN_QUEUE_DELAY_MS;
 			return;
 		}
