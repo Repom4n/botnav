@@ -1329,6 +1329,12 @@ static void G_MaybeQueueBotTutorial(tracked_duel_runtime_t *loserRuntime, gentit
 		{
 			G_QueueManualBasicsAdvice(botClientNum, loser->s.number, session->duelsSeen, session);
 		}
+		if (issue < DUEL_TRACK_ISSUE_COUNT &&
+			g_botTutorialQueues[botClientNum].queuedCount > queuedCountBefore &&
+			session->lastIssueAdvised != issue)
+		{
+			G_MarkTrackedIssueAdvice(session, loserRuntime, issue);
+		}
 
 		if ((loserRuntime->spentByState[DUEL_TRACK_STATE_PANIC] >= 20 || loserRuntime->lateDefenseSpends >= 1) &&
 			G_TrackedAdviceIsSpecificAllowed(loserRuntime, session, DUEL_TRACK_ISSUE_LATE_DEFENSE))
