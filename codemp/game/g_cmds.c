@@ -1442,7 +1442,23 @@ void SetTeam( gentity_t *ent, char *s, qboolean forcedToJoin ) {//JAPRO - Modifi
 	{
 		team = TEAM_SPECTATOR;
 	}
+	else if ( level.gametype == GT_ARCADE &&
+		team != TEAM_SPECTATOR &&
+		oldTeam == TEAM_SPECTATOR &&
+		!G_ArcadeEnsureHumanReserveSlots() )
+	{
+		team = TEAM_SPECTATOR;
+	}
+	else if ( level.gametype == GT_ARCADE &&
+		g_maxGameClients.integer > 0 &&
+		team != TEAM_SPECTATOR &&
+		oldTeam == TEAM_SPECTATOR &&
+		G_ArcadeCountActiveNonSpectatorClients() >= g_maxGameClients.integer )
+	{
+		team = TEAM_SPECTATOR;
+	}
 	else if ( g_maxGameClients.integer > 0 &&
+		level.gametype != GT_ARCADE &&
 		level.numNonSpectatorClients >= g_maxGameClients.integer )
 	{
 		team = TEAM_SPECTATOR;
@@ -1523,14 +1539,26 @@ void SetTeam( gentity_t *ent, char *s, qboolean forcedToJoin ) {//JAPRO - Modifi
 		return;
 
 	if (client->ps.duelInProgress) {
-		gentity_t *duelAgainst = &g_entities[client->ps.duelIndex];
+		gentity_t *duelAgainst = NULL;
+		qboolean arcadeManagedDuel = G_IsArcadeManagedBot(ent) ? qtrue : qfalse;
+
+		if (client->ps.duelIndex >= 0 && client->ps.duelIndex < MAX_CLIENTS)
+		{
+			duelAgainst = &g_entities[client->ps.duelIndex];
+			arcadeManagedDuel = (arcadeManagedDuel || G_IsArcadeManagedBot(duelAgainst)) ? qtrue : qfalse;
+		}
 
 		G_ClearTrackedDuelIfMismatched(ent, duelAgainst);
-		if (duelAgainst->client) {
+		if (duelAgainst && duelAgainst->client && arcadeManagedDuel)
+		{
+			G_ArcadeClearDuelPairState(ent, duelAgainst);
+		}
+		else if (duelAgainst && duelAgainst->client) {
 			G_FinishTrackedDuel(duelAgainst, ent, dueltypes[ent->client->ps.clientNum], qfalse);
 		}
 
-		if (ent->client->pers.lastUserName[0] && duelAgainst->client && duelAgainst->client->pers.lastUserName[0]) {
+		if (!arcadeManagedDuel &&
+			ent->client->pers.lastUserName[0] && duelAgainst && duelAgainst->client && duelAgainst->client->pers.lastUserName[0]) {
 			if (!(ent->client->sess.accountFlags & JAPRO_ACCOUNTFLAG_NODUEL) && !(duelAgainst->client->sess.accountFlags & JAPRO_ACCOUNTFLAG_NODUEL))
 			{
 				G_AddDuel(duelAgainst->client->pers.lastUserName, ent->client->pers.lastUserName, duelAgainst->client->pers.duelStartTime, dueltypes[ent->client->ps.clientNum], duelAgainst->client->ps.stats[STAT_HEALTH], duelAgainst->client->ps.stats[STAT_ARMOR]);

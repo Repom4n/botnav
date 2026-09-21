@@ -4457,7 +4457,26 @@ void ClientThink_real( gentity_t *ent ) {
 //[JAPRO - Serverside - Duel - Improve/fix duel end print - Start]
 			//Show ranked, elo change? kms
 			if (!ent->client->sess.raceMode) {
-				if (ent->health > 0 && ent->client->ps.stats[STAT_HEALTH] > 0)
+				qboolean cleanupArcadeManagedDuel = qfalse;
+
+				if (G_IsArcadeManagedBot(ent) || G_IsArcadeManagedBot(duelAgainst))
+				{
+					cleanupArcadeManagedDuel = qtrue;
+				}
+				if (cleanupArcadeManagedDuel)
+				{
+					ent->client->pers.stats.duelDamageGiven = 0;
+					if (duelAgainst && duelAgainst->client)
+					{
+						duelAgainst->client->pers.stats.duelDamageGiven = 0;
+						G_ArcadeClearDuelPairState(ent, duelAgainst);
+					}
+					else
+					{
+						G_ArcadeClearDuelState(ent, qtrue);
+					}
+				}
+				else if (ent->health > 0 && ent->client->ps.stats[STAT_HEALTH] > 0)
 				{
 					if (dueltypes[ent->client->ps.clientNum] == 0) {//Saber
 						trap->SendServerCommand(-1, va("print \"%s^7 %s %s^7! (^1%i^7/^2%i^7) (Saber)\n\"",

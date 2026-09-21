@@ -4901,14 +4901,26 @@ void ClientDisconnect( int clientNum ) {
 	}
 
 	if (ent->client->ps.duelInProgress) {
-		gentity_t *duelAgainst = &g_entities[ent->client->ps.duelIndex];
+		gentity_t *duelAgainst = NULL;
+		qboolean arcadeManagedDuel = G_IsArcadeManagedBot(ent) ? qtrue : qfalse;
+
+		if (ent->client->ps.duelIndex >= 0 && ent->client->ps.duelIndex < MAX_CLIENTS)
+		{
+			duelAgainst = &g_entities[ent->client->ps.duelIndex];
+			arcadeManagedDuel = (arcadeManagedDuel || G_IsArcadeManagedBot(duelAgainst)) ? qtrue : qfalse;
+		}
 
 		G_ClearTrackedDuelIfMismatched(ent, duelAgainst);
-		if (duelAgainst->client) {
+		if (duelAgainst && duelAgainst->client && arcadeManagedDuel)
+		{
+			G_ArcadeClearDuelPairState(ent, duelAgainst);
+		}
+		else if (duelAgainst && duelAgainst->client) {
 			G_FinishTrackedDuel(duelAgainst, ent, dueltypes[ent->client->ps.clientNum], qfalse);
 		}
 
-		if (ent->client->pers.lastUserName[0] && duelAgainst->client && duelAgainst->client->pers.lastUserName[0]) {
+		if (!arcadeManagedDuel &&
+			ent->client->pers.lastUserName[0] && duelAgainst && duelAgainst->client && duelAgainst->client->pers.lastUserName[0]) {
 			//Trying to dodge the duel, no no no
 			if (!(ent->client->sess.accountFlags & JAPRO_ACCOUNTFLAG_NODUEL) && !(duelAgainst->client->sess.accountFlags & JAPRO_ACCOUNTFLAG_NODUEL))
 			{

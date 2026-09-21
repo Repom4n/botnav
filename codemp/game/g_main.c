@@ -370,7 +370,7 @@ static void G_ArcadeSendCenterMessage(gentity_t *ent, const char *headline, int 
 	}
 }
 
-static int G_ArcadeCountIngameHumans(void)
+int G_ArcadeCountIngameHumans(void)
 {
 	int i, count = 0;
 	for (i = 0; i < MAX_CLIENTS; i++)
@@ -408,7 +408,7 @@ static int G_ArcadeCountOccupiedHumans(void)
 	return count;
 }
 
-static int G_ArcadeCountReservedClientSlots(void)
+int G_ArcadeCountReservedClientSlots(void)
 {
 	int i, count = 0;
 	for (i = 0; i < MAX_CLIENTS; i++)
@@ -436,6 +436,32 @@ static int G_ArcadeCountReservedClientSlots(void)
 		}
 		count++;
 	}
+	return count;
+}
+
+int G_ArcadeCountActiveNonSpectatorClients(void)
+{
+	int i, count = 0;
+
+	for (i = 0; i < MAX_CLIENTS; i++)
+	{
+		gentity_t *ent = &g_entities[i];
+
+		if (!ent->inuse || !ent->client)
+		{
+			continue;
+		}
+		if (ent->client->pers.connected != CON_CONNECTED)
+		{
+			continue;
+		}
+		if (ent->client->sess.sessionTeam == TEAM_SPECTATOR)
+		{
+			continue;
+		}
+		count++;
+	}
+
 	return count;
 }
 
@@ -473,6 +499,8 @@ static void G_ArcadeWarnNoRoomForPlayers(void)
 	nextWarnTime = level.time + ARCADE_NO_ROOM_WARNING_COOLDOWN_MS;
 	trap->SendServerCommand(-1, "print \"can't add more bots, not enough room for players\n\"");
 }
+
+static void G_ArcadeClearBotDuelState(gentity_t *ent);
 
 static int G_ArcadeKickBotsForReserve(int neededSlots)
 {
@@ -516,8 +544,9 @@ static int G_ArcadeKickBotsForReserve(int neededSlots)
 				continue;
 			}
 
-			level.arcadeManagedBot[i] = qfalse;
+			G_ArcadeClearBotDuelState(ent);
 			trap->DropClient(i, "Arcade reserve slot for human players");
+			level.arcadeManagedBot[i] = qfalse;
 			kicked++;
 		}
 	}
@@ -525,7 +554,7 @@ static int G_ArcadeKickBotsForReserve(int neededSlots)
 	return kicked;
 }
 
-static qboolean G_ArcadeEnsureHumanReserveSlots(void)
+qboolean G_ArcadeEnsureHumanReserveSlots(void)
 {
 	int freeSlots = sv_maxclients.integer - G_ArcadeCountReservedClientSlots();
 	int neededSlots = ARCADE_RESERVED_PLAYER_SLOTS - freeSlots;
@@ -551,6 +580,86 @@ static qboolean G_ArcadeEnsureHumanReserveSlots(void)
 
 	freeSlots = sv_maxclients.integer - G_ArcadeCountReservedClientSlots();
 	return (freeSlots >= ARCADE_RESERVED_PLAYER_SLOTS) ? qtrue : qfalse;
+}
+
+qboolean G_IsArcadeManagedBot(const gentity_t *ent)
+{
+	if (level.gametype != GT_ARCADE || !ent || !ent->client)
+	{
+		return qfalse;
+	}
+	if (ent->s.number < 0 || ent->s.number >= MAX_CLIENTS)
+	{
+		return qfalse;
+	}
+	return ((ent->r.svFlags & SVF_BOT) && level.arcadeManagedBot[ent->s.number]) ? qtrue : qfalse;
+}
+
+void G_ArcadeClearDuelState(gentity_t *ent, qboolean clearDuelType)
+{
+	int clientNum;
+
+	if (!ent || !ent->client)
+	{
+		return;
+	}
+
+	clientNum = ent->s.number;
+	if (clientNum < 0 || clientNum >= MAX_CLIENTS)
+	{
+		return;
+	}
+
+	ent->client->ps.duelInProgress = qfalse;
+	ent->client->ps.duelIndex = ENTITYNUM_NONE;
+	ent->client->pers.duelStartTime = 0;
+	if (clearDuelType)
+	{
+		dueltypes[clientNum] = 0;
+	}
+	G_ClearTrackedDuelClientState(clientNum);
+}
+
+void G_ArcadeClearDuelPairState(gentity_t *first, gentity_t *second)
+{
+	if (!first || !second)
+	{
+		return;
+	}
+
+	G_ArcadeClearDuelState(first, qtrue);
+	G_ArcadeClearDuelState(second, qtrue);
+}
+
+static void G_ArcadeClearBotDuelState(gentity_t *ent)
+{
+	gentity_t *opponent = NULL;
+	int clientNum;
+
+	if (!ent || !ent->client)
+	{
+		return;
+	}
+
+	clientNum = ent->s.number;
+	if (clientNum < 0 || clientNum >= MAX_CLIENTS)
+	{
+		return;
+	}
+
+	if (ent->client->ps.duelIndex >= 0 && ent->client->ps.duelIndex < MAX_CLIENTS)
+	{
+		opponent = &g_entities[ent->client->ps.duelIndex];
+	}
+
+	if (opponent && opponent->client &&
+		opponent->client->ps.duelIndex == clientNum)
+	{
+		G_ArcadeClearDuelPairState(ent, opponent);
+		return;
+	}
+
+	G_ArcadeClearDuelState(ent, qtrue);
 }
 
 static qboolean G_ArcadeTryAddManagedBot(float skill)
@@ -670,11 +779,12 @@ static void G_ArcadeKickManagedBot(gentity_t *ent)
 
 	if (ent->s.number >= 0 && ent->s.number < MAX_CLIENTS)
 	{
-		level.arcadeManagedBot[ent->s.number] = qfalse;
 		if (ent->client->pers.connected != CON_DISCONNECTED)
 		{
+			G_ArcadeClearBotDuelState(ent);
 			trap->DropClient(ent->s.number, "Arcade bot cleanup");
 		}
+		level.arcadeManagedBot[ent->s.number] = qfalse;
 	}
 }
 
@@ -782,14 +892,16 @@ static int G_ArcadeKickAllBots(void)
 			continue;
 		}
 
-		level.arcadeManagedBot[i] = qfalse;
 		if (!ent->inuse || !ent->client || !(ent->r.svFlags & SVF_BOT) ||
 			ent->client->pers.connected == CON_DISCONNECTED)
 		{
+			level.arcadeManagedBot[i] = qfalse;
 			continue;
 		}
 
+		G_ArcadeClearBotDuelState(ent);
 		trap->DropClient(i, "Arcade bot cleanup");
+		level.arcadeManagedBot[i] = qfalse;
 		dropped++;
 	}
 
