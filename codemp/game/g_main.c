@@ -669,11 +669,8 @@ static void G_ArcadeKickManagedBot(gentity_t *ent)
 
 	if (ent->s.number >= 0 && ent->s.number < MAX_CLIENTS)
 	{
-		if (ent->client->pers.connected == CON_DISCONNECTED)
-		{
-			level.arcadeManagedBot[ent->s.number] = qfalse;
-		}
-		else
+		level.arcadeManagedBot[ent->s.number] = qfalse;
+		if (ent->client->pers.connected != CON_DISCONNECTED)
 		{
 			trap->DropClient(ent->s.number, "Arcade bot cleanup");
 		}
@@ -732,7 +729,7 @@ static void G_ArcadeRespawnParticipant(gentity_t *ent, qboolean preservePosition
 	G_ArcadeRestorePlayer(ent);
 }
 
-static void G_ArcadeKickAllBots(void);
+static int G_ArcadeKickAllBots(void);
 
 static qboolean G_ArcadeHasManagedBots(void)
 {
@@ -764,13 +761,15 @@ static void G_ArcadeShutdown(qboolean kickBots)
 	level.arcadeRoundBotsTarget = 0;
 	level.arcadeRoundQueuedStart = 0;
 	level.arcadeCleanupRetryTime = 0;
+	level.arcadeCleanupPendingBots = 0;
 	level.arcadeGameOverTime = 0;
 	level.arcadeReserveAnnounceTime = 0;
 }
 
-static void G_ArcadeKickAllBots(void)
+static int G_ArcadeKickAllBots(void)
 {
 	int i;
+	int dropped = 0;
 
 	for (i = 0; i < MAX_CLIENTS; i++)
 	{
@@ -781,15 +780,18 @@ static void G_ArcadeKickAllBots(void)
 			continue;
 		}
 
+		level.arcadeManagedBot[i] = qfalse;
 		if (!ent->inuse || !ent->client || !(ent->r.svFlags & SVF_BOT) ||
 			ent->client->pers.connected == CON_DISCONNECTED)
 		{
-			level.arcadeManagedBot[i] = qfalse;
 			continue;
 		}
 
 		trap->DropClient(i, "Arcade bot cleanup");
+		dropped++;
 	}
+
+	return dropped;
 }
 
 static void G_ArcadeStartRound(void)
@@ -799,6 +801,7 @@ static void G_ArcadeStartRound(void)
 	int targetBots;
 	int botsToAdd;
 	int availableBotSlots;
+	int droppedManagedBots = 0;
 	int successfulAdds = 0;
 	const int maxManagedBots = G_ArcadeGetManagedBotCapacity();
 	const int progressionLevel = G_ArcadeGetProgressionLevel(level.arcadeLevel);
@@ -811,6 +814,7 @@ static void G_ArcadeStartRound(void)
 		level.arcadeRoundStartTime = 0;
 		level.arcadeRoundQueuedStart = 0;
 		level.arcadeCleanupRetryTime = 0;
+		level.arcadeCleanupPendingBots = 0;
 		level.arcadeRoundBotsTarget = 0;
 		G_ArcadeKickAllBots();
 		return;
@@ -825,9 +829,10 @@ static void G_ArcadeStartRound(void)
 
 	if (G_ArcadeCountManagedBotSlots() > 0)
 	{
-		G_ArcadeKickAllBots();
-		if (G_ArcadeCountManagedBotSlots() > 0)
+		droppedManagedBots = G_ArcadeKickAllBots();
+		if (droppedManagedBots > 0)
 		{
+			level.arcadeCleanupPendingBots = droppedManagedBots;
 			level.arcadeRoundBotsTarget = targetBots;
 			level.arcadeRoundQueuedStart = 0;
 			level.arcadeCleanupRetryTime = level.time + ARCADE_CLEANUP_RETRY_DELAY_MS;
@@ -836,6 +841,14 @@ static void G_ArcadeStartRound(void)
 	}
 
 	availableBotSlots = G_ArcadeGetAvailableBotSlots();
+	if (level.arcadeCleanupPendingBots > 0 && availableBotSlots < targetBots)
+	{
+		level.arcadeRoundBotsTarget = targetBots;
+		level.arcadeRoundQueuedStart = 0;
+		level.arcadeCleanupRetryTime = level.time + ARCADE_CLEANUP_RETRY_DELAY_MS;
+		return;
+	}
+	level.arcadeCleanupPendingBots = 0;
 	if (availableBotSlots < targetBots)
 	{
 		targetBots = availableBotSlots;
@@ -846,6 +859,7 @@ static void G_ArcadeStartRound(void)
 		level.arcadeRoundBotsTarget = 0;
 		level.arcadeRoundQueuedStart = level.time + ARCADE_JOIN_QUEUE_DELAY_MS;
 		level.arcadeCleanupRetryTime = 0;
+		level.arcadeCleanupPendingBots = 0;
 		return;
 	}
 
@@ -870,6 +884,7 @@ static void G_ArcadeStartRound(void)
 		level.arcadeRoundBotsTarget = 0;
 		level.arcadeRoundQueuedStart = level.time + ARCADE_JOIN_QUEUE_DELAY_MS;
 		level.arcadeCleanupRetryTime = 0;
+		level.arcadeCleanupPendingBots = 0;
 		return;
 	}
 	targetBots = successfulAdds;
@@ -908,6 +923,7 @@ static void G_ArcadeStartRound(void)
 	level.arcadeRoundStartTime = level.time;
 	level.arcadeRoundQueuedStart = 0;
 	level.arcadeCleanupRetryTime = 0;
+	level.arcadeCleanupPendingBots = 0;
 	trap->SendServerCommand(-1, va("cp \"^2ARCADE LEVEL %i\n^7Fight!\n\"", level.arcadeLevel));
 }
 
@@ -1025,6 +1041,7 @@ static void G_ArcadeFinishRound(qboolean gameOver, qboolean arcadeComplete)
 
 	G_ArcadeKickAllBots();
 	level.arcadeCleanupRetryTime = 0;
+	level.arcadeCleanupPendingBots = 0;
 	level.arcadeRoundBotsTarget = 0;
 }
 
@@ -1049,6 +1066,7 @@ static void G_ArcadeRunFrame(void)
 		level.arcadeLevel = ARCADE_START_LEVEL;
 		level.arcadeRoundQueuedStart = level.time + ARCADE_GAME_START_DELAY_MS;
 		level.arcadeCleanupRetryTime = 0;
+		level.arcadeCleanupPendingBots = 0;
 		trap->SendServerCommand(-1, va("cp \"^2Good Luck!\n^7Arcade Level %i\n\"", level.arcadeLevel));
 	}
 	(void)G_ArcadeEnsureHumanReserveSlots();
@@ -1059,6 +1077,7 @@ static void G_ArcadeRunFrame(void)
 		level.arcadeLevel = ARCADE_START_LEVEL;
 		level.arcadeRoundQueuedStart = level.time + ARCADE_GAME_START_DELAY_MS;
 		level.arcadeCleanupRetryTime = 0;
+		level.arcadeCleanupPendingBots = 0;
 		trap->SendServerCommand(-1, va("cp \"^2Good Luck!\n^7Arcade Level %i\n\"", level.arcadeLevel));
 	}
 	if (level.arcadeCleanupRetryTime && level.time >= level.arcadeCleanupRetryTime)
@@ -1078,6 +1097,7 @@ static void G_ArcadeRunFrame(void)
 		{
 			level.arcadeRoundQueuedStart = 0;
 			level.arcadeCleanupRetryTime = 0;
+			level.arcadeCleanupPendingBots = 0;
 			level.arcadeRoundBotsTarget = 0;
 			if (G_ArcadeCountManagedBotSlots() > 0)
 			{
