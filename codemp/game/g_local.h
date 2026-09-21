@@ -1554,6 +1554,7 @@ typedef struct level_locals_s {
 	int			arcadeRoundStartTime;
 	int			arcadeRoundBotsTarget;
 	int			arcadeRoundQueuedStart;
+	int			arcadeCleanupRetryTime;
 	int			arcadeGameOverTime;
 	int			arcadeReserveAnnounceTime;
 	int			arcadeScore[MAX_CLIENTS];
