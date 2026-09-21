@@ -210,6 +210,7 @@ void G_CacheMapname( const vmCvar_t *mapname )
 #define ARCADE_GAME_START_DELAY_MS 3500
 #define ARCADE_JOIN_QUEUE_DELAY_MS 1000
 #define ARCADE_CLEANUP_RETRY_DELAY_MS 50
+#define ARCADE_CLEANUP_RETRY_BUDGET 20
 #define ARCADE_BETWEEN_LEVEL_DELAY_MS 1500
 #define ARCADE_GAME_OVER_DELAY_MS 7000
 #define ARCADE_RESERVED_PLAYER_SLOTS 1
@@ -762,6 +763,7 @@ static void G_ArcadeShutdown(qboolean kickBots)
 	level.arcadeRoundQueuedStart = 0;
 	level.arcadeCleanupRetryTime = 0;
 	level.arcadeCleanupPendingBots = 0;
+	level.arcadeCleanupRetryBudget = 0;
 	level.arcadeGameOverTime = 0;
 	level.arcadeReserveAnnounceTime = 0;
 }
@@ -815,6 +817,7 @@ static void G_ArcadeStartRound(void)
 		level.arcadeRoundQueuedStart = 0;
 		level.arcadeCleanupRetryTime = 0;
 		level.arcadeCleanupPendingBots = 0;
+		level.arcadeCleanupRetryBudget = 0;
 		level.arcadeRoundBotsTarget = 0;
 		G_ArcadeKickAllBots();
 		return;
@@ -833,6 +836,7 @@ static void G_ArcadeStartRound(void)
 		if (droppedManagedBots > 0)
 		{
 			level.arcadeCleanupPendingBots = droppedManagedBots;
+			level.arcadeCleanupRetryBudget = ARCADE_CLEANUP_RETRY_BUDGET;
 			level.arcadeRoundBotsTarget = targetBots;
 			level.arcadeRoundQueuedStart = 0;
 			level.arcadeCleanupRetryTime = level.time + ARCADE_CLEANUP_RETRY_DELAY_MS;
@@ -843,17 +847,21 @@ static void G_ArcadeStartRound(void)
 	availableBotSlots = G_ArcadeGetAvailableBotSlots();
 	if (level.arcadeCleanupPendingBots > 0 && availableBotSlots < targetBots)
 	{
-		if (availableBotSlots + level.arcadeCleanupPendingBots >= targetBots)
+		if (level.arcadeCleanupRetryBudget > 0 &&
+			availableBotSlots + level.arcadeCleanupPendingBots >= targetBots)
 		{
 			level.arcadeCleanupPendingBots--;
+			level.arcadeCleanupRetryBudget--;
 			level.arcadeRoundBotsTarget = targetBots;
 			level.arcadeRoundQueuedStart = 0;
 			level.arcadeCleanupRetryTime = level.time + ARCADE_CLEANUP_RETRY_DELAY_MS;
 			return;
 		}
 		level.arcadeCleanupPendingBots = 0;
+		level.arcadeCleanupRetryBudget = 0;
 	}
 	level.arcadeCleanupPendingBots = 0;
+	level.arcadeCleanupRetryBudget = 0;
 	if (availableBotSlots < targetBots)
 	{
 		targetBots = availableBotSlots;
@@ -865,6 +873,7 @@ static void G_ArcadeStartRound(void)
 		level.arcadeRoundQueuedStart = level.time + ARCADE_JOIN_QUEUE_DELAY_MS;
 		level.arcadeCleanupRetryTime = 0;
 		level.arcadeCleanupPendingBots = 0;
+		level.arcadeCleanupRetryBudget = 0;
 		return;
 	}
 
@@ -890,6 +899,7 @@ static void G_ArcadeStartRound(void)
 		level.arcadeRoundQueuedStart = level.time + ARCADE_JOIN_QUEUE_DELAY_MS;
 		level.arcadeCleanupRetryTime = 0;
 		level.arcadeCleanupPendingBots = 0;
+		level.arcadeCleanupRetryBudget = 0;
 		return;
 	}
 	targetBots = successfulAdds;
@@ -929,6 +939,7 @@ static void G_ArcadeStartRound(void)
 	level.arcadeRoundQueuedStart = 0;
 	level.arcadeCleanupRetryTime = 0;
 	level.arcadeCleanupPendingBots = 0;
+	level.arcadeCleanupRetryBudget = 0;
 	trap->SendServerCommand(-1, va("cp \"^2ARCADE LEVEL %i\n^7Fight!\n\"", level.arcadeLevel));
 }
 
@@ -1047,6 +1058,7 @@ static void G_ArcadeFinishRound(qboolean gameOver, qboolean arcadeComplete)
 	G_ArcadeKickAllBots();
 	level.arcadeCleanupRetryTime = 0;
 	level.arcadeCleanupPendingBots = 0;
+	level.arcadeCleanupRetryBudget = 0;
 	level.arcadeRoundBotsTarget = 0;
 }
 
@@ -1072,6 +1084,7 @@ static void G_ArcadeRunFrame(void)
 		level.arcadeRoundQueuedStart = level.time + ARCADE_GAME_START_DELAY_MS;
 		level.arcadeCleanupRetryTime = 0;
 		level.arcadeCleanupPendingBots = 0;
+		level.arcadeCleanupRetryBudget = 0;
 		trap->SendServerCommand(-1, va("cp \"^2Good Luck!\n^7Arcade Level %i\n\"", level.arcadeLevel));
 	}
 	(void)G_ArcadeEnsureHumanReserveSlots();
@@ -1083,6 +1096,7 @@ static void G_ArcadeRunFrame(void)
 		level.arcadeRoundQueuedStart = level.time + ARCADE_GAME_START_DELAY_MS;
 		level.arcadeCleanupRetryTime = 0;
 		level.arcadeCleanupPendingBots = 0;
+		level.arcadeCleanupRetryBudget = 0;
 		trap->SendServerCommand(-1, va("cp \"^2Good Luck!\n^7Arcade Level %i\n\"", level.arcadeLevel));
 	}
 	if (level.arcadeCleanupRetryTime && level.time >= level.arcadeCleanupRetryTime)
@@ -1103,6 +1117,7 @@ static void G_ArcadeRunFrame(void)
 			level.arcadeRoundQueuedStart = 0;
 			level.arcadeCleanupRetryTime = 0;
 			level.arcadeCleanupPendingBots = 0;
+			level.arcadeCleanupRetryBudget = 0;
 			level.arcadeRoundBotsTarget = 0;
 			if (G_ArcadeCountManagedBotSlots() > 0)
 			{
