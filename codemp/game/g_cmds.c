@@ -1449,6 +1449,14 @@ void SetTeam( gentity_t *ent, char *s, qboolean forcedToJoin ) {//JAPRO - Modifi
 	{
 		team = TEAM_SPECTATOR;
 	}
+	else if ( level.gametype == GT_ARCADE &&
+		g_maxGameClients.integer > 0 &&
+		team != TEAM_SPECTATOR &&
+		oldTeam == TEAM_SPECTATOR &&
+		G_ArcadeCountIngameHumans() >= g_maxGameClients.integer )
+	{
+		team = TEAM_SPECTATOR;
+	}
 	else if ( g_maxGameClients.integer > 0 &&
 		level.gametype != GT_ARCADE &&
 		level.numNonSpectatorClients >= g_maxGameClients.integer )

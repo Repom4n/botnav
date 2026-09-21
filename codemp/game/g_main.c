@@ -370,7 +370,7 @@ static void G_ArcadeSendCenterMessage(gentity_t *ent, const char *headline, int 
 	}
 }
 
-static int G_ArcadeCountIngameHumans(void)
+int G_ArcadeCountIngameHumans(void)
 {
 	int i, count = 0;
 	for (i = 0; i < MAX_CLIENTS; i++)
