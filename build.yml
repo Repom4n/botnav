@@ -1,0 +1,587 @@
+name: build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+      - beta
+    paths-ignore:
+      - "**.md"
+      - ".gitignore"
+      - "docs/*"
+  pull_request:
+    branches:
+      - master
+      - beta
+    paths-ignore:
+      - "**.md"
+      - ".gitignore"
+      - "docs/*"
+  release:
+    types: [published]
+
+jobs:
+  msvc:
+    name: Windows ${{ matrix.arch }} ${{ matrix.build_type }} (${{ matrix.portable }})
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86, x86_64]
+        build_type: [Debug, Release]
+        portable: [Portable]
+        include:
+          - arch: x86
+            platform: Win32
+          - arch: x86_64
+            platform: x64
+
+    steps:
+      - uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2 # v4.2.2
+        if: github.event_name == 'pull_request'
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2 # v4.2.2
+        if: github.event_name != 'pull_request'
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Add msbuild to PATH
+        shell: pwsh
+        run: |
+          $vsWhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsPath = & $vsWhere -latest -products * -requires Microsoft.Component.MSBuild -property installationPath
+          
+          if ($vsPath) {
+            Write-Host "Found Visual Studio at: $vsPath"
+          
+            $msBuildPath = Get-ChildItem -Path "$vsPath\MSBuild\Current\Bin\MSBuild.exe" -ErrorAction SilentlyContinue |
+                           Select-Object -First 1 -ExpandProperty Directory
+          
+            if ($msBuildPath) {
+              Write-Host "Found MSBuild at: $msBuildPath"
+              echo "$msBuildPath" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          
+              $env:PATH = "$msBuildPath;$env:PATH"
+            } else {
+              throw "MSBuild not found in VS installation"
+            }
+          } else {
+            throw "Visual Studio installation not found"
+          }
+
+      - name: Setup NASM
+        uses: ilammy/setup-nasm@72793074d3c8cdda771dba85f6deafe00623038b
+
+      - name: Create Build Environment
+        run: cmake -E make_directory ${{ github.workspace }}/build
+
+      - name: Configure CMake
+        shell: bash
+        working-directory: ${{ github.workspace }}/build
+        run: |
+          OPTIONS="-DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DCMAKE_INSTALL_PREFIX=bin"
+          if [ "${{ matrix.portable }}" == "Portable" ]; then
+            OPTIONS+=" -DBuildPortableVersion=ON -DUseTurboJPEG=ON "
+          else
+            OPTIONS+=" -DBuildPortableVersion=OFF -DUseTurboJPEG=ON "
+          fi
+          cmake $GITHUB_WORKSPACE -A ${{ matrix.platform }} $OPTIONS
+
+      - name: Build
+        working-directory: ${{ github.workspace }}/build
+        shell: bash
+        run: cmake --build . --config ${{ matrix.build_type }} -j $NUMBER_OF_PROCESSORS
+
+      - name: Install
+        if: ${{ matrix.build_type == 'Release' }}
+        working-directory: ${{ github.workspace }}/build
+        shell: bash
+        run: cmake --install . --config ${{ matrix.build_type }}
+
+      - name: Create Archive
+        if: ${{ matrix.build_type == 'Release' }}
+        working-directory: ${{ github.workspace }}/build/bin/JediAcademy
+        shell: bash
+        run: |
+          7z a -r TaystJK-windows-${{ matrix.arch }}-${{ matrix.build_type }}-${{ matrix.portable }}.zip *
+
+      - uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # v4.6.2
+        if: ${{ matrix.build_type == 'Release' }}
+        with:
+          name: TaystJK-windows-${{ matrix.arch }}-${{ matrix.build_type }}-${{ matrix.portable }}
+          path: ${{ github.workspace }}/build/bin/JediAcademy/TaystJK-windows-${{ matrix.arch }}-${{ matrix.build_type }}-${{ matrix.portable }}.zip
+          if-no-files-found: error
+
+  ubuntu:
+    name: Ubuntu ${{ matrix.arch }} ${{ matrix.build_type }} (${{ matrix.portable }})
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86, x86_64]
+        build_type: [Debug, Release]
+        portable: [Portable]
+
+    steps:
+      - uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2 # v4.2.2
+        if: github.event_name == 'pull_request'
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2 # v4.2.2
+        if: github.event_name != 'pull_request'
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Setup NASM
+        uses: ilammy/setup-nasm@72793074d3c8cdda771dba85f6deafe00623038b
+
+      - name: Create Build Environment
+        run: |
+          if [ ${{ matrix.arch }} == "x86" ]; then
+            sudo dpkg --add-architecture i386
+            sudo apt-get -qq update
+            sudo apt-get -y install libpcre2-8-0:i386 gcc-multilib g++-multilib libjpeg-dev:i386 libpng-dev:i386 libcurl4-openssl-dev:i386 libglib2.0-dev:i386 libsdl2-dev:i386
+          else
+            sudo apt-get -qq update
+            sudo apt-get install libjpeg-dev libpng-dev zlib1g-dev libsdl2-dev
+          fi
+          cmake -E make_directory ${{ github.workspace }}/build
+
+      - name: Configure CMake
+        shell: bash
+        working-directory: ${{ github.workspace }}/build
+        run: |
+          OPTIONS="-DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/install"
+          if [ "${{ matrix.portable }}" == "Portable" ]; then
+            OPTIONS+=" -DBuildPortableVersion=ON -DUseTurboJPEG=ON"
+          else
+            OPTIONS+=" -DBuildPortableVersion=OFF -DUseTurboJPEG=ON"
+          fi
+          if [ ${{ matrix.arch }} == "x86" ]; then
+            OPTIONS+=" -DCMAKE_TOOLCHAIN_FILE=cmake/Toolchains/linux-i686.cmake"
+          fi
+          cmake $GITHUB_WORKSPACE $OPTIONS
+
+      - name: Build
+        working-directory: ${{ github.workspace }}/build
+        shell: bash
+        run: cmake --build . -j $(nproc)
+
+      - name: Install
+        if: ${{ matrix.build_type == 'Release' }}
+        working-directory: ${{ github.workspace }}/build
+        shell: bash
+        run: cmake --install .
+
+      - name: Create binary archive
+        if: ${{ matrix.build_type == 'Release' }}
+        working-directory: ${{ github.workspace }}/install/JediAcademy
+        shell: bash
+        run: tar -czvf TaystJK-linux-${{ matrix.arch }}-${{ matrix.build_type }}-${{ matrix.portable }}.tar.gz  *
+
+      - uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # v4.6.2
+        if: ${{ matrix.build_type == 'Release' }}
+        with:
+          name: TaystJK-linux-${{ matrix.arch }}-${{ matrix.build_type }}-${{ matrix.portable }}
+          path: ${{github.workspace}}/install/JediAcademy/TaystJK-linux-${{ matrix.arch }}-${{ matrix.build_type }}-${{ matrix.portable }}.tar.gz
+          if-no-files-found: error
+
+  macos-x86_64:
+    name: macOS ${{ matrix.arch }} ${{ matrix.build_type }} (${{ matrix.portable}})
+    runs-on: macos-15-intel
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86_64]
+        build_type: [Debug, Release]
+        portable: [Portable]
+
+    steps:
+      - uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2 # v4.2.2
+        if: github.event_name == 'pull_request'
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2 # v4.2.2
+        if: github.event_name != 'pull_request'
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Setup NASM
+        uses: ilammy/setup-nasm@72793074d3c8cdda771dba85f6deafe00623038b
+
+      - name: Create Build Environment
+        run: |
+          brew install sdl2
+          cmake -E make_directory ${{ github.workspace }}/build
+
+      - name: Configure CMake
+        shell: bash
+        working-directory: ${{ github.workspace }}/build
+        run: |
+          OPTIONS="-DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/install"
+          if [ "${{ matrix.portable }}" == "Portable" ]; then
+            OPTIONS+=" -DBuildPortableVersion=ON -DUseTurboJPEG=ON"
+          else
+            OPTIONS+=" -DBuildPortableVersion=OFF -DUseTurboJPEG=ON"
+          fi
+          cmake $GITHUB_WORKSPACE $OPTIONS
+
+      - name: Build
+        working-directory: ${{ github.workspace }}/build
+        shell: bash
+        run: cmake --build . -j $(getconf _NPROCESSORS_ONLN)
+
+      - name: Install
+        if: ${{ matrix.build_type == 'Release' }}
+        working-directory: ${{ github.workspace }}/build
+        shell: bash
+        run: cmake --install .
+
+      - name: Create TaystJK binary archive
+        if: ${{ matrix.build_type == 'Release' }}
+        working-directory: ${{ github.workspace }}/install/JediAcademy
+        shell: bash
+        run: |
+          chmod +x taystjk.${{ matrix.arch }}.app/Contents/MacOS/taystjk.${{ matrix.arch }}
+          chmod +x taystjkded.${{ matrix.arch }}
+          codesign --force --deep --sign - taystjk.${{ matrix.arch }}.app 
+          codesign --force --deep --sign - taystjkded.${{ matrix.arch }}
+          tar -czvf TaystJK-macos-${{ matrix.arch }}-${{ matrix.build_type }}-${{ matrix.portable }}.tar.gz *
+
+      - uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # v4.6.2
+        if: ${{ matrix.build_type == 'Release' }}
+        with:
+          name: TaystJK-macos-${{ matrix.arch }}-${{ matrix.build_type }}-${{ matrix.portable }}
+          path: ${{ github.workspace }}/install/JediAcademy/TaystJK-macos-${{ matrix.arch }}-${{ matrix.build_type }}-${{ matrix.portable }}.tar.gz
+          if-no-files-found: error
+
+  macos-arm64:
+    name: macOS ${{ matrix.arch }} ${{ matrix.build_type }} (${{ matrix.portable}})
+    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [arm64]
+        build_type: [Debug, Release]
+        portable: [Portable]
+
+    steps:
+      - uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2 # v4.2.2
+        if: github.event_name == 'pull_request'
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2 # v4.2.2
+        if: github.event_name != 'pull_request'
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Setup NASM
+        uses: ilammy/setup-nasm@72793074d3c8cdda771dba85f6deafe00623038b
+
+      - name: Create Build Environment
+        run: |
+          brew install sdl2
+          cmake -E make_directory ${{ github.workspace }}/build
+
+      - name: Configure CMake
+        shell: bash
+        working-directory: ${{ github.workspace }}/build
+        run: |
+          OPTIONS="-DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch }} -DCMAKE_SYSTEM_PROCESSOR=${{ matrix.arch }} -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/install"
+          if [ "${{ matrix.portable }}" == "Portable" ]; then
+            OPTIONS+=" -DBuildPortableVersion=ON -DUseTurboJPEG=ON"
+          else
+            OPTIONS+=" -DBuildPortableVersion=OFF -DUseTurboJPEG=ON"
+          fi
+          cmake $GITHUB_WORKSPACE $OPTIONS
+
+      - name: Build
+        working-directory: ${{ github.workspace }}/build
+        shell: bash
+        run: cmake --build . -j $(getconf _NPROCESSORS_ONLN)
+
+      - name: Install
+        if: ${{ matrix.build_type == 'Release' }}
+        working-directory: ${{ github.workspace }}/build
+        shell: bash
+        run: cmake --install .
+
+      - name: Create TaystJK binary archive
+        if: ${{ matrix.build_type == 'Release' }}
+        working-directory: ${{ github.workspace }}/install/JediAcademy
+        shell: bash
+        run: |
+          chmod +x taystjk.${{ matrix.arch }}.app/Contents/MacOS/taystjk.${{ matrix.arch }}
+          chmod +x taystjkded.${{ matrix.arch }}
+          codesign --force --deep --sign - taystjk.${{ matrix.arch }}.app 
+          codesign --force --deep --sign - taystjkded.${{ matrix.arch }}
+          tar -czvf TaystJK-macos-${{ matrix.arch }}-${{ matrix.build_type }}-${{ matrix.portable }}.tar.gz *
+
+      - uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # v4.6.2
+        if: ${{ matrix.build_type == 'Release' }}
+        with:
+          name: TaystJK-macos-${{ matrix.arch }}-${{ matrix.build_type }}-${{ matrix.portable }}
+          path: ${{ github.workspace }}/install/JediAcademy/TaystJK-macos-${{ matrix.arch }}-${{ matrix.build_type }}-${{ matrix.portable }}.tar.gz
+          if-no-files-found: error
+
+  macos-universal2:
+    name: macOS universal2 Binary
+    needs: [macos-x86_64, macos-arm64]
+    runs-on: macos-15
+
+    steps:
+      - name: Download x86_64 artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: TaystJK-macos-x86_64-Release-Portable
+          path: x86_64-build
+
+      - name: Download arm64 artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: TaystJK-macos-arm64-Release-Portable
+          path: arm64-build
+
+      - name: Extract archives
+        run: |
+          mkdir -p x86_64-extracted
+          mkdir -p arm64-extracted
+          tar -xzf x86_64-build/TaystJK-macos-x86_64-Release-Portable.tar.gz -C x86_64-extracted
+          tar -xzf arm64-build/TaystJK-macos-arm64-Release-Portable.tar.gz -C arm64-extracted
+
+      - name: Create Universal 2 Binary
+        run: |
+          mkdir -p universal2-app/JediAcademy/taystjk.app/Contents/{MacOS/taystjk,Resources,Frameworks}
+          mkdir -p universal2-app/JediAcademy/taystjk/
+
+          cp -R x86_64-extracted/taystjk.x86_64.app/Contents/Info.plist   universal2-app/JediAcademy/taystjk.app/Contents/
+          cp -R x86_64-extracted/taystjk.x86_64.app/Contents/PkgInfo      universal2-app/JediAcademy/taystjk.app/Contents/ 2>/dev/null || true
+          cp -R x86_64-extracted/taystjk.x86_64.app/Contents/Resources/*  universal2-app/JediAcademy/taystjk.app/Contents/Resources/
+          cp -R x86_64-extracted/taystjk/*                                universal2-app/JediAcademy/taystjk/
+
+          plutil -replace CFBundleExecutable -string "taystjk.ub2" universal2-app/JediAcademy/taystjk.app/Contents/Info.plist
+          plutil -replace LSArchitecturePriority -json '["arm64","x86_64"]' universal2-app/JediAcademy/taystjk.app/Contents/Info.plist
+
+          lipo -create -output "universal2-app/JediAcademy/taystjk.app/Contents/MacOS/taystjk.ub2" \
+            x86_64-extracted/taystjk.x86_64.app/Contents/MacOS/taystjk.x86_64 \
+            arm64-extracted/taystjk.arm64.app/Contents/MacOS/taystjk.arm64
+
+          lipo -create -output universal2-app/JediAcademy/taystjkded \
+            x86_64-extracted/taystjkded.x86_64 \
+            arm64-extracted/taystjkded.arm64
+
+          lipo -create -output universal2-app/JediAcademy/taystjk.app/Contents/Frameworks/libSDL2-2.0.0.dylib \
+            x86_64-extracted/taystjk.x86_64.app/Contents/Frameworks/libSDL2-2.0.0.dylib \
+            arm64-extracted/taystjk.arm64.app/Contents/Frameworks/libSDL2-2.0.0.dylib
+
+          cp -v x86_64-extracted/taystjk.x86_64.app/Contents/MacOS/rd-*_x86_64.dylib universal2-app/JediAcademy/taystjk.app/Contents/MacOS/
+          cp -v arm64-extracted/taystjk.arm64.app/Contents/MacOS/rd-*_arm64.dylib universal2-app/JediAcademy/taystjk.app/Contents/MacOS/
+
+          cp -v x86_64-extracted/taystjk.x86_64.app/Contents/MacOS/taystjk/*x86_64.dylib universal2-app/JediAcademy/taystjk.app/Contents/MacOS/taystjk/
+          cp -v arm64-extracted/taystjk.arm64.app/Contents/MacOS/taystjk/*arm64.dylib universal2-app/JediAcademy/taystjk.app/Contents/MacOS/taystjk/
+
+      - name: Create TaystJK binary archive
+        working-directory: ${{ github.workspace }}/universal2-app/JediAcademy/
+        shell: bash
+        run: |
+          chmod +x taystjk.app/Contents/MacOS/taystjk.ub2
+          chmod +x taystjkded
+          codesign --force --deep --sign - taystjk.app 
+          codesign --force --deep --sign - taystjkded
+          tar -czvf TaystJK-macos-universal2-Release-Portable.tar.gz *
+
+      - uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # v4.6.2
+        with:
+          name: TaystJK-macos-universal2-Release-Portable
+          path: universal2-app/JediAcademy/TaystJK-macos-universal2-Release-Portable.tar.gz
+          if-no-files-found: error
+
+  generate-release-body:
+    name: Generate Release Body
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/beta')
+    runs-on: ubuntu-22.04
+    outputs:
+      release_body: ${{ steps.generate.outputs.release_body }}
+    steps:
+      - uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Generate commit log
+        id: generate
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ github.event_name }}" == "push" ] && [ "${{ github.ref }}" == "refs/heads/beta" ]; then
+            TAG="latest-beta"
+          else
+            TAG="latest"
+          fi
+
+          LATEST_COMMIT=$(gh api repos/${{ github.repository }}/releases/tags/${TAG} --jq '.target_commitish' 2>/dev/null || echo "")
+
+          RELEASE_BODY="## Commits"
+
+          if [ -n "$LATEST_COMMIT" ] && git rev-parse --quiet --verify "$LATEST_COMMIT^{commit}" >/dev/null; then
+            COMMITS=$(git log $LATEST_COMMIT..HEAD --pretty=format:"%h|%s|%an")
+          else
+            COMMITS=$(git log -3 --pretty=format:"%h|%s|%an")
+          fi
+
+          while IFS='|' read -r hash subject author; do
+            if [[ $subject =~ ^Merge\ pull\ request\ \#([0-9]+) ]]; then
+              PR_NUM="${BASH_REMATCH[1]}"
+              PR_LINK=" [#${PR_NUM}](https://github.com/${{ github.repository }}/pull/${PR_NUM})"
+              RELEASE_BODY+=$'\n'"- $hash: $subject ($author)${PR_LINK}"
+            elif [[ $subject =~ \(#([0-9]+)\)$ ]]; then
+              PR_NUM="${BASH_REMATCH[1]}"
+              subject=$(echo "$subject" | sed 's/ (#[0-9]\+)$//')
+              PR_LINK=" [#${PR_NUM}](https://github.com/${{ github.repository }}/pull/${PR_NUM})"
+              RELEASE_BODY+=$'\n'"- $hash: $subject ($author)${PR_LINK}"
+            else
+              RELEASE_BODY+=$'\n'"- $hash: $subject ($author)"
+            fi
+          done <<< "$COMMITS"
+
+          EOF=$(dd if=/dev/urandom bs=15 count=1 status=none | base64)
+          echo "release_body<<$EOF" >> $GITHUB_OUTPUT
+          echo "$RELEASE_BODY" >> $GITHUB_OUTPUT
+          echo "$EOF" >> $GITHUB_OUTPUT
+
+  create-latest:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    needs: [msvc, ubuntu, macos-x86_64, macos-arm64, macos-universal2, generate-release-body]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2 # v4.2.2
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Download Artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: artifacts
+
+      - name: Create latest build
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete latest --cleanup-tag --yes 2>/dev/null || true
+
+          RELEASE_FILES=""
+          for artifact_dir in artifacts/*; do
+            if [ -d "$artifact_dir" ]; then
+              for file in "$artifact_dir"/*; do
+                if [ -f "$file" ]; then
+                  filename=$(basename "$file" | sed -e 's/-Release-Non-Portable//' -e 's/-Release-Portable//')
+                  cp "$file" "$filename"
+                  RELEASE_FILES="$RELEASE_FILES $filename"
+                fi
+              done
+            fi
+          done
+
+          gh release create latest \
+            --title "Latest Build" \
+            --notes "${{ needs.generate-release-body.outputs.release_body }}" \
+            --target ${{ github.sha }} \
+            $RELEASE_FILES
+
+  create-prerelease:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/beta'
+    needs: [msvc, ubuntu, macos-x86_64, macos-arm64, macos-universal2, generate-release-body]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2 # v4.2.2
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Download Artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: artifacts
+
+      - name: Create latest beta build
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete latest-beta --cleanup-tag --yes 2>/dev/null || true
+
+          RELEASE_FILES=""
+          for artifact_dir in artifacts/*; do
+            if [ -d "$artifact_dir" ]; then
+              for file in "$artifact_dir"/*; do
+                if [ -f "$file" ]; then
+                  filename=$(basename "$file" | sed -e 's/-Release-Non-Portable//' -e 's/-Release-Portable//')
+                  cp "$file" "$filename"
+                  RELEASE_FILES="$RELEASE_FILES $filename"
+                fi
+              done
+            fi
+          done
+
+          gh release create latest-beta \
+            --title "Beta Build" \
+            --notes "${{ needs.generate-release-body.outputs.release_body }}" \
+            --target ${{ github.sha }} \
+            --prerelease \
+            $RELEASE_FILES
+
+  create-release:
+    if: github.event_name == 'release'
+    needs: [msvc, ubuntu, macos-x86_64, macos-arm64, macos-universal2]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2 # v4.2.2
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Download Artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: artifacts
+
+      - name: Upload archives
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for artifact_dir in artifacts/*; do
+            if [ -d "$artifact_dir" ]; then
+              for file in "$artifact_dir"/*; do
+                if [ -f "$file" ]; then
+                  filename=$(basename "$file" | sed -e 's/-Release-Non-Portable//' -e 's/-Release-Portable//')
+                  gh release upload "${{ github.event.release.tag_name }}" \
+                    "$file" \
+                    --clobber \
+                    --name "$filename"
+                fi
+              done
+            fi
+          done

@@ -19,7 +19,7 @@
 # The <min>...<policy_max> syntax is needed to remain compatible with 3.1, but also newer versions that dropped 3.1 compatibility
 # More info here: https://cmake.org/cmake/help/latest/command/cmake_minimum_required.html
 cmake_minimum_required(VERSION 3.1...3.31)
-set(CMAKE_OSX_DEPLOYMENT_TARGET "10.11" CACHE STRING "Minimum OS X deployment version")
+set(CMAKE_OSX_DEPLOYMENT_TARGET "10.9" CACHE STRING "Minimum OS X deployment version")
 
 set(InOpenJK ON)
 
@@ -73,12 +73,9 @@ if(UseInternalLibs OR WIN32 OR APPLE)
     set(UseInternalJPEGDefault   ON)
     set(UseInternalSDL2Default   ON)
   else()
-    set(UseInternalZlibDefault ON)
-    set(UseInternalPNGDefault  ON)
     set(UseInternalJPEGDefault ON)
-    if(APPLE)
-        set(UseInternalSDL2Default ON)
-    endif()
+    set(UseInternalPNGDefault  ON)
+    set(UseInternalZlibDefault ON)
   endif()
 endif()
 
@@ -237,27 +234,6 @@ if(MSVC)
 		set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /arch:SSE2")
 	endif()
 
-	if(UseAddressSanitizer)
-		# MSVC ASan is incompatible with runtime checks, Edit and Continue,
-		# and incremental linking. RelWithDebInfo already provides /Zi.
-		foreach(flag_variable CMAKE_C_FLAGS_DEBUG CMAKE_CXX_FLAGS_DEBUG)
-			string(REPLACE "/RTC1" "" ${flag_variable} "${${flag_variable}}")
-			string(REPLACE "/RTCs" "" ${flag_variable} "${${flag_variable}}")
-			string(REPLACE "/RTCu" "" ${flag_variable} "${${flag_variable}}")
-			string(REPLACE "/ZI" "/Zi" ${flag_variable} "${${flag_variable}}")
-		endforeach()
-		add_compile_options(/fsanitize=address)
-		add_link_options(/INCREMENTAL:NO)
-
-		# The bundled Discord RPC library is prebuilt without MSVC's ASan
-		# annotations for std::string and std::vector. Linking it into an
-		# annotated binary fails with LNK2038, so omit it from diagnostic builds.
-		if(BuildDiscordRichPresence)
-			message(STATUS "MSVC ASan: disabling incompatible prebuilt Discord RPC library")
-			set(BuildDiscordRichPresence OFF)
-		endif()
-	endif()
-
 	# Configure MSVC Runtime
 	include(MSVCRuntime)
 	if(NOT DEFINED MSVC_RUNTIME)
@@ -283,12 +259,9 @@ elseif (("${CMAKE_C_COMPILER_ID}" STREQUAL "GNU") OR ("${CMAKE_C_COMPILER_ID}" M
 	set(CMAKE_SHARED_LIBRARY_LINK_CXX_FLAGS "")
 
 	if(UseAddressSanitizer)
-		add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
-		add_link_options(-fsanitize=address)
-		if(NOT APPLE)
-			# raise stack size to 64MiB, since the sanitizer adds overhead to stack frames
-			add_link_options(-z stack-size=0x4000000)
-		endif()
+		# also raise stack size drastically (to 64MiB), since the sanitizer adds overhead to stack frames
+		add_compile_options(-fsanitize=address)
+		add_link_options(-fsanitize=address -z stack-size=4000000)
 	endif()
 	if(UseUndefinedSanitizer)
 		add_compile_options(-fsanitize=undefined)

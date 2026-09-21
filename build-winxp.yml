@@ -1,0 +1,217 @@
+name: build-winxp
+
+# runs every 4 months
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 0 1 */4 *"
+  release:
+    types: [published]
+
+jobs:
+  msvc-xp:
+    name: WinXP ${{ matrix.arch }} ${{ matrix.build_type }} (${{ matrix.portable }})
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86, x86_64]
+        build_type: [Release]
+        portable: [Portable]
+        include:
+          - arch: x86
+            platform: Win32
+          - arch: x86_64
+            platform: x64
+
+    steps:
+      - uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2 # v4.2.2
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Install Windows XP Support for Visual Studio
+        run: |
+          Set-Location "C:\Program Files (x86)\Microsoft Visual Studio\Installer\"
+          $InstallPath = "C:\Program Files\Microsoft Visual Studio\2022\Enterprise"
+          $componentsToAdd = @(
+            "Microsoft.VisualStudio.Component.WinXP"
+          )
+          [string]$workloadArgs = $componentsToAdd | ForEach-Object {" --add " +  $_}
+          $Arguments = ('/c', "vs_installer.exe", 'modify', '--installPath', "`"$InstallPath`"",$workloadArgs, '--quiet', '--norestart', '--nocache')
+          $process = Start-Process -FilePath cmd.exe -ArgumentList $Arguments -Wait -PassThru -WindowStyle Hidden
+          if ($process.ExitCode -eq 0)
+          {
+              Write-Host "components have been successfully added"
+              Get-ChildItem C:\ProgramData\Microsoft\VisualStudio\Packages\Microsoft.Windows.XPSupport.*
+          }
+          else
+          {
+              Write-Host "components were not installed"
+              exit 1
+          }
+
+      - name: Add msbuild to PATH
+        shell: pwsh
+        run: |
+          $vsWhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsPath = & $vsWhere -latest -products * -requires Microsoft.Component.MSBuild -property installationPath
+          
+          if ($vsPath) {
+            Write-Host "Found Visual Studio at: $vsPath"
+          
+            $msBuildPath = Get-ChildItem -Path "$vsPath\MSBuild\Current\Bin\MSBuild.exe" -ErrorAction SilentlyContinue |
+                           Select-Object -First 1 -ExpandProperty Directory
+          
+            if ($msBuildPath) {
+              Write-Host "Found MSBuild at: $msBuildPath"
+              echo "$msBuildPath" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          
+              $env:PATH = "$msBuildPath;$env:PATH"
+            } else {
+              throw "MSBuild not found in VS installation"
+            }
+          } else {
+            throw "Visual Studio installation not found"
+          }
+
+      - name: Create Build Environment
+        run: cmake -E make_directory ${{ github.workspace }}/build
+
+      - name: Configure CMake
+        shell: bash
+        working-directory: ${{ github.workspace }}/build
+        run: |
+          OPTIONS="-DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DCMAKE_INSTALL_PREFIX=bin"
+          if [ "${{ matrix.portable }}" == "Portable" ]; then
+            OPTIONS+=" -DBuildPortableVersion=ON"
+          else
+            OPTIONS+=" -DBuildPortableVersion=OFF"
+          fi
+          cmake $GITHUB_WORKSPACE -T v141_xp -A ${{ matrix.platform }} $OPTIONS
+
+      - name: Build
+        working-directory: ${{ github.workspace }}/build
+        shell: bash
+        run: cmake --build . --config ${{ matrix.build_type }} -j $NUMBER_OF_PROCESSORS
+
+      - name: Install
+        if: ${{ matrix.build_type == 'Release' }}
+        working-directory: ${{ github.workspace }}/build
+        shell: bash
+        run: cmake --install . --config ${{ matrix.build_type }}
+
+      - name: Create Archive
+        if: ${{ matrix.build_type == 'Release' }}
+        working-directory: ${{ github.workspace }}/build/bin/JediAcademy
+        shell: bash
+        run: |
+          7z a -r TaystJK-windowsxp-${{ matrix.arch }}-${{ matrix.build_type }}-${{ matrix.portable }}.zip *
+
+      - uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # v4.6.2
+        if: ${{ matrix.build_type == 'Release' }}
+        with:
+          name: TaystJK-windowsxp-${{ matrix.arch }}-${{ matrix.build_type }}-${{ matrix.portable }}
+          path: ${{ github.workspace }}/build/bin/JediAcademy/TaystJK-windowsxp-${{ matrix.arch }}-${{ matrix.build_type }}-${{ matrix.portable }}.zip
+          if-no-files-found: error
+
+  create-winxp:
+    if: (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && github.ref == 'refs/heads/master'
+    needs: [msvc-xp]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2 # v4.2.2
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Download Artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: artifacts
+
+      - name: Create latest XP build
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          LATEST_RELEASE_COMMIT=$(gh api repos/${{ github.repository }}/releases/tags/winxp --jq '.target_commitish' 2>/dev/null || echo "")
+          gh release delete winxp --cleanup-tag --yes 2>/dev/null || true
+
+          RELEASE_BODY="## Commits"
+
+          if [ -n "$LATEST_RELEASE_COMMIT" ] && git rev-parse --quiet --verify "$LATEST_RELEASE_COMMIT^{commit}" >/dev/null; then
+            COMMITS=$(git log $LATEST_RELEASE_COMMIT..HEAD --pretty=format:"%h|%s|%an")
+          else
+            COMMITS=$(git log -3 --pretty=format:"%h|%s|%an")
+          fi
+
+          while IFS='|' read -r hash subject author; do
+            if [[ $subject =~ ^Merge\ pull\ request\ \#([0-9]+) ]]; then
+              PR_NUM="${BASH_REMATCH[1]}"
+              PR_LINK=" [#${PR_NUM}](https://github.com/${{ github.repository }}/pull/${PR_NUM})"
+              RELEASE_BODY+=$'\n'"- $hash: $subject ($author)${PR_LINK}"
+            elif [[ $subject =~ \(#([0-9]+)\)$ ]]; then
+              PR_NUM="${BASH_REMATCH[1]}"
+              subject=$(echo "$subject" | sed 's/ (#[0-9]\+)$//')
+              PR_LINK=" [#${PR_NUM}](https://github.com/${{ github.repository }}/pull/${PR_NUM})"
+              RELEASE_BODY+=$'\n'"- $hash: $subject ($author)${PR_LINK}"
+            else
+              RELEASE_BODY+=$'\n'"- $hash: $subject ($author)"
+            fi
+          done <<< "$COMMITS"
+
+          RELEASE_FILES=""
+          for artifact_dir in artifacts/*; do
+            if [ -d "$artifact_dir" ]; then
+              for file in "$artifact_dir"/*; do
+                if [ -f "$file" ]; then
+                  filename=$(basename "$file" | sed -e 's/-Release-Non-Portable//' -e 's/-Release-Portable//')
+                  cp "$file" "$filename"
+                  RELEASE_FILES="$RELEASE_FILES $filename"
+                fi
+              done
+            fi
+          done
+
+          gh release create winxp \
+            --title "Latest WinXP Build" \
+            --notes "$RELEASE_BODY" \
+            --target ${{ github.sha }} \
+            $RELEASE_FILES
+
+  create-release-winxp:
+    if: github.event_name == 'release'
+    needs: [msvc-xp]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2 # v4.2.2
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Download Artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: artifacts
+
+      - name: Upload archives
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for artifact_dir in artifacts/*; do
+            if [ -d "$artifact_dir" ]; then
+              for file in "$artifact_dir"/*; do
+                if [ -f "$file" ]; then
+                  filename=$(basename "$file" | sed -e 's/-Release-Non-Portable//' -e 's/-Release-Portable//')
+                  gh release upload "${{ github.event.release.tag_name }}" \
+                    "$file" \
+                    --clobber \
+                    --name "$filename"
+                fi
+              done
+            fi
+          done
