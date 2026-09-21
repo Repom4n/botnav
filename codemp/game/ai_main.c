@@ -10145,6 +10145,76 @@ static float NewBotAI_GetEnemyClosingSpeed(bot_state_t *bs)
 	return DotProduct(bs->currentEnemy->client->ps.velocity, toUs);
 }
 
+static qboolean NewBotAI_IsEnemyCollapsePressure(bot_state_t *bs)
+{
+	float closingSpeed;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return qfalse;
+	}
+	closingSpeed = NewBotAI_GetEnemyClosingSpeed(bs);
+	if (!bs->frame_Enemy_Vis || bs->frame_Enemy_Len < 80.0f || bs->frame_Enemy_Len > 320.0f)
+	{
+		return qfalse;
+	}
+	if (bs->currentEnemy->client->ps.weapon != WP_SABER)
+	{
+		return qfalse;
+	}
+
+	return (closingSpeed >= 220.0f) ? qtrue : qfalse;
+}
+
+static qboolean NewBotAI_ShouldPreDefenseAgainstCollapse(bot_state_t *bs)
+{
+	int ourHealth;
+	int hisHealth;
+	int ourForce;
+	int hisForce;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return qfalse;
+	}
+	ourHealth = g_entities[bs->client].health;
+	hisHealth = bs->currentEnemy->health;
+	ourForce = bs->cur_ps.fd.forcePower;
+	hisForce = bs->currentEnemy->client->ps.fd.forcePower;
+
+	if (!NewBotAI_IsEnemyCollapsePressure(bs))
+	{
+		return qfalse;
+	}
+	if (ourForce > hisForce + 10 && ourHealth > hisHealth + 10)
+	{
+		return qfalse;
+	}
+
+	return qtrue;
+}
+
+static qboolean NewBotAI_IsStablePTKCommitWindow(bot_state_t *bs)
+{
+	const float closingSpeed = NewBotAI_GetEnemyClosingSpeed(bs);
+
+	if (!bs)
+	{
+		return qfalse;
+	}
+	if (!bs->frame_Enemy_Vis || bs->frame_Enemy_Len < 96.0f || bs->frame_Enemy_Len > 384.0f)
+	{
+		return qfalse;
+	}
+	/* Avoid forcing PTK in chaotic collapse windows or when the target is disengaging hard. */
+	if (closingSpeed > 260.0f || closingSpeed < -120.0f)
+	{
+		return qfalse;
+	}
+
+	return qtrue;
+}
+
 enum
 {
 	NEWBOTAI_PULL_TIMING_NONE,
@@ -12596,6 +12666,10 @@ static int NewBotAI_GetPTKWeight(bot_state_t *bs)
 	{
 		return 0;
 	}
+	if (!NewBotAI_IsStablePTKCommitWindow(bs) && hisHealth > 30)
+	{
+		return 0;
+	}
 
 	//Item 6: a knocked-down opponent is the prime PTK window (they cannot defend the pull
 	//or the kick while getting up), so weight it heavily.
@@ -12714,6 +12788,13 @@ static int NewBotAI_GetPTKWeight(bot_state_t *bs)
 		bs->lastGripkickSuccessTime < level.time - 3500)
 	{
 		weight -= 10;
+	}
+	if (bs->cur_ps.fd.forcePowerSelected == FP_PULL &&
+		bs->lastGripkickSuccessTime < level.time - 5000 &&
+		NewBotAI_IsEnemyCollapsePressure(bs))
+	{
+		/* Anti-counter adaptation: stop re-forcing stale pull entries into fast punish lanes. */
+		weight -= 25;
 	}
 
 	weight += BotGetAggressionWeightedBonus(bs, aggressionWeight, 35, qtrue);
@@ -14142,6 +14223,8 @@ int NewBotAI_GetPull(bot_state_t *bs) {
 		return 0; //dont need to pull, we are so close
 	if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE)
 		return 0; //pull-kicks must be initiated from the ground
+	if (NewBotAI_ShouldPreDefenseAgainstCollapse(bs) && ourForce < 55)
+		return 0;
 	if (g_flipKick.integer && NewBotAI_CanAttemptFlipkick(bs) && bs->frame_Enemy_Len <= NEWBOTAI_IMMEDIATE_FLIPKICK_RANGE)
 		return 0; //already in immediate flipkick range: don't overshoot by pulling
 	if (!bs->frame_Enemy_Vis)
@@ -14176,6 +14259,11 @@ int NewBotAI_GetPull(bot_state_t *bs) {
 	{
 		//PTK-weighted window but not enough bank for the full pull+throw budget yet:
 		//conserve briefly and re-enter PTK once we cross the budget threshold.
+		return 0;
+	}
+	if (ptkWeight > 0 && !NewBotAI_IsStablePTKCommitWindow(bs) && hisHealth > 25)
+	{
+		/* Commit-quality gate: only force PTK when range/timing lane is stable. */
 		return 0;
 	}
 	if (ptkWeight <= 0 && ourForce <= 30 && hisForce >= ourForce)
@@ -14632,6 +14720,8 @@ int NewBotAI_GetDrain(bot_state_t *bs) {
 	if (bs->cur_ps.saberInFlight)
 		return 0; //never drain while our saber is mid-flight
 	if (bs->frame_Enemy_Len > MAX_DRAIN_DISTANCE)
+		return 0;
+	if (NewBotAI_ShouldPreDefenseAgainstCollapse(bs) && !NewBotAI_IsPullkickDrainWindow(bs))
 		return 0;
 	if (ourForce < 25)
 		return 0;
