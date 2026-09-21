@@ -4461,12 +4461,11 @@ void ClientThink_real( gentity_t *ent ) {
 				{
 					if (duelAgainst && duelAgainst->client)
 					{
-						G_ArcadeClearDuelPairState(ent, duelAgainst);
+						G_ClearTrackedDuelClientState(duelAgainst->s.number);
+						dueltypes[duelAgainst->s.number] = 0;
 					}
-					else
-					{
-						G_ArcadeClearDuelState(ent, qtrue);
-					}
+					G_ClearTrackedDuelClientState(ent->s.number);
+					dueltypes[ent->s.number] = 0;
 				}
 				else if (ent->health > 0 && ent->client->ps.stats[STAT_HEALTH] > 0)
 				{
