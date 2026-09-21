@@ -372,7 +372,7 @@ void WP_InitForcePowers( gentity_t *ent ) {
 				didEvent = qtrue;
 
 				if ( !(ent->r.svFlags & SVF_BOT) && ent->s.eType != ET_NPC ) {
-					if ( !g_teamAutoJoin.integer ) {
+					if ( !g_teamAutoJoin.integer && level.gametype != GT_ARCADE ) {
 						// make them a spectator so they can set their powerups up without being bothered.
 						ent->client->sess.sessionTeam = TEAM_SPECTATOR;
 						ent->client->sess.spectatorState = SPECTATOR_FREE;
