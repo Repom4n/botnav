@@ -1903,6 +1903,7 @@ void QDECL G_SecurityLogPrintf( const char *fmt, ... );
 void SendScoreboardMessageToAllClients( void );
 const char *G_GetStringEdString(char *refSection, char *refName);
 void G_ArcadeResetClientRunState(int clientNum);
+void G_ArcadeClearClientParticipationState(int clientNum);
 void G_ArcadeHandlePlayerDeath(gentity_t *self, gentity_t *attacker);
 void G_AddArcadeScore(const char *username, const char *mapname, int score, int level, int kills, int end_time);
 qboolean G_GetArcadeTopScore(const char *mapname, int *scoreOut, char *usernameOut, int usernameOutSize);

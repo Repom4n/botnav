@@ -2917,7 +2917,11 @@ char *ClientConnect( int clientNum, qboolean firstTime, qboolean isBot ) {
 	// they can connect
 	client = &level.clients[ clientNum ];
 	ent->client = client;
-	if (level.gametype != GT_ARCADE || firstTime || level.newSession)
+	if (level.gametype == GT_ARCADE)
+	{
+		G_ArcadeClearClientParticipationState(clientNum);
+	}
+	else
 	{
 		G_ArcadeResetClientRunState(clientNum);
 	}

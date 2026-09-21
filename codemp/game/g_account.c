@@ -1288,12 +1288,7 @@ static void G_MaybeQueueBotTutorial(tracked_duel_runtime_t *loserRuntime, gentit
 		const int queuedCountBefore = g_botTutorialQueues[botClientNum].queuedCount;
 		const qboolean queueWasEmpty = (queuedCountBefore <= g_botTutorialQueues[botClientNum].nextMessageIndex);
 
-		if (session->duelsSeen <= 1)
 		G_QueueManualBasicsAdvice(botClientNum, loser->s.number, session->duelsSeen - 1, session);
-		else
-		{
-		G_QueueManualMetaAdvice(botClientNum, loser->s.number, session->duelsSeen, session);
-		}
 		G_MaybeQueueTrackedLoginAdvice(botClientNum, loser->s.number, session, loggedIn);
 		if (g_botTutorialQueues[botClientNum].queuedCount > queuedCountBefore)
 		{
@@ -1443,13 +1438,9 @@ void G_QueueArcadeBotTutorial(gentity_t *speaker, gentity_t *listener, int round
 
 	if (betweenRounds)
 	{
-		if (rotation <= 2)
+		if (rotation <= TRACKED_DUEL_ADVICE_BASIC_WINDOW)
 		{
 			G_QueueManualBasicsAdvice(speaker->s.number, listener->s.number, rotation, NULL);
-		}
-		else if ((rotation % 2) == 0)
-		{
-			G_QueueManualMetaAdvice(speaker->s.number, listener->s.number, rotation, NULL);
 		}
 		else
 		{
@@ -1458,7 +1449,18 @@ void G_QueueArcadeBotTutorial(gentity_t *speaker, gentity_t *listener, int round
 	}
 	else
 	{
-		G_QueueManualGenericAdvice(speaker->s.number, listener->s.number, NULL, qfalse, NULL);
+		if (rotation <= TRACKED_DUEL_ADVICE_BASIC_WINDOW)
+		{
+			G_QueueManualBasicsAdvice(speaker->s.number, listener->s.number, rotation, NULL);
+		}
+		else if (rotation <= TRACKED_DUEL_ADVICE_BASIC_WINDOW + 3)
+		{
+			G_QueueManualIntermediateAdvice(speaker->s.number, listener->s.number, rotation, NULL);
+		}
+		else
+		{
+			G_QueueManualGenericAdvice(speaker->s.number, listener->s.number, NULL, qfalse, NULL);
+		}
 	}
 
 	if (queue->queuedCount > queue->nextMessageIndex)
