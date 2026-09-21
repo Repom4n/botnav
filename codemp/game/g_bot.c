@@ -35,6 +35,8 @@ static struct botSpawnQueue_s {
 	int		spawnTime;
 } botSpawnQueue[BOT_SPAWN_QUEUE_DEPTH];
 
+static void G_AddBot( const char *name, float skill, const char *team, int delay, char *altname, qboolean arcadeManaged );
+
 vmCvar_t bot_minplayers;
 
 float trap_Cvar_VariableValue( const char *var_name ) {
@@ -558,7 +560,7 @@ static void G_AddRandomBotInternal( int team, qboolean arcadeManaged ) {
 				Q_strncpyz(netname, value, sizeof(netname));
 				Q_CleanStr(netname);
 				if (arcadeManaged)
-					trap->SendConsoleCommand( EXEC_INSERT, va("addbot \"%s\" %.2f %s %i \"\" 1\n", netname, skill, (teamstr[0] ? teamstr : "free"), 0) );
+					G_AddBot(netname, skill, (teamstr[0] ? teamstr : "free"), 0, "", qtrue);
 				else
 					trap->SendConsoleCommand( EXEC_INSERT, va("addbot \"%s\" %.2f %s %i\n", netname, skill, teamstr, 0) );
 				return;
