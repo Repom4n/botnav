@@ -1023,6 +1023,7 @@ static void G_ArcadeFinishRound(qboolean gameOver, qboolean arcadeComplete)
 	}
 
 	G_ArcadeKickAllBots();
+	level.arcadeCleanupRetryTime = 0;
 	level.arcadeRoundBotsTarget = 0;
 }
 
