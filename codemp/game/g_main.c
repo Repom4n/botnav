@@ -1014,7 +1014,16 @@ static void G_ArcadeStartRound(void)
 		level.arcadeCleanupRetryBudget = 0;
 		return;
 	}
-	targetBots = successfulAdds;
+	targetBots = G_ArcadeCountAliveBots();
+	if (targetBots <= 0)
+	{
+		level.arcadeRoundBotsTarget = 0;
+		level.arcadeRoundQueuedStart = level.time + ARCADE_JOIN_QUEUE_DELAY_MS;
+		level.arcadeCleanupRetryTime = 0;
+		level.arcadeCleanupPendingBots = 0;
+		level.arcadeCleanupRetryBudget = 0;
+		return;
+	}
 	for (i = 0; i < MAX_CLIENTS; i++)
 	{
 		gentity_t *ent = &g_entities[i];
