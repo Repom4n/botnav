@@ -4904,11 +4904,15 @@ void ClientDisconnect( int clientNum ) {
 		gentity_t *duelAgainst = &g_entities[ent->client->ps.duelIndex];
 
 		G_ClearTrackedDuelIfMismatched(ent, duelAgainst);
-		if (duelAgainst->client) {
+		if (duelAgainst->client &&
+			!G_IsArcadeManagedBot(ent) &&
+			!G_IsArcadeManagedBot(duelAgainst)) {
 			G_FinishTrackedDuel(duelAgainst, ent, dueltypes[ent->client->ps.clientNum], qfalse);
 		}
 
-		if (ent->client->pers.lastUserName[0] && duelAgainst->client && duelAgainst->client->pers.lastUserName[0]) {
+		if (ent->client->pers.lastUserName[0] && duelAgainst->client && duelAgainst->client->pers.lastUserName[0] &&
+			!G_IsArcadeManagedBot(ent) &&
+			!G_IsArcadeManagedBot(duelAgainst)) {
 			//Trying to dodge the duel, no no no
 			if (!(ent->client->sess.accountFlags & JAPRO_ACCOUNTFLAG_NODUEL) && !(duelAgainst->client->sess.accountFlags & JAPRO_ACCOUNTFLAG_NODUEL))
 			{
