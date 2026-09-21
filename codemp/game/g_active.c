@@ -4459,6 +4459,16 @@ void ClientThink_real( gentity_t *ent ) {
 			if (!ent->client->sess.raceMode) {
 				if (G_IsArcadeManagedBot(ent) || G_IsArcadeManagedBot(duelAgainst))
 				{
+					ent->client->ps.duelInProgress = qfalse;
+					ent->client->ps.duelIndex = ENTITYNUM_NONE;
+					ent->client->pers.duelStartTime = 0;
+					duelAgainst->client->ps.duelInProgress = qfalse;
+					duelAgainst->client->ps.duelIndex = ENTITYNUM_NONE;
+					duelAgainst->client->pers.duelStartTime = 0;
+					if (G_IsArcadeManagedBot(ent))
+						dueltypes[ent->s.number] = 0;
+					if (G_IsArcadeManagedBot(duelAgainst))
+						dueltypes[duelAgainst->s.number] = 0;
 					G_ClearTrackedDuelClientState(ent->s.number);
 					G_ClearTrackedDuelClientState(duelAgainst->s.number);
 				}
