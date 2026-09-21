@@ -3762,7 +3762,7 @@ void ClientThink_real( gentity_t *ent ) {
 	}
 
 	if (!isNPC && client->sess.sessionTeam == TEAM_FREE && !g_raceMode.integer) {
-		if (client->ps.stats[STAT_RACEMODE] || level.gametype >= GT_TEAM) {
+		if (client->ps.stats[STAT_RACEMODE] || (level.gametype >= GT_TEAM && level.gametype != GT_ARCADE)) {
 			SetTeam ( ent, "spectator", qtrue );
 			client->sess.raceMode = qfalse;
 			client->ps.stats[STAT_RACEMODE] = qfalse;

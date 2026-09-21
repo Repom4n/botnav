@@ -1374,6 +1374,11 @@ void SetTeam( gentity_t *ent, char *s, qboolean forcedToJoin ) {//JAPRO - Modifi
 
 	oldTeam = client->sess.sessionTeam;
 
+	if (level.gametype == GT_ARCADE && team == TEAM_SPECTATOR && !forcedToJoin)
+	{
+		G_ArcadeClearClientParticipationState(clientNum);
+	}
+
 	if (level.gametype == GT_SIEGE)
 	{
 		if (client->tempSpectate >= level.time &&
@@ -1462,6 +1467,34 @@ void SetTeam( gentity_t *ent, char *s, qboolean forcedToJoin ) {//JAPRO - Modifi
 		level.numNonSpectatorClients >= g_maxGameClients.integer )
 	{
 		team = TEAM_SPECTATOR;
+	}
+
+	if (level.gametype == GT_ARCADE &&
+		!forcedToJoin &&
+		team != TEAM_SPECTATOR &&
+		oldTeam == TEAM_SPECTATOR)
+	{
+		const qboolean alreadyQueued = level.arcadeParticipant[clientNum];
+
+		if (!alreadyQueued)
+		{
+			G_ArcadeResetClientRunState(clientNum);
+		}
+
+		level.arcadeParticipant[clientNum] = qtrue;
+		level.arcadeEliminated[clientNum] = (level.arcadeRoundStartTime > 0) ? qtrue : qfalse;
+		client->sess.spectatorState = SPECTATOR_FREE;
+		client->sess.spectatorClient = 0;
+
+		if (level.arcadeRoundStartTime > 0 || level.arcadeGameOverTime || level.arcadeRoundQueuedStart)
+		{
+			trap->SendServerCommand(ent-g_entities, "print \"Arcade: you will join next round.\n\"");
+		}
+		else
+		{
+			trap->SendServerCommand(ent-g_entities, "print \"Arcade: queued for the next round.\n\"");
+		}
+		return;
 	}
 
 	//

@@ -381,7 +381,7 @@ int G_ArcadeCountIngameHumans(void)
 		{
 			continue;
 		}
-		if (ent->client->sess.sessionTeam == TEAM_FREE)
+		if (ent->client->sess.sessionTeam == TEAM_FREE || level.arcadeParticipant[i])
 		{
 			count++;
 		}
@@ -400,7 +400,7 @@ static int G_ArcadeCountOccupiedHumans(void)
 		{
 			continue;
 		}
-		if (ent->client->sess.sessionTeam == TEAM_FREE)
+		if (ent->client->sess.sessionTeam == TEAM_FREE || level.arcadeParticipant[i])
 		{
 			count++;
 		}
@@ -1021,7 +1021,7 @@ static void G_ArcadeStartRound(void)
 		const qboolean wasParticipant = level.arcadeParticipant[i];
 		const qboolean shouldParticipate = ent->inuse && ent->client && !(ent->r.svFlags & SVF_BOT) &&
 			ent->client->pers.connected == CON_CONNECTED &&
-			ent->client->sess.sessionTeam == TEAM_FREE;
+			(ent->client->sess.sessionTeam == TEAM_FREE || level.arcadeParticipant[i]);
 		const int savedScore = level.arcadeScore[i];
 		const int savedTotalKills = level.arcadeTotalKills[i];
 		if (!ent->inuse || !ent->client || (ent->r.svFlags & SVF_BOT) ||
