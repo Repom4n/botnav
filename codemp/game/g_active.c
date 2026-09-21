@@ -4457,15 +4457,11 @@ void ClientThink_real( gentity_t *ent ) {
 //[JAPRO - Serverside - Duel - Improve/fix duel end print - Start]
 			//Show ranked, elo change? kms
 			if (!ent->client->sess.raceMode) {
+				qboolean cleanupArcadeManagedDuel = qfalse;
+
 				if (G_IsArcadeManagedBot(ent) || G_IsArcadeManagedBot(duelAgainst))
 				{
-					if (duelAgainst && duelAgainst->client)
-					{
-						G_ClearTrackedDuelClientState(duelAgainst->s.number);
-						dueltypes[duelAgainst->s.number] = 0;
-					}
-					G_ClearTrackedDuelClientState(ent->s.number);
-					dueltypes[ent->s.number] = 0;
+					cleanupArcadeManagedDuel = qtrue;
 				}
 				else if (ent->health > 0 && ent->client->ps.stats[STAT_HEALTH] > 0)
 				{
@@ -4536,6 +4532,17 @@ void ClientThink_real( gentity_t *ent ) {
 				}
 				ent->client->pers.stats.duelDamageGiven = 0;
 				duelAgainst->client->pers.stats.duelDamageGiven = 0;
+				if (cleanupArcadeManagedDuel)
+				{
+					if (duelAgainst && duelAgainst->client)
+					{
+						G_ArcadeClearDuelPairState(ent, duelAgainst);
+					}
+					else
+					{
+						G_ArcadeClearDuelState(ent, qtrue);
+					}
+				}
 			}
 //[JAPRO - Serverside - Duel - Improve/fix duel end print - End]
 		}
