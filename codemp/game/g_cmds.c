@@ -1540,12 +1540,12 @@ void SetTeam( gentity_t *ent, char *s, qboolean forcedToJoin ) {//JAPRO - Modifi
 
 	if (client->ps.duelInProgress) {
 		gentity_t *duelAgainst = NULL;
-		qboolean arcadeManagedDuel = qfalse;
+		qboolean arcadeManagedDuel = G_IsArcadeManagedBot(ent) ? qtrue : qfalse;
 
 		if (client->ps.duelIndex >= 0 && client->ps.duelIndex < MAX_CLIENTS)
 		{
 			duelAgainst = &g_entities[client->ps.duelIndex];
-			arcadeManagedDuel = (G_IsArcadeManagedBot(ent) || G_IsArcadeManagedBot(duelAgainst)) ? qtrue : qfalse;
+			arcadeManagedDuel = (arcadeManagedDuel || G_IsArcadeManagedBot(duelAgainst)) ? qtrue : qfalse;
 		}
 
 		G_ClearTrackedDuelIfMismatched(ent, duelAgainst);
