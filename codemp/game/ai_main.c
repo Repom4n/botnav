@@ -11627,7 +11627,7 @@ static int BotGetNewBotAITargetMode(void)
 }
 
 //-3 and -4 both prefer human targets first, then fall back to allowing bot-vs-bot
-//targeting once no humans are active; only -4 uses duel challenge flow.
+//targeting once no humans are active; only -4 stays force-duel-only while searching.
 static qboolean BotTargetModePrefersHumansThenBots(int targetMode)
 {
 	return (targetMode == NEWBOTAI_TARGET_PREFER_HUMANS || targetMode == NEWBOTAI_TARGET_PREFER_HUMANS_DUEL);
@@ -11635,12 +11635,13 @@ static qboolean BotTargetModePrefersHumansThenBots(int targetMode)
 
 static qboolean BotTargetModeAllowsBotDuelChallenges(int targetMode)
 {
-	return (targetMode == NEWBOTAI_TARGET_PREFER_HUMANS_DUEL);
+	return (targetMode == NEWBOTAI_TARGET_PREFER_HUMANS ||
+		targetMode == NEWBOTAI_TARGET_PREFER_HUMANS_DUEL);
 }
 
 static qboolean BotTargetModeUsesExtendedBotDuelCooldown(int targetMode)
 {
-	return (targetMode == NEWBOTAI_TARGET_PREFER_HUMANS_DUEL);
+	return BotTargetModeAllowsBotDuelChallenges(targetMode);
 }
 
 static qboolean BotTargetModeIsForceDuelOnly(int targetMode)
@@ -16649,13 +16650,14 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	someonesHere = BotHasActiveHumanPlayers();
 
 	//Count completed duels: once we hit bot_duelcountmax, -3/-4 go back to FFA for a
-	//while. For -4 that means exploring for a new opponent for bot_ffaexploretime ms.
+	//while and stop immediately re-locking the same bot after a duel ends.
 	if (bs->wasDuelInProgress && !bs->cur_ps.duelInProgress &&
 		BotTargetModeAllowsBotDuelChallenges(targetMode))
 	{
 		if (oldEnemy && (g_entities[bs->client].r.svFlags & SVF_BOT) && (oldEnemy->r.svFlags & SVF_BOT))
 		{
 			bot_state_t *oldEnemyBS = NULL;
+			const int blacklistUntil = level.time + NEWBOTAI_DUEL_TARGET_BLACKLIST_MS;
 			const int duelCooldownMs = NewBotAI_GetDuelRequestCooldownMs(
 				NEWBOTAI_DUEL_REQUEST_COOLDOWN_MS,
 				NEWBOTAI_DUEL_REQUEST_BOT_VS_BOT_COOLDOWN_MS,
@@ -16665,6 +16667,21 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 			if (oldEnemy->s.number >= 0 && oldEnemy->s.number < MAX_CLIENTS)
 			{
 				oldEnemyBS = botstates[oldEnemy->s.number];
+			}
+			bs->duelBlacklistIndex = oldEnemy->s.number;
+			bs->duelBlacklistUntil = blacklistUntil;
+			if (bs->currentEnemy == oldEnemy)
+			{
+				NewBotAI_ClearCurrentEnemyLock(bs);
+			}
+			if (oldEnemyBS)
+			{
+				oldEnemyBS->duelBlacklistIndex = bs->client;
+				oldEnemyBS->duelBlacklistUntil = blacklistUntil;
+				if (oldEnemyBS->currentEnemy == &g_entities[bs->client])
+				{
+					NewBotAI_ClearCurrentEnemyLock(oldEnemyBS);
+				}
 			}
 			if (duelCooldownMs > 0)
 			{
@@ -16688,7 +16705,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 				bs->duelBlacklistIndex = bs->currentEnemy->s.number;
 				bs->duelBlacklistUntil = level.time + NEWBOTAI_DUEL_TARGET_BLACKLIST_MS;
 			}
-			if (targetMode == NEWBOTAI_TARGET_PREFER_HUMANS_DUEL)
+			if (bot_ffaexploretime.integer > 0)
 			{
 				bs->ffaExploreUntil = level.time + bot_ffaexploretime.integer;
 			}

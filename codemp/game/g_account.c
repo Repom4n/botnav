@@ -3058,12 +3058,13 @@ void G_AddDuel(char *winner, char *loser, int start_time, int type, int winner_h
 	sqlite3 * db;
 	time_t	rawtime;
 	char	string[256] = {0};
+	const int duelLogType = (level.gametype == GT_ARCADE) ? 21 : type;
 	const int duration = start_time ? (level.time - start_time) : 0;
 
 	time( &rawtime );
 	localtime( &rawtime );
 
-	Com_sprintf(string, sizeof(string), "%s;%s;%i;%i;%i;%i;%i\n", winner, loser, duration, type, winner_hp, winner_shield, rawtime);
+	Com_sprintf(string, sizeof(string), "%s;%s;%i;%i;%i;%i;%i\n", winner, loser, duration, duelLogType, winner_hp, winner_shield, rawtime);
 
 	if (level.duelLog)
 		trap->FS_Write(string, strlen(string), level.duelLog ); //Always write to text file, this file is remade every mapchange and its contents are put to database.
@@ -3071,20 +3072,26 @@ void G_AddDuel(char *winner, char *loser, int start_time, int type, int winner_h
 	//Might want to make this log to file, and have that sent to db on map change.  But whatever.. duel finishes are not as frequent as race course finishes usually.
 
 #if _ELORANKING	
-	if (g_eloRanking.integer) {
+	if (g_eloRanking.integer && duelLogType != 21) {
 		CALL_SQLITE (open (LOCAL_DB_PATH, & db));
 		{
 			const qboolean shouldRankDuel = G_ShouldRankBotVsBotDuel(winner, loser, rawtime, db);
 			if (shouldRankDuel)
 			{
-				G_AddDuelElo(winner, loser, type, duration, winner_hp, winner_shield, 0, rawtime, db);
+				G_AddDuelElo(winner, loser, duelLogType, duration, winner_hp, winner_shield, 0, rawtime, db);
 			}
 
 			else
 			{
-				G_AddDuelToDBWithHandle(db, winner, loser, type, duration, winner_hp, winner_shield, rawtime);
+				G_AddDuelToDBWithHandle(db, winner, loser, duelLogType, duration, winner_hp, winner_shield, rawtime);
 			}
 		}
+		CALL_SQLITE (close(db));
+	}
+	else if (duelLogType == 21)
+	{
+		CALL_SQLITE (open (LOCAL_DB_PATH, & db));
+		G_AddDuelToDBWithHandle(db, winner, loser, duelLogType, duration, winner_hp, winner_shield, rawtime);
 		CALL_SQLITE (close(db));
 	}
 #endif
