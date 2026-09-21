@@ -209,6 +209,7 @@ void G_CacheMapname( const vmCvar_t *mapname )
 #define ARCADE_PRIMARY_BOT_LEVEL_MAX 10
 #define ARCADE_GAME_START_DELAY_MS 3500
 #define ARCADE_JOIN_QUEUE_DELAY_MS 1000
+#define ARCADE_CLEANUP_RETRY_DELAY_MS 50
 #define ARCADE_BETWEEN_LEVEL_DELAY_MS 1500
 #define ARCADE_GAME_OVER_DELAY_MS 7000
 #define ARCADE_RESERVED_PLAYER_SLOTS 1
@@ -826,7 +827,7 @@ static void G_ArcadeStartRound(void)
 		if (G_ArcadeCountManagedBotSlots() > 0)
 		{
 			level.arcadeRoundBotsTarget = targetBots;
-			level.arcadeRoundQueuedStart = level.time + ARCADE_JOIN_QUEUE_DELAY_MS;
+			level.arcadeRoundQueuedStart = level.time + ARCADE_CLEANUP_RETRY_DELAY_MS;
 			return;
 		}
 	}
