@@ -401,8 +401,20 @@ static int G_ArcadeCountReservedClientSlots(void)
 	for (i = 0; i < MAX_CLIENTS; i++)
 	{
 		gentity_t *ent = &g_entities[i];
-		if (!ent->inuse || !ent->client || ent->client->pers.connected == CON_DISCONNECTED)
+		if (!ent->inuse || !ent->client)
 		{
+			continue;
+		}
+		if (ent->client->pers.connected == CON_DISCONNECTED)
+		{
+			continue;
+		}
+		if (ent->client->pers.connected == CON_CONNECTING)
+		{
+			if ((ent->r.svFlags & SVF_BOT) && level.arcadeManagedBot[i])
+			{
+				count++;
+			}
 			continue;
 		}
 		if (ent->client->pers.connected == CON_CONNECTED &&

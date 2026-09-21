@@ -1014,12 +1014,13 @@ static qboolean G_IsTrackedIntermediateCandidate(const tracked_duel_runtime_t *r
 
 static qboolean G_ShouldSuppressRepeatedIssueAdvice(const tracked_duel_runtime_t *runtime, duel_advice_session_state_t *session, duel_track_issue_t issue)
 {
-	const unsigned int opponentHash = runtime ? G_HashTrackedIdentityString(runtime->opponentKey) : 0;
+	unsigned int opponentHash;
 
 	if (!runtime || !session || issue < 0 || issue >= DUEL_TRACK_ISSUE_COUNT)
 	{
 		return qfalse;
 	}
+	opponentHash = G_HashTrackedIdentityString(runtime->opponentKey);
 	if (session->lastIssueAdvised != issue)
 	{
 		return qfalse;
@@ -1356,7 +1357,10 @@ static void G_MaybeQueueBotTutorial(tracked_duel_runtime_t *loserRuntime, gentit
 			G_QueueManualBasicsAdvice(botClientNum, loser->s.number, session->duelsSeen, session);
 		}
 
-		G_MaybeQueueTrackedSuccessAdvice(botClientNum, loser->s.number, successRuntime, session);
+		if (g_botTutorialQueues[botClientNum].queuedCount == queuedCountBefore)
+		{
+			G_MaybeQueueTrackedSuccessAdvice(botClientNum, loser->s.number, successRuntime, session);
+		}
 		G_MaybeQueueTrackedLoginAdvice(botClientNum, loser->s.number, session, loggedIn);
 
 		if ((loserRuntime->spentByState[DUEL_TRACK_STATE_PANIC] >= 20 || loserRuntime->lateDefenseSpends >= 1) &&
