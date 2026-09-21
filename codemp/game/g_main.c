@@ -262,6 +262,19 @@ void G_ArcadeResetClientRunState(int clientNum)
 	level.arcadeManagedBot[clientNum] = qfalse;
 }
 
+void G_ArcadeClearClientParticipationState(int clientNum)
+{
+	if (clientNum < 0 || clientNum >= MAX_CLIENTS)
+	{
+		return;
+	}
+
+	level.arcadeRoundKills[clientNum] = 0;
+	level.arcadeEliminated[clientNum] = qfalse;
+	level.arcadeParticipant[clientNum] = qfalse;
+	level.arcadeManagedBot[clientNum] = qfalse;
+}
+
 static void G_ArcadeResetScores(void)
 {
 	int i;
@@ -937,10 +950,18 @@ static void G_ArcadeStartRound(void)
 
 void G_ArcadeHandlePlayerDeath(gentity_t *self, gentity_t *attacker)
 {
+	const int clientNum = self ? self->s.number : -1;
+	qboolean roundActiveParticipant;
+
 	if (level.gametype != GT_ARCADE || !self || !self->client)
 	{
 		return;
 	}
+	roundActiveParticipant = (clientNum >= 0 && clientNum < MAX_CLIENTS &&
+		level.arcadeRoundStartTime > 0 &&
+		level.arcadeParticipant[clientNum] &&
+		self->client->sess.sessionTeam == TEAM_FREE &&
+		!level.arcadeEliminated[clientNum]) ? qtrue : qfalse;
 
 	if (attacker && attacker->client && attacker != self &&
 		attacker->s.number >= 0 && attacker->s.number < MAX_CLIENTS)
@@ -949,16 +970,15 @@ void G_ArcadeHandlePlayerDeath(gentity_t *self, gentity_t *attacker)
 		level.arcadeTotalKills[attacker->s.number]++;
 	}
 
-	if (level.gametype == GT_ARCADE && attacker && attacker->client && (attacker->r.svFlags & SVF_BOT) &&
-		self->client->pers.connected == CON_CONNECTED && !(self->r.svFlags & SVF_BOT) &&
-		self->s.number >= 0 && self->s.number < MAX_CLIENTS &&
-		level.arcadeParticipant[self->s.number] && !level.arcadeEliminated[self->s.number])
+	if (roundActiveParticipant &&
+		attacker && attacker->client && (attacker->r.svFlags & SVF_BOT) &&
+		self->client->pers.connected == CON_CONNECTED && !(self->r.svFlags & SVF_BOT))
 	{
 		G_QueueArcadeBotTutorial(attacker, self, level.arcadeLevel, qfalse);
 	}
-	if (self->s.number >= 0 && self->s.number < MAX_CLIENTS)
+	if (roundActiveParticipant)
 	{
-		level.arcadeEliminated[self->s.number] = qtrue;
+		level.arcadeEliminated[clientNum] = qtrue;
 	}
 	if ((self->r.svFlags & SVF_BOT) &&
 		self->s.number >= 0 && self->s.number < MAX_CLIENTS &&
@@ -967,10 +987,7 @@ void G_ArcadeHandlePlayerDeath(gentity_t *self, gentity_t *attacker)
 		G_ArcadeKickManagedBot(self);
 		return;
 	}
-	if (level.arcadeRoundStartTime > 0 &&
-		self->s.number >= 0 && self->s.number < MAX_CLIENTS &&
-		level.arcadeParticipant[self->s.number] &&
-		self->client->sess.sessionTeam != TEAM_SPECTATOR)
+	if (roundActiveParticipant && self->client->sess.sessionTeam != TEAM_SPECTATOR)
 	{
 		SetTeamQuick(self, TEAM_SPECTATOR, qfalse);
 	}
