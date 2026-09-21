@@ -457,7 +457,7 @@ static int G_ArcadeKickBotsForReserve(int neededSlots)
 			const qboolean isSpectator = (ent->client && ent->client->sess.sessionTeam == TEAM_SPECTATOR) ? qtrue : qfalse;
 
 			if (!ent->inuse || !ent->client || !(ent->r.svFlags & SVF_BOT) ||
-				ent->client->pers.connected == CON_DISCONNECTED)
+				ent->client->pers.connected != CON_CONNECTED)
 			{
 				continue;
 			}
