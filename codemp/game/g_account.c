@@ -1368,8 +1368,11 @@ static void G_MaybeQueueBotTutorial(tracked_duel_runtime_t *loserRuntime, gentit
 		if (g_botTutorialQueues[botClientNum].queuedCount == queuedCountBefore)
 		{
 			G_MaybeQueueTrackedSuccessAdvice(botClientNum, loser->s.number, successRuntime, session);
+			if (g_botTutorialQueues[botClientNum].queuedCount == queuedCountBefore)
+			{
+				G_MaybeQueueTrackedLoginAdvice(botClientNum, loser->s.number, session, loggedIn);
+			}
 		}
-		G_MaybeQueueTrackedLoginAdvice(botClientNum, loser->s.number, session, loggedIn);
 
 		if ((loserRuntime->spentByState[DUEL_TRACK_STATE_PANIC] >= 20 || loserRuntime->lateDefenseSpends >= 1) &&
 			G_TrackedAdviceIsSpecificAllowed(loserRuntime, session, DUEL_TRACK_ISSUE_LATE_DEFENSE))
