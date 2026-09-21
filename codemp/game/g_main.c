@@ -601,8 +601,8 @@ void G_ArcadeClearDuelPairState(gentity_t *first, gentity_t *second)
 		return;
 	}
 
-	G_ArcadeClearDuelState(first, G_IsArcadeManagedBot(first));
-	G_ArcadeClearDuelState(second, G_IsArcadeManagedBot(second));
+	G_ArcadeClearDuelState(first, qtrue);
+	G_ArcadeClearDuelState(second, qtrue);
 }
 
 static void G_ArcadeClearBotDuelState(gentity_t *ent)
