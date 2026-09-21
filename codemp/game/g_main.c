@@ -778,6 +778,7 @@ static void G_ArcadeStartRound(void)
 	int i;
 	const int humans = G_ArcadeCountIngameHumans();
 	int targetBots;
+	int botsToAdd;
 	const int maxManagedBots = G_ArcadeGetManagedBotCapacity();
 	const int progressionLevel = G_ArcadeGetProgressionLevel(level.arcadeLevel);
 	const int primaryLevel = G_ArcadeClampPrimaryBotLevel(progressionLevel);
@@ -804,6 +805,7 @@ static void G_ArcadeStartRound(void)
 	{
 		G_ArcadeKickAllBots();
 	}
+	botsToAdd = targetBots;
 
 	for (i = 0; i < MAX_CLIENTS; i++)
 	{
@@ -811,7 +813,7 @@ static void G_ArcadeStartRound(void)
 		level.arcadeEliminated[i] = qfalse;
 	}
 
-	while (G_ArcadeCountManagedBotSlots() < targetBots)
+	for (i = 0; i < botsToAdd; i++)
 	{
 		if (!G_ArcadeTryAddManagedBot(primarySkill))
 		{
