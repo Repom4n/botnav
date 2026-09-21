@@ -4466,9 +4466,9 @@ void ClientThink_real( gentity_t *ent ) {
 				if (cleanupArcadeManagedDuel)
 				{
 					ent->client->pers.stats.duelDamageGiven = 0;
-					duelAgainst->client->pers.stats.duelDamageGiven = 0;
 					if (duelAgainst && duelAgainst->client)
 					{
+						duelAgainst->client->pers.stats.duelDamageGiven = 0;
 						G_ArcadeClearDuelPairState(ent, duelAgainst);
 					}
 					else
