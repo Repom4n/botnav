@@ -596,7 +596,9 @@ static void G_ArcadeClearBotDuelState(gentity_t *ent)
 	dueltypes[clientNum] = 0;
 	G_ClearTrackedDuelClientState(clientNum);
 
-	if (opponent && opponent->client && opponent->client->ps.duelIndex == clientNum)
+	if (opponent && opponent->client &&
+		opponent->client->ps.duelIndex == clientNum &&
+		G_IsArcadeManagedBot(opponent))
 	{
 		opponent->client->ps.duelInProgress = qfalse;
 		opponent->client->ps.duelIndex = ENTITYNUM_NONE;
