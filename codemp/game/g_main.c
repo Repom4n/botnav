@@ -603,6 +603,7 @@ static void G_ArcadeClearBotDuelState(gentity_t *ent)
 		opponent->client->ps.duelInProgress = qfalse;
 		opponent->client->ps.duelIndex = ENTITYNUM_NONE;
 		opponent->client->pers.duelStartTime = 0;
+		dueltypes[opponent->s.number] = 0;
 		G_ClearTrackedDuelClientState(opponent->s.number);
 	}
 }
