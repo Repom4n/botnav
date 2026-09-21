@@ -569,6 +569,31 @@ qboolean G_IsArcadeManagedBot(const gentity_t *ent)
 	return ((ent->r.svFlags & SVF_BOT) && level.arcadeManagedBot[ent->s.number]) ? qtrue : qfalse;
 }
 
+void G_ArcadeClearDuelState(gentity_t *ent, qboolean clearDuelType)
+{
+	int clientNum;
+
+	if (!ent || !ent->client)
+	{
+		return;
+	}
+
+	clientNum = ent->s.number;
+	if (clientNum < 0 || clientNum >= MAX_CLIENTS)
+	{
+		return;
+	}
+
+	ent->client->ps.duelInProgress = qfalse;
+	ent->client->ps.duelIndex = ENTITYNUM_NONE;
+	ent->client->pers.duelStartTime = 0;
+	if (clearDuelType)
+	{
+		dueltypes[clientNum] = 0;
+	}
+	G_ClearTrackedDuelClientState(clientNum);
+}
+
 static void G_ArcadeClearBotDuelState(gentity_t *ent)
 {
 	gentity_t *opponent = NULL;
@@ -590,21 +615,13 @@ static void G_ArcadeClearBotDuelState(gentity_t *ent)
 		opponent = &g_entities[ent->client->ps.duelIndex];
 	}
 
-	ent->client->ps.duelInProgress = qfalse;
-	ent->client->ps.duelIndex = ENTITYNUM_NONE;
-	ent->client->pers.duelStartTime = 0;
-	dueltypes[clientNum] = 0;
-	G_ClearTrackedDuelClientState(clientNum);
+	G_ArcadeClearDuelState(ent, qtrue);
 
 	if (opponent && opponent->client &&
 		opponent->client->ps.duelIndex == clientNum &&
 		G_IsArcadeManagedBot(opponent))
 	{
-		opponent->client->ps.duelInProgress = qfalse;
-		opponent->client->ps.duelIndex = ENTITYNUM_NONE;
-		opponent->client->pers.duelStartTime = 0;
-		dueltypes[opponent->s.number] = 0;
-		G_ClearTrackedDuelClientState(opponent->s.number);
+		G_ArcadeClearDuelState(opponent, qtrue);
 	}
 }
 
