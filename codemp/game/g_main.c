@@ -951,15 +951,17 @@ static void G_ArcadeStartRound(void)
 void G_ArcadeHandlePlayerDeath(gentity_t *self, gentity_t *attacker)
 {
 	const int clientNum = self ? self->s.number : -1;
-	const qboolean roundActiveParticipant = (clientNum >= 0 && clientNum < MAX_CLIENTS &&
-		level.arcadeRoundStartTime > 0 &&
-		level.arcadeParticipant[clientNum] &&
-		!level.arcadeEliminated[clientNum]) ? qtrue : qfalse;
+	qboolean roundActiveParticipant;
 
 	if (level.gametype != GT_ARCADE || !self || !self->client)
 	{
 		return;
 	}
+	roundActiveParticipant = (clientNum >= 0 && clientNum < MAX_CLIENTS &&
+		level.arcadeRoundStartTime > 0 &&
+		level.arcadeParticipant[clientNum] &&
+		self->client->sess.sessionTeam == TEAM_FREE &&
+		!level.arcadeEliminated[clientNum]) ? qtrue : qfalse;
 
 	if (attacker && attacker->client && attacker != self &&
 		attacker->s.number >= 0 && attacker->s.number < MAX_CLIENTS)
@@ -968,7 +970,7 @@ void G_ArcadeHandlePlayerDeath(gentity_t *self, gentity_t *attacker)
 		level.arcadeTotalKills[attacker->s.number]++;
 	}
 
-	if (level.gametype == GT_ARCADE && roundActiveParticipant &&
+	if (roundActiveParticipant &&
 		attacker && attacker->client && (attacker->r.svFlags & SVF_BOT) &&
 		self->client->pers.connected == CON_CONNECTED && !(self->r.svFlags & SVF_BOT))
 	{

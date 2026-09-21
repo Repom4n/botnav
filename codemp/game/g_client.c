@@ -2905,7 +2905,20 @@ char *ClientConnect( int clientNum, qboolean firstTime, qboolean isBot ) {
 		}
 	}
 
-	if ( ent->inuse )
+	{
+		qboolean preserveArcadeParticipation = qfalse;
+		if (level.gametype == GT_ARCADE &&
+			level.arcadeRoundStartTime > 0 &&
+			level.arcadeParticipant[clientNum] &&
+			!level.arcadeEliminated[clientNum] &&
+			!isBot &&
+			level.clients[clientNum].pers.guid[0] &&
+			!Q_stricmp(level.clients[clientNum].pers.guid, guid))
+		{
+			preserveArcadeParticipation = qtrue;
+		}
+
+		if ( ent->inuse )
 	{// if a player reconnects quickly after a disconnect, the client disconnect may never be called, thus flag can get lost in the ether
 		G_LogPrintf( "Forcing disconnect on active client: %i\n", clientNum );
 		// so lets just fix up anything that should happen on a disconnect
@@ -2917,13 +2930,18 @@ char *ClientConnect( int clientNum, qboolean firstTime, qboolean isBot ) {
 	// they can connect
 	client = &level.clients[ clientNum ];
 	ent->client = client;
-	if (level.gametype == GT_ARCADE)
 	{
-		G_ArcadeClearClientParticipationState(clientNum);
-	}
-	else
+		const qboolean shouldResetArcadeState = (firstTime || level.newSession || !preserveArcadeParticipation) ? qtrue : qfalse;
+
+		if (level.gametype != GT_ARCADE || shouldResetArcadeState)
 	{
 		G_ArcadeResetClientRunState(clientNum);
+	}
+		if (shouldResetArcadeState)
+		{
+			G_ArcadeClearClientParticipationState(clientNum);
+		}
+	}
 	}
 
 	//assign the pointer for bg entity access
