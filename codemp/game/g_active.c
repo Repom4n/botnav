@@ -4463,6 +4463,19 @@ void ClientThink_real( gentity_t *ent ) {
 				{
 					cleanupArcadeManagedDuel = qtrue;
 				}
+				if (cleanupArcadeManagedDuel)
+				{
+					ent->client->pers.stats.duelDamageGiven = 0;
+					duelAgainst->client->pers.stats.duelDamageGiven = 0;
+					if (duelAgainst && duelAgainst->client)
+					{
+						G_ArcadeClearDuelPairState(ent, duelAgainst);
+					}
+					else
+					{
+						G_ArcadeClearDuelState(ent, qtrue);
+					}
+				}
 				else if (ent->health > 0 && ent->client->ps.stats[STAT_HEALTH] > 0)
 				{
 					if (dueltypes[ent->client->ps.clientNum] == 0) {//Saber
@@ -4532,17 +4545,6 @@ void ClientThink_real( gentity_t *ent ) {
 				}
 				ent->client->pers.stats.duelDamageGiven = 0;
 				duelAgainst->client->pers.stats.duelDamageGiven = 0;
-				if (cleanupArcadeManagedDuel)
-				{
-					if (duelAgainst && duelAgainst->client)
-					{
-						G_ArcadeClearDuelPairState(ent, duelAgainst);
-					}
-					else
-					{
-						G_ArcadeClearDuelState(ent, qtrue);
-					}
-				}
 			}
 //[JAPRO - Serverside - Duel - Improve/fix duel end print - End]
 		}
