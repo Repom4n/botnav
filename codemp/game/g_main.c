@@ -408,7 +408,7 @@ static int G_ArcadeCountOccupiedHumans(void)
 	return count;
 }
 
-static int G_ArcadeCountReservedClientSlots(void)
+int G_ArcadeCountReservedClientSlots(void)
 {
 	int i, count = 0;
 	for (i = 0; i < MAX_CLIENTS; i++)
