@@ -668,8 +668,11 @@ static void G_ArcadeKickManagedBot(gentity_t *ent)
 
 	if (ent->s.number >= 0 && ent->s.number < MAX_CLIENTS)
 	{
-		level.arcadeManagedBot[ent->s.number] = qfalse;
-		if (ent->client->pers.connected != CON_DISCONNECTED)
+		if (ent->client->pers.connected == CON_DISCONNECTED)
+		{
+			level.arcadeManagedBot[ent->s.number] = qfalse;
+		}
+		else
 		{
 			trap->DropClient(ent->s.number, "Arcade bot cleanup");
 		}
@@ -776,10 +779,10 @@ static void G_ArcadeKickAllBots(void)
 			continue;
 		}
 
-		level.arcadeManagedBot[i] = qfalse;
 		if (!ent->inuse || !ent->client || !(ent->r.svFlags & SVF_BOT) ||
 			ent->client->pers.connected == CON_DISCONNECTED)
 		{
+			level.arcadeManagedBot[i] = qfalse;
 			continue;
 		}
 
@@ -793,8 +796,8 @@ static void G_ArcadeStartRound(void)
 	const int humans = G_ArcadeCountIngameHumans();
 	int targetBots;
 	int botsToAdd;
-	qboolean hadManagedBotSlots = qfalse;
 	int availableBotSlots;
+	int successfulAdds = 0;
 	const int maxManagedBots = G_ArcadeGetManagedBotCapacity();
 	const int progressionLevel = G_ArcadeGetProgressionLevel(level.arcadeLevel);
 	const int primaryLevel = G_ArcadeClampPrimaryBotLevel(progressionLevel);
@@ -819,22 +822,26 @@ static void G_ArcadeStartRound(void)
 
 	if (G_ArcadeCountManagedBotSlots() > 0)
 	{
-		hadManagedBotSlots = qtrue;
 		G_ArcadeKickAllBots();
+		if (G_ArcadeCountManagedBotSlots() > 0)
+		{
+			level.arcadeRoundBotsTarget = 0;
+			level.arcadeRoundQueuedStart = level.time + ARCADE_JOIN_QUEUE_DELAY_MS;
+			return;
+		}
 	}
 
 	availableBotSlots = G_ArcadeGetAvailableBotSlots();
 	if (availableBotSlots < targetBots)
 	{
-		if (hadManagedBotSlots)
-		{
-			level.arcadeRoundBotsTarget = targetBots;
-			level.arcadeRoundQueuedStart = level.time + ARCADE_JOIN_QUEUE_DELAY_MS;
-			return;
-		}
-
 		targetBots = availableBotSlots;
 		G_ArcadeWarnNoRoomForPlayers();
+	}
+	if (targetBots <= 0)
+	{
+		level.arcadeRoundBotsTarget = 0;
+		level.arcadeRoundQueuedStart = level.time + ARCADE_JOIN_QUEUE_DELAY_MS;
+		return;
 	}
 
 	botsToAdd = targetBots;
@@ -851,7 +858,15 @@ static void G_ArcadeStartRound(void)
 		{
 			break;
 		}
+		successfulAdds++;
 	}
+	if (successfulAdds <= 0)
+	{
+		level.arcadeRoundBotsTarget = 0;
+		level.arcadeRoundQueuedStart = level.time + ARCADE_JOIN_QUEUE_DELAY_MS;
+		return;
+	}
+	targetBots = successfulAdds;
 	for (i = 0; i < MAX_CLIENTS; i++)
 	{
 		gentity_t *ent = &g_entities[i];
