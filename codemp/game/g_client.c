@@ -2907,6 +2907,7 @@ char *ClientConnect( int clientNum, qboolean firstTime, qboolean isBot ) {
 
 	{
 		qboolean preserveArcadeParticipation = qfalse;
+		qboolean preserveArcadeManagedBot = qfalse;
 		if (level.gametype == GT_ARCADE &&
 			level.arcadeRoundStartTime > 0 &&
 			level.arcadeParticipant[clientNum] &&
@@ -2916,6 +2917,12 @@ char *ClientConnect( int clientNum, qboolean firstTime, qboolean isBot ) {
 			!Q_stricmp(level.clients[clientNum].pers.guid, guid))
 		{
 			preserveArcadeParticipation = qtrue;
+		}
+		if (level.gametype == GT_ARCADE &&
+			isBot &&
+			level.arcadeManagedBot[clientNum])
+		{
+			preserveArcadeManagedBot = qtrue;
 		}
 
 		if ( ent->inuse )
@@ -2934,12 +2941,20 @@ char *ClientConnect( int clientNum, qboolean firstTime, qboolean isBot ) {
 		const qboolean shouldResetArcadeState = (firstTime || level.newSession || !preserveArcadeParticipation) ? qtrue : qfalse;
 
 		if (level.gametype != GT_ARCADE || shouldResetArcadeState)
-	{
-		G_ArcadeResetClientRunState(clientNum);
-	}
+		{
+			G_ArcadeResetClientRunState(clientNum);
+			if (preserveArcadeManagedBot)
+			{
+				level.arcadeManagedBot[clientNum] = qtrue;
+			}
+		}
 		if (shouldResetArcadeState)
 		{
 			G_ArcadeClearClientParticipationState(clientNum);
+			if (preserveArcadeManagedBot)
+			{
+				level.arcadeManagedBot[clientNum] = qtrue;
+			}
 		}
 	}
 	}
