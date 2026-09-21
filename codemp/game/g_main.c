@@ -368,11 +368,14 @@ static int G_ArcadeCountOccupiedHumans(void)
 	{
 		gentity_t *ent = &g_entities[i];
 		if (!ent->inuse || !ent->client || (ent->r.svFlags & SVF_BOT) ||
-			ent->client->pers.connected == CON_DISCONNECTED)
+			ent->client->pers.connected != CON_CONNECTED)
 		{
 			continue;
 		}
-		count++;
+		if (ent->client->sess.sessionTeam == TEAM_FREE)
+		{
+			count++;
+		}
 	}
 	return count;
 }
@@ -383,7 +386,27 @@ static int G_ArcadeCountOccupiedClients(void)
 	for (i = 0; i < MAX_CLIENTS; i++)
 	{
 		gentity_t *ent = &g_entities[i];
+		if (!ent->inuse || !ent->client || ent->client->pers.connected != CON_CONNECTED)
+		{
+			continue;
+		}
+		count++;
+	}
+	return count;
+}
+
+static int G_ArcadeCountReservedClientSlots(void)
+{
+	int i, count = 0;
+	for (i = 0; i < MAX_CLIENTS; i++)
+	{
+		gentity_t *ent = &g_entities[i];
 		if (!ent->inuse || !ent->client || ent->client->pers.connected == CON_DISCONNECTED)
+		{
+			continue;
+		}
+		if (ent->client->pers.connected == CON_CONNECTED &&
+			ent->client->sess.sessionTeam == TEAM_SPECTATOR)
 		{
 			continue;
 		}
@@ -507,7 +530,7 @@ static qboolean G_ArcadeTryAddManagedBot(float skill)
 	{
 		maxConnectedBeforeReserve = 0;
 	}
-	if (G_ArcadeCountOccupiedClients() >= maxConnectedBeforeReserve)
+	if (G_ArcadeCountReservedClientSlots() >= maxConnectedBeforeReserve)
 	{
 		G_ArcadeWarnNoRoomForPlayers();
 		return qfalse;

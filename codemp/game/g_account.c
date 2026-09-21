@@ -1047,12 +1047,12 @@ static void G_MarkTrackedIssueAdvice(duel_advice_session_state_t *session, const
 static void G_MaybeQueueTrackedSuccessAdvice(int botClientNum, int targetClientNum, const tracked_duel_runtime_t *runtime, duel_advice_session_state_t *session)
 {
 	static const char *successPressure[] = {
-		"One win signal: your pressure converted cleanly after forcing disadvantage. Keep that tempo shape.",
-		"Good conversion timing there—your finish window opened only after forcing a bad state."
+		"One win signal: clean conversions often come after forcing disadvantage first. Keep that tempo shape.",
+		"Good conversion timing pattern: finish windows open after the opponent is forced into a bad state."
 	};
 	static const char *successDefense[] = {
-		"Defense looked cleaner this round: early structure prevented late panic spending.",
-		"Your anti-collapse timing improved there—good pre-defense before the pressure peak."
+		"Defense win signal: early structure can prevent late panic spending.",
+		"Anti-collapse timing signal: pre-defense before pressure peaks usually stabilizes the exchange."
 	};
 
 	if (!runtime)
@@ -1061,7 +1061,7 @@ static void G_MaybeQueueTrackedSuccessAdvice(int botClientNum, int targetClientN
 	}
 	if (runtime->endingHP > 0 &&
 		runtime->spentByState[DUEL_TRACK_STATE_FINISHING] >= 80 &&
-		runtime->spentByState[DUEL_TRACK_STATE_DISADVANTAGE] >= runtime->spentByState[DUEL_TRACK_STATE_ADVANTAGE] + 30)
+		runtime->spentByState[DUEL_TRACK_STATE_ADVANTAGE] >= runtime->spentByState[DUEL_TRACK_STATE_DISADVANTAGE] + 30)
 	{
 		G_QueueRotatingTutorialMessage(botClientNum, targetClientNum, successPressure,
 			(int)(sizeof(successPressure) / sizeof(successPressure[0])), runtime->eventCount, session);
@@ -1277,6 +1277,8 @@ static void G_MaybeQueueBotTutorial(tracked_duel_runtime_t *loserRuntime, gentit
 	qboolean allowSpecificIssue;
 	qboolean suppressRepeatedIssueAdvice;
 	int duelDuration;
+	tracked_duel_runtime_t *winnerRuntime;
+	const tracked_duel_runtime_t *successRuntime;
 
 	if (!bot_tutorial.integer || bot_nochat.integer || !loserRuntime || !winner || !loser ||
 		!winner->client || !loser->client)
@@ -1285,6 +1287,8 @@ static void G_MaybeQueueBotTutorial(tracked_duel_runtime_t *loserRuntime, gentit
 		return;
 
 	botClientNum = winner->s.number;
+	winnerRuntime = (winner->s.number >= 0 && winner->s.number < MAX_CLIENTS) ? &g_trackedDuels[winner->s.number] : NULL;
+	successRuntime = (winnerRuntime && winnerRuntime->eventCount > 0) ? winnerRuntime : NULL;
 	session = G_GetTrackedAdviceSession(loser, loserRuntime);
 	if (!session)
 		return;
@@ -1352,7 +1356,7 @@ static void G_MaybeQueueBotTutorial(tracked_duel_runtime_t *loserRuntime, gentit
 			G_QueueManualBasicsAdvice(botClientNum, loser->s.number, session->duelsSeen, session);
 		}
 
-		G_MaybeQueueTrackedSuccessAdvice(botClientNum, loser->s.number, loserRuntime, session);
+		G_MaybeQueueTrackedSuccessAdvice(botClientNum, loser->s.number, successRuntime, session);
 		G_MaybeQueueTrackedLoginAdvice(botClientNum, loser->s.number, session, loggedIn);
 
 		if ((loserRuntime->spentByState[DUEL_TRACK_STATE_PANIC] >= 20 || loserRuntime->lateDefenseSpends >= 1) &&
