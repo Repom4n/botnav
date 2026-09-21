@@ -380,21 +380,6 @@ static int G_ArcadeCountOccupiedHumans(void)
 	return count;
 }
 
-static int G_ArcadeCountOccupiedClients(void)
-{
-	int i, count = 0;
-	for (i = 0; i < MAX_CLIENTS; i++)
-	{
-		gentity_t *ent = &g_entities[i];
-		if (!ent->inuse || !ent->client || ent->client->pers.connected != CON_CONNECTED)
-		{
-			continue;
-		}
-		count++;
-	}
-	return count;
-}
-
 static int G_ArcadeCountReservedClientSlots(void)
 {
 	int i, count = 0;
@@ -501,7 +486,7 @@ static int G_ArcadeKickBotsForReserve(int neededSlots)
 
 static qboolean G_ArcadeEnsureHumanReserveSlots(void)
 {
-	int freeSlots = sv_maxclients.integer - G_ArcadeCountOccupiedClients();
+	int freeSlots = sv_maxclients.integer - G_ArcadeCountReservedClientSlots();
 	int neededSlots = ARCADE_RESERVED_PLAYER_SLOTS - freeSlots;
 
 	if (neededSlots <= 0)
@@ -523,7 +508,7 @@ static qboolean G_ArcadeEnsureHumanReserveSlots(void)
 		}
 	}
 
-	freeSlots = sv_maxclients.integer - G_ArcadeCountOccupiedClients();
+	freeSlots = sv_maxclients.integer - G_ArcadeCountReservedClientSlots();
 	return (freeSlots >= ARCADE_RESERVED_PLAYER_SLOTS) ? qtrue : qfalse;
 }
 
