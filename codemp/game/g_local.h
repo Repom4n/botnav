@@ -1914,6 +1914,7 @@ int G_ArcadeCountIngameHumans(void);
 qboolean G_ArcadeEnsureHumanReserveSlots(void);
 qboolean G_IsArcadeManagedBot(const gentity_t *ent);
 void G_ArcadeClearDuelState(gentity_t *ent, qboolean clearDuelType);
+void G_ArcadeClearDuelPairState(gentity_t *first, gentity_t *second);
 
 //
 // g_client.c

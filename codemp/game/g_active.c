@@ -4459,8 +4459,7 @@ void ClientThink_real( gentity_t *ent ) {
 			if (!ent->client->sess.raceMode) {
 				if (G_IsArcadeManagedBot(ent) || G_IsArcadeManagedBot(duelAgainst))
 				{
-					G_ArcadeClearDuelState(ent, G_IsArcadeManagedBot(ent));
-					G_ArcadeClearDuelState(duelAgainst, G_IsArcadeManagedBot(duelAgainst));
+					G_ArcadeClearDuelPairState(ent, duelAgainst);
 				}
 				else if (ent->health > 0 && ent->client->ps.stats[STAT_HEALTH] > 0)
 				{

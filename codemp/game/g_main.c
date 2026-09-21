@@ -594,6 +594,17 @@ void G_ArcadeClearDuelState(gentity_t *ent, qboolean clearDuelType)
 	G_ClearTrackedDuelClientState(clientNum);
 }
 
+void G_ArcadeClearDuelPairState(gentity_t *first, gentity_t *second)
+{
+	if (!first || !second)
+	{
+		return;
+	}
+
+	G_ArcadeClearDuelState(first, G_IsArcadeManagedBot(first));
+	G_ArcadeClearDuelState(second, G_IsArcadeManagedBot(second));
+}
+
 static void G_ArcadeClearBotDuelState(gentity_t *ent)
 {
 	gentity_t *opponent = NULL;
@@ -615,14 +626,15 @@ static void G_ArcadeClearBotDuelState(gentity_t *ent)
 		opponent = &g_entities[ent->client->ps.duelIndex];
 	}
 
-	G_ArcadeClearDuelState(ent, qtrue);
-
 	if (opponent && opponent->client &&
 		opponent->client->ps.duelIndex == clientNum &&
 		G_IsArcadeManagedBot(opponent))
 	{
-		G_ArcadeClearDuelState(opponent, qtrue);
+		G_ArcadeClearDuelPairState(ent, opponent);
+		return;
 	}
+
+	G_ArcadeClearDuelState(ent, qtrue);
 }
 
 static qboolean G_ArcadeTryAddManagedBot(float skill)
