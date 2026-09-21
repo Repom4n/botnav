@@ -639,6 +639,26 @@ static gentity_t *G_ArcadeFindManagedBot(qboolean spectator)
 	return NULL;
 }
 
+static int G_ArcadeCountActiveManagedBots(void)
+{
+	int i, count = 0;
+
+	for (i = 0; i < MAX_CLIENTS; i++)
+	{
+		gentity_t *ent = &g_entities[i];
+		if (!level.arcadeManagedBot[i] ||
+			!ent->inuse || !ent->client || !(ent->r.svFlags & SVF_BOT) ||
+			ent->client->pers.connected != CON_CONNECTED ||
+			ent->client->sess.sessionTeam == TEAM_SPECTATOR)
+		{
+			continue;
+		}
+		count++;
+	}
+
+	return count;
+}
+
 static int G_ArcadeCountManagedBotSlots(void)
 {
 	int i, count = 0;
@@ -703,6 +723,24 @@ static int G_ArcadeKickManagedBots(int maxKickCount, qboolean spectatorOnly)
 		{
 			break;
 		}
+	}
+
+	return kicked;
+}
+
+static int G_ArcadeKickManagedBotsPreferSpectators(int maxKickCount)
+{
+	int kicked = 0;
+
+	if (maxKickCount <= 0)
+	{
+		return 0;
+	}
+
+	kicked = G_ArcadeKickManagedBots(maxKickCount, qtrue);
+	if (kicked < maxKickCount)
+	{
+		kicked += G_ArcadeKickManagedBots(maxKickCount - kicked, qfalse);
 	}
 
 	return kicked;
@@ -812,6 +850,7 @@ static void G_ArcadeShutdown(qboolean kickBots)
 static void G_ArcadeEnsureWaitingBot(void)
 {
 	gentity_t *waitingBot;
+	gentity_t *spectatorBot;
 	int totalManagedBots = G_ArcadeCountManagedBotSlots();
 	int desiredBots = 1;
 	const int maxManagedBots = G_ArcadeGetManagedBotCapacity();
@@ -829,7 +868,7 @@ static void G_ArcadeEnsureWaitingBot(void)
 
 	if (totalManagedBots > desiredBots)
 	{
-		G_ArcadeKickManagedBots(totalManagedBots - desiredBots, qfalse);
+		G_ArcadeKickManagedBotsPreferSpectators(totalManagedBots - desiredBots);
 		return;
 	}
 
@@ -841,6 +880,18 @@ static void G_ArcadeEnsureWaitingBot(void)
 	if (waitingBot)
 	{
 		G_ArcadeRestorePlayer(waitingBot);
+		return;
+	}
+
+	spectatorBot = G_ArcadeFindManagedBot(qtrue);
+	if (spectatorBot)
+	{
+		G_ArcadeRespawnParticipant(spectatorBot, qfalse);
+		return;
+	}
+
+	if (G_ArcadeCountActiveManagedBots() >= desiredBots)
+	{
 		return;
 	}
 
@@ -894,7 +945,7 @@ static void G_ArcadeStartRound(void)
 		totalManagedBots = G_ArcadeCountManagedBotSlots();
 		if (totalManagedBots > targetBots)
 		{
-			G_ArcadeKickManagedBots(totalManagedBots - targetBots, qfalse);
+			G_ArcadeKickManagedBotsPreferSpectators(totalManagedBots - targetBots);
 		}
 	}
 
@@ -904,8 +955,14 @@ static void G_ArcadeStartRound(void)
 		level.arcadeEliminated[i] = qfalse;
 	}
 
-	while (G_ArcadeCountManagedBotSlots() < targetBots)
+	while (G_ArcadeCountActiveManagedBots() < targetBots)
 	{
+		gentity_t *spectatorBot = G_ArcadeFindManagedBot(qtrue);
+		if (spectatorBot)
+		{
+			G_ArcadeRespawnParticipant(spectatorBot, qfalse);
+			continue;
+		}
 		if (!G_ArcadeTryAddManagedBot(primarySkill))
 		{
 			break;

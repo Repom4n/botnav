@@ -14,7 +14,7 @@ This document describes all cvars added for the NewBotAI system and how they rel
 
 | Cvar | Default | Description |
 |------|---------|-------------|
-| `g_newBotAITarget` | `-1` | Target selection mode. `-1` = default (closest), `-2` = humans only, `-3` = prefer humans then bots and offer force duels to either while continuing combat, `-4` = prefer humans then bots but only offer force duels and retreat/heal instead of attacking, `>=0` = force specific client index. |
+| `g_newBotAITarget` | `-1` | Target selection mode. `-1` = default (closest), `-2` = humans only, `-3` = prefer humans then bots and issue/accept force duels while otherwise fighting normally, `-4` = prefer humans then bots but only offer force duels and retreat/heal instead of attacking, `>=0` = force specific client index. |
 | `bot_targetdistance` | `4096` | Max distance at which bots will acquire, keep, or keep waypoint-pursuing a target through walls. If the target exceeds this distance, the lock is dropped unless a new in-range target is found. |
 | `bot_target_timeout` | `3000` | How long (ms) a bot keeps its current lost-sight combat lock before fully falling back to normal navigation when it is not using waypoint pursuit retention. |
 | `g_newBotAITargetDistance` | `4096` | Declared but currently unused (superseded by `bot_targetdistance`). |
@@ -119,6 +119,7 @@ Notes:
 - `-4` bots fight normally once a duel actually starts (`duelInProgress`); the force-duel-only approach only applies while finding/challenging.
 - `-3` bots target the true nearest enemy (no health weighting), like `-1`, while still issuing/accepting duels.
 - Bots throttle self-initiated duel requests to one every 7 seconds by default, but bot-vs-bot offers in `-3`/`-4` are throttled to once every 2 minutes so human duel opportunities are not crowded out.
+- After a bot-vs-bot duel ends, both bots temporarily blacklist each other so they search for a new opponent instead of immediately rematching.
 - Ranked bot-vs-bot ELO progression is limited to 5 ranked duels per bot level per UTC day/session bucket; extra bot-vs-bot duels still run but are logged unranked.
 
 ## Miscellaneous
