@@ -1483,7 +1483,7 @@ void SetTeam( gentity_t *ent, char *s, qboolean forcedToJoin ) {//JAPRO - Modifi
 		const qboolean alreadyQueued = level.arcadeParticipant[clientNum];
 		const qboolean canNewPlayerJoin = (!level.arcadeGameOverTime &&
 			level.arcadeRoundStartTime <= 0 &&
-			level.arcadeLevel == ARCADE_START_LEVEL) ? qtrue : qfalse;
+			level.arcadeLevel == 1) ? qtrue : qfalse;
 
 		if (!alreadyQueued && !canNewPlayerJoin)
 		{
