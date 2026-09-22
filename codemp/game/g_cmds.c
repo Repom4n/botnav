@@ -1487,7 +1487,14 @@ void SetTeam( gentity_t *ent, char *s, qboolean forcedToJoin ) {//JAPRO - Modifi
 
 		if (!alreadyQueued && !canNewPlayerJoin)
 		{
-			trap->SendServerCommand(ent-g_entities, "print \"Arcade: new players can only join before level 1 starts.\n\"");
+			if (level.arcadeGameOverTime)
+			{
+				trap->SendServerCommand(ent-g_entities, "print \"Arcade: wait for the next level 1 round to open.\n\"");
+			}
+			else
+			{
+				trap->SendServerCommand(ent-g_entities, "print \"Arcade: new players can only join before level 1 starts.\n\"");
+			}
 			return;
 		}
 
