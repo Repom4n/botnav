@@ -2199,7 +2199,7 @@ void CG_DrawHUD(centity_t	*cent)
 					CG_DrawForcePowerJK2(SCREEN_WIDTH - 80, SCREEN_HEIGHT - 80);
 					CG_DrawAmmoJK2(cent, SCREEN_WIDTH - 80, SCREEN_HEIGHT - 80);
 					CG_DrawJK2HUDRightFrame2(SCREEN_WIDTH - 80, SCREEN_HEIGHT - 80);
-					if (cg_drawScore.integer > 1 && cgs.gametype >= GT_TEAM && cgs.gametype != GT_SIEGE)
+					if (cg_drawScore.integer > 1 && cgs.gametype >= GT_TEAM && cgs.gametype != GT_SIEGE && cgs.gametype != GT_ARCADE)
 						CG_DrawScaledProportionalString(SCREEN_WIDTH - 125 * cgs.widthRatioCoef, SCREEN_HEIGHT - 38,
 														scoreStr, UI_RIGHT | UI_DROPSHADOW, colorTable[CT_WHITE], 0.7f);
 					else
@@ -2215,7 +2215,7 @@ void CG_DrawHUD(centity_t	*cent)
 							focusItem = Menu_FindItemByName(menuHUD, "score_line");
 							if (focusItem)
 							{
-								if (cg_drawScore.integer > 1 && cgs.gametype >= GT_TEAM && cgs.gametype != GT_SIEGE) {
+								if (cg_drawScore.integer > 1 && cgs.gametype >= GT_TEAM && cgs.gametype != GT_SIEGE && cgs.gametype != GT_ARCADE) {
 									CG_DrawScaledProportionalString(
 											SCREEN_WIDTH - (SCREEN_WIDTH - focusItem->window.rect.x - cg_drawScoreX.value) * cgs.widthRatioCoef,
 											focusItem->window.rect.y - cg_drawScoreY.value - 14,

@@ -1558,6 +1558,9 @@ typedef struct level_locals_s {
 	int			arcadeCleanupPendingBots;
 	int			arcadeCleanupRetryBudget;
 	int			arcadeGameOverTime;
+	int			arcadeGameOverCenterReplayTime;
+	int			arcadeRoundCenterReplayTime;
+	int			arcadeRoundCenterReplayLevel;
 	int			arcadeReserveAnnounceTime;
 	int			arcadeScore[MAX_CLIENTS];
 	int			arcadeRoundKills[MAX_CLIENTS];
@@ -1565,6 +1568,8 @@ typedef struct level_locals_s {
 	qboolean	arcadeEliminated[MAX_CLIENTS];
 	qboolean	arcadeParticipant[MAX_CLIENTS];
 	qboolean	arcadeManagedBot[MAX_CLIENTS];
+	qboolean	arcadeGameOverComplete;
+	qboolean	arcadeGameOverCenterReplaySent;
 	qboolean	arcadeInitialized;
 } level_locals_t;
 
