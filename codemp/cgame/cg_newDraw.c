@@ -239,7 +239,7 @@ const char *CG_GetGameStatusText(void) {
 	{
 		s = "";
 	}
-	else if ( cgs.gametype < GT_TEAM)
+	else if ( cgs.gametype < GT_TEAM || cgs.gametype == GT_ARCADE)
 	{
 		if (cg.snap->ps.persistant[PERS_TEAM] != TEAM_SPECTATOR )
 		{

@@ -138,7 +138,7 @@ static void CG_DrawClientScore( int y, score_t *score, float *color, float fade,
 		localClient = qtrue;
 
 		if ( cg.snap->ps.persistant[PERS_TEAM] == TEAM_SPECTATOR
-			|| cgs.gametype >= GT_TEAM ) {
+			|| (cgs.gametype >= GT_TEAM && cgs.gametype != GT_ARCADE) ) {
 			rank = -1;
 		} else {
 			rank = cg.snap->ps.persistant[PERS_RANK] & ~RANK_TIED_FLAG;
@@ -556,7 +556,7 @@ qboolean CG_DrawOldScoreboard( void ) {
 
 	//I guess this can be accomplished simply by printing the first teams score with a maxClients
 	//value passed in related to how many players are on both teams.
-	if ( cgs.gametype >= GT_TEAM ) {
+	if ( cgs.gametype >= GT_TEAM && cgs.gametype != GT_ARCADE ) {
 		//
 		// teamplay scoreboard
 		//
@@ -684,4 +684,3 @@ qboolean CG_DrawOldScoreboard( void ) {
 }
 
 //================================================================================
-
