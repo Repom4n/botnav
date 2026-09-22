@@ -42,6 +42,12 @@ static char LOCAL_DB_PATH[MAX_OSPATH];
 #define TRACKED_DUEL_SCORE_FORCED_ENTRY_SPENT_BONUS 3
 #define TRACKED_DUEL_SCORE_FORCED_ENTRY_NO_CONFIRM_BONUS 2
 #define TRACKED_DUEL_SCORE_LINEAR_FALLBACK_BASE 1
+#define TRACKED_ARCADE_SEQUENCE_TIMEOUT_MS 1500
+#define TRACKED_ARCADE_ATTACK_CHAIN_WINDOW_MS 1200
+#define TRACKED_ARCADE_COUNTER_WINDOW_MS 1200
+#define TRACKED_ARCADE_PUNISH_WINDOW_MS 900
+#define TRACKED_ARCADE_FORCE_TO_SABER_WINDOW_MS 1000
+#define TRACKED_ARCADE_LEADERBOARD_NAME_CHARS 18
 #define LOCAL_ARCADE_SCORE_ORDER "score DESC, end_time DESC"
 //#define GLOBAL_DB_PATH sv_globalDBPath.string
 //#define MAX_TMP_RACELOG_SIZE 80 * 1024
@@ -110,7 +116,14 @@ typedef enum
 	DUEL_TRACK_EVENT_KNOCKDOWN,
 	DUEL_TRACK_EVENT_PRESSURE_SUCCESS,
 	DUEL_TRACK_EVENT_RESET_SUCCESS,
-	DUEL_TRACK_EVENT_OVERCOMMIT
+	DUEL_TRACK_EVENT_OVERCOMMIT,
+	DUEL_TRACK_EVENT_ATTACK_START,
+	DUEL_TRACK_EVENT_ATTACK_CHAIN,
+	DUEL_TRACK_EVENT_COUNTER_SUCCESS,
+	DUEL_TRACK_EVENT_PUNISH_SUCCESS,
+	DUEL_TRACK_EVENT_SABER_RETURN_PUNISH,
+	DUEL_TRACK_EVENT_FORCE_TO_SABER,
+	DUEL_TRACK_EVENT_KNOCKDOWN_FOLLOWUP
 } duel_track_event_type_t;
 
 typedef struct
@@ -123,12 +136,20 @@ typedef struct
 	unsigned char state;
 	unsigned char rangeBucket;
 	unsigned char hasGeometry;
+	unsigned short sequenceId;
+	unsigned short buttons;
+	short yawDelta;
+	int saberMove;
+	int enemySaberMove;
 	vec3_t selfOrigin;
 	vec3_t enemyOrigin;
 	vec3_t selfVelocity;
 	vec3_t enemyVelocity;
 	float selfYaw;
 	float enemyYaw;
+	unsigned char opponentKind;
+	char opponentKey[64];
+	char opponentLabel[MAX_NETNAME];
 	char note[32];
 } tracked_duel_event_t;
 
@@ -177,6 +198,49 @@ typedef struct
 	char primaryIssue[32];
 	tracked_duel_event_t events[TRACKED_DUEL_MAX_EVENTS];
 } tracked_duel_runtime_t;
+
+typedef struct
+{
+	qboolean active;
+	int startTime;
+	int eventCount;
+	int lastForce;
+	int lowestForce;
+	int lastHealthArmor;
+	int lastSelectedPower;
+	int lastPowersActive;
+	int lastRangeBucket;
+	int lastAirborne;
+	int lastKnockdown;
+	int lastGripCripple;
+	int lastButtons;
+	int lastSaberMove;
+	int lastOpponentClientNum;
+	int lastOpponentHealthArmor;
+	int lastAttackTime;
+	int lastDamageTakenTime;
+	int lastForceSpendTime;
+	int currentSequenceId;
+	int lastSequenceTime;
+	int totalForceSpent;
+	int totalForceRegen;
+	int totalDamageTaken;
+	int totalDamageDealt;
+	int lowForceWindows;
+	int knockdownEvents;
+	int resetSuccessEvents;
+	int counterSuccessEvents;
+	int punishSuccessEvents;
+	int saberReturnPunishes;
+	int killCount;
+	int endingForce;
+	int endingHP;
+	int endingArmor;
+	int identityKind;
+	char identityKey[64];
+	char identityLabel[MAX_NETNAME];
+	tracked_duel_event_t events[TRACKED_DUEL_MAX_EVENTS];
+} tracked_arcade_runtime_t;
 
 typedef struct
 {
@@ -231,6 +295,7 @@ typedef enum
 } duel_track_skill_band_t;
 
 static tracked_duel_runtime_t g_trackedDuels[MAX_CLIENTS];
+static tracked_arcade_runtime_t g_trackedArcadeCombats[MAX_CLIENTS];
 static bot_tutorial_queue_t g_botTutorialQueues[MAX_CLIENTS];
 static duel_advice_session_state_t g_duelAdviceSessions[MAX_CLIENTS];
 static qboolean g_duelTrackingSchemaReady = qfalse;
@@ -240,6 +305,140 @@ static void G_EnsureLocalArcadeSchema(sqlite3 *db);
 static qboolean G_DoesTrackedDuelTableExist(sqlite3 *db, const char *tableName);
 static qboolean G_OpenTrackedLocalDB(sqlite3 **dbOut, char *resolvedPath, int resolvedPathSize);
 static void G_QueueBotTutorialMessage(int botClientNum, int targetClientNum, const char *message);
+static void G_FormatArcadeLeaderboardName(const char *input, char *output, int outputSize)
+{
+	char clean[MAX_NETNAME];
+	int visibleChars = 0;
+	int readIndex = 0;
+	int writeIndex = 0;
+
+	if (!output || outputSize <= 0)
+		return;
+
+	output[0] = '\0';
+	if (!input || !input[0])
+	{
+		Q_strncpyz(output, "<unknown>", outputSize);
+		return;
+	}
+
+	Q_strncpyz(clean, input, sizeof(clean));
+	Q_CleanStr(clean);
+	if (!clean[0])
+	{
+		Q_strncpyz(output, "<unknown>", outputSize);
+		return;
+	}
+
+	while (clean[readIndex] && writeIndex < outputSize - 1 &&
+		visibleChars < TRACKED_ARCADE_LEADERBOARD_NAME_CHARS)
+	{
+		output[writeIndex++] = clean[readIndex++];
+		visibleChars++;
+	}
+	output[writeIndex] = '\0';
+}
+
+static qboolean G_IsAllowedTrackedTableName(const char *tableName)
+{
+	static const char *const allowedTables[] = {
+		"LocalDuelTrackSummary",
+		"LocalDuelTrackParticipant",
+		"LocalDuelTrackEvent",
+		"LocalDuelTrackGeometry",
+		"LocalDuelTrackAggregate",
+		"LocalArcadeTrackSession",
+		"LocalArcadeTrackEvent",
+		"LocalArcadeTrackGeometry"
+	};
+	int i;
+
+	if (!tableName || !tableName[0])
+		return qfalse;
+
+	for (i = 0; i < (int)(sizeof(allowedTables) / sizeof(allowedTables[0])); i++)
+	{
+		if (!Q_stricmp(tableName, allowedTables[i]))
+			return qtrue;
+	}
+	return qfalse;
+}
+
+static qboolean G_IsAllowedTrackedColumnName(const char *columnName)
+{
+	static const char *const allowedColumns[] = {
+		"source_context",
+		"sequence_id",
+		"buttons",
+		"saber_move",
+		"enemy_saber_move",
+		"yaw_delta",
+		"opponent_label",
+		"opponent_kind"
+	};
+	int i;
+
+	if (!columnName || !columnName[0])
+		return qfalse;
+
+	for (i = 0; i < (int)(sizeof(allowedColumns) / sizeof(allowedColumns[0])); i++)
+	{
+		if (!Q_stricmp(columnName, allowedColumns[i]))
+			return qtrue;
+	}
+	return qfalse;
+}
+
+static qboolean G_TrackedTableHasColumn(sqlite3 *db, const char *tableName, const char *columnName)
+{
+	sqlite3_stmt *stmt = NULL;
+	char sql[128];
+	int s = SQLITE_DONE;
+	qboolean found = qfalse;
+
+	if (!G_IsAllowedTrackedTableName(tableName) || !G_IsAllowedTrackedColumnName(columnName))
+		return qfalse;
+
+	Com_sprintf(sql, sizeof(sql), "PRAGMA table_info(%s)", tableName);
+	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
+	while ((s = sqlite3_step(stmt)) == SQLITE_ROW)
+	{
+		const unsigned char *name = sqlite3_column_text(stmt, 1);
+		if (name && !Q_stricmp((const char *)name, columnName))
+		{
+			found = qtrue;
+			break;
+		}
+	}
+	if (s != SQLITE_DONE)
+		G_ErrorPrint("ERROR: SQL Select Failed (tracked table_info)", s);
+	CALL_SQLITE(finalize(stmt));
+	return found;
+}
+
+static void G_EnsureTrackedTableColumn(sqlite3 *db, const char *tableName, const char *columnName, const char *definition)
+{
+	sqlite3_stmt *stmt = NULL;
+	char sql[256];
+	int s;
+
+	if (!G_IsAllowedTrackedTableName(tableName) || !G_IsAllowedTrackedColumnName(columnName) ||
+		!definition || !definition[0])
+	{
+		return;
+	}
+
+	if (G_TrackedTableHasColumn(db, tableName, columnName))
+		return;
+
+	Com_sprintf(sql, sizeof(sql), "ALTER TABLE %s ADD COLUMN %s %s", tableName, columnName, definition);
+	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
+	s = sqlite3_step(stmt);
+	if (s != SQLITE_DONE)
+		G_ErrorPrint("ERROR: SQL Alter Failed (tracked add column)", s);
+	CALL_SQLITE(finalize(stmt));
+}
+
 static void G_EnsureLocalDuelTrackingSchema(sqlite3 *db)
 {
 	sqlite3_stmt *stmt = NULL;
@@ -311,6 +510,53 @@ static void G_EnsureLocalDuelTrackingSchema(sqlite3 *db)
 	if (s != SQLITE_DONE)
 		G_ErrorPrint("ERROR: SQL Create Failed (LocalDuelTrackAggregate)", s);
 	CALL_SQLITE(finalize(stmt));
+
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackSummary", "source_context", "VARCHAR(16) DEFAULT 'duel'");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "sequence_id", "UNSIGNED SMALLINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "buttons", "UNSIGNED SMALLINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "saber_move", "INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "enemy_saber_move", "INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "yaw_delta", "SMALLINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "opponent_label", "VARCHAR(36) DEFAULT ''");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "opponent_kind", "UNSIGNED TINYINT DEFAULT 0");
+
+	sql = "CREATE TABLE IF NOT EXISTS LocalArcadeTrackSession("
+		"id INTEGER PRIMARY KEY, source_context VARCHAR(16), start_time UNSIGNED INTEGER, end_time UNSIGNED INTEGER, "
+		"duration UNSIGNED INTEGER, mapname VARCHAR(64), participant_key VARCHAR(64), participant_label VARCHAR(36), "
+		"participant_kind UNSIGNED TINYINT, result VARCHAR(24), arcade_level UNSIGNED SMALLINT, total_kills UNSIGNED SMALLINT, "
+		"total_force_spent UNSIGNED INTEGER, total_force_regen UNSIGNED INTEGER, total_damage_taken UNSIGNED INTEGER, "
+		"total_damage_dealt UNSIGNED INTEGER, low_force_windows UNSIGNED SMALLINT, knockdown_events UNSIGNED SMALLINT, "
+		"counter_successes UNSIGNED SMALLINT, punish_successes UNSIGNED SMALLINT, reset_successes UNSIGNED SMALLINT, "
+		"saber_return_punishes UNSIGNED SMALLINT)";
+	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
+	s = sqlite3_step(stmt);
+	if (s != SQLITE_DONE)
+		G_ErrorPrint("ERROR: SQL Create Failed (LocalArcadeTrackSession)", s);
+	CALL_SQLITE(finalize(stmt));
+
+	sql = "CREATE TABLE IF NOT EXISTS LocalArcadeTrackEvent("
+		"id INTEGER PRIMARY KEY, session_id INTEGER, participant_key VARCHAR(64), participant_label VARCHAR(36), "
+		"participant_kind UNSIGNED TINYINT, opponent_key VARCHAR(64), opponent_label VARCHAR(36), opponent_kind UNSIGNED TINYINT, "
+		"rel_time UNSIGNED INTEGER, event_index UNSIGNED SMALLINT, sequence_id UNSIGNED SMALLINT, event_type VARCHAR(24), "
+		"power UNSIGNED TINYINT, amount SMALLINT, state UNSIGNED TINYINT, range_bucket UNSIGNED TINYINT, "
+		"buttons UNSIGNED SMALLINT, saber_move INTEGER, enemy_saber_move INTEGER, yaw_delta SMALLINT, note VARCHAR(32))";
+	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
+	s = sqlite3_step(stmt);
+	if (s != SQLITE_DONE)
+		G_ErrorPrint("ERROR: SQL Create Failed (LocalArcadeTrackEvent)", s);
+	CALL_SQLITE(finalize(stmt));
+
+	sql = "CREATE TABLE IF NOT EXISTS LocalArcadeTrackGeometry("
+		"id INTEGER PRIMARY KEY, session_id INTEGER, participant_key VARCHAR(64), opponent_key VARCHAR(64), "
+		"rel_time UNSIGNED INTEGER, event_index UNSIGNED SMALLINT, "
+		"self_x REAL, self_y REAL, self_z REAL, enemy_x REAL, enemy_y REAL, enemy_z REAL, "
+		"self_vx REAL, self_vy REAL, self_vz REAL, enemy_vx REAL, enemy_vy REAL, enemy_vz REAL, "
+		"self_yaw REAL, enemy_yaw REAL)";
+	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
+	s = sqlite3_step(stmt);
+	if (s != SQLITE_DONE)
+		G_ErrorPrint("ERROR: SQL Create Failed (LocalArcadeTrackGeometry)", s);
+	CALL_SQLITE(finalize(stmt));
 	g_duelTrackingSchemaReady = qtrue;
 	Q_strncpyz(g_duelTrackingSchemaPath, LOCAL_DB_PATH, sizeof(g_duelTrackingSchemaPath));
 }
@@ -350,7 +596,23 @@ static qboolean G_ShouldCaptureTrackedGeometryEvent(int eventType)
 		return qfalse;
 	if (bot_dueltracking_geometry.integer >= 2)
 		return qtrue;
-	return (eventType == 2 || eventType == 3 || eventType == 4 || eventType == 5) ? qtrue : qfalse;
+	switch (eventType)
+	{
+	case DUEL_TRACK_EVENT_DAMAGE:
+	case DUEL_TRACK_EVENT_RANGE:
+	case DUEL_TRACK_EVENT_AIR:
+	case DUEL_TRACK_EVENT_KNOCKDOWN:
+	case DUEL_TRACK_EVENT_ATTACK_START:
+	case DUEL_TRACK_EVENT_ATTACK_CHAIN:
+	case DUEL_TRACK_EVENT_COUNTER_SUCCESS:
+	case DUEL_TRACK_EVENT_PUNISH_SUCCESS:
+	case DUEL_TRACK_EVENT_SABER_RETURN_PUNISH:
+	case DUEL_TRACK_EVENT_FORCE_TO_SABER:
+	case DUEL_TRACK_EVENT_KNOCKDOWN_FOLLOWUP:
+		return qtrue;
+	default:
+		return qfalse;
+	}
 }
 
 static qboolean G_IsTrackedDuelEligible(gentity_t *first, gentity_t *second)
@@ -782,7 +1044,40 @@ static const char *G_GetTrackedEventTypeName(int eventType)
 	case DUEL_TRACK_EVENT_PRESSURE_SUCCESS: return "pressure_success";
 	case DUEL_TRACK_EVENT_RESET_SUCCESS: return "reset_success";
 	case DUEL_TRACK_EVENT_OVERCOMMIT: return "overcommit";
+	case DUEL_TRACK_EVENT_ATTACK_START: return "attack_start";
+	case DUEL_TRACK_EVENT_ATTACK_CHAIN: return "attack_chain";
+	case DUEL_TRACK_EVENT_COUNTER_SUCCESS: return "counter_success";
+	case DUEL_TRACK_EVENT_PUNISH_SUCCESS: return "punish_success";
+	case DUEL_TRACK_EVENT_SABER_RETURN_PUNISH: return "saber_return_punish";
+	case DUEL_TRACK_EVENT_FORCE_TO_SABER: return "force_to_saber";
+	case DUEL_TRACK_EVENT_KNOCKDOWN_FOLLOWUP: return "knockdown_followup";
 	default: return "note";
+	}
+}
+
+static void G_FillTrackedEventContext(tracked_duel_event_t *event, gentity_t *self, gentity_t *enemy, qboolean captureGeometry)
+{
+	if (!event || !self || !self->client)
+		return;
+
+	event->buttons = (unsigned short)(self->client->pers.cmd.buttons & 0xFFFF);
+	event->saberMove = self->client->ps.saberMove;
+	event->selfYaw = self->client->ps.viewangles[YAW];
+	if (enemy && enemy->client)
+	{
+		event->enemySaberMove = enemy->client->ps.saberMove;
+		event->enemyYaw = enemy->client->ps.viewangles[YAW];
+		event->yawDelta = (short)AngleSubtract(event->selfYaw, event->enemyYaw);
+		G_GetDuelTrackingIdentity(enemy, event->opponentKey, sizeof(event->opponentKey),
+			event->opponentLabel, sizeof(event->opponentLabel), (int *)&event->opponentKind);
+		if (captureGeometry)
+		{
+			VectorCopy(self->client->ps.origin, event->selfOrigin);
+			VectorCopy(enemy->client->ps.origin, event->enemyOrigin);
+			VectorCopy(self->client->ps.velocity, event->selfVelocity);
+			VectorCopy(enemy->client->ps.velocity, event->enemyVelocity);
+			event->hasGeometry = 1;
+		}
 	}
 }
 
@@ -865,6 +1160,7 @@ static void G_SetTrackedOpeningIfEmpty(tracked_duel_runtime_t *runtime, duel_tra
 static void G_AddTrackedDuelEvent(tracked_duel_runtime_t *runtime, int eventType, int relTime, int amount, duel_track_power_t power, int state, int rangeBucket, const char *note, gentity_t *self, gentity_t *enemy)
 {
 	tracked_duel_event_t *event;
+	const qboolean captureGeometry = G_ShouldCaptureTrackedGeometryEvent(eventType);
 
 	if (!runtime || !runtime->active || runtime->eventCount >= TRACKED_DUEL_MAX_EVENTS)
 		return;
@@ -878,16 +1174,145 @@ static void G_AddTrackedDuelEvent(tracked_duel_runtime_t *runtime, int eventType
 	event->power = (unsigned char)power;
 	event->state = (unsigned char)state;
 	event->rangeBucket = (unsigned char)rangeBucket;
-	if (G_ShouldCaptureTrackedGeometryEvent(eventType) && self && enemy && self->client && enemy->client)
+	G_FillTrackedEventContext(event, self, enemy, captureGeometry);
+	if (note)
+		Q_strncpyz(event->note, note, sizeof(event->note));
+}
+
+static duel_track_power_t G_InferTrackedPowerSpendArcade(gentity_t *ent, tracked_arcade_runtime_t *runtime)
+{
+	static const int sustainedPowers[] = { FP_GRIP, FP_DRAIN, FP_ABSORB, FP_PROTECT, FP_SPEED, FP_SEE, FP_RAGE };
+	int i;
+	duel_track_power_t mappedPower;
+
+	if (!ent || !ent->client || !runtime)
+		return DUEL_TRACK_POWER_UNKNOWN;
+
+	mappedPower = G_MapForcePowerToTrackedPower(ent->client->ps.fd.forcePowerSelected);
+	if (mappedPower != DUEL_TRACK_POWER_UNKNOWN)
+		return mappedPower;
+
+	for (i = 0; i < (int)(sizeof(sustainedPowers) / sizeof(sustainedPowers[0])); i++)
 	{
-		VectorCopy(self->client->ps.origin, event->selfOrigin);
-		VectorCopy(enemy->client->ps.origin, event->enemyOrigin);
-		VectorCopy(self->client->ps.velocity, event->selfVelocity);
-		VectorCopy(enemy->client->ps.velocity, event->enemyVelocity);
-		event->selfYaw = self->client->ps.viewangles[YAW];
-		event->enemyYaw = enemy->client->ps.viewangles[YAW];
-		event->hasGeometry = 1;
+		const int bit = 1 << sustainedPowers[i];
+		if ((runtime->lastPowersActive & bit) || (ent->client->ps.fd.forcePowersActive & bit))
+		{
+			mappedPower = G_MapForcePowerToTrackedPower(sustainedPowers[i]);
+			if (mappedPower != DUEL_TRACK_POWER_UNKNOWN)
+				return mappedPower;
+		}
 	}
+
+	mappedPower = G_MapForcePowerToTrackedPower(runtime->lastSelectedPower);
+	return mappedPower;
+}
+
+static gentity_t *G_GetTrackedArcadePrimaryOpponent(gentity_t *ent)
+{
+	gentity_t *bestManaged = NULL;
+	gentity_t *bestBot = NULL;
+	gentity_t *bestFallback = NULL;
+	float bestManagedDist = 0.0f;
+	float bestBotDist = 0.0f;
+	float bestFallbackDist = 0.0f;
+	int i;
+
+	if (!ent || !ent->client)
+		return NULL;
+
+	for (i = 0; i < MAX_CLIENTS; i++)
+	{
+		gentity_t *other = &g_entities[i];
+		vec3_t diff;
+		float distSq;
+
+		if (other == ent || !other->inuse || !other->client ||
+			other->client->pers.connected != CON_CONNECTED ||
+			other->client->sess.sessionTeam == TEAM_SPECTATOR ||
+			other->health < 1)
+		{
+			continue;
+		}
+
+		VectorSubtract(ent->client->ps.origin, other->client->ps.origin, diff);
+		distSq = DotProduct(diff, diff);
+
+		if (level.arcadeManagedBot[i])
+		{
+			if (!bestManaged || distSq < bestManagedDist)
+			{
+				bestManaged = other;
+				bestManagedDist = distSq;
+			}
+			continue;
+		}
+		if (other->r.svFlags & SVF_BOT)
+		{
+			if (!bestBot || distSq < bestBotDist)
+			{
+				bestBot = other;
+				bestBotDist = distSq;
+			}
+			continue;
+		}
+		if (level.arcadeParticipant[i] && !level.arcadeEliminated[i])
+		{
+			if (!bestFallback || distSq < bestFallbackDist)
+			{
+				bestFallback = other;
+				bestFallbackDist = distSq;
+			}
+		}
+	}
+
+	if (bestManaged)
+		return bestManaged;
+	if (bestBot)
+		return bestBot;
+	return bestFallback;
+}
+
+static int G_GetTrackedCombatHealthArmor(gentity_t *ent)
+{
+	if (!ent || !ent->client)
+		return 0;
+	return ent->health + ent->client->ps.stats[STAT_ARMOR];
+}
+
+static void G_TouchTrackedArcadeSequence(tracked_arcade_runtime_t *runtime)
+{
+	if (!runtime)
+		return;
+
+	if (runtime->currentSequenceId <= 0 ||
+		level.time - runtime->lastSequenceTime > TRACKED_ARCADE_SEQUENCE_TIMEOUT_MS)
+	{
+		runtime->currentSequenceId++;
+		if (runtime->currentSequenceId <= 0)
+			runtime->currentSequenceId = 1;
+	}
+	runtime->lastSequenceTime = level.time;
+}
+
+static void G_AddTrackedArcadeEvent(tracked_arcade_runtime_t *runtime, int eventType, int relTime, int amount, duel_track_power_t power, int state, int rangeBucket, const char *note, gentity_t *self, gentity_t *enemy)
+{
+	tracked_duel_event_t *event;
+	const qboolean captureGeometry = G_ShouldCaptureTrackedGeometryEvent(eventType);
+
+	if (!runtime || !runtime->active || runtime->eventCount >= TRACKED_DUEL_MAX_EVENTS)
+		return;
+
+	event = &runtime->events[runtime->eventCount++];
+	memset(event, 0, sizeof(*event));
+	event->relTime = relTime;
+	event->amount = amount;
+	event->eventIndex = runtime->eventCount;
+	event->eventType = (unsigned char)eventType;
+	event->power = (unsigned char)power;
+	event->state = (unsigned char)state;
+	event->rangeBucket = (unsigned char)rangeBucket;
+	event->sequenceId = (unsigned short)((runtime->currentSequenceId > 0) ? runtime->currentSequenceId : 0);
+	G_FillTrackedEventContext(event, self, enemy, captureGeometry);
 	if (note)
 		Q_strncpyz(event->note, note, sizeof(event->note));
 }
@@ -1595,7 +2020,7 @@ static void G_InsertTrackedEvents(sqlite3 *db, sqlite3_int64 summaryId, tracked_
 	if (!runtime || runtime->eventCount <= 0)
 		return;
 
-	sql = "INSERT INTO LocalDuelTrackEvent(summary_id, participant_key, opponent_key, rel_time, event_index, event_type, power, amount, state, range_bucket, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+	sql = "INSERT INTO LocalDuelTrackEvent(summary_id, participant_key, opponent_key, rel_time, event_index, event_type, power, amount, state, range_bucket, sequence_id, buttons, saber_move, enemy_saber_move, yaw_delta, opponent_label, opponent_kind, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
 	captureGeometry = G_IsTrackedGeometryEnabled();
 	if (captureGeometry)
@@ -1628,7 +2053,14 @@ static void G_InsertTrackedEvents(sqlite3 *db, sqlite3_int64 summaryId, tracked_
 		CALL_SQLITE(bind_int(stmt, 8, event->amount));
 		CALL_SQLITE(bind_int(stmt, 9, event->state));
 		CALL_SQLITE(bind_int(stmt, 10, event->rangeBucket));
-		CALL_SQLITE(bind_text(stmt, 11, event->note, -1, SQLITE_STATIC));
+		CALL_SQLITE(bind_int(stmt, 11, event->sequenceId));
+		CALL_SQLITE(bind_int(stmt, 12, event->buttons));
+		CALL_SQLITE(bind_int(stmt, 13, event->saberMove));
+		CALL_SQLITE(bind_int(stmt, 14, event->enemySaberMove));
+		CALL_SQLITE(bind_int(stmt, 15, event->yawDelta));
+		CALL_SQLITE(bind_text(stmt, 16, event->opponentLabel, -1, SQLITE_STATIC));
+		CALL_SQLITE(bind_int(stmt, 17, event->opponentKind));
+		CALL_SQLITE(bind_text(stmt, 18, event->note, -1, SQLITE_STATIC));
 		s = sqlite3_step(stmt);
 		if (s != SQLITE_DONE)
 		{
@@ -1763,28 +2195,30 @@ static void G_PersistTrackedDuel(tracked_duel_runtime_t *winnerRuntime, tracked_
 	endTimestamp = (int)rawtime;
 	startTimestamp = endTimestamp - durationSeconds;
 
-	CALL_SQLITE(open(LOCAL_DB_PATH, &db));
+	if (!G_OpenTrackedLocalDB(&db, NULL, 0))
+		return;
 	G_EnsureLocalArcadeSchema(db);
 	G_EnsureLocalDuelTrackingSchema(db);
 
-	sql = "INSERT INTO LocalDuelTrackSummary(start_time, end_time, duration, type, mapname, winner_key, winner_label, winner_kind, winner_side, loser_key, loser_label, loser_kind, loser_side, draw, winner_opening, loser_opening) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+	sql = "INSERT INTO LocalDuelTrackSummary(source_context, start_time, end_time, duration, type, mapname, winner_key, winner_label, winner_kind, winner_side, loser_key, loser_label, loser_kind, loser_side, draw, winner_opening, loser_opening) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
-	CALL_SQLITE(bind_int(stmt, 1, startTimestamp));
-	CALL_SQLITE(bind_int(stmt, 2, endTimestamp));
-	CALL_SQLITE(bind_int(stmt, 3, durationSeconds));
-	CALL_SQLITE(bind_int(stmt, 4, duelType));
-	CALL_SQLITE(bind_text(stmt, 5, level.rawmapname, -1, SQLITE_STATIC));
-	CALL_SQLITE(bind_text(stmt, 6, summaryFirst->identityKey, -1, SQLITE_STATIC));
-	CALL_SQLITE(bind_text(stmt, 7, summaryFirst->identityLabel, -1, SQLITE_STATIC));
-	CALL_SQLITE(bind_int(stmt, 8, summaryFirst->identityKind));
-	CALL_SQLITE(bind_int(stmt, 9, summaryFirst->side));
-	CALL_SQLITE(bind_text(stmt, 10, summarySecond->identityKey, -1, SQLITE_STATIC));
-	CALL_SQLITE(bind_text(stmt, 11, summarySecond->identityLabel, -1, SQLITE_STATIC));
-	CALL_SQLITE(bind_int(stmt, 12, summarySecond->identityKind));
-	CALL_SQLITE(bind_int(stmt, 13, summarySecond->side));
-	CALL_SQLITE(bind_int(stmt, 14, draw ? 1 : 0));
-	CALL_SQLITE(bind_text(stmt, 15, summaryFirst->openingTactic, -1, SQLITE_STATIC));
-	CALL_SQLITE(bind_text(stmt, 16, summarySecond->openingTactic, -1, SQLITE_STATIC));
+	CALL_SQLITE(bind_text(stmt, 1, "duel", -1, SQLITE_STATIC));
+	CALL_SQLITE(bind_int(stmt, 2, startTimestamp));
+	CALL_SQLITE(bind_int(stmt, 3, endTimestamp));
+	CALL_SQLITE(bind_int(stmt, 4, durationSeconds));
+	CALL_SQLITE(bind_int(stmt, 5, duelType));
+	CALL_SQLITE(bind_text(stmt, 6, level.rawmapname, -1, SQLITE_STATIC));
+	CALL_SQLITE(bind_text(stmt, 7, summaryFirst->identityKey, -1, SQLITE_STATIC));
+	CALL_SQLITE(bind_text(stmt, 8, summaryFirst->identityLabel, -1, SQLITE_STATIC));
+	CALL_SQLITE(bind_int(stmt, 9, summaryFirst->identityKind));
+	CALL_SQLITE(bind_int(stmt, 10, summaryFirst->side));
+	CALL_SQLITE(bind_text(stmt, 11, summarySecond->identityKey, -1, SQLITE_STATIC));
+	CALL_SQLITE(bind_text(stmt, 12, summarySecond->identityLabel, -1, SQLITE_STATIC));
+	CALL_SQLITE(bind_int(stmt, 13, summarySecond->identityKind));
+	CALL_SQLITE(bind_int(stmt, 14, summarySecond->side));
+	CALL_SQLITE(bind_int(stmt, 15, draw ? 1 : 0));
+	CALL_SQLITE(bind_text(stmt, 16, summaryFirst->openingTactic, -1, SQLITE_STATIC));
+	CALL_SQLITE(bind_text(stmt, 17, summarySecond->openingTactic, -1, SQLITE_STATIC));
 	s = sqlite3_step(stmt);
 	if (s != SQLITE_DONE)
 		G_ErrorPrint("ERROR: SQL Insert Failed (LocalDuelTrackSummary)", s);
@@ -2004,6 +2438,422 @@ void G_ClearTrackedDuelIfMismatched(gentity_t *ent, gentity_t *opponent)
 	G_ClearTrackedDuelRuntime(ent->s.number);
 	if (otherRuntime->active && otherRuntime->opponentClientNum == ent->s.number)
 		G_ClearTrackedDuelRuntime(opponent->s.number);
+}
+
+static qboolean G_InsertTrackedArcadeEvents(sqlite3 *db, sqlite3_int64 sessionId, tracked_arcade_runtime_t *runtime)
+{
+	sqlite3_stmt *stmt = NULL;
+	sqlite3_stmt *geomStmt = NULL;
+	char *sql;
+	int i;
+	int s;
+	qboolean captureGeometry = qfalse;
+	qboolean hasAnyGeometry = qfalse;
+	qboolean insertFailed = qfalse;
+
+	if (!runtime || runtime->eventCount <= 0)
+		return qtrue;
+
+	captureGeometry = G_IsTrackedGeometryEnabled();
+	if (captureGeometry)
+	{
+		for (i = 0; i < runtime->eventCount; i++)
+		{
+			if (runtime->events[i].hasGeometry)
+			{
+				hasAnyGeometry = qtrue;
+				break;
+			}
+		}
+	}
+	sql = "INSERT INTO LocalArcadeTrackEvent(session_id, participant_key, participant_label, participant_kind, opponent_key, opponent_label, opponent_kind, rel_time, event_index, sequence_id, event_type, power, amount, state, range_bucket, buttons, saber_move, enemy_saber_move, yaw_delta, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
+	if (captureGeometry && hasAnyGeometry)
+	{
+		sql = "INSERT INTO LocalArcadeTrackGeometry(session_id, participant_key, opponent_key, rel_time, event_index, self_x, self_y, self_z, enemy_x, enemy_y, enemy_z, self_vx, self_vy, self_vz, enemy_vx, enemy_vy, enemy_vz, self_yaw, enemy_yaw) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+		CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &geomStmt, NULL));
+	}
+
+	for (i = 0; i < runtime->eventCount; i++)
+	{
+		tracked_duel_event_t *event = &runtime->events[i];
+		CALL_SQLITE(bind_int64(stmt, 1, sessionId));
+		CALL_SQLITE(bind_text(stmt, 2, runtime->identityKey, -1, SQLITE_STATIC));
+		CALL_SQLITE(bind_text(stmt, 3, runtime->identityLabel, -1, SQLITE_STATIC));
+		CALL_SQLITE(bind_int(stmt, 4, runtime->identityKind));
+		CALL_SQLITE(bind_text(stmt, 5, event->opponentKey, -1, SQLITE_STATIC));
+		CALL_SQLITE(bind_text(stmt, 6, event->opponentLabel, -1, SQLITE_STATIC));
+		CALL_SQLITE(bind_int(stmt, 7, event->opponentKind));
+		CALL_SQLITE(bind_int(stmt, 8, event->relTime));
+		CALL_SQLITE(bind_int(stmt, 9, event->eventIndex));
+		CALL_SQLITE(bind_int(stmt, 10, event->sequenceId));
+		CALL_SQLITE(bind_text(stmt, 11, G_GetTrackedEventTypeName(event->eventType), -1, SQLITE_STATIC));
+		CALL_SQLITE(bind_int(stmt, 12, event->power));
+		CALL_SQLITE(bind_int(stmt, 13, event->amount));
+		CALL_SQLITE(bind_int(stmt, 14, event->state));
+		CALL_SQLITE(bind_int(stmt, 15, event->rangeBucket));
+		CALL_SQLITE(bind_int(stmt, 16, event->buttons));
+		CALL_SQLITE(bind_int(stmt, 17, event->saberMove));
+		CALL_SQLITE(bind_int(stmt, 18, event->enemySaberMove));
+		CALL_SQLITE(bind_int(stmt, 19, event->yawDelta));
+		CALL_SQLITE(bind_text(stmt, 20, event->note, -1, SQLITE_STATIC));
+		s = sqlite3_step(stmt);
+		if (s != SQLITE_DONE)
+		{
+			G_ErrorPrint("ERROR: SQL Insert Failed (LocalArcadeTrackEvent)", s);
+			insertFailed = qtrue;
+			break;
+		}
+		CALL_SQLITE(reset(stmt));
+		CALL_SQLITE(clear_bindings(stmt));
+
+		if (captureGeometry && hasAnyGeometry && event->hasGeometry)
+		{
+			CALL_SQLITE(bind_int64(geomStmt, 1, sessionId));
+			CALL_SQLITE(bind_text(geomStmt, 2, runtime->identityKey, -1, SQLITE_STATIC));
+			CALL_SQLITE(bind_text(geomStmt, 3, event->opponentKey, -1, SQLITE_STATIC));
+			CALL_SQLITE(bind_int(geomStmt, 4, event->relTime));
+			CALL_SQLITE(bind_int(geomStmt, 5, event->eventIndex));
+			CALL_SQLITE(bind_double(geomStmt, 6, event->selfOrigin[0]));
+			CALL_SQLITE(bind_double(geomStmt, 7, event->selfOrigin[1]));
+			CALL_SQLITE(bind_double(geomStmt, 8, event->selfOrigin[2]));
+			CALL_SQLITE(bind_double(geomStmt, 9, event->enemyOrigin[0]));
+			CALL_SQLITE(bind_double(geomStmt, 10, event->enemyOrigin[1]));
+			CALL_SQLITE(bind_double(geomStmt, 11, event->enemyOrigin[2]));
+			CALL_SQLITE(bind_double(geomStmt, 12, event->selfVelocity[0]));
+			CALL_SQLITE(bind_double(geomStmt, 13, event->selfVelocity[1]));
+			CALL_SQLITE(bind_double(geomStmt, 14, event->selfVelocity[2]));
+			CALL_SQLITE(bind_double(geomStmt, 15, event->enemyVelocity[0]));
+			CALL_SQLITE(bind_double(geomStmt, 16, event->enemyVelocity[1]));
+			CALL_SQLITE(bind_double(geomStmt, 17, event->enemyVelocity[2]));
+			CALL_SQLITE(bind_double(geomStmt, 18, event->selfYaw));
+			CALL_SQLITE(bind_double(geomStmt, 19, event->enemyYaw));
+			s = sqlite3_step(geomStmt);
+			if (s != SQLITE_DONE)
+			{
+				G_ErrorPrint("ERROR: SQL Insert Failed (LocalArcadeTrackGeometry)", s);
+				insertFailed = qtrue;
+				break;
+			}
+			CALL_SQLITE(reset(geomStmt));
+			CALL_SQLITE(clear_bindings(geomStmt));
+		}
+	}
+
+	CALL_SQLITE(finalize(stmt));
+	if (captureGeometry && hasAnyGeometry)
+		CALL_SQLITE(finalize(geomStmt));
+	return insertFailed ? qfalse : qtrue;
+}
+
+static void G_PersistTrackedArcadeCombat(tracked_arcade_runtime_t *runtime, const char *result, int arcadeLevel)
+{
+	sqlite3 *db;
+	sqlite3_stmt *stmt = NULL;
+	char *sql;
+	qboolean persistOk = qfalse;
+	int s;
+	sqlite3_int64 sessionId;
+	time_t rawtime;
+	int endTimestamp;
+	int startTimestamp;
+	const int duration = (runtime && runtime->startTime > 0) ? (level.time - runtime->startTime) : 0;
+	const int durationSeconds = duration / 1000;
+
+	if (!runtime)
+		return;
+
+	time(&rawtime);
+	endTimestamp = (int)rawtime;
+	startTimestamp = endTimestamp - durationSeconds;
+
+	if (!G_OpenTrackedLocalDB(&db, NULL, 0))
+		return;
+	G_EnsureLocalArcadeSchema(db);
+	G_EnsureLocalDuelTrackingSchema(db);
+	CALL_SQLITE(exec(db, "BEGIN TRANSACTION", NULL, NULL, NULL));
+
+	sql = "INSERT INTO LocalArcadeTrackSession(source_context, start_time, end_time, duration, mapname, participant_key, participant_label, participant_kind, result, arcade_level, total_kills, total_force_spent, total_force_regen, total_damage_taken, total_damage_dealt, low_force_windows, knockdown_events, counter_successes, punish_successes, reset_successes, saber_return_punishes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
+	CALL_SQLITE(bind_text(stmt, 1, "arcade", -1, SQLITE_STATIC));
+	CALL_SQLITE(bind_int(stmt, 2, startTimestamp));
+	CALL_SQLITE(bind_int(stmt, 3, endTimestamp));
+	CALL_SQLITE(bind_int(stmt, 4, durationSeconds));
+	CALL_SQLITE(bind_text(stmt, 5, level.rawmapname, -1, SQLITE_STATIC));
+	CALL_SQLITE(bind_text(stmt, 6, runtime->identityKey, -1, SQLITE_STATIC));
+	CALL_SQLITE(bind_text(stmt, 7, runtime->identityLabel, -1, SQLITE_STATIC));
+	CALL_SQLITE(bind_int(stmt, 8, runtime->identityKind));
+	CALL_SQLITE(bind_text(stmt, 9, result ? result : "finished", -1, SQLITE_STATIC));
+	CALL_SQLITE(bind_int(stmt, 10, arcadeLevel));
+	CALL_SQLITE(bind_int(stmt, 11, runtime->killCount));
+	CALL_SQLITE(bind_int(stmt, 12, runtime->totalForceSpent));
+	CALL_SQLITE(bind_int(stmt, 13, runtime->totalForceRegen));
+	CALL_SQLITE(bind_int(stmt, 14, runtime->totalDamageTaken));
+	CALL_SQLITE(bind_int(stmt, 15, runtime->totalDamageDealt));
+	CALL_SQLITE(bind_int(stmt, 16, runtime->lowForceWindows));
+	CALL_SQLITE(bind_int(stmt, 17, runtime->knockdownEvents));
+	CALL_SQLITE(bind_int(stmt, 18, runtime->counterSuccessEvents));
+	CALL_SQLITE(bind_int(stmt, 19, runtime->punishSuccessEvents));
+	CALL_SQLITE(bind_int(stmt, 20, runtime->resetSuccessEvents));
+	CALL_SQLITE(bind_int(stmt, 21, runtime->saberReturnPunishes));
+	s = sqlite3_step(stmt);
+	if (s != SQLITE_DONE)
+		G_ErrorPrint("ERROR: SQL Insert Failed (LocalArcadeTrackSession)", s);
+	CALL_SQLITE(finalize(stmt));
+	sessionId = sqlite3_last_insert_rowid(db);
+
+	persistOk = (s == SQLITE_DONE) ? G_InsertTrackedArcadeEvents(db, sessionId, runtime) : qfalse;
+	if (persistOk)
+	{
+		CALL_SQLITE(exec(db, "COMMIT", NULL, NULL, NULL));
+	}
+	else
+	{
+		CALL_SQLITE(exec(db, "ROLLBACK", NULL, NULL, NULL));
+	}
+	CALL_SQLITE(close(db));
+}
+
+void G_StartTrackedArcadeCombat(gentity_t *ent)
+{
+	tracked_arcade_runtime_t *runtime;
+	gentity_t *opponent;
+
+	if (!G_IsTrackedDuelCollectionEnabled() || !ent || !ent->client || (ent->r.svFlags & SVF_BOT))
+		return;
+
+	runtime = &g_trackedArcadeCombats[ent->s.number];
+	memset(runtime, 0, sizeof(*runtime));
+	runtime->active = qtrue;
+	runtime->startTime = level.time;
+	runtime->lastForce = ent->client->ps.fd.forcePower;
+	runtime->lowestForce = ent->client->ps.fd.forcePower;
+	runtime->lastHealthArmor = G_GetTrackedCombatHealthArmor(ent);
+	runtime->lastSelectedPower = ent->client->ps.fd.forcePowerSelected;
+	runtime->lastPowersActive = ent->client->ps.fd.forcePowersActive;
+	runtime->lastAirborne = (ent->client->ps.groundEntityNum == ENTITYNUM_NONE) ? 1 : 0;
+	runtime->lastKnockdown = BG_InKnockDown(ent->client->ps.legsAnim) ? 1 : 0;
+	runtime->lastGripCripple = ent->client->ps.fd.forceGripCripple ? 1 : 0;
+	runtime->lastButtons = ent->client->pers.cmd.buttons;
+	runtime->lastSaberMove = ent->client->ps.saberMove;
+	G_GetDuelTrackingIdentity(ent, runtime->identityKey, sizeof(runtime->identityKey), runtime->identityLabel, sizeof(runtime->identityLabel), &runtime->identityKind);
+
+	opponent = G_GetTrackedArcadePrimaryOpponent(ent);
+	if (opponent && opponent->client)
+	{
+		runtime->lastOpponentClientNum = opponent->s.number;
+		runtime->lastRangeBucket = G_GetTrackedRangeBucket(ent, opponent);
+		runtime->lastOpponentHealthArmor = G_GetTrackedCombatHealthArmor(opponent);
+	}
+	else
+	{
+		runtime->lastOpponentClientNum = ENTITYNUM_NONE;
+		runtime->lastRangeBucket = 0;
+		runtime->lastOpponentHealthArmor = 0;
+	}
+}
+
+void G_UpdateTrackedArcadeCombatFrame(gentity_t *ent)
+{
+	tracked_arcade_runtime_t *runtime;
+	gentity_t *opponent;
+	int curForce;
+	int curHealthArmor;
+	int forceDelta;
+	int healthDelta;
+	int curRangeBucket = 0;
+	int airborne;
+	int knockedDown;
+	int state = DUEL_TRACK_STATE_NEUTRAL;
+	int opponentHealthArmor = 0;
+	int attackButtons;
+	const int attackMask = BUTTON_ATTACK | BUTTON_ALT_ATTACK;
+
+	if (!ent || !ent->client)
+		return;
+	if (!G_IsTrackedDuelCollectionEnabled())
+		return;
+
+	runtime = &g_trackedArcadeCombats[ent->s.number];
+	if (!runtime->active)
+		return;
+
+	opponent = G_GetTrackedArcadePrimaryOpponent(ent);
+	if (opponent && opponent->client)
+	{
+		curRangeBucket = G_GetTrackedRangeBucket(ent, opponent);
+		state = G_InferTrackedForceState(ent, opponent);
+		opponentHealthArmor = G_GetTrackedCombatHealthArmor(opponent);
+	}
+
+	curForce = ent->client->ps.fd.forcePower;
+	curHealthArmor = G_GetTrackedCombatHealthArmor(ent);
+	airborne = (ent->client->ps.groundEntityNum == ENTITYNUM_NONE) ? 1 : 0;
+	knockedDown = BG_InKnockDown(ent->client->ps.legsAnim) ? 1 : 0;
+
+	if ((state == DUEL_TRACK_STATE_PANIC || state == DUEL_TRACK_STATE_DISADVANTAGE) &&
+		curForce <= TRACKED_DUEL_LOW_FORCE_THRESHOLD)
+	{
+		runtime->lastForceSpendTime = level.time;
+	}
+
+	attackButtons = ent->client->pers.cmd.buttons & attackMask;
+	if (opponent && attackButtons && !(runtime->lastButtons & attackMask))
+	{
+		G_TouchTrackedArcadeSequence(runtime);
+		runtime->lastAttackTime = level.time;
+		G_AddTrackedArcadeEvent(runtime, DUEL_TRACK_EVENT_ATTACK_START, level.time - runtime->startTime, attackButtons, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, (attackButtons & BUTTON_ALT_ATTACK) ? "alt" : "attack", ent, opponent);
+		if (runtime->lastForceSpendTime > 0 &&
+			level.time - runtime->lastForceSpendTime <= TRACKED_ARCADE_FORCE_TO_SABER_WINDOW_MS)
+		{
+			G_AddTrackedArcadeEvent(runtime, DUEL_TRACK_EVENT_FORCE_TO_SABER, level.time - runtime->startTime, ent->client->ps.saberMove, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, "force_to_saber", ent, opponent);
+		}
+	}
+	else if (opponent && attackButtons &&
+		ent->client->ps.saberMove != runtime->lastSaberMove &&
+		BG_SaberInAttack(ent->client->ps.saberMove) &&
+		runtime->lastAttackTime > 0 &&
+		level.time - runtime->lastAttackTime <= TRACKED_ARCADE_ATTACK_CHAIN_WINDOW_MS)
+	{
+		G_TouchTrackedArcadeSequence(runtime);
+		runtime->lastAttackTime = level.time;
+		G_AddTrackedArcadeEvent(runtime, DUEL_TRACK_EVENT_ATTACK_CHAIN, level.time - runtime->startTime, ent->client->ps.saberMove, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, "chain", ent, opponent);
+	}
+
+	forceDelta = curForce - runtime->lastForce;
+	if (forceDelta < 0)
+	{
+		const int spent = -forceDelta;
+		duel_track_power_t power = G_InferTrackedPowerSpendArcade(ent, runtime);
+
+		runtime->totalForceSpent += spent;
+		if (state == DUEL_TRACK_STATE_PANIC && curForce <= TRACKED_DUEL_LOW_FORCE_THRESHOLD)
+			runtime->lowForceWindows++;
+		runtime->lastForceSpendTime = level.time;
+		G_AddTrackedArcadeEvent(runtime, DUEL_TRACK_EVENT_FORCE, level.time - runtime->startTime, spent, power, state, curRangeBucket, NULL, ent, opponent);
+	}
+	else if (forceDelta > 0)
+	{
+		runtime->totalForceRegen += forceDelta;
+		G_AddTrackedArcadeEvent(runtime, DUEL_TRACK_EVENT_REGEN, level.time - runtime->startTime, forceDelta, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, NULL, ent, opponent);
+		if (runtime->lastForce <= TRACKED_DUEL_LOW_FORCE_THRESHOLD &&
+			curForce > TRACKED_DUEL_LOW_FORCE_THRESHOLD)
+		{
+			runtime->resetSuccessEvents++;
+			G_AddTrackedArcadeEvent(runtime, DUEL_TRACK_EVENT_RESET_SUCCESS, level.time - runtime->startTime, forceDelta, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, "reset", ent, opponent);
+		}
+	}
+
+	healthDelta = curHealthArmor - runtime->lastHealthArmor;
+	if (healthDelta < 0)
+	{
+		const int taken = -healthDelta;
+
+		runtime->totalDamageTaken += taken;
+		runtime->lastDamageTakenTime = level.time;
+		G_AddTrackedArcadeEvent(runtime, DUEL_TRACK_EVENT_DAMAGE, level.time - runtime->startTime, taken, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, (opponent && opponent->client && opponent->client->ps.saberInFlight) ? "saberthrow" : NULL, ent, opponent);
+	}
+
+	if (opponent && runtime->lastOpponentClientNum == opponent->s.number &&
+		runtime->lastOpponentHealthArmor > 0 &&
+		opponentHealthArmor < runtime->lastOpponentHealthArmor)
+	{
+		const int dealt = runtime->lastOpponentHealthArmor - opponentHealthArmor;
+
+		runtime->totalDamageDealt += dealt;
+		G_TouchTrackedArcadeSequence(runtime);
+		if (runtime->lastDamageTakenTime > 0 &&
+			level.time - runtime->lastDamageTakenTime <= TRACKED_ARCADE_COUNTER_WINDOW_MS)
+		{
+			runtime->counterSuccessEvents++;
+			G_AddTrackedArcadeEvent(runtime, DUEL_TRACK_EVENT_COUNTER_SUCCESS, level.time - runtime->startTime, dealt, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, "counter", ent, opponent);
+		}
+		else if (runtime->lastAttackTime > 0 &&
+			level.time - runtime->lastAttackTime <= TRACKED_ARCADE_PUNISH_WINDOW_MS)
+		{
+			runtime->punishSuccessEvents++;
+			G_AddTrackedArcadeEvent(runtime, DUEL_TRACK_EVENT_PUNISH_SUCCESS, level.time - runtime->startTime, dealt, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, "punish", ent, opponent);
+		}
+		if (opponent->client->ps.saberInFlight)
+		{
+			runtime->saberReturnPunishes++;
+			G_AddTrackedArcadeEvent(runtime, DUEL_TRACK_EVENT_SABER_RETURN_PUNISH, level.time - runtime->startTime, dealt, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, "return", ent, opponent);
+		}
+		if (BG_InKnockDown(opponent->client->ps.legsAnim))
+		{
+			G_AddTrackedArcadeEvent(runtime, DUEL_TRACK_EVENT_KNOCKDOWN_FOLLOWUP, level.time - runtime->startTime, dealt, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, "followup", ent, opponent);
+		}
+	}
+
+	if ((opponent && curRangeBucket != runtime->lastRangeBucket) ||
+		(!opponent && runtime->lastOpponentClientNum != ENTITYNUM_NONE))
+	{
+		G_AddTrackedArcadeEvent(runtime, DUEL_TRACK_EVENT_RANGE, level.time - runtime->startTime, curRangeBucket, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, opponent ? NULL : "no_target", ent, opponent);
+	}
+
+	if (airborne != runtime->lastAirborne)
+		G_AddTrackedArcadeEvent(runtime, DUEL_TRACK_EVENT_AIR, level.time - runtime->startTime, airborne, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, airborne ? "airborne" : "landed", ent, opponent);
+
+	if (knockedDown && !runtime->lastKnockdown)
+	{
+		runtime->knockdownEvents++;
+		G_AddTrackedArcadeEvent(runtime, DUEL_TRACK_EVENT_KNOCKDOWN, level.time - runtime->startTime, 1, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, "knockdown", ent, opponent);
+	}
+
+	if (curForce < runtime->lowestForce)
+		runtime->lowestForce = curForce;
+
+	runtime->lastForce = curForce;
+	runtime->lastHealthArmor = curHealthArmor;
+	runtime->lastSelectedPower = ent->client->ps.fd.forcePowerSelected;
+	runtime->lastPowersActive = ent->client->ps.fd.forcePowersActive;
+	runtime->lastRangeBucket = curRangeBucket;
+	runtime->lastAirborne = airborne;
+	runtime->lastKnockdown = knockedDown;
+	runtime->lastGripCripple = ent->client->ps.fd.forceGripCripple ? 1 : 0;
+	runtime->lastButtons = ent->client->pers.cmd.buttons;
+	runtime->lastSaberMove = ent->client->ps.saberMove;
+	if (opponent && opponent->client)
+	{
+		runtime->lastOpponentClientNum = opponent->s.number;
+		runtime->lastOpponentHealthArmor = opponentHealthArmor;
+	}
+	else
+	{
+		runtime->lastOpponentClientNum = ENTITYNUM_NONE;
+		runtime->lastOpponentHealthArmor = 0;
+	}
+}
+
+void G_FinishTrackedArcadeCombat(gentity_t *ent, const char *result)
+{
+	tracked_arcade_runtime_t runtimeCopy;
+	tracked_arcade_runtime_t *runtime;
+
+	if (!ent || !ent->client)
+		return;
+
+	runtime = &g_trackedArcadeCombats[ent->s.number];
+	if (!runtime->active)
+		return;
+
+	runtime->endingForce = ent->client->ps.fd.forcePower;
+	runtime->endingHP = ent->health;
+	runtime->endingArmor = ent->client->ps.stats[STAT_ARMOR];
+	if (ent->s.number >= 0 && ent->s.number < MAX_CLIENTS)
+		runtime->killCount = level.arcadeRoundKills[ent->s.number];
+
+	memcpy(&runtimeCopy, runtime, sizeof(runtimeCopy));
+	memset(runtime, 0, sizeof(*runtime));
+	G_PersistTrackedArcadeCombat(&runtimeCopy, result, level.arcadeLevel);
+}
+
+void G_ClearTrackedArcadeCombat(int clientNum)
+{
+	if (clientNum < 0 || clientNum >= MAX_CLIENTS)
+		return;
+
+	memset(&g_trackedArcadeCombats[clientNum], 0, sizeof(g_trackedArcadeCombats[clientNum]));
 }
 
 static void G_EnsureLocalArcadeSchema(sqlite3 *db)
@@ -2961,14 +3811,16 @@ void Cmd_DuelTop10_f(gentity_t *ent) {
 				s = sqlite3_step(stmt);
 				if (s == SQLITE_ROW) {
 					char *tmpMsg = NULL;
+					char displayName[32];
 					int score = 0, levelReached = 0, kills = 0;
 
 					Q_strncpyz(username, (char*)sqlite3_column_text(stmt, 0), sizeof(username));
+					G_FormatArcadeLeaderboardName(username, displayName, sizeof(displayName));
 					score = sqlite3_column_int(stmt, 1);
 					levelReached = sqlite3_column_int(stmt, 2);
 					kills = sqlite3_column_int(stmt, 3);
 
-					tmpMsg = va("^5%-3i ^3%-18s ^3%-10i ^3%-6i %i\n", start+row, username, score, levelReached, kills);
+					tmpMsg = va("^5%2i^3: ^3%-18s ^3%-10i ^3%-6i %i\n", start+row, displayName, score, levelReached, kills);
 					if (strlen(msg) + strlen(tmpMsg) >= sizeof(msg)) {
 						trap->SendServerCommand(ent-g_entities, va("print \"%s\"", msg));
 						msg[0] = '\0';
@@ -5666,7 +6518,7 @@ static qboolean G_OpenTrackedLocalDB(sqlite3 **dbOut, char *resolvedPath, int re
 
 void Svcmd_ExportDuelTrack_f(void)
 {
-	const char *trackedTables[5];
+	const char *trackedTables[9];
 	int trackedTableCount = 0;
 	sqlite3 *db;
 	char dbDir[MAX_OSPATH];
@@ -5728,6 +6580,12 @@ void Svcmd_ExportDuelTrack_f(void)
 	if (G_DoesTrackedDuelTableExist(db, "LocalDuelTrackGeometry"))
 		trackedTables[trackedTableCount++] = "LocalDuelTrackGeometry";
 	trackedTables[trackedTableCount++] = "LocalDuelTrackAggregate";
+	if (G_DoesTrackedDuelTableExist(db, "LocalArcadeTrackSession"))
+		trackedTables[trackedTableCount++] = "LocalArcadeTrackSession";
+	if (G_DoesTrackedDuelTableExist(db, "LocalArcadeTrackEvent"))
+		trackedTables[trackedTableCount++] = "LocalArcadeTrackEvent";
+	if (G_DoesTrackedDuelTableExist(db, "LocalArcadeTrackGeometry"))
+		trackedTables[trackedTableCount++] = "LocalArcadeTrackGeometry";
 
 	Q_strncpyz(dbDir, effectiveDbPath, sizeof(dbDir));
 	slashPos = strrchr(dbDir, '/');

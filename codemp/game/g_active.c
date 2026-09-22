@@ -4465,9 +4465,27 @@ void ClientThink_real( gentity_t *ent ) {
 				}
 				if (cleanupArcadeManagedDuel)
 				{
+					const qboolean entAlive = (ent->health > 0 && ent->client->ps.stats[STAT_HEALTH] > 0) ? qtrue : qfalse;
 					ent->client->pers.stats.duelDamageGiven = 0;
 					if (duelAgainst && duelAgainst->client)
 					{
+						const qboolean opponentAlive = (duelAgainst->health > 0 && duelAgainst->client->ps.stats[STAT_HEALTH] > 0) ? qtrue : qfalse;
+						const int entDuelType = dueltypes[ent->client->ps.clientNum];
+						const int opponentDuelType = dueltypes[duelAgainst->client->ps.clientNum];
+						const int trackedDuelType = entDuelType ? entDuelType : opponentDuelType;
+
+						if (entAlive && !opponentAlive)
+						{
+							G_FinishTrackedDuel(ent, duelAgainst, trackedDuelType, qfalse);
+						}
+						else if (!entAlive && opponentAlive)
+						{
+							G_FinishTrackedDuel(duelAgainst, ent, opponentDuelType ? opponentDuelType : trackedDuelType, qfalse);
+						}
+						else
+						{
+							G_FinishTrackedDuel(ent, duelAgainst, trackedDuelType, qtrue);
+						}
 						duelAgainst->client->pers.stats.duelDamageGiven = 0;
 						G_ArcadeClearDuelPairState(ent, duelAgainst);
 					}

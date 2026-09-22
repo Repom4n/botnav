@@ -4922,6 +4922,7 @@ void ClientDisconnect( int clientNum ) {
 		G_ClearTrackedDuelIfMismatched(ent, duelAgainst);
 		if (duelAgainst && duelAgainst->client && arcadeManagedDuel)
 		{
+			G_FinishTrackedDuel(duelAgainst, ent, dueltypes[ent->client->ps.clientNum], qfalse);
 			G_ArcadeClearDuelPairState(ent, duelAgainst);
 		}
 		else if (duelAgainst && duelAgainst->client) {

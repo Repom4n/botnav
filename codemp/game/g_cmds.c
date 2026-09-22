@@ -1606,6 +1606,7 @@ void SetTeam( gentity_t *ent, char *s, qboolean forcedToJoin ) {//JAPRO - Modifi
 		G_ClearTrackedDuelIfMismatched(ent, duelAgainst);
 		if (duelAgainst && duelAgainst->client && arcadeManagedDuel)
 		{
+			G_FinishTrackedDuel(duelAgainst, ent, dueltypes[ent->client->ps.clientNum], qfalse);
 			G_ArcadeClearDuelPairState(ent, duelAgainst);
 		}
 		else if (duelAgainst && duelAgainst->client) {
