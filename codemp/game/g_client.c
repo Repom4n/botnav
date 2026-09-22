@@ -2927,22 +2927,27 @@ char *ClientConnect( int clientNum, qboolean firstTime, qboolean isBot ) {
 	client = &level.clients[ clientNum ];
 	ent->client = client;
 	{
-	const qboolean shouldResetArcadeState = (firstTime || level.newSession || level.gametype == GT_ARCADE || !isBot) ? qtrue : qfalse;
+		const qboolean shouldClearParticipationState = (firstTime || level.newSession) ? qtrue : qfalse;
 
-		if (level.gametype != GT_ARCADE || shouldResetArcadeState)
+		if (level.gametype == GT_ARCADE)
 		{
 			G_ArcadeResetClientRunState(clientNum);
 			if (preserveArcadeManagedBot)
 			{
 				level.arcadeManagedBot[clientNum] = qtrue;
 			}
-		}
-		if (shouldResetArcadeState)
-		{
 			G_ArcadeClearClientParticipationState(clientNum);
 			if (preserveArcadeManagedBot)
 			{
 				level.arcadeManagedBot[clientNum] = qtrue;
+			}
+		}
+		else
+		{
+			G_ArcadeResetClientRunState(clientNum);
+			if (shouldClearParticipationState)
+			{
+				G_ArcadeClearClientParticipationState(clientNum);
 			}
 		}
 	}
