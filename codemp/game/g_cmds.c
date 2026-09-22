@@ -1376,7 +1376,13 @@ void SetTeam( gentity_t *ent, char *s, qboolean forcedToJoin ) {//JAPRO - Modifi
 
 	if (level.gametype == GT_ARCADE && team == TEAM_SPECTATOR && !forcedToJoin)
 	{
-		G_ArcadeClearClientParticipationState(clientNum);
+		if (!(level.arcadeRoundStartTime > 0 &&
+			level.arcadeParticipant[clientNum] &&
+			!level.arcadeEliminated[clientNum] &&
+			oldTeam != TEAM_SPECTATOR))
+		{
+			G_ArcadeClearClientParticipationState(clientNum);
+		}
 	}
 
 	if (level.gametype == GT_SIEGE)
@@ -1475,6 +1481,15 @@ void SetTeam( gentity_t *ent, char *s, qboolean forcedToJoin ) {//JAPRO - Modifi
 		oldTeam == TEAM_SPECTATOR)
 	{
 		const qboolean alreadyQueued = level.arcadeParticipant[clientNum];
+		const qboolean canNewPlayerJoin = (!level.arcadeGameOverTime &&
+			level.arcadeRoundStartTime <= 0 &&
+			level.arcadeLevel == ARCADE_START_LEVEL) ? qtrue : qfalse;
+
+		if (!alreadyQueued && !canNewPlayerJoin)
+		{
+			trap->SendServerCommand(ent-g_entities, "print \"Arcade: new players can only join before level 1 starts.\n\"");
+			return;
+		}
 
 		if (!alreadyQueued)
 		{

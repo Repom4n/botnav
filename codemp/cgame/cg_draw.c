@@ -3848,7 +3848,7 @@ static void CG_DrawTaystHUD(char* s) {
 					  FONT_MEDIUM);
     }
 
-	if ( cgs.gametype >= GT_TEAM )
+	if ( cgs.gametype >= GT_TEAM && cgs.gametype != GT_ARCADE )
 	{
 		CG_DrawTeamHUD(background, xOffset);
 	}
