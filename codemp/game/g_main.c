@@ -501,6 +501,7 @@ static void G_ArcadeWarnNoRoomForPlayers(void)
 }
 
 static void G_ArcadeClearBotDuelState(gentity_t *ent);
+static void G_ArcadeFinishRound(qboolean gameOver, qboolean arcadeComplete);
 
 static int G_ArcadeKickBotsForReserve(int neededSlots)
 {
@@ -726,6 +727,27 @@ static int G_ArcadeCountAliveHumans(void)
 	return count;
 }
 
+static int G_ArcadeCountAliveHumansExcludingClient(int clientNum)
+{
+	int i, count = 0;
+	for (i = 0; i < MAX_CLIENTS; i++)
+	{
+		gentity_t *ent = &g_entities[i];
+		if (i == clientNum ||
+			!ent->inuse || !ent->client || (ent->r.svFlags & SVF_BOT) ||
+			ent->client->pers.connected != CON_CONNECTED)
+		{
+			continue;
+		}
+		if (!level.arcadeParticipant[i] || ent->client->sess.sessionTeam == TEAM_SPECTATOR || ent->health < 1)
+		{
+			continue;
+		}
+		count++;
+	}
+	return count;
+}
+
 static int G_ArcadeCountAliveBots(void)
 {
 	int i, count = 0;
@@ -745,6 +767,19 @@ static int G_ArcadeCountAliveBots(void)
 		count++;
 	}
 	return count;
+}
+
+static void G_ArcadeBeginGameOver(qboolean arcadeComplete)
+{
+	G_ArcadeFinishRound(qtrue, arcadeComplete);
+	level.arcadeRoundStartTime = 0;
+	level.arcadeRoundQueuedStart = 0;
+	level.arcadeCleanupRetryTime = 0;
+	level.arcadeCleanupPendingBots = 0;
+	level.arcadeCleanupRetryBudget = 0;
+	level.arcadeRoundBotsTarget = 0;
+	level.arcadeGameOverTime = level.time;
+	level.arcadeLevel = ARCADE_START_LEVEL;
 }
 
 static int G_ArcadeCountManagedBotSlots(void)
@@ -782,7 +817,7 @@ static void G_ArcadeKickManagedBot(gentity_t *ent)
 		if (ent->client->pers.connected != CON_DISCONNECTED)
 		{
 			G_ArcadeClearBotDuelState(ent);
-			trap->DropClient(ent->s.number, "Arcade bot cleanup");
+			trap->DropClient(ent->s.number, "was kicked");
 		}
 		level.arcadeManagedBot[ent->s.number] = qfalse;
 	}
@@ -919,7 +954,7 @@ static int G_ArcadeKickAllBots(void)
 
 		G_RemoveQueuedBotBegin(i);
 		G_ArcadeClearBotDuelState(ent);
-		trap->DropClient(i, "Arcade bot cleanup");
+		trap->DropClient(i, "was kicked");
 		level.arcadeManagedBot[i] = qfalse;
 		dropped++;
 	}
@@ -1126,6 +1161,30 @@ void G_ArcadeHandlePlayerDeath(gentity_t *self, gentity_t *attacker)
 	{
 		SetTeamQuick(self, TEAM_SPECTATOR, qfalse);
 	}
+	if (roundActiveParticipant &&
+		level.arcadeRoundStartTime > 0 &&
+		G_ArcadeCountAliveHumansExcludingClient(clientNum) <= 0)
+	{
+		G_ArcadeBeginGameOver(qfalse);
+	}
+}
+
+void G_ArcadeHandlePlayerDisconnect(int clientNum)
+{
+	if (level.gametype != GT_ARCADE ||
+		clientNum < 0 || clientNum >= MAX_CLIENTS ||
+		level.arcadeRoundStartTime <= 0 ||
+		!level.arcadeParticipant[clientNum] ||
+		level.arcadeEliminated[clientNum])
+	{
+		return;
+	}
+
+	level.arcadeEliminated[clientNum] = qtrue;
+	if (G_ArcadeCountAliveHumansExcludingClient(clientNum) <= 0)
+	{
+		G_ArcadeBeginGameOver(qfalse);
+	}
 }
 
 static void G_ArcadeFinishRound(qboolean gameOver, qboolean arcadeComplete)
@@ -1274,17 +1333,14 @@ static void G_ArcadeRunFrame(void)
 
 	if (aliveHumans <= 0 && G_ArcadeCountRoundParticipants() > 0)
 	{
-		G_ArcadeFinishRound(qtrue, qfalse);
-		level.arcadeRoundStartTime = 0;
-		level.arcadeGameOverTime = level.time;
+		G_ArcadeBeginGameOver(qfalse);
 		return;
 	}
 	if (aliveBots <= 0)
 	{
 		if (level.arcadeLevel >= ARCADE_FINAL_LEVEL)
 		{
-			G_ArcadeFinishRound(qtrue, qtrue);
-			level.arcadeGameOverTime = level.time;
+			G_ArcadeBeginGameOver(qtrue);
 		}
 		else
 		{

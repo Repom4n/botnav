@@ -2906,18 +2906,7 @@ char *ClientConnect( int clientNum, qboolean firstTime, qboolean isBot ) {
 	}
 
 	{
-		qboolean preserveArcadeParticipation = qfalse;
 		qboolean preserveArcadeManagedBot = qfalse;
-		if (level.gametype == GT_ARCADE &&
-			level.arcadeRoundStartTime > 0 &&
-			level.arcadeParticipant[clientNum] &&
-			!level.arcadeEliminated[clientNum] &&
-			!isBot &&
-			level.clients[clientNum].pers.guid[0] &&
-			!Q_stricmp(level.clients[clientNum].pers.guid, guid))
-		{
-			preserveArcadeParticipation = qtrue;
-		}
 		if (level.gametype == GT_ARCADE &&
 			isBot &&
 			level.arcadeManagedBot[clientNum])
@@ -2938,22 +2927,27 @@ char *ClientConnect( int clientNum, qboolean firstTime, qboolean isBot ) {
 	client = &level.clients[ clientNum ];
 	ent->client = client;
 	{
-		const qboolean shouldResetArcadeState = (firstTime || level.newSession || !preserveArcadeParticipation) ? qtrue : qfalse;
+		const qboolean shouldClearParticipationState = (firstTime || level.newSession) ? qtrue : qfalse;
 
-		if (level.gametype != GT_ARCADE || shouldResetArcadeState)
+		if (level.gametype == GT_ARCADE)
 		{
 			G_ArcadeResetClientRunState(clientNum);
 			if (preserveArcadeManagedBot)
 			{
 				level.arcadeManagedBot[clientNum] = qtrue;
 			}
-		}
-		if (shouldResetArcadeState)
-		{
 			G_ArcadeClearClientParticipationState(clientNum);
 			if (preserveArcadeManagedBot)
 			{
 				level.arcadeManagedBot[clientNum] = qtrue;
+			}
+		}
+		else
+		{
+			G_ArcadeResetClientRunState(clientNum);
+			if (shouldClearParticipationState)
+			{
+				G_ArcadeClearClientParticipationState(clientNum);
 			}
 		}
 	}
@@ -4955,8 +4949,6 @@ void ClientDisconnect( int clientNum ) {
 			ent->client->pers.stats.racetime = 0.0f;
 		}
 	}
-	G_ArcadeResetClientRunState(clientNum);
-
 //JAPRO - Serverside - Stop those pesky reconnect whores - End
 
 	i = 0;
@@ -5077,6 +5069,8 @@ void ClientDisconnect( int clientNum ) {
 	ent->client->ps.persistant[PERS_TEAM] = TEAM_FREE;
 	ent->client->sess.sessionTeam = TEAM_FREE;
 	ent->r.contents = 0;
+	G_ArcadeHandlePlayerDisconnect(clientNum);
+	G_ArcadeResetClientRunState(clientNum);
 
 	if (ent->client->holdingObjectiveItem > 0)
 	{ //carrying a siege objective item - make sure it updates and removes itself from us now in case this is an instant death-respawn situation
