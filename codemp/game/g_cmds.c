@@ -1480,7 +1480,7 @@ void SetTeam( gentity_t *ent, char *s, qboolean forcedToJoin ) {//JAPRO - Modifi
 		team != TEAM_SPECTATOR &&
 		oldTeam == TEAM_SPECTATOR)
 	{
-		const qboolean alreadyQueued = level.arcadeParticipant[clientNum];
+		const qboolean alreadyQueued = (level.arcadeParticipant[clientNum] || level.arcadeQueued[clientNum]);
 		const qboolean canNewPlayerJoin = (!level.arcadeGameOverTime &&
 			level.arcadeRoundStartTime <= 0 &&
 			level.arcadeLevel == 1) ? qtrue : qfalse;
@@ -1503,7 +1503,7 @@ void SetTeam( gentity_t *ent, char *s, qboolean forcedToJoin ) {//JAPRO - Modifi
 			G_ArcadeResetClientRunState(clientNum);
 		}
 
-		level.arcadeParticipant[clientNum] = qtrue;
+		level.arcadeQueued[clientNum] = qtrue;
 		level.arcadeEliminated[clientNum] = (level.arcadeRoundStartTime > 0) ? qtrue : qfalse;
 		client->sess.spectatorState = SPECTATOR_FREE;
 		client->sess.spectatorClient = 0;
