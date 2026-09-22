@@ -110,7 +110,14 @@ typedef enum
 	DUEL_TRACK_EVENT_KNOCKDOWN,
 	DUEL_TRACK_EVENT_PRESSURE_SUCCESS,
 	DUEL_TRACK_EVENT_RESET_SUCCESS,
-	DUEL_TRACK_EVENT_OVERCOMMIT
+	DUEL_TRACK_EVENT_OVERCOMMIT,
+	DUEL_TRACK_EVENT_ATTACK_START,
+	DUEL_TRACK_EVENT_ATTACK_CHAIN,
+	DUEL_TRACK_EVENT_COUNTER_SUCCESS,
+	DUEL_TRACK_EVENT_PUNISH_SUCCESS,
+	DUEL_TRACK_EVENT_SABER_RETURN_PUNISH,
+	DUEL_TRACK_EVENT_FORCE_TO_SABER,
+	DUEL_TRACK_EVENT_KNOCKDOWN_FOLLOWUP
 } duel_track_event_type_t;
 
 typedef struct
@@ -123,12 +130,20 @@ typedef struct
 	unsigned char state;
 	unsigned char rangeBucket;
 	unsigned char hasGeometry;
+	unsigned short sequenceId;
+	unsigned short buttons;
+	short yawDelta;
+	int saberMove;
+	int enemySaberMove;
 	vec3_t selfOrigin;
 	vec3_t enemyOrigin;
 	vec3_t selfVelocity;
 	vec3_t enemyVelocity;
 	float selfYaw;
 	float enemyYaw;
+	unsigned char opponentKind;
+	char opponentKey[64];
+	char opponentLabel[MAX_NETNAME];
 	char note[32];
 } tracked_duel_event_t;
 
@@ -177,6 +192,49 @@ typedef struct
 	char primaryIssue[32];
 	tracked_duel_event_t events[TRACKED_DUEL_MAX_EVENTS];
 } tracked_duel_runtime_t;
+
+typedef struct
+{
+	qboolean active;
+	int startTime;
+	int eventCount;
+	int lastForce;
+	int lowestForce;
+	int lastHealthArmor;
+	int lastSelectedPower;
+	int lastPowersActive;
+	int lastRangeBucket;
+	int lastAirborne;
+	int lastKnockdown;
+	int lastGripCripple;
+	int lastButtons;
+	int lastSaberMove;
+	int lastOpponentClientNum;
+	int lastOpponentHealthArmor;
+	int lastAttackTime;
+	int lastDamageTakenTime;
+	int lastForceSpendTime;
+	int currentSequenceId;
+	int lastSequenceTime;
+	int totalForceSpent;
+	int totalForceRegen;
+	int totalDamageTaken;
+	int totalDamageDealt;
+	int lowForceWindows;
+	int knockdownEvents;
+	int resetSuccessEvents;
+	int counterSuccessEvents;
+	int punishSuccessEvents;
+	int saberReturnPunishes;
+	int killCount;
+	int endingForce;
+	int endingHP;
+	int endingArmor;
+	int identityKind;
+	char identityKey[64];
+	char identityLabel[MAX_NETNAME];
+	tracked_duel_event_t events[TRACKED_DUEL_MAX_EVENTS];
+} tracked_arcade_runtime_t;
 
 typedef struct
 {
@@ -231,6 +289,7 @@ typedef enum
 } duel_track_skill_band_t;
 
 static tracked_duel_runtime_t g_trackedDuels[MAX_CLIENTS];
+static tracked_arcade_runtime_t g_trackedArcadeCombats[MAX_CLIENTS];
 static bot_tutorial_queue_t g_botTutorialQueues[MAX_CLIENTS];
 static duel_advice_session_state_t g_duelAdviceSessions[MAX_CLIENTS];
 static qboolean g_duelTrackingSchemaReady = qfalse;
@@ -240,6 +299,47 @@ static void G_EnsureLocalArcadeSchema(sqlite3 *db);
 static qboolean G_DoesTrackedDuelTableExist(sqlite3 *db, const char *tableName);
 static qboolean G_OpenTrackedLocalDB(sqlite3 **dbOut, char *resolvedPath, int resolvedPathSize);
 static void G_QueueBotTutorialMessage(int botClientNum, int targetClientNum, const char *message);
+static qboolean G_TrackedTableHasColumn(sqlite3 *db, const char *tableName, const char *columnName)
+{
+	sqlite3_stmt *stmt = NULL;
+	char sql[128];
+	int s;
+	qboolean found = qfalse;
+
+	Com_sprintf(sql, sizeof(sql), "PRAGMA table_info(%s)", tableName);
+	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
+	while ((s = sqlite3_step(stmt)) == SQLITE_ROW)
+	{
+		const unsigned char *name = sqlite3_column_text(stmt, 1);
+		if (name && !Q_stricmp((const char *)name, columnName))
+		{
+			found = qtrue;
+			break;
+		}
+	}
+	if (s != SQLITE_DONE && s != SQLITE_ROW)
+		G_ErrorPrint("ERROR: SQL Select Failed (tracked table_info)", s);
+	CALL_SQLITE(finalize(stmt));
+	return found;
+}
+
+static void G_EnsureTrackedTableColumn(sqlite3 *db, const char *tableName, const char *columnName, const char *definition)
+{
+	sqlite3_stmt *stmt = NULL;
+	char sql[256];
+	int s;
+
+	if (G_TrackedTableHasColumn(db, tableName, columnName))
+		return;
+
+	Com_sprintf(sql, sizeof(sql), "ALTER TABLE %s ADD COLUMN %s", tableName, definition);
+	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
+	s = sqlite3_step(stmt);
+	if (s != SQLITE_DONE)
+		G_ErrorPrint("ERROR: SQL Alter Failed (tracked add column)", s);
+	CALL_SQLITE(finalize(stmt));
+}
+
 static void G_EnsureLocalDuelTrackingSchema(sqlite3 *db)
 {
 	sqlite3_stmt *stmt = NULL;
@@ -311,6 +411,53 @@ static void G_EnsureLocalDuelTrackingSchema(sqlite3 *db)
 	if (s != SQLITE_DONE)
 		G_ErrorPrint("ERROR: SQL Create Failed (LocalDuelTrackAggregate)", s);
 	CALL_SQLITE(finalize(stmt));
+
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackSummary", "source_context", "source_context VARCHAR(16) DEFAULT 'duel'");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "sequence_id", "sequence_id UNSIGNED SMALLINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "buttons", "buttons UNSIGNED SMALLINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "saber_move", "saber_move INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "enemy_saber_move", "enemy_saber_move INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "yaw_delta", "yaw_delta SMALLINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "opponent_label", "opponent_label VARCHAR(36) DEFAULT ''");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "opponent_kind", "opponent_kind UNSIGNED TINYINT DEFAULT 0");
+
+	sql = "CREATE TABLE IF NOT EXISTS LocalArcadeTrackSession("
+		"id INTEGER PRIMARY KEY, source_context VARCHAR(16), start_time UNSIGNED INTEGER, end_time UNSIGNED INTEGER, "
+		"duration UNSIGNED INTEGER, mapname VARCHAR(64), participant_key VARCHAR(64), participant_label VARCHAR(36), "
+		"participant_kind UNSIGNED TINYINT, result VARCHAR(24), arcade_level UNSIGNED SMALLINT, total_kills UNSIGNED SMALLINT, "
+		"total_force_spent UNSIGNED INTEGER, total_force_regen UNSIGNED INTEGER, total_damage_taken UNSIGNED INTEGER, "
+		"total_damage_dealt UNSIGNED INTEGER, low_force_windows UNSIGNED SMALLINT, knockdown_events UNSIGNED SMALLINT, "
+		"counter_successes UNSIGNED SMALLINT, punish_successes UNSIGNED SMALLINT, reset_successes UNSIGNED SMALLINT, "
+		"saber_return_punishes UNSIGNED SMALLINT)";
+	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
+	s = sqlite3_step(stmt);
+	if (s != SQLITE_DONE)
+		G_ErrorPrint("ERROR: SQL Create Failed (LocalArcadeTrackSession)", s);
+	CALL_SQLITE(finalize(stmt));
+
+	sql = "CREATE TABLE IF NOT EXISTS LocalArcadeTrackEvent("
+		"id INTEGER PRIMARY KEY, session_id INTEGER, participant_key VARCHAR(64), participant_label VARCHAR(36), "
+		"participant_kind UNSIGNED TINYINT, opponent_key VARCHAR(64), opponent_label VARCHAR(36), opponent_kind UNSIGNED TINYINT, "
+		"rel_time UNSIGNED INTEGER, event_index UNSIGNED SMALLINT, sequence_id UNSIGNED SMALLINT, event_type VARCHAR(24), "
+		"power UNSIGNED TINYINT, amount SMALLINT, state UNSIGNED TINYINT, range_bucket UNSIGNED TINYINT, "
+		"buttons UNSIGNED SMALLINT, saber_move INTEGER, enemy_saber_move INTEGER, yaw_delta SMALLINT, note VARCHAR(32))";
+	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
+	s = sqlite3_step(stmt);
+	if (s != SQLITE_DONE)
+		G_ErrorPrint("ERROR: SQL Create Failed (LocalArcadeTrackEvent)", s);
+	CALL_SQLITE(finalize(stmt));
+
+	sql = "CREATE TABLE IF NOT EXISTS LocalArcadeTrackGeometry("
+		"id INTEGER PRIMARY KEY, session_id INTEGER, participant_key VARCHAR(64), opponent_key VARCHAR(64), "
+		"rel_time UNSIGNED INTEGER, event_index UNSIGNED SMALLINT, "
+		"self_x REAL, self_y REAL, self_z REAL, enemy_x REAL, enemy_y REAL, enemy_z REAL, "
+		"self_vx REAL, self_vy REAL, self_vz REAL, enemy_vx REAL, enemy_vy REAL, enemy_vz REAL, "
+		"self_yaw REAL, enemy_yaw REAL)";
+	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
+	s = sqlite3_step(stmt);
+	if (s != SQLITE_DONE)
+		G_ErrorPrint("ERROR: SQL Create Failed (LocalArcadeTrackGeometry)", s);
+	CALL_SQLITE(finalize(stmt));
 	g_duelTrackingSchemaReady = qtrue;
 	Q_strncpyz(g_duelTrackingSchemaPath, LOCAL_DB_PATH, sizeof(g_duelTrackingSchemaPath));
 }
@@ -350,7 +497,23 @@ static qboolean G_ShouldCaptureTrackedGeometryEvent(int eventType)
 		return qfalse;
 	if (bot_dueltracking_geometry.integer >= 2)
 		return qtrue;
-	return (eventType == 2 || eventType == 3 || eventType == 4 || eventType == 5) ? qtrue : qfalse;
+	switch (eventType)
+	{
+	case DUEL_TRACK_EVENT_DAMAGE:
+	case DUEL_TRACK_EVENT_RANGE:
+	case DUEL_TRACK_EVENT_AIR:
+	case DUEL_TRACK_EVENT_KNOCKDOWN:
+	case DUEL_TRACK_EVENT_ATTACK_START:
+	case DUEL_TRACK_EVENT_ATTACK_CHAIN:
+	case DUEL_TRACK_EVENT_COUNTER_SUCCESS:
+	case DUEL_TRACK_EVENT_PUNISH_SUCCESS:
+	case DUEL_TRACK_EVENT_SABER_RETURN_PUNISH:
+	case DUEL_TRACK_EVENT_FORCE_TO_SABER:
+	case DUEL_TRACK_EVENT_KNOCKDOWN_FOLLOWUP:
+		return qtrue;
+	default:
+		return qfalse;
+	}
 }
 
 static qboolean G_IsTrackedDuelEligible(gentity_t *first, gentity_t *second)
@@ -782,7 +945,40 @@ static const char *G_GetTrackedEventTypeName(int eventType)
 	case DUEL_TRACK_EVENT_PRESSURE_SUCCESS: return "pressure_success";
 	case DUEL_TRACK_EVENT_RESET_SUCCESS: return "reset_success";
 	case DUEL_TRACK_EVENT_OVERCOMMIT: return "overcommit";
+	case DUEL_TRACK_EVENT_ATTACK_START: return "attack_start";
+	case DUEL_TRACK_EVENT_ATTACK_CHAIN: return "attack_chain";
+	case DUEL_TRACK_EVENT_COUNTER_SUCCESS: return "counter_success";
+	case DUEL_TRACK_EVENT_PUNISH_SUCCESS: return "punish_success";
+	case DUEL_TRACK_EVENT_SABER_RETURN_PUNISH: return "saber_return_punish";
+	case DUEL_TRACK_EVENT_FORCE_TO_SABER: return "force_to_saber";
+	case DUEL_TRACK_EVENT_KNOCKDOWN_FOLLOWUP: return "knockdown_followup";
 	default: return "note";
+	}
+}
+
+static void G_FillTrackedEventContext(tracked_duel_event_t *event, gentity_t *self, gentity_t *enemy, qboolean captureGeometry)
+{
+	if (!event || !self || !self->client)
+		return;
+
+	event->buttons = (unsigned short)(self->client->pers.cmd.buttons & 0xFFFF);
+	event->saberMove = self->client->ps.saberMove;
+	event->selfYaw = self->client->ps.viewangles[YAW];
+	if (enemy && enemy->client)
+	{
+		event->enemySaberMove = enemy->client->ps.saberMove;
+		event->enemyYaw = enemy->client->ps.viewangles[YAW];
+		event->yawDelta = (short)AngleSubtract(event->selfYaw, event->enemyYaw);
+		G_GetDuelTrackingIdentity(enemy, event->opponentKey, sizeof(event->opponentKey),
+			event->opponentLabel, sizeof(event->opponentLabel), (int *)&event->opponentKind);
+		if (captureGeometry)
+		{
+			VectorCopy(self->client->ps.origin, event->selfOrigin);
+			VectorCopy(enemy->client->ps.origin, event->enemyOrigin);
+			VectorCopy(self->client->ps.velocity, event->selfVelocity);
+			VectorCopy(enemy->client->ps.velocity, event->enemyVelocity);
+			event->hasGeometry = 1;
+		}
 	}
 }
 

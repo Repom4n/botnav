@@ -294,6 +294,7 @@ void G_ArcadeResetClientRunState(int clientNum)
 		return;
 	}
 
+	G_ClearTrackedArcadeCombat(clientNum);
 	level.arcadeScore[clientNum] = 0;
 	level.arcadeLastRoundScore[clientNum] = 0;
 	level.arcadeLastRoundFlawless[clientNum] = qfalse;
@@ -313,6 +314,7 @@ void G_ArcadeClearClientParticipationState(int clientNum)
 		return;
 	}
 
+	G_ClearTrackedArcadeCombat(clientNum);
 	level.arcadeRoundKills[clientNum] = 0;
 	level.arcadeLastRoundScore[clientNum] = 0;
 	level.arcadeLastRoundFlawless[clientNum] = qfalse;
@@ -354,6 +356,10 @@ static int G_ArcadeGetTimeBonus(int elapsed)
 
 	if (elapsed >= 60000)
 	{
+		if (elapsed > 90000)
+		{
+			return -((elapsed - 90000) / 1000) * 15;
+		}
 		return 0;
 	}
 
@@ -1193,6 +1199,16 @@ static void G_ArcadeStartRound(void)
 	level.arcadeCleanupRetryTime = 0;
 	level.arcadeCleanupPendingBots = 0;
 	level.arcadeCleanupRetryBudget = 0;
+	for (i = 0; i < MAX_CLIENTS; i++)
+	{
+		gentity_t *ent = &g_entities[i];
+		if (!level.arcadeParticipant[i] || !ent->inuse || !ent->client ||
+			(ent->r.svFlags & SVF_BOT) || ent->client->sess.sessionTeam == TEAM_SPECTATOR)
+		{
+			continue;
+		}
+		G_StartTrackedArcadeCombat(ent);
+	}
 	G_ArcadeBroadcastLevelCenterMessage(level.arcadeLevel);
 }
 
@@ -1226,6 +1242,7 @@ void G_ArcadeHandlePlayerDeath(gentity_t *self, gentity_t *attacker)
 	}
 	if (roundActiveParticipant)
 	{
+		G_FinishTrackedArcadeCombat(self, "eliminated");
 		level.arcadeEliminated[clientNum] = qtrue;
 	}
 	if ((self->r.svFlags & SVF_BOT) &&
@@ -1258,6 +1275,7 @@ void G_ArcadeHandlePlayerDisconnect(int clientNum)
 		return;
 	}
 
+	G_FinishTrackedArcadeCombat(&g_entities[clientNum], "disconnect");
 	level.arcadeEliminated[clientNum] = qtrue;
 	if (G_ArcadeCountAliveHumansExcludingClient(clientNum) <= 0)
 	{
@@ -1295,6 +1313,7 @@ static void G_ArcadeFinishRound(qboolean gameOver, qboolean arcadeComplete)
 		{
 			continue;
 		}
+		G_FinishTrackedArcadeCombat(ent, arcadeComplete ? "arcade_complete" : (gameOver ? "game_over" : "level_clear"));
 		level.arcadeLastRoundScore[i] = 0;
 		level.arcadeLastRoundFlawless[i] = qfalse;
 
@@ -5543,6 +5562,7 @@ void G_RunFrame( int levelTime ) {
 					ent->client->pers.stats.lowestHP = 0;
 				}
 				G_UpdateTrackedDuelFrame(ent);
+				G_UpdateTrackedArcadeCombatFrame(ent);
 			}
 
 			if (g_allowNPC.integer)

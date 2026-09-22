@@ -4468,6 +4468,7 @@ void ClientThink_real( gentity_t *ent ) {
 					ent->client->pers.stats.duelDamageGiven = 0;
 					if (duelAgainst && duelAgainst->client)
 					{
+						G_FinishTrackedDuel(ent, duelAgainst, dueltypes[ent->client->ps.clientNum], (ent->health > 0 && ent->client->ps.stats[STAT_HEALTH] > 0) ? qfalse : qtrue);
 						duelAgainst->client->pers.stats.duelDamageGiven = 0;
 						G_ArcadeClearDuelPairState(ent, duelAgainst);
 					}
