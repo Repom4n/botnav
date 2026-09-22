@@ -857,6 +857,27 @@ static qboolean G_ArcadeHasManagedBots(void)
 	return qfalse;
 }
 
+static qboolean G_ArcadeHasAnyBotClients(void)
+{
+	int i;
+
+	for (i = 0; i < MAX_CLIENTS; i++)
+	{
+		gentity_t *ent = &g_entities[i];
+		if (!ent->inuse || !ent->client || !(ent->r.svFlags & SVF_BOT))
+		{
+			continue;
+		}
+		if (ent->client->pers.connected == CON_DISCONNECTED)
+		{
+			continue;
+		}
+		return qtrue;
+	}
+
+	return qfalse;
+}
+
 static void G_ArcadeShutdown(qboolean kickBots)
 {
 	if (kickBots)
@@ -883,22 +904,20 @@ static int G_ArcadeKickAllBots(void)
 	int i;
 	int dropped = 0;
 
+	G_ClearBotSpawnQueue();
+
 	for (i = 0; i < MAX_CLIENTS; i++)
 	{
 		gentity_t *ent = &g_entities[i];
+		const qboolean isBot = (ent->inuse && ent->client && (ent->r.svFlags & SVF_BOT)) ? qtrue : qfalse;
 
-		if (!level.arcadeManagedBot[i])
-		{
-			continue;
-		}
-
-		if (!ent->inuse || !ent->client || !(ent->r.svFlags & SVF_BOT) ||
-			ent->client->pers.connected == CON_DISCONNECTED)
+		if (!isBot || ent->client->pers.connected == CON_DISCONNECTED)
 		{
 			level.arcadeManagedBot[i] = qfalse;
 			continue;
 		}
 
+		G_RemoveQueuedBotBegin(i);
 		G_ArcadeClearBotDuelState(ent);
 		trap->DropClient(i, "Arcade bot cleanup");
 		level.arcadeManagedBot[i] = qfalse;
@@ -942,7 +961,7 @@ static void G_ArcadeStartRound(void)
 		G_ArcadeWarnNoRoomForPlayers();
 	}
 
-	if (G_ArcadeCountManagedBotSlots() > 0)
+	if (G_ArcadeHasAnyBotClients() || G_ArcadeCountManagedBotSlots() > 0)
 	{
 		droppedManagedBots = G_ArcadeKickAllBots();
 		if (droppedManagedBots > 0)
@@ -1191,7 +1210,8 @@ static void G_ArcadeRunFrame(void)
 	if (level.gametype != GT_ARCADE)
 	{
 		if (level.arcadeInitialized || level.arcadeRoundStartTime || level.arcadeRoundQueuedStart ||
-			level.arcadeCleanupRetryTime || level.arcadeGameOverTime || level.arcadeRoundBotsTarget || G_ArcadeHasManagedBots())
+			level.arcadeCleanupRetryTime || level.arcadeGameOverTime || level.arcadeRoundBotsTarget ||
+			G_ArcadeHasManagedBots() || G_ArcadeHasAnyBotClients())
 		{
 			G_ArcadeShutdown(qtrue);
 		}

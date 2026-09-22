@@ -1983,6 +1983,7 @@ char *G_GetBotInfoByNumber( int num );
 char *G_GetBotInfoByName( const char *name );
 void G_CheckBotSpawn( void );
 void G_RemoveQueuedBotBegin( int clientNum );
+void G_ClearBotSpawnQueue( void );
 qboolean G_BotConnect( int clientNum, qboolean restart );
 void G_AddRandomBot( int team );
 void G_AddRandomBotManaged( int team );

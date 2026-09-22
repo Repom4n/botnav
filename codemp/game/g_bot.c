@@ -886,6 +886,15 @@ void G_RemoveQueuedBotBegin( int clientNum ) {
 	}
 }
 
+void G_ClearBotSpawnQueue( void ) {
+	int n;
+
+	for ( n = 0; n < BOT_SPAWN_QUEUE_DEPTH; n++ ) {
+		botSpawnQueue[n].spawnTime = 0;
+		botSpawnQueue[n].clientNum = -1;
+	}
+}
+
 /*
 ===============
 G_BotConnect
