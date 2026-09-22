@@ -352,16 +352,16 @@ static int G_ArcadeGetArmorResource(const gentity_t *ent)
 
 static int G_ArcadeGetTimeBonus(int elapsed)
 {
-	const float remainingRatio = (60000 - elapsed) / 60000.0f;
-
+	if (elapsed > 90000)
+	{
+		return -((elapsed - 90000) / 1000) * 15;
+	}
 	if (elapsed >= 60000)
 	{
-		if (elapsed > 90000)
-		{
-			return -((elapsed - 90000) / 1000) * 15;
-		}
 		return 0;
 	}
+
+	const float remainingRatio = (60000 - elapsed) / 60000.0f;
 
 	return (int)(2000.0f * (powf(2.0f, remainingRatio * 2.0f) - 1.0f));
 }
