@@ -5563,7 +5563,6 @@ void G_RunFrame( int levelTime ) {
 				}
 				G_UpdateTrackedDuelFrame(ent);
 				G_UpdateTrackedArcadeCombatFrame(ent);
-				G_UpdateTrackedArcadeCombatFrame(ent);
 			}
 
 			if (g_allowNPC.integer)

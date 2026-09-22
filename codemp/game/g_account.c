@@ -2473,9 +2473,13 @@ static void G_InsertTrackedArcadeEvents(sqlite3 *db, sqlite3_int64 sessionId, tr
 	}
 
 	if (insertFailed)
+	{
 		CALL_SQLITE(exec(db, "ROLLBACK", NULL, NULL, NULL));
+	}
 	else
+	{
 		CALL_SQLITE(exec(db, "COMMIT", NULL, NULL, NULL));
+	}
 
 	CALL_SQLITE(finalize(stmt));
 	if (captureGeometry && hasAnyGeometry)
