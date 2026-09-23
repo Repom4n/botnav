@@ -10875,8 +10875,7 @@ void InitGameAccountStuff( void ) { //Called every mapload , move the create tab
 
 	CALL_SQLITE (open (LOCAL_DB_PATH, & db));
 	G_EnsureLocalArcadeSchema(db);
-	if (bot_dueltracking.integer)
-		G_EnsureLocalDuelTrackingSchema(db);
+	G_EnsureLocalDuelTrackingSchema(db);
 
 	//sqlite_exec(db, "VACUUM;", 0, 0);
 	//index LocalRun on RANK
