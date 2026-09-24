@@ -490,7 +490,7 @@ static void G_EnsureLocalDuelTrackingSchema(sqlite3 *db)
 		"rel_time UNSIGNED INTEGER, event_index UNSIGNED SMALLINT, "
 		"self_x REAL, self_y REAL, self_z REAL, enemy_x REAL, enemy_y REAL, enemy_z REAL, "
 		"self_vx REAL, self_vy REAL, self_vz REAL, enemy_vx REAL, enemy_vy REAL, enemy_vz REAL, "
-		"self_yaw REAL, enemy_yaw REAL)";
+		"self_yaw REAL, enemy_yaw REAL, distance REAL, closing_speed REAL)";
 	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
 	s = sqlite3_step(stmt);
 	if (s != SQLITE_DONE)
@@ -519,6 +519,8 @@ static void G_EnsureLocalDuelTrackingSchema(sqlite3 *db)
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "yaw_delta", "SMALLINT DEFAULT 0");
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "opponent_label", "VARCHAR(36) DEFAULT ''");
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "opponent_kind", "UNSIGNED TINYINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackGeometry", "distance", "REAL DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackGeometry", "closing_speed", "REAL DEFAULT 0");
 
 	sql = "CREATE TABLE IF NOT EXISTS LocalArcadeTrackSession("
 		"id INTEGER PRIMARY KEY, source_context VARCHAR(16), start_time UNSIGNED INTEGER, end_time UNSIGNED INTEGER, "
@@ -551,12 +553,14 @@ static void G_EnsureLocalDuelTrackingSchema(sqlite3 *db)
 		"rel_time UNSIGNED INTEGER, event_index UNSIGNED SMALLINT, "
 		"self_x REAL, self_y REAL, self_z REAL, enemy_x REAL, enemy_y REAL, enemy_z REAL, "
 		"self_vx REAL, self_vy REAL, self_vz REAL, enemy_vx REAL, enemy_vy REAL, enemy_vz REAL, "
-		"self_yaw REAL, enemy_yaw REAL)";
+		"self_yaw REAL, enemy_yaw REAL, distance REAL, closing_speed REAL)";
 	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
 	s = sqlite3_step(stmt);
 	if (s != SQLITE_DONE)
 		G_ErrorPrint("ERROR: SQL Create Failed (LocalArcadeTrackGeometry)", s);
 	CALL_SQLITE(finalize(stmt));
+	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackGeometry", "distance", "REAL DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackGeometry", "closing_speed", "REAL DEFAULT 0");
 	g_duelTrackingSchemaReady = qtrue;
 	Q_strncpyz(g_duelTrackingSchemaPath, LOCAL_DB_PATH, sizeof(g_duelTrackingSchemaPath));
 }
@@ -2036,7 +2040,7 @@ static void G_InsertTrackedEvents(sqlite3 *db, sqlite3_int64 summaryId, tracked_
 	}
 	if (captureGeometry && hasAnyGeometry)
 	{
-		sql = "INSERT INTO LocalDuelTrackGeometry(summary_id, participant_key, opponent_key, rel_time, event_index, self_x, self_y, self_z, enemy_x, enemy_y, enemy_z, self_vx, self_vy, self_vz, enemy_vx, enemy_vy, enemy_vz, self_yaw, enemy_yaw) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+		sql = "INSERT INTO LocalDuelTrackGeometry(summary_id, participant_key, opponent_key, rel_time, event_index, self_x, self_y, self_z, enemy_x, enemy_y, enemy_z, self_vx, self_vy, self_vz, enemy_vx, enemy_vy, enemy_vz, self_yaw, enemy_yaw, distance, closing_speed) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 		CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &geomStmt, NULL));
 	}
 	CALL_SQLITE(exec(db, "BEGIN TRANSACTION", NULL, NULL, NULL));
@@ -2072,6 +2076,16 @@ static void G_InsertTrackedEvents(sqlite3 *db, sqlite3_int64 summaryId, tracked_
 		CALL_SQLITE(clear_bindings(stmt));
 		if (captureGeometry && hasAnyGeometry && event->hasGeometry)
 		{
+			vec3_t toEnemy;
+			vec3_t relVelocity;
+			float distance;
+			float closingSpeed;
+
+			VectorSubtract(event->enemyOrigin, event->selfOrigin, toEnemy);
+			distance = VectorLength(toEnemy);
+			VectorSubtract(event->enemyVelocity, event->selfVelocity, relVelocity);
+			closingSpeed = (distance > 0.0f) ? -(DotProduct(relVelocity, toEnemy) / distance) : 0.0f;
+
 			CALL_SQLITE(bind_int64(geomStmt, 1, summaryId));
 			CALL_SQLITE(bind_text(geomStmt, 2, runtime->identityKey, -1, SQLITE_STATIC));
 			CALL_SQLITE(bind_text(geomStmt, 3, runtime->opponentKey, -1, SQLITE_STATIC));
@@ -2091,6 +2105,8 @@ static void G_InsertTrackedEvents(sqlite3 *db, sqlite3_int64 summaryId, tracked_
 			CALL_SQLITE(bind_double(geomStmt, 17, event->enemyVelocity[2]));
 			CALL_SQLITE(bind_double(geomStmt, 18, event->selfYaw));
 			CALL_SQLITE(bind_double(geomStmt, 19, event->enemyYaw));
+			CALL_SQLITE(bind_double(geomStmt, 20, distance));
+			CALL_SQLITE(bind_double(geomStmt, 21, closingSpeed));
 			s = sqlite3_step(geomStmt);
 			if (s != SQLITE_DONE)
 			{
@@ -2470,7 +2486,7 @@ static qboolean G_InsertTrackedArcadeEvents(sqlite3 *db, sqlite3_int64 sessionId
 	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
 	if (captureGeometry && hasAnyGeometry)
 	{
-		sql = "INSERT INTO LocalArcadeTrackGeometry(session_id, participant_key, opponent_key, rel_time, event_index, self_x, self_y, self_z, enemy_x, enemy_y, enemy_z, self_vx, self_vy, self_vz, enemy_vx, enemy_vy, enemy_vz, self_yaw, enemy_yaw) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+		sql = "INSERT INTO LocalArcadeTrackGeometry(session_id, participant_key, opponent_key, rel_time, event_index, self_x, self_y, self_z, enemy_x, enemy_y, enemy_z, self_vx, self_vy, self_vz, enemy_vx, enemy_vy, enemy_vz, self_yaw, enemy_yaw, distance, closing_speed) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 		CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &geomStmt, NULL));
 	}
 
@@ -2507,8 +2523,18 @@ static qboolean G_InsertTrackedArcadeEvents(sqlite3 *db, sqlite3_int64 sessionId
 		CALL_SQLITE(reset(stmt));
 		CALL_SQLITE(clear_bindings(stmt));
 
-		if (captureGeometry && hasAnyGeometry && event->hasGeometry)
+		if (captureGeometry && hasAnyGeometry && event->hasGeometry && event->opponentKey[0])
 		{
+			vec3_t toEnemy;
+			vec3_t relVelocity;
+			float distance;
+			float closingSpeed;
+
+			VectorSubtract(event->enemyOrigin, event->selfOrigin, toEnemy);
+			distance = VectorLength(toEnemy);
+			VectorSubtract(event->enemyVelocity, event->selfVelocity, relVelocity);
+			closingSpeed = (distance > 0.0f) ? -(DotProduct(relVelocity, toEnemy) / distance) : 0.0f;
+
 			CALL_SQLITE(bind_int64(geomStmt, 1, sessionId));
 			CALL_SQLITE(bind_text(geomStmt, 2, runtime->identityKey, -1, SQLITE_STATIC));
 			CALL_SQLITE(bind_text(geomStmt, 3, event->opponentKey, -1, SQLITE_STATIC));
@@ -2528,6 +2554,8 @@ static qboolean G_InsertTrackedArcadeEvents(sqlite3 *db, sqlite3_int64 sessionId
 			CALL_SQLITE(bind_double(geomStmt, 17, event->enemyVelocity[2]));
 			CALL_SQLITE(bind_double(geomStmt, 18, event->selfYaw));
 			CALL_SQLITE(bind_double(geomStmt, 19, event->enemyYaw));
+			CALL_SQLITE(bind_double(geomStmt, 20, distance));
+			CALL_SQLITE(bind_double(geomStmt, 21, closingSpeed));
 			s = sqlite3_step(geomStmt);
 			if (s != SQLITE_DONE)
 			{

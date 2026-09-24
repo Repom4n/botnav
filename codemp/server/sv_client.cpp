@@ -381,6 +381,8 @@ or crashing -- SV_FinalMessage() will handle that
 void SV_DropClient( client_t *drop, const char *reason ) {
 	int		i;
 	const bool isBot = drop->netchan.remoteAddress.type == NA_BOT;
+	const bool suppressBroadcast = (isBot && reason && !Q_stricmp(reason, "ARCADE_SILENT_DROP"));
+	const char *disconnectReason = suppressBroadcast ? SV_GetStringEdString("MP_SVGAME", "WAS_KICKED") : reason;
 
 	if ( drop->state == CS_ZOMBIE ) {
 		return;		// already dropped
@@ -391,14 +393,16 @@ void SV_DropClient( client_t *drop, const char *reason ) {
 	NET_HTTP_DenyClient( drop - svs.clients );
 
 	// tell everyone why they got dropped
-	SV_SendServerCommand( NULL, "print \"%s" S_COLOR_WHITE " %s\n\"", drop->name, reason );
+	if (!suppressBroadcast) {
+		SV_SendServerCommand( NULL, "print \"%s" S_COLOR_WHITE " %s\n\"", drop->name, reason );
+	}
 
 	// call the prog function for removing a client
 	// this will remove the body, among other things
 	GVM_ClientDisconnect( drop - svs.clients );
 
 	// add the disconnect command
-	SV_SendServerCommand( drop, "disconnect \"%s\"", reason );
+	SV_SendServerCommand( drop, "disconnect \"%s\"", disconnectReason );
 
 	if ( isBot ) {
 		SV_BotFreeClient( drop - svs.clients );
@@ -1904,4 +1908,3 @@ void SV_ExecuteClientMessage( client_t *cl, msg_t *msg ) {
 //		Com_Printf( "WARNING: Junk at end of packet for client %i\n", cl - svs.clients );
 //	}
 }
-

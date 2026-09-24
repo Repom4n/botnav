@@ -187,7 +187,7 @@ static void CG_DrawClientScore( int y, score_t *score, float *color, float fade,
 //JAPRO - Clientside - Scoreboard Deaths - Start
 				if ((cg_scoreDeaths.integer == 2 && (cgs.serverMod < SVMOD_JAPLUS || !cgs.pluginSet)) || cg_scoreDeaths.integer == 3) //3 shows local count always (debugging)
 					score->deaths = ci->deaths;
-				if (cg_scoreDeaths.integer && (cg_scoreDeaths.integer == 2 || (cgs.serverMod >= SVMOD_JAPLUS && cgs.pluginSet) || cg_scoreDeaths.integer == 3) && (cgs.gametype != GT_CTF && cgs.gametype != GT_DUEL))
+				if (cg_scoreDeaths.integer && (cg_scoreDeaths.integer == 2 || (cgs.serverMod >= SVMOD_JAPLUS && cgs.pluginSet) || cg_scoreDeaths.integer == 3) && (cgs.gametype != GT_CTF && cgs.gametype != GT_DUEL && cgs.gametype != GT_ARCADE))
 					CG_Text_Paint(SB_SCORE_X, y, 1.0f * scale, colorWhite, va("%i/%i", score->score, score->deaths), 0, 0, ITEM_TEXTSTYLE_OUTLINED, FONT_SMALL);
 				else
 					CG_Text_Paint(SB_SCORE_X, y, 1.0f * scale, colorWhite, va("%i", score->score), 0, 0, ITEM_TEXTSTYLE_OUTLINED, FONT_SMALL);
