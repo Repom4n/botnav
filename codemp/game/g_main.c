@@ -566,12 +566,16 @@ int G_ArcadeCountIngameHumans(void)
 		{
 			continue;
 		}
-		if (ent->client->sess.sessionTeam == TEAM_FREE || level.arcadeParticipant[i] || level.arcadeQueued[i])
+		if (level.gametype == GT_ARCADE)
 		{
-			if (level.gametype != GT_ARCADE || level.arcadeParticipant[i] || level.arcadeQueued[i])
+			if (ent->client->sess.sessionTeam == TEAM_FREE || level.arcadeQueued[i])
 			{
 				count++;
 			}
+		}
+		else if (ent->client->sess.sessionTeam == TEAM_FREE)
+		{
+			count++;
 		}
 	}
 	return count;
@@ -588,12 +592,16 @@ static int G_ArcadeCountOccupiedHumans(void)
 		{
 			continue;
 		}
-		if (ent->client->sess.sessionTeam == TEAM_FREE || level.arcadeParticipant[i] || level.arcadeQueued[i])
+		if (level.gametype == GT_ARCADE)
 		{
-			if (level.gametype != GT_ARCADE || level.arcadeParticipant[i] || level.arcadeQueued[i])
+			if (ent->client->sess.sessionTeam == TEAM_FREE || level.arcadeQueued[i])
 			{
 				count++;
 			}
+		}
+		else if (ent->client->sess.sessionTeam == TEAM_FREE)
+		{
+			count++;
 		}
 	}
 	return count;
@@ -1011,7 +1019,7 @@ static void G_ArcadeKickManagedBot(gentity_t *ent)
 		if (ent->client->pers.connected != CON_DISCONNECTED)
 		{
 			G_ArcadeClearBotDuelState(ent);
-			trap->DropClient(ent->s.number, "was kicked");
+			trap->DropClient(ent->s.number, "Arcade bot recycle");
 		}
 		level.arcadeManagedBot[ent->s.number] = qfalse;
 	}
@@ -1093,12 +1101,14 @@ static qboolean G_ArcadeHasAnyBotClients(void)
 	for (i = 0; i < MAX_CLIENTS; i++)
 	{
 		gentity_t *ent = &g_entities[i];
-		if (!ent->inuse || !ent->client || !(ent->r.svFlags & SVF_BOT))
+		if (!level.arcadeManagedBot[i] ||
+			!ent->inuse || !ent->client || !(ent->r.svFlags & SVF_BOT))
 		{
 			continue;
 		}
 		if (ent->client->pers.connected == CON_DISCONNECTED)
 		{
+			level.arcadeManagedBot[i] = qfalse;
 			continue;
 		}
 		return qtrue;
@@ -1143,7 +1153,8 @@ static int G_ArcadeKickAllBots(void)
 		gentity_t *ent = &g_entities[i];
 		const qboolean isBot = (ent->inuse && ent->client && (ent->r.svFlags & SVF_BOT)) ? qtrue : qfalse;
 
-		if (!isBot || ent->client->pers.connected == CON_DISCONNECTED)
+		if (!level.arcadeManagedBot[i] ||
+			!isBot || ent->client->pers.connected == CON_DISCONNECTED)
 		{
 			level.arcadeManagedBot[i] = qfalse;
 			continue;
@@ -1151,7 +1162,7 @@ static int G_ArcadeKickAllBots(void)
 
 		G_RemoveQueuedBotBegin(i);
 		G_ArcadeClearBotDuelState(ent);
-		trap->DropClient(i, "was kicked");
+		trap->DropClient(i, "Arcade bot recycle");
 		level.arcadeManagedBot[i] = qfalse;
 		dropped++;
 	}
@@ -1281,7 +1292,7 @@ static void G_ArcadeStartRound(void)
 		const qboolean wasParticipant = level.arcadeParticipant[i];
 		const qboolean shouldParticipate = ent->inuse && ent->client && !(ent->r.svFlags & SVF_BOT) &&
 			ent->client->pers.connected == CON_CONNECTED &&
-			(level.arcadeParticipant[i] || level.arcadeQueued[i]);
+			((ent->client->sess.sessionTeam == TEAM_FREE && level.arcadeParticipant[i]) || level.arcadeQueued[i]);
 		const int savedScore = level.arcadeScore[i];
 		const int savedTotalKills = level.arcadeTotalKills[i];
 		if (!ent->inuse || !ent->client || (ent->r.svFlags & SVF_BOT) ||
@@ -1356,6 +1367,14 @@ void G_ArcadeHandlePlayerDeath(gentity_t *self, gentity_t *attacker)
 		self->client->pers.connected == CON_CONNECTED && !(self->r.svFlags & SVF_BOT))
 	{
 		G_QueueArcadeBotTutorial(attacker, self, level.arcadeLevel, qfalse);
+	}
+	if (roundActiveParticipant &&
+		attacker && attacker->client && attacker != self &&
+		attacker->client->pers.connected == CON_CONNECTED &&
+		self->client->pers.connected == CON_CONNECTED)
+	{
+		trap->SendServerCommand(-1, va("cp \"%s ^7killed %s\n\"",
+			attacker->client->pers.netname, self->client->pers.netname));
 	}
 	if (roundActiveParticipant)
 	{
