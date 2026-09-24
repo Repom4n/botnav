@@ -1373,8 +1373,10 @@ void G_ArcadeHandlePlayerDeath(gentity_t *self, gentity_t *attacker)
 		attacker->client->pers.connected == CON_CONNECTED &&
 		self->client->pers.connected == CON_CONNECTED)
 	{
-		trap->SendServerCommand(-1, va("cp \"%s ^7killed %s\n\"",
-			attacker->client->pers.netname, self->client->pers.netname));
+		const char *killMsg = va("cp \"%s ^7killed %s\n\"",
+			attacker->client->pers.netname, self->client->pers.netname);
+		trap->SendServerCommand(attacker - g_entities, killMsg);
+		trap->SendServerCommand(self - g_entities, killMsg);
 	}
 	if (roundActiveParticipant)
 	{
