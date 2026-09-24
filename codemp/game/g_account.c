@@ -2523,7 +2523,7 @@ static qboolean G_InsertTrackedArcadeEvents(sqlite3 *db, sqlite3_int64 sessionId
 		CALL_SQLITE(reset(stmt));
 		CALL_SQLITE(clear_bindings(stmt));
 
-		if (captureGeometry && hasAnyGeometry && event->hasGeometry)
+		if (captureGeometry && hasAnyGeometry && event->hasGeometry && event->opponentKey[0])
 		{
 			vec3_t toEnemy;
 			vec3_t relVelocity;

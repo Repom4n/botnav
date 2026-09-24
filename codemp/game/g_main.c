@@ -215,10 +215,92 @@ void G_CacheMapname( const vmCvar_t *mapname )
 #define ARCADE_GAME_OVER_DELAY_MS 8500
 #define ARCADE_RESERVED_PLAYER_SLOTS 1
 #define ARCADE_NO_ROOM_WARNING_COOLDOWN_MS 3000
+#define ARCADE_SILENT_DROP_REASON "ARCADE_SILENT_DROP"
 
 static int G_ArcadeGetProgressionLevel(int arcadeLevel)
 {
 	return arcadeLevel + ARCADE_BOT_LEVEL_OFFSET;
+}
+
+static void G_ArcadeSanitizeCenterName(const char *source, char *out, size_t outSize)
+{
+	char temp[MAX_NETNAME];
+	size_t i;
+	size_t j = 0;
+
+	if (!out || outSize < 2)
+	{
+		return;
+	}
+
+	if (!source || !source[0])
+	{
+		Q_strncpyz(out, "player", outSize);
+		return;
+	}
+
+	Q_strncpyz(temp, source, sizeof(temp));
+	Q_CleanStr(temp);
+
+	for (i = 0; temp[i] && j + 1 < outSize; i++)
+	{
+		const char c = temp[i];
+		const qboolean isAlphaNum = ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+			(c >= '0' && c <= '9')) ? qtrue : qfalse;
+		const qboolean isSafePunct = (c == ' ' || c == '_' || c == '-' || c == '.') ? qtrue : qfalse;
+
+		if (isAlphaNum || isSafePunct)
+		{
+			out[j++] = c;
+		}
+		else
+		{
+			out[j++] = '_';
+		}
+	}
+	out[j] = '\0';
+
+	if (!out[0])
+	{
+		Q_strncpyz(out, "player", outSize);
+	}
+}
+
+static void G_ArcadeEscapeCenterString(const char *source, char *out, size_t outSize)
+{
+	size_t i;
+	size_t j = 0;
+
+	if (!out || outSize < 2)
+	{
+		return;
+	}
+
+	if (!source)
+	{
+		out[0] = '\0';
+		return;
+	}
+
+	for (i = 0; source[i] && j + 1 < outSize; i++)
+	{
+		const char c = source[i];
+
+		if ((c == '"' || c == '\\') && j + 2 < outSize)
+		{
+			out[j++] = '\\';
+			out[j++] = c;
+		}
+		else if (c == '\n' || c == '\r')
+		{
+			out[j++] = ' ';
+		}
+		else
+		{
+			out[j++] = c;
+		}
+	}
+	out[j] = '\0';
 }
 
 static void G_ArcadeBroadcastLevelCenterMessage(int levelNumber)
@@ -745,7 +827,7 @@ static int G_ArcadeKickBotsForReserve(int neededSlots)
 			}
 
 			G_ArcadeClearBotDuelState(ent);
-			trap->DropClient(i, "Arcade reserve slot for human players");
+			trap->DropClient(i, ARCADE_SILENT_DROP_REASON);
 			level.arcadeManagedBot[i] = qfalse;
 			kicked++;
 		}
@@ -1019,7 +1101,7 @@ static void G_ArcadeKickManagedBot(gentity_t *ent)
 		if (ent->client->pers.connected != CON_DISCONNECTED)
 		{
 			G_ArcadeClearBotDuelState(ent);
-			trap->DropClient(ent->s.number, "Arcade bot recycle");
+			trap->DropClient(ent->s.number, ARCADE_SILENT_DROP_REASON);
 		}
 		level.arcadeManagedBot[ent->s.number] = qfalse;
 	}
@@ -1162,7 +1244,7 @@ static int G_ArcadeKickAllBots(void)
 
 		G_RemoveQueuedBotBegin(i);
 		G_ArcadeClearBotDuelState(ent);
-		trap->DropClient(i, "Arcade bot recycle");
+		trap->DropClient(i, ARCADE_SILENT_DROP_REASON);
 		level.arcadeManagedBot[i] = qfalse;
 		dropped++;
 	}
@@ -1292,7 +1374,9 @@ static void G_ArcadeStartRound(void)
 		const qboolean wasParticipant = level.arcadeParticipant[i];
 		const qboolean shouldParticipate = ent->inuse && ent->client && !(ent->r.svFlags & SVF_BOT) &&
 			ent->client->pers.connected == CON_CONNECTED &&
-			((ent->client->sess.sessionTeam == TEAM_FREE && level.arcadeParticipant[i]) || level.arcadeQueued[i]);
+			(level.arcadeParticipant[i] || level.arcadeQueued[i]);
+		const qboolean shouldJoinRound = shouldParticipate &&
+			(ent->client->sess.sessionTeam == TEAM_FREE || level.arcadeQueued[i]);
 		const int savedScore = level.arcadeScore[i];
 		const int savedTotalKills = level.arcadeTotalKills[i];
 		if (!ent->inuse || !ent->client || (ent->r.svFlags & SVF_BOT) ||
@@ -1304,6 +1388,13 @@ static void G_ArcadeStartRound(void)
 		if (!shouldParticipate)
 		{
 			level.arcadeParticipant[i] = qfalse;
+			level.arcadeQueued[i] = qfalse;
+			G_ArcadeSyncClientScoreboardScore(ent);
+			continue;
+		}
+		if (!shouldJoinRound)
+		{
+			level.arcadeParticipant[i] = qtrue;
 			level.arcadeQueued[i] = qfalse;
 			G_ArcadeSyncClientScoreboardScore(ent);
 			continue;
@@ -1370,11 +1461,27 @@ void G_ArcadeHandlePlayerDeath(gentity_t *self, gentity_t *attacker)
 	}
 	if (roundActiveParticipant &&
 		attacker && attacker->client && attacker != self &&
+		attacker->s.number >= 0 && attacker->s.number < MAX_CLIENTS &&
+		level.arcadeParticipant[attacker->s.number] &&
+		!level.arcadeEliminated[attacker->s.number] &&
+		attacker->client->sess.sessionTeam == TEAM_FREE &&
 		attacker->client->pers.connected == CON_CONNECTED &&
 		self->client->pers.connected == CON_CONNECTED)
 	{
-		const char *killMsg = va("cp \"%s ^7killed %s\n\"",
-			attacker->client->pers.netname, self->client->pers.netname);
+		char attackerName[MAX_NETNAME];
+		char victimName[MAX_NETNAME];
+		char attackerEscaped[MAX_NETNAME * 2];
+		char victimEscaped[MAX_NETNAME * 2];
+		char killedEscaped[64];
+		const char *killedText = G_GetStringEdString("MP_SVGAME", "KILLED");
+		const char *killMsg;
+
+		G_ArcadeSanitizeCenterName(attacker->client->pers.netname, attackerName, sizeof(attackerName));
+		G_ArcadeSanitizeCenterName(self->client->pers.netname, victimName, sizeof(victimName));
+		G_ArcadeEscapeCenterString(attackerName, attackerEscaped, sizeof(attackerEscaped));
+		G_ArcadeEscapeCenterString(victimName, victimEscaped, sizeof(victimEscaped));
+		G_ArcadeEscapeCenterString(killedText, killedEscaped, sizeof(killedEscaped));
+		killMsg = va("cp \"%s %s %s\n\"", attackerEscaped, killedEscaped, victimEscaped);
 		trap->SendServerCommand(attacker - g_entities, killMsg);
 		trap->SendServerCommand(self - g_entities, killMsg);
 	}

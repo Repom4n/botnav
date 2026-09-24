@@ -381,7 +381,8 @@ or crashing -- SV_FinalMessage() will handle that
 void SV_DropClient( client_t *drop, const char *reason ) {
 	int		i;
 	const bool isBot = drop->netchan.remoteAddress.type == NA_BOT;
-	const bool suppressBroadcast = (isBot && reason && !Q_stricmpn(reason, "Arcade ", 7));
+	const bool suppressBroadcast = (isBot && reason && !Q_stricmp(reason, "ARCADE_SILENT_DROP"));
+	const char *disconnectReason = suppressBroadcast ? SV_GetStringEdString("MP_SVGAME", "WAS_KICKED") : reason;
 
 	if ( drop->state == CS_ZOMBIE ) {
 		return;		// already dropped
@@ -401,7 +402,7 @@ void SV_DropClient( client_t *drop, const char *reason ) {
 	GVM_ClientDisconnect( drop - svs.clients );
 
 	// add the disconnect command
-	SV_SendServerCommand( drop, "disconnect \"%s\"", reason );
+	SV_SendServerCommand( drop, "disconnect \"%s\"", disconnectReason );
 
 	if ( isBot ) {
 		SV_BotFreeClient( drop - svs.clients );
