@@ -6528,7 +6528,7 @@ static void G_BuildTrackedSessionExportQuery(qboolean includeDuel, qboolean incl
 	char *out, int outSize)
 {
 	const char *duelSelect =
-		"SELECT 'duel_summary' AS record_type, source_context, id AS record_id, "
+		"SELECT 1 AS export_format_version, 'duel_summary' AS record_type, source_context, id AS record_id, "
 		"start_time, end_time, duration, mapname, type, '' AS result, 0 AS arcade_level, "
 		"'' AS participant_key, '' AS participant_label, 0 AS participant_kind, "
 		"winner_key, winner_label, winner_kind, winner_side, "
@@ -6540,7 +6540,7 @@ static void G_BuildTrackedSessionExportQuery(qboolean includeDuel, qboolean incl
 		"0 AS reset_successes, 0 AS saber_return_punishes "
 		"FROM LocalDuelTrackSummary";
 	const char *arcadeSelect =
-		"SELECT 'arcade_session' AS record_type, source_context, id AS record_id, "
+		"SELECT 1 AS export_format_version, 'arcade_session' AS record_type, source_context, id AS record_id, "
 		"start_time, end_time, duration, mapname, 21 AS type, result, arcade_level, "
 		"participant_key, participant_label, participant_kind, "
 		"'' AS winner_key, '' AS winner_label, 0 AS winner_kind, 0 AS winner_side, "
@@ -6555,11 +6555,11 @@ static void G_BuildTrackedSessionExportQuery(qboolean includeDuel, qboolean incl
 
 	/*
 	 * Keep the duel and arcade SELECT branches column-compatible. The combined
-	 * sessions export writes, in order: record_type, source_context, record_id,
-	 * start/end/duration/map/type/result/arcade_level, participant identity,
-	 * duel winner+loser identity, draw/openings, and the aggregated tracked
-	 * combat counters. Any future schema changes here must preserve that layout
-	 * across both UNION branches.
+	 * sessions export writes, in order: export_format_version, record_type,
+	 * source_context, record_id, start/end/duration/map/type/result/
+	 * arcade_level, participant identity, duel winner+loser identity,
+	 * draw/openings, and the aggregated tracked combat counters. Any future
+	 * schema changes here must preserve that layout across both UNION branches.
 	 */
 	out[0] = '\0';
 	if (includeDuel)
@@ -6573,7 +6573,7 @@ static void G_BuildTrackedSessionExportQuery(qboolean includeDuel, qboolean incl
 static const char *G_GetTrackedParticipantExportQuery(void)
 {
 	return
-		"SELECT 'duel_participant' AS record_type, 'duel' AS source_context, id AS record_id, summary_id, "
+		"SELECT 1 AS export_format_version, 'duel_participant' AS record_type, 'duel' AS source_context, id AS record_id, summary_id, "
 		"participant_key, participant_label, participant_kind, opponent_key, won, side, opponent_side, matchup, "
 		"total_force_spent, total_force_regen, ending_force, ending_hp, ending_armor, "
 		"low_force_windows, grip_cripple_events, saber_throw_punishes, knockdown_events, late_defense_spends, "
@@ -6587,14 +6587,14 @@ static void G_BuildTrackedEventExportQuery(qboolean includeDuel, qboolean includ
 	char *out, int outSize)
 {
 	const char *duelSelect =
-		"SELECT 'duel_event' AS record_type, 'duel' AS source_context, id AS record_id, summary_id AS parent_id, "
+		"SELECT 1 AS export_format_version, 'duel_event' AS record_type, 'duel' AS source_context, id AS record_id, summary_id AS parent_id, "
 		"participant_key, '' AS participant_label, 0 AS participant_kind, "
 		"opponent_key, opponent_label, opponent_kind, "
 		"rel_time, event_index, sequence_id, event_type, power, amount, state, range_bucket, "
 		"buttons, saber_move, enemy_saber_move, yaw_delta, note "
 		"FROM LocalDuelTrackEvent";
 	const char *arcadeSelect =
-		"SELECT 'arcade_event' AS record_type, 'arcade' AS source_context, id AS record_id, session_id AS parent_id, "
+		"SELECT 1 AS export_format_version, 'arcade_event' AS record_type, 'arcade' AS source_context, id AS record_id, session_id AS parent_id, "
 		"participant_key, participant_label, participant_kind, "
 		"opponent_key, opponent_label, opponent_kind, "
 		"rel_time, event_index, sequence_id, event_type, power, amount, state, range_bucket, "
@@ -6617,13 +6617,13 @@ static void G_BuildTrackedGeometryExportQuery(qboolean includeDuel, qboolean inc
 	char *out, int outSize)
 {
 	const char *duelSelect =
-		"SELECT 'duel_geometry' AS record_type, 'duel' AS source_context, id AS record_id, summary_id AS parent_id, "
+		"SELECT 1 AS export_format_version, 'duel_geometry' AS record_type, 'duel' AS source_context, id AS record_id, summary_id AS parent_id, "
 		"participant_key, opponent_key, rel_time, event_index, "
 		"self_x, self_y, self_z, enemy_x, enemy_y, enemy_z, "
 		"self_vx, self_vy, self_vz, enemy_vx, enemy_vy, enemy_vz, self_yaw, enemy_yaw "
 		"FROM LocalDuelTrackGeometry";
 	const char *arcadeSelect =
-		"SELECT 'arcade_geometry' AS record_type, 'arcade' AS source_context, id AS record_id, session_id AS parent_id, "
+		"SELECT 1 AS export_format_version, 'arcade_geometry' AS record_type, 'arcade' AS source_context, id AS record_id, session_id AS parent_id, "
 		"participant_key, opponent_key, rel_time, event_index, "
 		"self_x, self_y, self_z, enemy_x, enemy_y, enemy_z, "
 		"self_vx, self_vy, self_vz, enemy_vx, enemy_vy, enemy_vz, self_yaw, enemy_yaw "
@@ -6644,7 +6644,7 @@ static void G_BuildTrackedGeometryExportQuery(qboolean includeDuel, qboolean inc
 static const char *G_GetTrackedAggregateExportQuery(void)
 {
 	return
-		"SELECT 'duel_aggregate' AS record_type, 'duel' AS source_context, "
+		"SELECT 1 AS export_format_version, 'duel_aggregate' AS record_type, 'duel' AS source_context, "
 		"participant_key, participant_kind, side, matchup, duels, wins, losses, "
 		"total_force_spent, total_force_regen, low_force_deaths, grip_cripples, saber_throw_punishes, "
 		"force_push, force_pull, force_grip, force_drain, force_rage, force_absorb, force_protect, force_heal, "
@@ -6759,10 +6759,8 @@ void Svcmd_ExportDuelTrack_f(void)
 	int rows;
 	char pathSep;
 	qboolean hadDuelSummary;
-	qboolean hadDuelParticipant;
 	qboolean hadDuelEvent;
 	qboolean hadDuelGeometry;
-	qboolean hadDuelAggregate;
 	qboolean hadArcadeSession;
 	qboolean hadArcadeEvent;
 	qboolean hadArcadeGeometry;
@@ -6838,10 +6836,8 @@ void Svcmd_ExportDuelTrack_f(void)
 	preHadArcadeGeometry = G_DoesTrackedDuelTableExist(db, "LocalArcadeTrackGeometry");
 	G_EnsureLocalDuelTrackingSchema(db);
 	hadDuelSummary = G_DoesTrackedDuelTableExist(db, "LocalDuelTrackSummary");
-	hadDuelParticipant = G_DoesTrackedDuelTableExist(db, "LocalDuelTrackParticipant");
 	hadDuelEvent = G_DoesTrackedDuelTableExist(db, "LocalDuelTrackEvent");
 	hadDuelGeometry = G_DoesTrackedDuelTableExist(db, "LocalDuelTrackGeometry");
-	hadDuelAggregate = G_DoesTrackedDuelTableExist(db, "LocalDuelTrackAggregate");
 	hadArcadeSession = G_DoesTrackedDuelTableExist(db, "LocalArcadeTrackSession");
 	hadArcadeEvent = G_DoesTrackedDuelTableExist(db, "LocalArcadeTrackEvent");
 	hadArcadeGeometry = G_DoesTrackedDuelTableExist(db, "LocalArcadeTrackGeometry");
@@ -6871,10 +6867,10 @@ void Svcmd_ExportDuelTrack_f(void)
 		includeGeometryDuel = hadDuelGeometry;
 		includeGeometryArcade = hadArcadeGeometry;
 		wantSessionExport = includeSessionDuel || includeSessionArcade;
-		wantParticipantExport = hadDuelParticipant;
+		wantParticipantExport = qfalse;
 		wantEventExport = includeEventDuel || includeEventArcade;
 		wantGeometryExport = includeGeometryDuel || includeGeometryArcade;
-		wantAggregateExport = hadDuelAggregate;
+		wantAggregateExport = qfalse;
 	}
 	G_BuildTrackedSessionExportQuery(includeSessionDuel, includeSessionArcade, sessionQuery, sizeof(sessionQuery));
 	G_BuildTrackedEventExportQuery(includeEventDuel, includeEventArcade, eventQuery, sizeof(eventQuery));
