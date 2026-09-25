@@ -10241,10 +10241,6 @@ static qboolean NewBotAI_HasStableSaberThrowDefenseAlignment(bot_state_t *bs)
 	{
 		return qfalse;
 	}
-	if (bs->lastHurtTime > level.time - 450)
-	{
-		return qfalse;
-	}
 
 	return (NewBotAI_GetSelfFacingErrorToEnemy(bs) <= 18.0f) ? qtrue : qfalse;
 }
