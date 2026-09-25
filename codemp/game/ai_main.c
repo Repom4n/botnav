@@ -10997,7 +10997,10 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 				NewBotAI_RetreatDiagonal(bs, (level.framenum & 1) ? qtrue : qfalse);
 			}
 		}
-		else if (preCollapseDefense && !enemySaberThreatImminent && !NewBotAI_IsBeingPulledTowardEnemy(bs))
+		else if (preCollapseDefense &&
+			!enemySaberThreatImminent &&
+			!bs->currentEnemy->client->ps.saberInFlight &&
+			!NewBotAI_IsBeingPulledTowardEnemy(bs))
 		{
 			if (bs->conserveUntil < level.time + 500)
 			{
