@@ -10238,10 +10238,6 @@ static qboolean NewBotAI_HasStableSaberThrowDefenseAlignment(bot_state_t *bs)
 	{
 		return qfalse;
 	}
-	if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE)
-	{
-		return qfalse;
-	}
 
 	return (NewBotAI_GetSelfFacingErrorToEnemy(bs) <= 18.0f) ? qtrue : qfalse;
 }
