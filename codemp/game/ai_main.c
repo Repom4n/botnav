@@ -153,7 +153,7 @@ static qboolean NewBotAI_IsFlipkickSetupReady(bot_state_t *bs);
 qboolean BG_InRoll3(int anim);
 static void NewBotAI_RetreatStraight(bot_state_t *bs);
 static float NewBotAI_GetEnemyClosingSpeed(bot_state_t *bs);
-static float NewBotAI_GetEnemyFacingError(bot_state_t *bs);
+static float NewBotAI_GetSelfFacingErrorToEnemy(bot_state_t *bs);
 static void NewBotAI_SaberDuelIndecisionFallback(bot_state_t *bs, qboolean horizontalSwingStart);
 static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs);
 static void NewBotAI_ApplyHorizontalSwingMove(bot_state_t *bs);
@@ -10190,7 +10190,7 @@ static float NewBotAI_GetEnemyClosingSpeed(bot_state_t *bs)
 	return DotProduct(bs->currentEnemy->client->ps.velocity, toUs);
 }
 
-static float NewBotAI_GetEnemyFacingError(bot_state_t *bs)
+static float NewBotAI_GetSelfFacingErrorToEnemy(bot_state_t *bs)
 {
 	vec3_t toEnemy;
 	vec3_t enemyAngles;
@@ -10246,7 +10246,7 @@ static qboolean NewBotAI_HasStableSaberThrowDefenseAlignment(bot_state_t *bs)
 		return qfalse;
 	}
 
-	return (NewBotAI_GetEnemyFacingError(bs) <= 18.0f) ? qtrue : qfalse;
+	return (NewBotAI_GetSelfFacingErrorToEnemy(bs) <= 18.0f) ? qtrue : qfalse;
 }
 
 static qboolean NewBotAI_ShouldStabilizeAgainstEnemySaberThrow(bot_state_t *bs)
@@ -10338,7 +10338,7 @@ static qboolean NewBotAI_IsStablePTKCommitWindow(bot_state_t *bs)
 	{
 		return qfalse;
 	}
-	if (NewBotAI_GetEnemyFacingError(bs) > 26.0f)
+	if (NewBotAI_GetSelfFacingErrorToEnemy(bs) > 26.0f)
 	{
 		return qfalse;
 	}
@@ -10967,6 +10967,9 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 		qboolean crouch = qfalse;
 		const qboolean enemySaberThreatImminent = NewBotAI_IsEnemySaberThreatImminent(bs);
 		const qboolean preCollapseDefense = NewBotAI_ShouldPreDefenseAgainstCollapse(bs);
+		const qboolean stabilizeVsSaberThrow =
+			(bs->currentEnemy->client->ps.saberInFlight &&
+			 NewBotAI_ShouldStabilizeAgainstEnemySaberThrow(bs)) ? qtrue : qfalse;
 
 		bs->runningLikeASissy = 0;
 		bs->forceMove_Forward = 0;
@@ -11015,7 +11018,6 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 		{
 			const int totalHealthDelta = NewBotAI_GetTotalHealthDelta(bs);
 			const int ourHealth = g_entities[bs->client].health;
-			const qboolean stabilizeVsSaberThrow = NewBotAI_ShouldStabilizeAgainstEnemySaberThrow(bs);
 
 			if (NewBotAI_ShouldEmergencyDrainRollSaberThrow(bs))
 			{
