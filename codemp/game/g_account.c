@@ -6553,6 +6553,14 @@ static void G_BuildTrackedSessionExportQuery(qboolean includeDuel, qboolean incl
 	if (!out || outSize < 1)
 		return;
 
+	/*
+	 * Keep the duel and arcade SELECT branches column-compatible. The combined
+	 * sessions export writes, in order: record_type, source_context, record_id,
+	 * start/end/duration/map/type/result/arcade_level, participant identity,
+	 * duel winner+loser identity, draw/openings, and the aggregated tracked
+	 * combat counters. Any future schema changes here must preserve that layout
+	 * across both UNION branches.
+	 */
 	out[0] = '\0';
 	if (includeDuel)
 		Q_strcat(out, outSize, duelSelect);
@@ -6752,6 +6760,20 @@ void Svcmd_ExportDuelTrack_f(void)
 	qboolean hadArcadeSession;
 	qboolean hadArcadeEvent;
 	qboolean hadArcadeGeometry;
+	qboolean preHadDuelSummary;
+	qboolean preHadDuelParticipant;
+	qboolean preHadDuelEvent;
+	qboolean preHadDuelGeometry;
+	qboolean preHadDuelAggregate;
+	qboolean preHadArcadeSession;
+	qboolean preHadArcadeEvent;
+	qboolean preHadArcadeGeometry;
+	qboolean hadAnyTrackedTables;
+	qboolean wantSessionExport;
+	qboolean wantParticipantExport;
+	qboolean wantEventExport;
+	qboolean wantGeometryExport;
+	qboolean wantAggregateExport;
 	char sessionQuery[4096];
 	char eventQuery[3072];
 	char geometryQuery[3072];
@@ -6794,6 +6816,14 @@ void Svcmd_ExportDuelTrack_f(void)
 		trap->Print("exportDuelTrack failed: unable to open local duel database.\n");
 		return;
 	}
+	preHadDuelSummary = G_DoesTrackedDuelTableExist(db, "LocalDuelTrackSummary");
+	preHadDuelParticipant = G_DoesTrackedDuelTableExist(db, "LocalDuelTrackParticipant");
+	preHadDuelEvent = G_DoesTrackedDuelTableExist(db, "LocalDuelTrackEvent");
+	preHadDuelGeometry = G_DoesTrackedDuelTableExist(db, "LocalDuelTrackGeometry");
+	preHadDuelAggregate = G_DoesTrackedDuelTableExist(db, "LocalDuelTrackAggregate");
+	preHadArcadeSession = G_DoesTrackedDuelTableExist(db, "LocalArcadeTrackSession");
+	preHadArcadeEvent = G_DoesTrackedDuelTableExist(db, "LocalArcadeTrackEvent");
+	preHadArcadeGeometry = G_DoesTrackedDuelTableExist(db, "LocalArcadeTrackGeometry");
 	G_EnsureLocalDuelTrackingSchema(db);
 	hadDuelSummary = G_DoesTrackedDuelTableExist(db, "LocalDuelTrackSummary");
 	hadDuelParticipant = G_DoesTrackedDuelTableExist(db, "LocalDuelTrackParticipant");
@@ -6803,6 +6833,25 @@ void Svcmd_ExportDuelTrack_f(void)
 	hadArcadeSession = G_DoesTrackedDuelTableExist(db, "LocalArcadeTrackSession");
 	hadArcadeEvent = G_DoesTrackedDuelTableExist(db, "LocalArcadeTrackEvent");
 	hadArcadeGeometry = G_DoesTrackedDuelTableExist(db, "LocalArcadeTrackGeometry");
+	hadAnyTrackedTables = preHadDuelSummary || preHadDuelParticipant || preHadDuelEvent ||
+		preHadDuelGeometry || preHadDuelAggregate || preHadArcadeSession ||
+		preHadArcadeEvent || preHadArcadeGeometry;
+	if (hadAnyTrackedTables)
+	{
+		wantSessionExport = preHadDuelSummary || preHadArcadeSession;
+		wantParticipantExport = preHadDuelParticipant;
+		wantEventExport = preHadDuelEvent || preHadArcadeEvent;
+		wantGeometryExport = preHadDuelGeometry || preHadArcadeGeometry;
+		wantAggregateExport = preHadDuelAggregate;
+	}
+	else
+	{
+		wantSessionExport = hadDuelSummary || hadArcadeSession;
+		wantParticipantExport = hadDuelParticipant;
+		wantEventExport = hadDuelEvent || hadArcadeEvent;
+		wantGeometryExport = hadDuelGeometry || hadArcadeGeometry;
+		wantAggregateExport = hadDuelAggregate;
+	}
 	G_BuildTrackedSessionExportQuery(hadDuelSummary, hadArcadeSession, sessionQuery, sizeof(sessionQuery));
 	G_BuildTrackedEventExportQuery(hadDuelEvent, hadArcadeEvent, eventQuery, sizeof(eventQuery));
 	G_BuildTrackedGeometryExportQuery(hadDuelGeometry, hadArcadeGeometry, geometryQuery, sizeof(geometryQuery));
@@ -6823,27 +6872,27 @@ void Svcmd_ExportDuelTrack_f(void)
 #endif
 
 	G_BuildTrackedExportPath(dbDir, pathSep, safePrefix, "sessions.csv", outPath, sizeof(outPath));
-	if (sessionQuery[0] &&
+	if (wantSessionExport && sessionQuery[0] &&
 		G_ExportTrackedQueryCSV(db, sessionQuery, outPath, &rows))
 		trap->Print("Exported tracked sessions (%d rows) -> %s\n", rows, outPath);
 
 	G_BuildTrackedExportPath(dbDir, pathSep, safePrefix, "participants.csv", outPath, sizeof(outPath));
-	if (hadDuelParticipant &&
+	if (wantParticipantExport &&
 		G_ExportTrackedQueryCSV(db, G_GetTrackedParticipantExportQuery(), outPath, &rows))
 		trap->Print("Exported tracked participants (%d rows) -> %s\n", rows, outPath);
 
 	G_BuildTrackedExportPath(dbDir, pathSep, safePrefix, "events.csv", outPath, sizeof(outPath));
-	if (eventQuery[0] &&
+	if (wantEventExport && eventQuery[0] &&
 		G_ExportTrackedQueryCSV(db, eventQuery, outPath, &rows))
 		trap->Print("Exported tracked events (%d rows) -> %s\n", rows, outPath);
 
 	G_BuildTrackedExportPath(dbDir, pathSep, safePrefix, "geometry.csv", outPath, sizeof(outPath));
-	if (geometryQuery[0] &&
+	if (wantGeometryExport && geometryQuery[0] &&
 		G_ExportTrackedQueryCSV(db, geometryQuery, outPath, &rows))
 		trap->Print("Exported tracked geometry (%d rows) -> %s\n", rows, outPath);
 
 	G_BuildTrackedExportPath(dbDir, pathSep, safePrefix, "aggregate.csv", outPath, sizeof(outPath));
-	if (hadDuelAggregate &&
+	if (wantAggregateExport &&
 		G_ExportTrackedQueryCSV(db, G_GetTrackedAggregateExportQuery(), outPath, &rows))
 		trap->Print("Exported tracked aggregate (%d rows) -> %s\n", rows, outPath);
 
