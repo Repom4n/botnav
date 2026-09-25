@@ -6794,6 +6794,7 @@ void Svcmd_ExportDuelTrack_f(void)
 		trap->Print("exportDuelTrack failed: unable to open local duel database.\n");
 		return;
 	}
+	G_EnsureLocalDuelTrackingSchema(db);
 	hadDuelSummary = G_DoesTrackedDuelTableExist(db, "LocalDuelTrackSummary");
 	hadDuelParticipant = G_DoesTrackedDuelTableExist(db, "LocalDuelTrackParticipant");
 	hadDuelEvent = G_DoesTrackedDuelTableExist(db, "LocalDuelTrackEvent");
@@ -6802,7 +6803,6 @@ void Svcmd_ExportDuelTrack_f(void)
 	hadArcadeSession = G_DoesTrackedDuelTableExist(db, "LocalArcadeTrackSession");
 	hadArcadeEvent = G_DoesTrackedDuelTableExist(db, "LocalArcadeTrackEvent");
 	hadArcadeGeometry = G_DoesTrackedDuelTableExist(db, "LocalArcadeTrackGeometry");
-	G_EnsureLocalDuelTrackingSchema(db);
 	G_BuildTrackedSessionExportQuery(hadDuelSummary, hadArcadeSession, sessionQuery, sizeof(sessionQuery));
 	G_BuildTrackedEventExportQuery(hadDuelEvent, hadArcadeEvent, eventQuery, sizeof(eventQuery));
 	G_BuildTrackedGeometryExportQuery(hadDuelGeometry, hadArcadeGeometry, geometryQuery, sizeof(geometryQuery));
