@@ -6673,6 +6673,12 @@ static void G_SanitizeTrackedExportPrefix(const char *in, char *out, int outSize
 	out[outIndex] = '\0';
 }
 
+static void G_RemoveTrackedExportFile(const char *path)
+{
+	if (path && path[0])
+		remove(path);
+}
+
 static qboolean G_DoesTrackedDuelTableExist(sqlite3 *db, const char *tableName)
 {
 	sqlite3_stmt *stmt = NULL;
@@ -6875,26 +6881,36 @@ void Svcmd_ExportDuelTrack_f(void)
 	if (wantSessionExport && sessionQuery[0] &&
 		G_ExportTrackedQueryCSV(db, sessionQuery, outPath, &rows))
 		trap->Print("Exported tracked sessions (%d rows) -> %s\n", rows, outPath);
+	else
+		G_RemoveTrackedExportFile(outPath);
 
 	G_BuildTrackedExportPath(dbDir, pathSep, safePrefix, "participants.csv", outPath, sizeof(outPath));
 	if (wantParticipantExport &&
 		G_ExportTrackedQueryCSV(db, G_GetTrackedParticipantExportQuery(), outPath, &rows))
 		trap->Print("Exported tracked participants (%d rows) -> %s\n", rows, outPath);
+	else
+		G_RemoveTrackedExportFile(outPath);
 
 	G_BuildTrackedExportPath(dbDir, pathSep, safePrefix, "events.csv", outPath, sizeof(outPath));
 	if (wantEventExport && eventQuery[0] &&
 		G_ExportTrackedQueryCSV(db, eventQuery, outPath, &rows))
 		trap->Print("Exported tracked events (%d rows) -> %s\n", rows, outPath);
+	else
+		G_RemoveTrackedExportFile(outPath);
 
 	G_BuildTrackedExportPath(dbDir, pathSep, safePrefix, "geometry.csv", outPath, sizeof(outPath));
 	if (wantGeometryExport && geometryQuery[0] &&
 		G_ExportTrackedQueryCSV(db, geometryQuery, outPath, &rows))
 		trap->Print("Exported tracked geometry (%d rows) -> %s\n", rows, outPath);
+	else
+		G_RemoveTrackedExportFile(outPath);
 
 	G_BuildTrackedExportPath(dbDir, pathSep, safePrefix, "aggregate.csv", outPath, sizeof(outPath));
 	if (wantAggregateExport &&
 		G_ExportTrackedQueryCSV(db, G_GetTrackedAggregateExportQuery(), outPath, &rows))
 		trap->Print("Exported tracked aggregate (%d rows) -> %s\n", rows, outPath);
+	else
+		G_RemoveTrackedExportFile(outPath);
 
 	CALL_SQLITE(close(db));
 }
