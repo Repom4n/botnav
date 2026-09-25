@@ -11071,7 +11071,7 @@ void CG_Player( centity_t *cent ) {
 		}
 	}
 	//JAPRO TRIBES IFFS - END
-	else if (cgs.gametype >= GT_TEAM && cg_drawFriend.integer &&
+	else if (cgs.gametype >= GT_TEAM && cgs.gametype != GT_ARCADE && cg_drawFriend.integer &&
 		cent->currentState.number != cg.snap->ps.clientNum &&
 		cent->currentState.eType != ET_NPC)
 	{	// If the view is either a spectator or on the same team as this character, show a symbol above their head.
@@ -13881,4 +13881,3 @@ void CG_ResetPlayerEntity( centity_t *cent )
 		trap->Print("%i ResetPlayerEntity yaw=%i\n", cent->currentState.number, cent->pe.torso.yawAngle );
 	}
 }
-

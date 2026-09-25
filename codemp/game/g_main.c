@@ -379,27 +379,6 @@ static qboolean G_ArcadePlayerIsLoggedIn(const gentity_t *ent)
 	return (ent && ent->client && ent->client->pers.userName[0]);
 }
 
-static void G_ArcadePrintConsoleSummary(gentity_t *ent, const char *resultLabel, int levelNumber,
-	int healthBonus, int armorBonus, int timeBonus, int killBonus, int flawlessBonus, int roundScore, int totalScore,
-	int kills, int topScore, const char *topName)
-{
-	const int clientNum = ent - g_entities;
-
-	trap->SendServerCommand(clientNum, va("print \"\n^5Arcade %s - Level %i\n\"",
-		resultLabel, levelNumber));
-	trap->SendServerCommand(clientNum,
-		"print \" ^5Base     HPx5     APx10    Time    Killsx100  Flawless  Round      Total      TotalKills\n\"");
-	trap->SendServerCommand(clientNum, va(
-		"print \" ^2%-8i ^2%-8i ^2%-8i ^2%-7i ^2%-10i ^2%-9i ^2%-10i ^2%-10i ^2%i\n\"",
-		(roundScore > 0) ? 1000 : 0, healthBonus, armorBonus, timeBonus, killBonus, flawlessBonus, roundScore, totalScore, kills));
-	if (topName && topName[0])
-	{
-		trap->SendServerCommand(clientNum, va(
-			"print \" ^5Top Score: ^2%i ^5(^7%s^5)\n\"",
-			topScore, topName));
-	}
-}
-
 static void G_ArcadeSendCenterMessage(gentity_t *ent, const char *headline, int roundScore,
 	int totalScore, int topScore, qboolean flawlessVictory)
 {
@@ -483,11 +462,12 @@ static void G_ArcadePrintScoreSnapshot(gentity_t *receiver, const char *title, q
 	}
 
 	trap->SendServerCommand(receiver - g_entities, va("print \"\n^5%s\n\"", title));
-	trap->SendServerCommand(receiver - g_entities, "print \" ^5#  Name                       Score      Kills      Status\n\"");
+	trap->SendServerCommand(receiver - g_entities, "print \" ^5#  Name                       Round      Total      Kills      Status\n\"");
 	for (i = 0; i < count; i++)
 	{
 		const int clientNum = indices[i];
 		gentity_t *ent = &g_entities[clientNum];
+		const int roundScore = level.arcadeLastRoundScore[clientNum];
 		const char *status = "observer";
 
 		if (level.arcadeParticipant[clientNum])
@@ -504,8 +484,8 @@ static void G_ArcadePrintScoreSnapshot(gentity_t *receiver, const char *title, q
 		}
 
 		trap->SendServerCommand(receiver - g_entities, va(
-			"print \" ^2%-2i ^7%-25s ^2%-10i ^2%-10i ^3%s\n\"",
-			i + 1, ent->client->pers.netname, level.arcadeScore[clientNum], level.arcadeTotalKills[clientNum], status));
+			"print \" ^2%-2i ^7%-25s ^2%-10i ^2%-10i ^2%-10i ^3%s\n\"",
+			i + 1, ent->client->pers.netname, roundScore, level.arcadeScore[clientNum], level.arcadeTotalKills[clientNum], status));
 	}
 
 	if (includeTopScore && G_GetArcadeTopScore(level.rawmapname, &topScore, topName, sizeof(topName)) && topName[0])
@@ -1111,7 +1091,22 @@ static void G_ArcadeShutdown(qboolean kickBots)
 {
 	if (kickBots)
 	{
-		G_ArcadeKickAllBots();
+		int i;
+		for (i = 0; i < MAX_CLIENTS; i++)
+		{
+			gentity_t *ent = &g_entities[i];
+			if (!level.arcadeManagedBot[i] ||
+				!ent->inuse || !ent->client || !(ent->r.svFlags & SVF_BOT) ||
+				ent->client->pers.connected == CON_DISCONNECTED)
+			{
+				level.arcadeManagedBot[i] = qfalse;
+				continue;
+			}
+			G_RemoveQueuedBotBegin(i);
+			G_ArcadeClearBotDuelState(ent);
+			trap->DropClient(i, "was kicked");
+			level.arcadeManagedBot[i] = qfalse;
+		}
 	}
 	G_ArcadeClearManagedBotState();
 
@@ -1456,9 +1451,6 @@ static void G_ArcadeFinishRound(qboolean gameOver, qboolean arcadeComplete)
 			G_ArcadeSyncClientScoreboardScore(ent);
 			if (!gameOver)
 			{
-				G_ArcadePrintConsoleSummary(ent, "Level Clear", level.arcadeLevel,
-					healthBonus, armorBonus, timeBonus, killBonus, flawlessBonus, roundScore,
-					level.arcadeScore[i], level.arcadeTotalKills[i], 0, NULL);
 				G_ArcadeSendCenterMessage(ent, "^2LEVEL CLEAR", roundScore, level.arcadeScore[i], 0, flawlessVictory);
 			}
 		}
@@ -1473,11 +1465,6 @@ static void G_ArcadeFinishRound(qboolean gameOver, qboolean arcadeComplete)
 					level.arcadeLevel, level.arcadeTotalKills[i], level.time);
 			}
 			G_GetArcadeTopScore(level.rawmapname, &topScore, topName, sizeof(topName));
-			G_ArcadePrintConsoleSummary(ent, arcadeComplete ? "Arcade Complete" : "Final",
-				level.arcadeLevel,
-				healthBonus, armorBonus, timeBonus, killBonus, flawlessBonus,
-				arcadeComplete ? roundScore : 0, level.arcadeScore[i],
-				level.arcadeTotalKills[i], topScore, topName);
 			G_ArcadeSendCenterMessage(ent,
 				arcadeComplete ? "^2ARCADE COMPLETE" : "^1GAME OVER",
 				arcadeComplete ? roundScore : level.arcadeScore[i], level.arcadeScore[i], topScore,
@@ -1513,12 +1500,13 @@ static void G_ArcadeRunFrame(void)
 {
 	const int aliveHumans = G_ArcadeCountAliveHumans();
 	const int aliveBots = G_ArcadeCountAliveBots();
+	const int managedBotSlots = G_ArcadeCountManagedBotSlots();
 
 	if (level.gametype != GT_ARCADE)
 	{
 		if (level.arcadeInitialized || level.arcadeRoundStartTime || level.arcadeRoundQueuedStart ||
 			level.arcadeCleanupRetryTime || level.arcadeGameOverTime || level.arcadeRoundBotsTarget ||
-			G_ArcadeHasManagedBots() || G_ArcadeHasAnyBotClients())
+			G_ArcadeHasManagedBots())
 		{
 			G_ArcadeShutdown(qtrue);
 		}
@@ -1541,6 +1529,7 @@ static void G_ArcadeRunFrame(void)
 	}
 	if (level.arcadeRoundStartTime <= 0)
 	{
+		G_ArcadeQueueActiveFreeHumans();
 		(void)G_ArcadeEnsureHumanReserveSlots();
 	}
 	if (level.arcadeGameOverTime &&
@@ -1606,6 +1595,17 @@ static void G_ArcadeRunFrame(void)
 	}
 	if (aliveBots <= 0)
 	{
+		if (managedBotSlots > 0)
+		{
+			return;
+		}
+		if (G_ArcadeCountRoundParticipants() <= 0)
+		{
+			level.arcadeRoundStartTime = 0;
+			level.arcadeRoundBotsTarget = 0;
+			level.arcadeRoundQueuedStart = level.time + ARCADE_JOIN_QUEUE_DELAY_MS;
+			return;
+		}
 		if (level.arcadeLevel >= ARCADE_FINAL_LEVEL)
 		{
 			G_ArcadeBeginGameOver(qtrue);

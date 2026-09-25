@@ -1376,13 +1376,11 @@ void SetTeam( gentity_t *ent, char *s, qboolean forcedToJoin ) {//JAPRO - Modifi
 
 	if (level.gametype == GT_ARCADE && team == TEAM_SPECTATOR && !forcedToJoin)
 	{
-		if (!(level.arcadeRoundStartTime > 0 &&
-			level.arcadeParticipant[clientNum] &&
-			!level.arcadeEliminated[clientNum] &&
-			oldTeam != TEAM_SPECTATOR))
+		if (oldTeam != TEAM_SPECTATOR)
 		{
-			G_ArcadeClearClientParticipationState(clientNum);
+			G_ArcadeHandlePlayerDisconnect(clientNum);
 		}
+		G_ArcadeClearClientParticipationState(clientNum);
 	}
 
 	if (level.gametype == GT_SIEGE)
