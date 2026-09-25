@@ -6933,41 +6933,61 @@ void Svcmd_ExportDuelTrack_f(void)
 	G_BuildTrackedExportPath(dbDir, pathSep, safePrefix, exportFileName, outPath, sizeof(outPath));
 	if (!wantSessionExport || !sessionQuery[0])
 		G_RemoveTrackedExportFile(outPath);
-	else if (
-		G_ExportTrackedQueryCSV(db, sessionQuery, outPath, &rows))
-		trap->Print("Exported tracked sessions (%d rows) -> %s\n", rows, outPath);
+	else
+	{
+		if (!timestampedExport)
+			G_RemoveTrackedExportFile(outPath);
+		if (G_ExportTrackedQueryCSV(db, sessionQuery, outPath, &rows))
+			trap->Print("Exported tracked sessions (%d rows) -> %s\n", rows, outPath);
+	}
 
 	Com_sprintf(exportFileName, sizeof(exportFileName), "participants%s.csv", exportSuffix);
 	G_BuildTrackedExportPath(dbDir, pathSep, safePrefix, exportFileName, outPath, sizeof(outPath));
 	if (!wantParticipantExport)
 		G_RemoveTrackedExportFile(outPath);
-	else if (
-		G_ExportTrackedQueryCSV(db, G_GetTrackedParticipantExportQuery(), outPath, &rows))
-		trap->Print("Exported tracked participants (%d rows) -> %s\n", rows, outPath);
+	else
+	{
+		if (!timestampedExport)
+			G_RemoveTrackedExportFile(outPath);
+		if (G_ExportTrackedQueryCSV(db, G_GetTrackedParticipantExportQuery(), outPath, &rows))
+			trap->Print("Exported tracked participants (%d rows) -> %s\n", rows, outPath);
+	}
 
 	Com_sprintf(exportFileName, sizeof(exportFileName), "events%s.csv", exportSuffix);
 	G_BuildTrackedExportPath(dbDir, pathSep, safePrefix, exportFileName, outPath, sizeof(outPath));
 	if (!wantEventExport || !eventQuery[0])
 		G_RemoveTrackedExportFile(outPath);
-	else if (
-		G_ExportTrackedQueryCSV(db, eventQuery, outPath, &rows))
-		trap->Print("Exported tracked events (%d rows) -> %s\n", rows, outPath);
+	else
+	{
+		if (!timestampedExport)
+			G_RemoveTrackedExportFile(outPath);
+		if (G_ExportTrackedQueryCSV(db, eventQuery, outPath, &rows))
+			trap->Print("Exported tracked events (%d rows) -> %s\n", rows, outPath);
+	}
 
 	Com_sprintf(exportFileName, sizeof(exportFileName), "geometry%s.csv", exportSuffix);
 	G_BuildTrackedExportPath(dbDir, pathSep, safePrefix, exportFileName, outPath, sizeof(outPath));
 	if (!wantGeometryExport || !geometryQuery[0])
 		G_RemoveTrackedExportFile(outPath);
-	else if (
-		G_ExportTrackedQueryCSV(db, geometryQuery, outPath, &rows))
-		trap->Print("Exported tracked geometry (%d rows) -> %s\n", rows, outPath);
+	else
+	{
+		if (!timestampedExport)
+			G_RemoveTrackedExportFile(outPath);
+		if (G_ExportTrackedQueryCSV(db, geometryQuery, outPath, &rows))
+			trap->Print("Exported tracked geometry (%d rows) -> %s\n", rows, outPath);
+	}
 
 	Com_sprintf(exportFileName, sizeof(exportFileName), "aggregate%s.csv", exportSuffix);
 	G_BuildTrackedExportPath(dbDir, pathSep, safePrefix, exportFileName, outPath, sizeof(outPath));
 	if (!wantAggregateExport)
 		G_RemoveTrackedExportFile(outPath);
-	else if (
-		G_ExportTrackedQueryCSV(db, G_GetTrackedAggregateExportQuery(), outPath, &rows))
-		trap->Print("Exported tracked aggregate (%d rows) -> %s\n", rows, outPath);
+	else
+	{
+		if (!timestampedExport)
+			G_RemoveTrackedExportFile(outPath);
+		if (G_ExportTrackedQueryCSV(db, G_GetTrackedAggregateExportQuery(), outPath, &rows))
+			trap->Print("Exported tracked aggregate (%d rows) -> %s\n", rows, outPath);
+	}
 
 	CALL_SQLITE(close(db));
 }
