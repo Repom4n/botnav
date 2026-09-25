@@ -11017,6 +11017,7 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 		{
 			const int totalHealthDelta = NewBotAI_GetTotalHealthDelta(bs);
 			const int ourHealth = g_entities[bs->client].health;
+			const qboolean enemySaberReturning = NewBotAI_IsEnemySaberReturning(bs);
 
 			if (NewBotAI_ShouldEmergencyDrainRollSaberThrow(bs))
 			{
@@ -11064,15 +11065,13 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 					trap->EA_ForcePower(bs->client);
 				}
 			}
-			else if (!stabilizeVsSaberThrow &&
-				NewBotAI_IsEnemySaberReturning(bs) &&
+			else if (!(stabilizeVsSaberThrow && !enemySaberReturning) &&
 				totalHealthDelta >= 30)
 			{
 				bs->combatAction = BOT_COMBAT_ACTION_AGGRESSION;
 				trap->EA_MoveForward(bs->client);
 			}
-			else if (!stabilizeVsSaberThrow &&
-				NewBotAI_IsEnemySaberReturning(bs) &&
+			else if (!(stabilizeVsSaberThrow && !enemySaberReturning) &&
 				totalHealthDelta < 0 && NewBotAI_ShouldCloseGapVsEnemySaberThrow(bs))
 			{
 				bs->combatAction = BOT_COMBAT_ACTION_AGGRESSION;
@@ -11083,8 +11082,7 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 				bs->combatAction = BOT_COMBAT_ACTION_RETREAT_DEFENSE;
 				NewBotAI_RetreatDiagonal(bs, (level.framenum & 1) ? qtrue : qfalse);
 			}
-			else if (!stabilizeVsSaberThrow &&
-				NewBotAI_IsEnemySaberReturning(bs) &&
+			else if (!(stabilizeVsSaberThrow && !enemySaberReturning) &&
 				pressAdvantage)
 			{
 				bs->combatAction = BOT_COMBAT_ACTION_AGGRESSION;
