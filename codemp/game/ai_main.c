@@ -10202,6 +10202,10 @@ static float NewBotAI_GetSelfFacingErrorToEnemy(bot_state_t *bs)
 
 	VectorSubtract(bs->currentEnemy->r.currentOrigin, bs->cur_ps.origin, toEnemy);
 	toEnemy[2] = 0.0f;
+	if (toEnemy[0] == 0.0f && toEnemy[1] == 0.0f)
+	{
+		return 0.0f;
+	}
 	vectoangles(toEnemy, enemyAngles);
 
 	return fabs(AngleSubtract(enemyAngles[YAW], bs->viewangles[YAW]));
@@ -10364,8 +10368,7 @@ static qboolean NewBotAI_HasTimedFanEntryWindow(bot_state_t *bs)
 	{
 		return qfalse;
 	}
-	enemyDisabled = (BG_InKnockDown(bs->currentEnemy->client->ps.legsAnim) ||
-		bs->currentEnemy->client->ps.groundEntityNum == ENTITYNUM_NONE) ? qtrue : qfalse;
+	enemyDisabled = BG_InKnockDown(bs->currentEnemy->client->ps.legsAnim) ? qtrue : qfalse;
 	if (NewBotAI_ShouldPressAdvantage(bs) || NewBotAI_HasClearAdvantage(bs) || enemyDisabled)
 	{
 		return qtrue;
