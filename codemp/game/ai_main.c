@@ -10994,26 +10994,6 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 				NewBotAI_RetreatDiagonal(bs, (level.framenum & 1) ? qtrue : qfalse);
 			}
 		}
-		else if (preCollapseDefense &&
-			!enemySaberThreatImminent &&
-			!bs->currentEnemy->client->ps.saberInFlight &&
-			!NewBotAI_IsBeingPulledTowardEnemy(bs))
-		{
-			if (bs->conserveUntil < level.time + 500)
-			{
-				bs->conserveUntil = level.time + 500;
-			}
-			bs->combatAction = BOT_COMBAT_ACTION_RETREAT_DEFENSE;
-			if (bs->frame_Enemy_Len <= 96.0f)
-			{
-				NewBotAI_GetGroundDodge(bs);
-			}
-			else
-			{
-				NewBotAI_RetreatDiagonal(bs, (level.framenum & 1) ? qtrue : qfalse);
-			}
-			return;
-		}
 		else if (enemySaberThreatImminent)
 		{
 			const int totalHealthDelta = NewBotAI_GetTotalHealthDelta(bs);
@@ -11091,6 +11071,23 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 			else
 			{
 				bs->combatAction = BOT_COMBAT_ACTION_RETREAT_DEFENSE;
+				NewBotAI_RetreatDiagonal(bs, (level.framenum & 1) ? qtrue : qfalse);
+			}
+			return;
+		}
+		else if (preCollapseDefense && !NewBotAI_IsBeingPulledTowardEnemy(bs))
+		{
+			if (bs->conserveUntil < level.time + 500)
+			{
+				bs->conserveUntil = level.time + 500;
+			}
+			bs->combatAction = BOT_COMBAT_ACTION_RETREAT_DEFENSE;
+			if (bs->frame_Enemy_Len <= 96.0f)
+			{
+				NewBotAI_GetGroundDodge(bs);
+			}
+			else
+			{
 				NewBotAI_RetreatDiagonal(bs, (level.framenum & 1) ? qtrue : qfalse);
 			}
 			return;
