@@ -6759,8 +6759,10 @@ void Svcmd_ExportDuelTrack_f(void)
 	int rows;
 	char pathSep;
 	qboolean hadDuelSummary;
+	qboolean hadDuelParticipant;
 	qboolean hadDuelEvent;
 	qboolean hadDuelGeometry;
+	qboolean hadDuelAggregate;
 	qboolean hadArcadeSession;
 	qboolean hadArcadeEvent;
 	qboolean hadArcadeGeometry;
@@ -6836,8 +6838,10 @@ void Svcmd_ExportDuelTrack_f(void)
 	preHadArcadeGeometry = G_DoesTrackedDuelTableExist(db, "LocalArcadeTrackGeometry");
 	G_EnsureLocalDuelTrackingSchema(db);
 	hadDuelSummary = G_DoesTrackedDuelTableExist(db, "LocalDuelTrackSummary");
+	hadDuelParticipant = G_DoesTrackedDuelTableExist(db, "LocalDuelTrackParticipant");
 	hadDuelEvent = G_DoesTrackedDuelTableExist(db, "LocalDuelTrackEvent");
 	hadDuelGeometry = G_DoesTrackedDuelTableExist(db, "LocalDuelTrackGeometry");
+	hadDuelAggregate = G_DoesTrackedDuelTableExist(db, "LocalDuelTrackAggregate");
 	hadArcadeSession = G_DoesTrackedDuelTableExist(db, "LocalArcadeTrackSession");
 	hadArcadeEvent = G_DoesTrackedDuelTableExist(db, "LocalArcadeTrackEvent");
 	hadArcadeGeometry = G_DoesTrackedDuelTableExist(db, "LocalArcadeTrackGeometry");
@@ -6867,10 +6871,10 @@ void Svcmd_ExportDuelTrack_f(void)
 		includeGeometryDuel = hadDuelGeometry;
 		includeGeometryArcade = hadArcadeGeometry;
 		wantSessionExport = includeSessionDuel || includeSessionArcade;
-		wantParticipantExport = qfalse;
+		wantParticipantExport = hadDuelParticipant;
 		wantEventExport = includeEventDuel || includeEventArcade;
 		wantGeometryExport = includeGeometryDuel || includeGeometryArcade;
-		wantAggregateExport = qfalse;
+		wantAggregateExport = hadDuelAggregate;
 	}
 	G_BuildTrackedSessionExportQuery(includeSessionDuel, includeSessionArcade, sessionQuery, sizeof(sessionQuery));
 	G_BuildTrackedEventExportQuery(includeEventDuel, includeEventArcade, eventQuery, sizeof(eventQuery));
