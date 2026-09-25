@@ -10200,7 +10200,8 @@ static float NewBotAI_GetSelfFacingErrorToEnemy(bot_state_t *bs)
 		return 180.0f;
 	}
 
-	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, toEnemy);
+	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->cur_ps.origin, toEnemy);
+	toEnemy[2] = 0.0f;
 	vectoangles(toEnemy, enemyAngles);
 
 	return fabs(AngleSubtract(enemyAngles[YAW], bs->viewangles[YAW]));
@@ -10298,18 +10299,18 @@ static qboolean NewBotAI_ShouldPreDefenseAgainstCollapse(bot_state_t *bs)
 	totalHealthDelta = NewBotAI_GetTotalHealthDelta(bs);
 	recentlyHurt = (bs->lastHurtTime > level.time - 900) ? qtrue : qfalse;
 
-	if (!NewBotAI_IsEnemyCollapsePressure(bs) &&
-		!(recentlyHurt && ourTotalHealth <= 45 && bs->frame_Enemy_Vis && bs->frame_Enemy_Len <= 256.0f))
-	{
-		return qfalse;
-	}
-	if (!recentlyHurt && ourForce > hisForce + 10 && ourHealth > hisHealth + 10)
-	{
-		return qfalse;
-	}
-	if (recentlyHurt && (ourTotalHealth <= 35 || totalHealthDelta <= -20))
+	if (recentlyHurt && ourTotalHealth <= 35 && totalHealthDelta <= -20)
 	{
 		return qtrue;
+	}
+	if (!NewBotAI_IsEnemyCollapsePressure(bs))
+	{
+		return (recentlyHurt && ourTotalHealth <= 45 &&
+			bs->frame_Enemy_Vis && bs->frame_Enemy_Len <= 256.0f) ? qtrue : qfalse;
+	}
+	if (ourForce > hisForce + 10 && ourHealth > hisHealth + 10)
+	{
+		return qfalse;
 	}
 
 	return qtrue;
@@ -10963,6 +10964,7 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 		qboolean crouch = qfalse;
 		const qboolean enemySaberThreatImminent = NewBotAI_IsEnemySaberThreatImminent(bs);
 		const qboolean preCollapseDefense = NewBotAI_ShouldPreDefenseAgainstCollapse(bs);
+		const qboolean enemySaberReturning = NewBotAI_IsEnemySaberReturning(bs);
 		const qboolean stabilizeVsSaberThrow =
 			(bs->currentEnemy->client->ps.saberInFlight &&
 			 NewBotAI_ShouldStabilizeAgainstEnemySaberThrow(bs)) ? qtrue : qfalse;
@@ -11017,7 +11019,6 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 		{
 			const int totalHealthDelta = NewBotAI_GetTotalHealthDelta(bs);
 			const int ourHealth = g_entities[bs->client].health;
-			const qboolean enemySaberReturning = NewBotAI_IsEnemySaberReturning(bs);
 
 			if (NewBotAI_ShouldEmergencyDrainRollSaberThrow(bs))
 			{
