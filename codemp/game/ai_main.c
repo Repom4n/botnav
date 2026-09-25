@@ -10265,10 +10265,6 @@ static qboolean NewBotAI_ShouldStabilizeAgainstEnemySaberThrow(bot_state_t *bs)
 	{
 		return qtrue;
 	}
-	if (!enemySaberReturning && bs->frame_Enemy_Len > 176.0f)
-	{
-		return qtrue;
-	}
 
 	return qfalse;
 }
@@ -13148,7 +13144,20 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 	const int firstDwellMs = Com_Clampi(10, 3000, bot_firstfandwell.integer);
 	const int dwellMs = Com_Clampi(10, 3000, bot_fandwell.integer);
 
-	if (!NewBotAI_IsSaberSwingStartWindow(bs) || !NewBotAI_HasTimedFanEntryWindow(bs))
+	if (!NewBotAI_IsSaberSwingStartWindow(bs))
+	{
+		NewBotAI_ResetFanChain(bs);
+		return;
+	}
+	if (bs->fanPhase == FAN_PHASE_INACTIVE && !NewBotAI_HasTimedFanEntryWindow(bs))
+	{
+		NewBotAI_ResetFanChain(bs);
+		return;
+	}
+	if (bs->fanPhase != FAN_PHASE_INACTIVE &&
+		(bs->currentEnemy->client->ps.saberInFlight ||
+		 NewBotAI_IsEnemySaberThreatImminent(bs) ||
+		 NewBotAI_ShouldPreDefenseAgainstCollapse(bs)))
 	{
 		NewBotAI_ResetFanChain(bs);
 		return;
