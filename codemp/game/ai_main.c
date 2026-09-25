@@ -9187,10 +9187,33 @@ void NewBotAI_Speeding(bot_state_t *bs)
 {
 	const qboolean enemyKnockedDown = (bs->currentEnemy && bs->currentEnemy->client &&
 		BG_InKnockDown(bs->currentEnemy->client->ps.legsAnim)) ? qtrue : qfalse;
+	const qboolean beingGripped = (bs->cur_ps.fd.forceGripBeingGripped > level.time) ? qtrue : qfalse;
+	const qboolean enemyGripActive = (bs->currentEnemy && bs->currentEnemy->client &&
+		(bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_GRIP))) ? qtrue : qfalse;
+	const qboolean imminentSaberThrowThreat = NewBotAI_IsEnemySaberThreatImminent(bs);
+	int ourHealthTotal = g_entities[bs->client].health + bs->cur_ps.stats[STAT_ARMOR];
+	int enemyHealthTotal = 0;
+	int enemyForce = 0;
+	const int ourForce = bs->cur_ps.fd.forcePower;
+	qboolean lostAdvantage = qfalse;
+
+	if (bs->currentEnemy && bs->currentEnemy->client)
+	{
+		enemyHealthTotal = bs->currentEnemy->health + bs->currentEnemy->client->ps.stats[STAT_ARMOR];
+		enemyForce = bs->currentEnemy->client->ps.fd.forcePower;
+		if (ourHealthTotal + 10 < enemyHealthTotal || ourForce + 15 < enemyForce)
+		{
+			lostAdvantage = qtrue;
+		}
+	}
 
 	if (enemyKnockedDown ||
+		beingGripped ||
+		(enemyGripActive && bs->frame_Enemy_Len < 512.0f) ||
+		imminentSaberThrowThreat ||
+		lostAdvantage ||
 		(g_entities[bs->client].health) < 50 ||
-		(bs->cur_ps.fd.forcePower < 20))
+		(ourForce < 20))
 	{
 		level.clients[bs->client].ps.fd.forcePowerSelected = FP_SPEED;
 		trap->EA_ForcePower(bs->client);
@@ -12460,7 +12483,8 @@ static int NewBotAI_GetLightningWeight(bot_state_t *bs)
 	{
 		return 0;
 	}
-	if (bs->currentEnemy && bs->currentEnemy->health > 0 && bs->currentEnemy->health < 9)
+	if (bs->currentEnemy && bs->currentEnemy->health > 0 && bs->currentEnemy->health < 9 &&
+		bs->currentEnemy->client->ps.stats[STAT_ARMOR] <= 0)
 	{
 		return 100;
 	}
