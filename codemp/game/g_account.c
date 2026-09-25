@@ -6524,6 +6524,90 @@ static qboolean G_ExportTrackedQueryCSV(sqlite3 *db, const char *sql, const char
 	return qtrue;
 }
 
+static const char *G_GetTrackedSessionExportQuery(void)
+{
+	return
+		"SELECT 'duel_summary' AS record_type, source_context, id AS record_id, "
+		"start_time, end_time, duration, mapname, type, '' AS result, 0 AS arcade_level, "
+		"'' AS participant_key, '' AS participant_label, 0 AS participant_kind, "
+		"winner_key, winner_label, winner_kind, winner_side, "
+		"loser_key, loser_label, loser_kind, loser_side, draw, "
+		"winner_opening, loser_opening, "
+		"0 AS total_kills, 0 AS total_force_spent, 0 AS total_force_regen, "
+		"0 AS total_damage_taken, 0 AS total_damage_dealt, 0 AS low_force_windows, "
+		"0 AS knockdown_events, 0 AS counter_successes, 0 AS punish_successes, "
+		"0 AS reset_successes, 0 AS saber_return_punishes "
+		"FROM LocalDuelTrackSummary "
+		"UNION ALL "
+		"SELECT 'arcade_session' AS record_type, source_context, id AS record_id, "
+		"start_time, end_time, duration, mapname, 21 AS type, result, arcade_level, "
+		"participant_key, participant_label, participant_kind, "
+		"'' AS winner_key, '' AS winner_label, 0 AS winner_kind, 0 AS winner_side, "
+		"'' AS loser_key, '' AS loser_label, 0 AS loser_kind, 0 AS loser_side, 0 AS draw, "
+		"'' AS winner_opening, '' AS loser_opening, "
+		"total_kills, total_force_spent, total_force_regen, total_damage_taken, total_damage_dealt, low_force_windows, "
+		"knockdown_events, counter_successes, punish_successes, reset_successes, saber_return_punishes "
+		"FROM LocalArcadeTrackSession";
+}
+
+static const char *G_GetTrackedParticipantExportQuery(void)
+{
+	return
+		"SELECT 'duel_participant' AS record_type, 'duel' AS source_context, id AS record_id, summary_id, "
+		"participant_key, participant_label, participant_kind, opponent_key, won, side, opponent_side, matchup, "
+		"total_force_spent, total_force_regen, ending_force, ending_hp, ending_armor, "
+		"low_force_windows, grip_cripple_events, saber_throw_punishes, knockdown_events, late_defense_spends, "
+		"opening_tactic, primary_issue, spent_neutral, spent_advantage, spent_disadvantage, spent_panic, spent_finishing, "
+		"force_push, force_pull, force_grip, force_drain, force_rage, force_absorb, force_protect, force_heal, "
+		"force_speed, force_seeing, force_unknown "
+		"FROM LocalDuelTrackParticipant";
+}
+
+static const char *G_GetTrackedEventExportQuery(void)
+{
+	return
+		"SELECT 'duel_event' AS record_type, 'duel' AS source_context, id AS record_id, summary_id AS parent_id, "
+		"participant_key, '' AS participant_label, 0 AS participant_kind, "
+		"opponent_key, opponent_label, opponent_kind, "
+		"rel_time, event_index, sequence_id, event_type, power, amount, state, range_bucket, "
+		"buttons, saber_move, enemy_saber_move, yaw_delta, note "
+		"FROM LocalDuelTrackEvent "
+		"UNION ALL "
+		"SELECT 'arcade_event' AS record_type, 'arcade' AS source_context, id AS record_id, session_id AS parent_id, "
+		"participant_key, participant_label, participant_kind, "
+		"opponent_key, opponent_label, opponent_kind, "
+		"rel_time, event_index, sequence_id, event_type, power, amount, state, range_bucket, "
+		"buttons, saber_move, enemy_saber_move, yaw_delta, note "
+		"FROM LocalArcadeTrackEvent";
+}
+
+static const char *G_GetTrackedGeometryExportQuery(void)
+{
+	return
+		"SELECT 'duel_geometry' AS record_type, 'duel' AS source_context, id AS record_id, summary_id AS parent_id, "
+		"participant_key, opponent_key, rel_time, event_index, "
+		"self_x, self_y, self_z, enemy_x, enemy_y, enemy_z, "
+		"self_vx, self_vy, self_vz, enemy_vx, enemy_vy, enemy_vz, self_yaw, enemy_yaw "
+		"FROM LocalDuelTrackGeometry "
+		"UNION ALL "
+		"SELECT 'arcade_geometry' AS record_type, 'arcade' AS source_context, id AS record_id, session_id AS parent_id, "
+		"participant_key, opponent_key, rel_time, event_index, "
+		"self_x, self_y, self_z, enemy_x, enemy_y, enemy_z, "
+		"self_vx, self_vy, self_vz, enemy_vx, enemy_vy, enemy_vz, self_yaw, enemy_yaw "
+		"FROM LocalArcadeTrackGeometry";
+}
+
+static const char *G_GetTrackedAggregateExportQuery(void)
+{
+	return
+		"SELECT 'duel_aggregate' AS record_type, 'duel' AS source_context, "
+		"participant_key, participant_kind, side, matchup, duels, wins, losses, "
+		"total_force_spent, total_force_regen, low_force_deaths, grip_cripples, saber_throw_punishes, "
+		"force_push, force_pull, force_grip, force_drain, force_rage, force_absorb, force_protect, force_heal, "
+		"force_speed, force_seeing, force_unknown "
+		"FROM LocalDuelTrackAggregate";
+}
+
 static void G_SanitizeTrackedExportPrefix(const char *in, char *out, int outSize)
 {
 	int i;
@@ -6624,70 +6708,14 @@ void Svcmd_ExportDuelTrack_f(void)
 	int i;
 	int rows;
 	char pathSep;
-	const char *sessionQuery =
-		"SELECT 'duel_summary' AS record_type, source_context, id AS record_id, "
-		"start_time, end_time, duration, mapname, type, '' AS result, 0 AS arcade_level, "
-		"'' AS participant_key, '' AS participant_label, 0 AS participant_kind, "
-		"winner_key, winner_label, winner_kind, winner_side, "
-		"loser_key, loser_label, loser_kind, loser_side, draw, "
-		"winner_opening, loser_opening, "
-		"0 AS total_kills, 0 AS total_force_spent, 0 AS total_force_regen, "
-		"0 AS total_damage_taken, 0 AS total_damage_dealt, 0 AS low_force_windows, "
-		"0 AS knockdown_events, 0 AS counter_successes, 0 AS punish_successes, "
-		"0 AS reset_successes, 0 AS saber_return_punishes "
-		"FROM LocalDuelTrackSummary "
-		"UNION ALL "
-		"SELECT 'arcade_session' AS record_type, source_context, id AS record_id, "
-		"start_time, end_time, duration, mapname, 21 AS type, result, arcade_level, "
-		"participant_key, participant_label, participant_kind, "
-		"'' AS winner_key, '' AS winner_label, 0 AS winner_kind, 0 AS winner_side, "
-		"'' AS loser_key, '' AS loser_label, 0 AS loser_kind, 0 AS loser_side, 0 AS draw, "
-		"'' AS winner_opening, '' AS loser_opening, "
-		"total_kills, total_force_spent, total_force_regen, total_damage_taken, total_damage_dealt, low_force_windows, "
-		"knockdown_events, counter_successes, punish_successes, reset_successes, saber_return_punishes "
-		"FROM LocalArcadeTrackSession";
-	const char *participantQuery =
-		"SELECT 'duel_participant' AS record_type, 'duel' AS source_context, id AS record_id, summary_id, "
-		"participant_key, participant_label, participant_kind, opponent_key, won, side, opponent_side, matchup, "
-		"total_force_spent, total_force_regen, ending_force, ending_hp, ending_armor, "
-		"low_force_windows, grip_cripple_events, saber_throw_punishes, knockdown_events, late_defense_spends, "
-		"opening_tactic, primary_issue, spent_neutral, spent_advantage, spent_disadvantage, spent_panic, spent_finishing, "
-		"force_push, force_pull, force_grip, force_drain, force_rage, force_absorb, force_protect, force_heal, "
-		"force_speed, force_seeing, force_unknown "
-		"FROM LocalDuelTrackParticipant";
-	const char *eventQuery =
-		"SELECT 'duel_event' AS record_type, 'duel' AS source_context, id AS record_id, summary_id AS parent_id, "
-		"participant_key, '' AS participant_label, 0 AS participant_kind, "
-		"opponent_key, opponent_label, opponent_kind, "
-		"rel_time, event_index, sequence_id, event_type, power, amount, state, range_bucket, "
-		"buttons, saber_move, enemy_saber_move, yaw_delta, note "
-		"FROM LocalDuelTrackEvent "
-		"UNION ALL "
-		"SELECT 'arcade_event' AS record_type, 'arcade' AS source_context, id AS record_id, session_id AS parent_id, "
-		"participant_key, participant_label, participant_kind, "
-		"opponent_key, opponent_label, opponent_kind, "
-		"rel_time, event_index, sequence_id, event_type, power, amount, state, range_bucket, "
-		"buttons, saber_move, enemy_saber_move, yaw_delta, note "
-		"FROM LocalArcadeTrackEvent";
-	const char *geometryQuery =
-		"SELECT 'duel_geometry' AS record_type, 'duel' AS source_context, id AS record_id, summary_id AS parent_id, "
-		"participant_key, opponent_key, rel_time, event_index, "
-		"self_x, self_y, self_z, enemy_x, enemy_y, enemy_z, "
-		"self_vx, self_vy, self_vz, enemy_vx, enemy_vy, enemy_vz, self_yaw, enemy_yaw "
-		"FROM LocalDuelTrackGeometry "
-		"UNION ALL "
-		"SELECT 'arcade_geometry' AS record_type, 'arcade' AS source_context, id AS record_id, session_id AS parent_id, "
-		"participant_key, opponent_key, rel_time, event_index, "
-		"self_x, self_y, self_z, enemy_x, enemy_y, enemy_z, "
-		"self_vx, self_vy, self_vz, enemy_vx, enemy_vy, enemy_vz, self_yaw, enemy_yaw "
-		"FROM LocalArcadeTrackGeometry";
-	const char *aggregateQuery =
-		"SELECT 'duel_aggregate' AS record_type, 'duel' AS source_context, "
-		"participant_key, participant_kind, side, matchup, duels, wins, losses, "
-		"total_force_spent, total_force_regen, low_force_deaths, grip_cripples, saber_throw_punishes, "
-		"force_push, force_pull, force_grip, force_drain, force_rage, force_absorb, force_protect, force_heal, "
-		"force_speed, force_seeing, force_unknown "
-		"FROM LocalDuelTrackAggregate";
+	qboolean hadDuelSummary;
+	qboolean hadDuelParticipant;
+	qboolean hadDuelEvent;
+	qboolean hadDuelGeometry;
+	qboolean hadDuelAggregate;
+	qboolean hadArcadeSession;
+	qboolean hadArcadeEvent;
+	qboolean hadArcadeGeometry;
 
 	optionalPrefix[0] = '\0';
 	if (trap->Argc() >= 2)
@@ -6727,6 +6755,14 @@ void Svcmd_ExportDuelTrack_f(void)
 		trap->Print("exportDuelTrack failed: unable to open local duel database.\n");
 		return;
 	}
+	hadDuelSummary = G_DoesTrackedDuelTableExist(db, "LocalDuelTrackSummary");
+	hadDuelParticipant = G_DoesTrackedDuelTableExist(db, "LocalDuelTrackParticipant");
+	hadDuelEvent = G_DoesTrackedDuelTableExist(db, "LocalDuelTrackEvent");
+	hadDuelGeometry = G_DoesTrackedDuelTableExist(db, "LocalDuelTrackGeometry");
+	hadDuelAggregate = G_DoesTrackedDuelTableExist(db, "LocalDuelTrackAggregate");
+	hadArcadeSession = G_DoesTrackedDuelTableExist(db, "LocalArcadeTrackSession");
+	hadArcadeEvent = G_DoesTrackedDuelTableExist(db, "LocalArcadeTrackEvent");
+	hadArcadeGeometry = G_DoesTrackedDuelTableExist(db, "LocalArcadeTrackGeometry");
 	G_EnsureLocalDuelTrackingSchema(db);
 
 	Q_strncpyz(dbDir, effectiveDbPath, sizeof(dbDir));
@@ -6745,23 +6781,28 @@ void Svcmd_ExportDuelTrack_f(void)
 #endif
 
 	G_BuildTrackedExportPath(dbDir, pathSep, safePrefix, "sessions.csv", outPath, sizeof(outPath));
-	if (G_ExportTrackedQueryCSV(db, sessionQuery, outPath, &rows))
+	if ((hadDuelSummary || hadArcadeSession) &&
+		G_ExportTrackedQueryCSV(db, G_GetTrackedSessionExportQuery(), outPath, &rows))
 		trap->Print("Exported tracked sessions (%d rows) -> %s\n", rows, outPath);
 
 	G_BuildTrackedExportPath(dbDir, pathSep, safePrefix, "participants.csv", outPath, sizeof(outPath));
-	if (G_ExportTrackedQueryCSV(db, participantQuery, outPath, &rows))
+	if (hadDuelParticipant &&
+		G_ExportTrackedQueryCSV(db, G_GetTrackedParticipantExportQuery(), outPath, &rows))
 		trap->Print("Exported tracked participants (%d rows) -> %s\n", rows, outPath);
 
 	G_BuildTrackedExportPath(dbDir, pathSep, safePrefix, "events.csv", outPath, sizeof(outPath));
-	if (G_ExportTrackedQueryCSV(db, eventQuery, outPath, &rows))
+	if ((hadDuelEvent || hadArcadeEvent) &&
+		G_ExportTrackedQueryCSV(db, G_GetTrackedEventExportQuery(), outPath, &rows))
 		trap->Print("Exported tracked events (%d rows) -> %s\n", rows, outPath);
 
 	G_BuildTrackedExportPath(dbDir, pathSep, safePrefix, "geometry.csv", outPath, sizeof(outPath));
-	if (G_ExportTrackedQueryCSV(db, geometryQuery, outPath, &rows))
+	if ((hadDuelGeometry || hadArcadeGeometry) &&
+		G_ExportTrackedQueryCSV(db, G_GetTrackedGeometryExportQuery(), outPath, &rows))
 		trap->Print("Exported tracked geometry (%d rows) -> %s\n", rows, outPath);
 
 	G_BuildTrackedExportPath(dbDir, pathSep, safePrefix, "aggregate.csv", outPath, sizeof(outPath));
-	if (G_ExportTrackedQueryCSV(db, aggregateQuery, outPath, &rows))
+	if (hadDuelAggregate &&
+		G_ExportTrackedQueryCSV(db, G_GetTrackedAggregateExportQuery(), outPath, &rows))
 		trap->Print("Exported tracked aggregate (%d rows) -> %s\n", rows, outPath);
 
 	CALL_SQLITE(close(db));
