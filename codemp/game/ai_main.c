@@ -10295,18 +10295,22 @@ static qboolean NewBotAI_ShouldPreDefenseAgainstCollapse(bot_state_t *bs)
 	totalHealthDelta = NewBotAI_GetTotalHealthDelta(bs);
 	recentlyHurt = (bs->lastHurtTime > level.time - 900) ? qtrue : qfalse;
 
+	if (!NewBotAI_IsEnemyCollapsePressure(bs))
+	{
+		return qfalse;
+	}
 	if (recentlyHurt && ourTotalHealth <= 35 && totalHealthDelta <= -20)
 	{
 		return qtrue;
 	}
-	if (!NewBotAI_IsEnemyCollapsePressure(bs))
-	{
-		return (recentlyHurt && ourTotalHealth <= 45 &&
-			bs->frame_Enemy_Vis && bs->frame_Enemy_Len <= 256.0f) ? qtrue : qfalse;
-	}
 	if (ourForce > hisForce + 10 && ourHealth > hisHealth + 10)
 	{
 		return qfalse;
+	}
+	if (recentlyHurt && ourTotalHealth <= 45 &&
+		bs->frame_Enemy_Vis && bs->frame_Enemy_Len <= 256.0f)
+	{
+		return qtrue;
 	}
 
 	return qtrue;
