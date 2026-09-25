@@ -424,6 +424,7 @@ static void G_ArcadePrintScoreSnapshot(gentity_t *receiver, const char *title, q
 	int count = 0;
 	int topScore = 0;
 	char topName[MAX_NETNAME] = {0};
+	qboolean topScoreQueryFailed = qfalse;
 
 	if (!G_ArcadeCanReceiveMessages(receiver))
 	{
@@ -488,9 +489,13 @@ static void G_ArcadePrintScoreSnapshot(gentity_t *receiver, const char *title, q
 			i + 1, ent->client->pers.netname, roundScore, level.arcadeScore[clientNum], level.arcadeTotalKills[clientNum], status));
 	}
 
-	if (includeTopScore && G_GetArcadeTopScore(level.rawmapname, &topScore, topName, sizeof(topName)) && topName[0])
+	if (includeTopScore && G_GetArcadeTopScore(level.rawmapname, &topScore, topName, sizeof(topName), &topScoreQueryFailed) && topName[0])
 	{
 		trap->SendServerCommand(receiver - g_entities, va("print \" ^5Top Score: ^2%i ^5(^7%s^5)\n\"", topScore, topName));
+	}
+	else if (includeTopScore && topScoreQueryFailed)
+	{
+		trap->SendServerCommand(receiver - g_entities, "print \" ^1Top score unavailable\n\"");
 	}
 }
 
@@ -525,7 +530,7 @@ static void G_ArcadeReplayGameOverCenterMessages(void)
 			continue;
 		}
 
-		G_GetArcadeTopScore(level.rawmapname, &topScore, topName, sizeof(topName));
+		G_GetArcadeTopScore(level.rawmapname, &topScore, topName, sizeof(topName), NULL);
 
 		G_ArcadeSendCenterMessage(ent,
 			level.arcadeGameOverComplete ? "^2ARCADE COMPLETE" : "^1GAME OVER",
@@ -1461,10 +1466,13 @@ static void G_ArcadeFinishRound(qboolean gameOver, qboolean arcadeComplete)
 			char topName[MAX_NETNAME] = {0};
 			if (G_ArcadePlayerIsLoggedIn(ent))
 			{
-				G_AddArcadeScore(ent->client->pers.userName, level.rawmapname, level.arcadeScore[i],
-					level.arcadeLevel, level.arcadeTotalKills[i], level.time);
+				if (!G_AddArcadeScore(ent->client->pers.userName, level.rawmapname, level.arcadeScore[i],
+					level.arcadeLevel, level.arcadeTotalKills[i], level.time))
+				{
+					trap->SendServerCommand(i, "print \"^1Arcade: failed to save score.\n\"");
+				}
 			}
-			G_GetArcadeTopScore(level.rawmapname, &topScore, topName, sizeof(topName));
+			G_GetArcadeTopScore(level.rawmapname, &topScore, topName, sizeof(topName), NULL);
 			G_ArcadeSendCenterMessage(ent,
 				arcadeComplete ? "^2ARCADE COMPLETE" : "^1GAME OVER",
 				arcadeComplete ? roundScore : level.arcadeScore[i], level.arcadeScore[i], topScore,

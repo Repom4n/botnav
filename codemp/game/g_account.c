@@ -420,7 +420,7 @@ static void G_EnsureTrackedTableColumn(sqlite3 *db, const char *tableName, const
 {
 	sqlite3_stmt *stmt = NULL;
 	char sql[256];
-	int s;
+	int s = SQLITE_ERROR;
 
 	if (!G_IsAllowedTrackedTableName(tableName) || !G_IsAllowedTrackedColumnName(columnName) ||
 		!definition || !definition[0])
@@ -443,7 +443,7 @@ static void G_EnsureLocalDuelTrackingSchema(sqlite3 *db)
 {
 	sqlite3_stmt *stmt = NULL;
 	char *sql;
-	int s;
+	int s = SQLITE_ERROR;
 
 	sql = "CREATE TABLE IF NOT EXISTS LocalDuelTrackSummary("
 		"id INTEGER PRIMARY KEY, start_time UNSIGNED INTEGER, end_time UNSIGNED INTEGER, duration UNSIGNED INTEGER, "
@@ -2911,9 +2911,7 @@ static void G_EnsureLocalArcadeSchema(sqlite3 *db)
 		s = sqlite3_step(stmt);
 		if (s != SQLITE_DONE)
 		{
-			const char *errMsg = sqlite3_errmsg(db);
-			const qboolean duplicateColumn = (errMsg && strstr(errMsg, "duplicate column name")) ? qtrue : qfalse;
-			if (!duplicateColumn && s != SQLITE_BUSY && s != SQLITE_LOCKED)
+			if (s != SQLITE_BUSY && s != SQLITE_LOCKED)
 			{
 				G_ErrorPrint("ERROR: SQL Alter Failed (LocalArcade mapname)", s);
 			}
@@ -3984,47 +3982,66 @@ void G_AddDuel(char *winner, char *loser, int start_time, int type, int winner_h
 
 }
 
-void G_AddArcadeScore(const char *username, const char *mapname, int score, int levelReached, int kills, int end_time)
+qboolean G_AddArcadeScore(const char *username, const char *mapname, int score, int levelReached, int kills, int end_time)
 {
 	sqlite3 *db;
-	sqlite3_stmt *stmt;
+sqlite3_stmt *stmt = NULL;
 	char *sql;
-	int s;
+int s = SQLITE_ERROR;
+	int busyRetry = 0;
+	const int maxBusyRetries = 2;
 
 	if (!username || !username[0] || !mapname || !mapname[0])
 	{
-		return;
+		return qfalse;
 	}
 
 	CALL_SQLITE(open(LOCAL_DB_PATH, &db));
+	sqlite3_busy_timeout(db, 100);
 	G_EnsureLocalArcadeSchema(db);
 	sql = "INSERT INTO LocalArcade(username, mapname, score, level, kills, end_time) VALUES (?, ?, ?, ?, ?, ?)";
 	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
-	CALL_SQLITE(bind_text(stmt, 1, username, -1, SQLITE_TRANSIENT));
-	CALL_SQLITE(bind_text(stmt, 2, mapname, -1, SQLITE_TRANSIENT));
-	CALL_SQLITE(bind_int(stmt, 3, score));
-	CALL_SQLITE(bind_int(stmt, 4, levelReached));
-	CALL_SQLITE(bind_int(stmt, 5, kills));
-	CALL_SQLITE(bind_int(stmt, 6, end_time));
-	s = sqlite3_step(stmt);
-	if (s != SQLITE_DONE)
+	for (busyRetry = 0; busyRetry <= maxBusyRetries; busyRetry++)
 	{
-		if (s != SQLITE_BUSY && s != SQLITE_LOCKED)
+		CALL_SQLITE(reset(stmt));
+		CALL_SQLITE(clear_bindings(stmt));
+		CALL_SQLITE(bind_text(stmt, 1, username, -1, SQLITE_TRANSIENT));
+		CALL_SQLITE(bind_text(stmt, 2, mapname, -1, SQLITE_TRANSIENT));
+		CALL_SQLITE(bind_int(stmt, 3, score));
+		CALL_SQLITE(bind_int(stmt, 4, levelReached));
+		CALL_SQLITE(bind_int(stmt, 5, kills));
+		CALL_SQLITE(bind_int(stmt, 6, end_time));
+		s = sqlite3_step(stmt);
+		if ((s == SQLITE_BUSY || s == SQLITE_LOCKED) && busyRetry < maxBusyRetries)
 		{
-			G_ErrorPrint("ERROR: SQL Insert Failed (G_AddArcadeScore)", s);
+			sqlite3_sleep(5);
+			continue;
 		}
+		break;
+	}
+	if (s == SQLITE_BUSY || s == SQLITE_LOCKED)
+	{
+		/* transient lock contention handled by caller via return value */
+	}
+	else if (s != SQLITE_DONE)
+	{
+		G_ErrorPrint("ERROR: SQL Insert Failed (G_AddArcadeScore)", s);
 	}
 	CALL_SQLITE(finalize(stmt));
 	CALL_SQLITE(close(db));
+	return (s == SQLITE_DONE) ? qtrue : qfalse;
 }
 
-qboolean G_GetArcadeTopScore(const char *mapname, int *scoreOut, char *usernameOut, int usernameOutSize)
+qboolean G_GetArcadeTopScore(const char *mapname, int *scoreOut, char *usernameOut, int usernameOutSize, qboolean *queryFailedOut)
 {
 	sqlite3 *db;
-	sqlite3_stmt *stmt;
+	sqlite3_stmt *stmt = NULL;
 	char *sql;
-	int s;
+	int s = SQLITE_ERROR;
+	int busyRetry = 0;
+	const int maxBusyRetries = 2;
 	qboolean found = qfalse;
+	qboolean queryFailed = qfalse;
 
 	if (scoreOut)
 	{
@@ -4034,12 +4051,17 @@ qboolean G_GetArcadeTopScore(const char *mapname, int *scoreOut, char *usernameO
 	{
 		usernameOut[0] = '\0';
 	}
+	if (queryFailedOut)
+	{
+		*queryFailedOut = qfalse;
+	}
 	if (!mapname || !mapname[0])
 	{
 		return qfalse;
 	}
 
 	CALL_SQLITE(open(LOCAL_DB_PATH, &db));
+	sqlite3_busy_timeout(db, 100);
 	G_EnsureLocalArcadeSchema(db);
 	sql = "WITH has_map(map_exists) AS (SELECT EXISTS(SELECT 1 FROM LocalArcade WHERE mapname = ?)) "
 		"SELECT username, score FROM LocalArcade, has_map "
@@ -4047,9 +4069,20 @@ qboolean G_GetArcadeTopScore(const char *mapname, int *scoreOut, char *usernameO
 		"OR (has_map.map_exists = 0 AND (LocalArcade.mapname = '' OR LocalArcade.mapname IS NULL)) "
 		"ORDER BY " LOCAL_ARCADE_SCORE_ORDER " LIMIT 1";
 	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
-	CALL_SQLITE(bind_text(stmt, 1, mapname, -1, SQLITE_TRANSIENT));
-	CALL_SQLITE(bind_text(stmt, 2, mapname, -1, SQLITE_TRANSIENT));
-	s = sqlite3_step(stmt);
+	for (busyRetry = 0; busyRetry <= maxBusyRetries; busyRetry++)
+	{
+		CALL_SQLITE(reset(stmt));
+		CALL_SQLITE(clear_bindings(stmt));
+		CALL_SQLITE(bind_text(stmt, 1, mapname, -1, SQLITE_TRANSIENT));
+		CALL_SQLITE(bind_text(stmt, 2, mapname, -1, SQLITE_TRANSIENT));
+		s = sqlite3_step(stmt);
+		if ((s == SQLITE_BUSY || s == SQLITE_LOCKED) && busyRetry < maxBusyRetries)
+		{
+			sqlite3_sleep(5);
+			continue;
+		}
+		break;
+	}
 	if (s == SQLITE_ROW)
 	{
 		if (scoreOut)
@@ -4063,15 +4096,21 @@ qboolean G_GetArcadeTopScore(const char *mapname, int *scoreOut, char *usernameO
 		}
 		found = qtrue;
 	}
+	else if (s == SQLITE_BUSY || s == SQLITE_LOCKED)
+	{
+		queryFailed = qtrue;
+	}
 	else if (s != SQLITE_DONE)
 	{
-		if (s != SQLITE_BUSY && s != SQLITE_LOCKED)
-		{
-			G_ErrorPrint("ERROR: SQL Select Failed (G_GetArcadeTopScore)", s);
-		}
+		queryFailed = qtrue;
+		G_ErrorPrint("ERROR: SQL Select Failed (G_GetArcadeTopScore)", s);
 	}
 	CALL_SQLITE(finalize(stmt));
 	CALL_SQLITE(close(db));
+	if (queryFailedOut)
+	{
+		*queryFailedOut = queryFailed;
+	}
 	return found;
 }
 
