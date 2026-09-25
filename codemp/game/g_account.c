@@ -6780,6 +6780,12 @@ void Svcmd_ExportDuelTrack_f(void)
 	qboolean wantEventExport;
 	qboolean wantGeometryExport;
 	qboolean wantAggregateExport;
+	qboolean includeSessionDuel;
+	qboolean includeSessionArcade;
+	qboolean includeEventDuel;
+	qboolean includeEventArcade;
+	qboolean includeGeometryDuel;
+	qboolean includeGeometryArcade;
 	char sessionQuery[4096];
 	char eventQuery[3072];
 	char geometryQuery[3072];
@@ -6844,23 +6850,35 @@ void Svcmd_ExportDuelTrack_f(void)
 		preHadArcadeEvent || preHadArcadeGeometry;
 	if (hadAnyTrackedTables)
 	{
-		wantSessionExport = preHadDuelSummary || preHadArcadeSession;
+		includeSessionDuel = preHadDuelSummary;
+		includeSessionArcade = preHadArcadeSession;
+		includeEventDuel = preHadDuelEvent;
+		includeEventArcade = preHadArcadeEvent;
+		includeGeometryDuel = preHadDuelGeometry;
+		includeGeometryArcade = preHadArcadeGeometry;
+		wantSessionExport = includeSessionDuel || includeSessionArcade;
 		wantParticipantExport = preHadDuelParticipant;
-		wantEventExport = preHadDuelEvent || preHadArcadeEvent;
-		wantGeometryExport = preHadDuelGeometry || preHadArcadeGeometry;
+		wantEventExport = includeEventDuel || includeEventArcade;
+		wantGeometryExport = includeGeometryDuel || includeGeometryArcade;
 		wantAggregateExport = preHadDuelAggregate;
 	}
 	else
 	{
-		wantSessionExport = hadDuelSummary || hadArcadeSession;
+		includeSessionDuel = hadDuelSummary;
+		includeSessionArcade = hadArcadeSession;
+		includeEventDuel = hadDuelEvent;
+		includeEventArcade = hadArcadeEvent;
+		includeGeometryDuel = hadDuelGeometry;
+		includeGeometryArcade = hadArcadeGeometry;
+		wantSessionExport = includeSessionDuel || includeSessionArcade;
 		wantParticipantExport = hadDuelParticipant;
-		wantEventExport = hadDuelEvent || hadArcadeEvent;
-		wantGeometryExport = hadDuelGeometry || hadArcadeGeometry;
+		wantEventExport = includeEventDuel || includeEventArcade;
+		wantGeometryExport = includeGeometryDuel || includeGeometryArcade;
 		wantAggregateExport = hadDuelAggregate;
 	}
-	G_BuildTrackedSessionExportQuery(hadDuelSummary, hadArcadeSession, sessionQuery, sizeof(sessionQuery));
-	G_BuildTrackedEventExportQuery(hadDuelEvent, hadArcadeEvent, eventQuery, sizeof(eventQuery));
-	G_BuildTrackedGeometryExportQuery(hadDuelGeometry, hadArcadeGeometry, geometryQuery, sizeof(geometryQuery));
+	G_BuildTrackedSessionExportQuery(includeSessionDuel, includeSessionArcade, sessionQuery, sizeof(sessionQuery));
+	G_BuildTrackedEventExportQuery(includeEventDuel, includeEventArcade, eventQuery, sizeof(eventQuery));
+	G_BuildTrackedGeometryExportQuery(includeGeometryDuel, includeGeometryArcade, geometryQuery, sizeof(geometryQuery));
 
 	Q_strncpyz(dbDir, effectiveDbPath, sizeof(dbDir));
 	slashPos = strrchr(dbDir, '/');
