@@ -153,6 +153,7 @@ static qboolean NewBotAI_IsFlipkickSetupReady(bot_state_t *bs);
 qboolean BG_InRoll3(int anim);
 static void NewBotAI_RetreatStraight(bot_state_t *bs);
 static float NewBotAI_GetEnemyClosingSpeed(bot_state_t *bs);
+static float NewBotAI_GetEnemyFacingError(bot_state_t *bs);
 static void NewBotAI_SaberDuelIndecisionFallback(bot_state_t *bs, qboolean horizontalSwingStart);
 static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs);
 static void NewBotAI_ApplyHorizontalSwingMove(bot_state_t *bs);
@@ -198,6 +199,8 @@ static qboolean NewBotAI_IsEnemySaberThreatImminent(bot_state_t *bs);
 static qboolean NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bot_state_t *bs);
 static qboolean NewBotAI_ShouldJumpDrainVsSaberThrow(bot_state_t *bs);
 static qboolean NewBotAI_ShouldEmergencyDrainRollSaberThrow(bot_state_t *bs);
+static qboolean NewBotAI_HasStableSaberThrowDefenseAlignment(bot_state_t *bs);
+static qboolean NewBotAI_ShouldStabilizeAgainstEnemySaberThrow(bot_state_t *bs);
 static void NewBotAI_ApplySidewaysDrainRoll(bot_state_t *bs, qboolean moveBack);
 static qboolean NewBotAI_ShouldUseSafePushWindowWhilePulled(bot_state_t *bs);
 static qboolean NewBotAI_HasFreePullkickWindow(bot_state_t *bs);
@@ -222,6 +225,7 @@ static qboolean NewBotAI_IsEnemyGetupPushWindow(bot_state_t *bs);
 static qboolean NewBotAI_IsEnemyPreGetupKnockdownState(bot_state_t *bs);
 static qboolean NewBotAI_ShouldAbortChargedThrowForGetupPush(bot_state_t *bs);
 static qboolean NewBotAI_TryAbortChargedThrowIntoPullkick(bot_state_t *bs);
+static qboolean NewBotAI_HasTimedFanEntryWindow(bot_state_t *bs);
 static qboolean NewBotAI_IsRecoveryMovementActive(bot_state_t *bs);
 static qboolean NewBotAI_HasExclusiveFlipkickMovement(bot_state_t *bs);
 static int BotGetNewBotAITargetMode(void);
@@ -7726,6 +7730,16 @@ static qboolean NewBotAI_IsActivelyEngagedInCombat(bot_state_t *bs)
 #define NEWBOTAI_DUEL_TARGET_BLACKLIST_MS 15000
 static qboolean NewBotAI_ShouldPreferFlipkickOverThrow(bot_state_t *bs)
 {
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return qfalse;
+	}
+	if (bs->currentEnemy->client->ps.saberInFlight &&
+		NewBotAI_ShouldStabilizeAgainstEnemySaberThrow(bs))
+	{
+		return qfalse;
+	}
+
 	return (NewBotAI_CanAttemptFlipkick(bs) && bs->frame_Enemy_Len <= NEWBOTAI_FLIPKICK_PREFERRED_RANGE) ? qtrue : qfalse;
 }
 
@@ -8397,6 +8411,13 @@ void NewBotAI_Flipkick(bot_state_t *bs)
 	}
 
 	if (!isGripSequence && bs->flipkickInputTime <= level.time && !NewBotAI_IsFlipkickSetupReady(bs))
+	{
+		NewBotAI_PushHopRetryCooldown(bs);
+		return;
+	}
+	if (!isGripSequence && bs->currentEnemy && bs->currentEnemy->client &&
+		bs->currentEnemy->client->ps.saberInFlight &&
+		NewBotAI_ShouldStabilizeAgainstEnemySaberThrow(bs))
 	{
 		NewBotAI_PushHopRetryCooldown(bs);
 		return;
@@ -9088,6 +9109,7 @@ void NewBotAI_Draining(bot_state_t *bs)
 	const qboolean safeDrainVsThrow = NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bs);
 	const qboolean jumpDrainThreat = NewBotAI_ShouldJumpDrainVsSaberThrow(bs);
 	const qboolean flipkickDrainEscape = (safeDrainVsThrow && NewBotAI_ShouldPreferFlipkickOverThrow(bs)) ? qtrue : qfalse;
+	const qboolean stabilizeVsSaberThrow = NewBotAI_ShouldStabilizeAgainstEnemySaberThrow(bs);
 	const qboolean maintainDrainlockTaps = (NewBotAI_IsPullkickDrainWindow(bs) || NewBotAI_IsDrainlockAdvantage(bs)) ? qtrue : qfalse;
 	qboolean shouldHold = qfalse;
 	int holdMs = 0;
@@ -9157,7 +9179,7 @@ void NewBotAI_Draining(bot_state_t *bs)
 		}
 		else if (jumpDrainThreat)
 		{
-			if (flipkickDrainEscape || NewBotAI_IsDrainlockAdvantage(bs))
+			if (!stabilizeVsSaberThrow && (flipkickDrainEscape || NewBotAI_IsDrainlockAdvantage(bs)))
 			{
 				trap->EA_MoveForward(bs->client);
 			}
@@ -9167,7 +9189,7 @@ void NewBotAI_Draining(bot_state_t *bs)
 			}
 			trap->EA_Jump(bs->client);
 		}
-		else if (!flipkickDrainEscape)
+		else if (!flipkickDrainEscape || stabilizeVsSaberThrow)
 		{
 			NewBotAI_RetreatDiagonal(bs, (level.framenum & 1) ? qtrue : qfalse);
 		}
@@ -10168,6 +10190,22 @@ static float NewBotAI_GetEnemyClosingSpeed(bot_state_t *bs)
 	return DotProduct(bs->currentEnemy->client->ps.velocity, toUs);
 }
 
+static float NewBotAI_GetEnemyFacingError(bot_state_t *bs)
+{
+	vec3_t toEnemy;
+	vec3_t enemyAngles;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return 180.0f;
+	}
+
+	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->eye, toEnemy);
+	vectoangles(toEnemy, enemyAngles);
+
+	return fabs(AngleSubtract(enemyAngles[YAW], bs->viewangles[YAW]));
+}
+
 static qboolean NewBotAI_IsEnemyCollapsePressure(bot_state_t *bs)
 {
 	float closingSpeed;
@@ -10189,12 +10227,68 @@ static qboolean NewBotAI_IsEnemyCollapsePressure(bot_state_t *bs)
 	return (closingSpeed >= 220.0f) ? qtrue : qfalse;
 }
 
+static qboolean NewBotAI_HasStableSaberThrowDefenseAlignment(bot_state_t *bs)
+{
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return qfalse;
+	}
+	if (!bs->frame_Enemy_Vis || bs->frame_Enemy_Len < 72.0f || bs->frame_Enemy_Len > 224.0f)
+	{
+		return qfalse;
+	}
+	if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE)
+	{
+		return qfalse;
+	}
+	if (bs->lastHurtTime > level.time - 450)
+	{
+		return qfalse;
+	}
+
+	return (NewBotAI_GetEnemyFacingError(bs) <= 18.0f) ? qtrue : qfalse;
+}
+
+static qboolean NewBotAI_ShouldStabilizeAgainstEnemySaberThrow(bot_state_t *bs)
+{
+	qboolean enemySaberReturning;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client ||
+		!bs->currentEnemy->client->ps.saberInFlight)
+	{
+		return qfalse;
+	}
+	enemySaberReturning = NewBotAI_IsEnemySaberReturning(bs);
+
+	if (NewBotAI_IsEnemySaberThreatImminent(bs))
+	{
+		return qtrue;
+	}
+	if (!NewBotAI_HasStableSaberThrowDefenseAlignment(bs))
+	{
+		return qtrue;
+	}
+	if (!enemySaberReturning && !NewBotAI_HasFreePullkickWindow(bs))
+	{
+		return qtrue;
+	}
+	if (!enemySaberReturning && bs->frame_Enemy_Len > 176.0f)
+	{
+		return qtrue;
+	}
+
+	return qfalse;
+}
+
 static qboolean NewBotAI_ShouldPreDefenseAgainstCollapse(bot_state_t *bs)
 {
 	int ourHealth;
 	int hisHealth;
 	int ourForce;
 	int hisForce;
+	int ourTotalHealth;
+	int totalHealthDelta;
+	qboolean recentlyHurt;
 
 	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
 	{
@@ -10204,14 +10298,22 @@ static qboolean NewBotAI_ShouldPreDefenseAgainstCollapse(bot_state_t *bs)
 	hisHealth = bs->currentEnemy->health;
 	ourForce = bs->cur_ps.fd.forcePower;
 	hisForce = bs->currentEnemy->client->ps.fd.forcePower;
+	ourTotalHealth = ourHealth + bs->cur_ps.stats[STAT_ARMOR];
+	totalHealthDelta = NewBotAI_GetTotalHealthDelta(bs);
+	recentlyHurt = (bs->lastHurtTime > level.time - 900) ? qtrue : qfalse;
 
-	if (!NewBotAI_IsEnemyCollapsePressure(bs))
+	if (!NewBotAI_IsEnemyCollapsePressure(bs) &&
+		!(recentlyHurt && ourTotalHealth <= 45 && bs->frame_Enemy_Vis && bs->frame_Enemy_Len <= 256.0f))
 	{
 		return qfalse;
 	}
-	if (ourForce > hisForce + 10 && ourHealth > hisHealth + 10)
+	if (!recentlyHurt && ourForce > hisForce + 10 && ourHealth > hisHealth + 10)
 	{
 		return qfalse;
+	}
+	if (recentlyHurt && (ourTotalHealth <= 35 || totalHealthDelta <= -20))
+	{
+		return qtrue;
 	}
 
 	return qtrue;
@@ -10230,6 +10332,16 @@ static qboolean NewBotAI_IsStablePTKCommitWindow(bot_state_t *bs)
 	{
 		return qfalse;
 	}
+	if (bs->currentEnemy && bs->currentEnemy->client &&
+		bs->currentEnemy->client->ps.saberInFlight &&
+		NewBotAI_ShouldStabilizeAgainstEnemySaberThrow(bs))
+	{
+		return qfalse;
+	}
+	if (NewBotAI_GetEnemyFacingError(bs) > 26.0f)
+	{
+		return qfalse;
+	}
 	/* Avoid forcing PTK in chaotic collapse windows or when the target is disengaging hard. */
 	if (closingSpeed > 260.0f || closingSpeed < -120.0f)
 	{
@@ -10237,6 +10349,42 @@ static qboolean NewBotAI_IsStablePTKCommitWindow(bot_state_t *bs)
 	}
 
 	return qtrue;
+}
+
+static qboolean NewBotAI_HasTimedFanEntryWindow(bot_state_t *bs)
+{
+	qboolean enemyDisabled;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return qfalse;
+	}
+	if (!bs->frame_Enemy_Vis || bs->frame_Enemy_Len < 72.0f || bs->frame_Enemy_Len > 224.0f)
+	{
+		return qfalse;
+	}
+	if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE || bs->currentEnemy->client->ps.saberInFlight)
+	{
+		return qfalse;
+	}
+	if (NewBotAI_IsEnemySaberThreatImminent(bs) || NewBotAI_ShouldPreDefenseAgainstCollapse(bs))
+	{
+		return qfalse;
+	}
+	enemyDisabled = (BG_InKnockDown(bs->currentEnemy->client->ps.legsAnim) ||
+		bs->currentEnemy->client->ps.groundEntityNum == ENTITYNUM_NONE) ? qtrue : qfalse;
+	if (NewBotAI_ShouldPressAdvantage(bs) || NewBotAI_HasClearAdvantage(bs) || enemyDisabled)
+	{
+		return qtrue;
+	}
+	if (BG_SaberInAttack(bs->cur_ps.saberMove) ||
+		PM_SaberInStart(bs->cur_ps.saberMove) ||
+		PM_SaberInTransition(bs->cur_ps.saberMove))
+	{
+		return qtrue;
+	}
+
+	return qfalse;
 }
 
 enum
@@ -10818,6 +10966,7 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 		gentity_t *saber;
 		qboolean crouch = qfalse;
 		const qboolean enemySaberThreatImminent = NewBotAI_IsEnemySaberThreatImminent(bs);
+		const qboolean preCollapseDefense = NewBotAI_ShouldPreDefenseAgainstCollapse(bs);
 
 		bs->runningLikeASissy = 0;
 		bs->forceMove_Forward = 0;
@@ -10845,10 +10994,28 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 				NewBotAI_RetreatDiagonal(bs, (level.framenum & 1) ? qtrue : qfalse);
 			}
 		}
+		else if (preCollapseDefense && !enemySaberThreatImminent && !NewBotAI_IsBeingPulledTowardEnemy(bs))
+		{
+			if (bs->conserveUntil < level.time + 500)
+			{
+				bs->conserveUntil = level.time + 500;
+			}
+			bs->combatAction = BOT_COMBAT_ACTION_RETREAT_DEFENSE;
+			if (bs->frame_Enemy_Len <= 96.0f)
+			{
+				NewBotAI_GetGroundDodge(bs);
+			}
+			else
+			{
+				NewBotAI_RetreatDiagonal(bs, (level.framenum & 1) ? qtrue : qfalse);
+			}
+			return;
+		}
 		else if (enemySaberThreatImminent)
 		{
 			const int totalHealthDelta = NewBotAI_GetTotalHealthDelta(bs);
 			const int ourHealth = g_entities[bs->client].health;
+			const qboolean stabilizeVsSaberThrow = NewBotAI_ShouldStabilizeAgainstEnemySaberThrow(bs);
 
 			if (NewBotAI_ShouldEmergencyDrainRollSaberThrow(bs))
 			{
@@ -10858,9 +11025,10 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 			else if (NewBotAI_ShouldJumpDrainVsSaberThrow(bs))
 			{
 				const qboolean aggressiveHop =
-					(NewBotAI_ShouldPreferFlipkickOverThrow(bs) ||
+					(!stabilizeVsSaberThrow &&
+					 (NewBotAI_ShouldPreferFlipkickOverThrow(bs) ||
 					 (NewBotAI_IsDrainlockAdvantage(bs) && ourHealth > 20) ||
-					 (totalHealthDelta < 0 && NewBotAI_ShouldCloseGapVsEnemySaberThrow(bs))) ? qtrue : qfalse;
+					 (totalHealthDelta < 0 && NewBotAI_ShouldCloseGapVsEnemySaberThrow(bs)))) ? qtrue : qfalse;
 				bs->combatAction = aggressiveHop ? BOT_COMBAT_ACTION_AGGRESSION : BOT_COMBAT_ACTION_RETREAT_DEFENSE;
 				if (aggressiveHop)
 				{
@@ -10895,12 +11063,16 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 					trap->EA_ForcePower(bs->client);
 				}
 			}
-			else if (totalHealthDelta >= 30)
+			else if (!stabilizeVsSaberThrow &&
+				NewBotAI_IsEnemySaberReturning(bs) &&
+				totalHealthDelta >= 30)
 			{
 				bs->combatAction = BOT_COMBAT_ACTION_AGGRESSION;
 				trap->EA_MoveForward(bs->client);
 			}
-			else if (totalHealthDelta < 0 && NewBotAI_ShouldCloseGapVsEnemySaberThrow(bs))
+			else if (!stabilizeVsSaberThrow &&
+				NewBotAI_IsEnemySaberReturning(bs) &&
+				totalHealthDelta < 0 && NewBotAI_ShouldCloseGapVsEnemySaberThrow(bs))
 			{
 				bs->combatAction = BOT_COMBAT_ACTION_AGGRESSION;
 				trap->EA_MoveForward(bs->client);
@@ -10910,7 +11082,9 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 				bs->combatAction = BOT_COMBAT_ACTION_RETREAT_DEFENSE;
 				NewBotAI_RetreatDiagonal(bs, (level.framenum & 1) ? qtrue : qfalse);
 			}
-			else if (pressAdvantage)
+			else if (!stabilizeVsSaberThrow &&
+				NewBotAI_IsEnemySaberReturning(bs) &&
+				pressAdvantage)
 			{
 				bs->combatAction = BOT_COMBAT_ACTION_AGGRESSION;
 				trap->EA_MoveForward(bs->client);
@@ -12659,6 +12833,7 @@ static int NewBotAI_GetPTKWeight(bot_state_t *bs)
 	const qboolean enemySwinging = (BG_SaberInAttack(bs->currentEnemy->client->ps.saberMove) ||
 		PM_SaberInStart(bs->currentEnemy->client->ps.saberMove) ||
 		PM_SaberInTransition(bs->currentEnemy->client->ps.saberMove)) ? qtrue : qfalse;
+	const qboolean stabilizeVsSaberThrow = NewBotAI_ShouldStabilizeAgainstEnemySaberThrow(bs);
 	int weight = 0;
 
 	if (!NewBotAI_IsEnemyPullable(bs) || !g_flipKick.integer)
@@ -12689,6 +12864,10 @@ static int NewBotAI_GetPTKWeight(bot_state_t *bs)
 	}
 
 	if (!NewBotAI_IsPullkickOpportunity(bs))
+	{
+		return 0;
+	}
+	if (bs->currentEnemy->client->ps.saberInFlight && stabilizeVsSaberThrow)
 	{
 		return 0;
 	}
@@ -12920,6 +13099,14 @@ static float NewBotAI_GetFanBiasPercent(bot_state_t *bs)
 	{
 		fanBias *= 0.6f;
 	}
+	if (bs->currentEnemy->client->ps.saberInFlight || bs->frame_Enemy_Len > 224.0f)
+	{
+		fanBias *= 0.35f;
+	}
+	if (NewBotAI_ShouldPreDefenseAgainstCollapse(bs))
+	{
+		fanBias *= 0.2f;
+	}
 
 	if (pressingAdvantage && ourHealth >= 85)
 	{
@@ -12961,7 +13148,7 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 	const int firstDwellMs = Com_Clampi(10, 3000, bot_firstfandwell.integer);
 	const int dwellMs = Com_Clampi(10, 3000, bot_fandwell.integer);
 
-	if (!NewBotAI_IsSaberSwingStartWindow(bs))
+	if (!NewBotAI_IsSaberSwingStartWindow(bs) || !NewBotAI_HasTimedFanEntryWindow(bs))
 	{
 		NewBotAI_ResetFanChain(bs);
 		return;
@@ -14236,6 +14423,7 @@ int NewBotAI_GetPull(bot_state_t *bs) {
 	const int hisForce = bs->currentEnemy->client->ps.fd.forcePower;
 	const float drainlockBias = BotGetChanceBiasPercent(bot_drainlockbias.value);
 	const qboolean freePullkickWindow = NewBotAI_HasFreePullkickWindow(bs);
+	const qboolean stabilizeVsSaberThrow = NewBotAI_ShouldStabilizeAgainstEnemySaberThrow(bs);
 	int healthDiff = ourHealth - hisHealth;
 	float weight = (float)healthDiff;
 	int ptkWeight = 0;
@@ -14258,6 +14446,8 @@ int NewBotAI_GetPull(bot_state_t *bs) {
 	if (bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB))
 		return 0;
 	if (ourForce < 21)
+		return 0;
+	if (stabilizeVsSaberThrow)
 		return 0;
 	if (bs->currentEnemy->client->ps.saberInFlight && !freePullkickWindow)
 		return 0;
