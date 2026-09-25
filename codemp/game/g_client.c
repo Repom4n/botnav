@@ -2992,6 +2992,14 @@ char *ClientConnect( int clientNum, qboolean firstTime, qboolean isBot ) {
 	{
 		client->sess.sessionTeam = TEAM_SPECTATOR;
 	}
+	else if (level.gametype == GT_ARCADE &&
+		!isBot &&
+		client->sess.sessionTeam == TEAM_FREE)
+	{
+		level.arcadeParticipant[clientNum] = qfalse;
+		level.arcadeQueued[clientNum] = qtrue;
+		level.arcadeEliminated[clientNum] = qfalse;
+	}
 
 	ent->r.svFlags &= ~SVF_BOT;
 	if( isBot ) {
