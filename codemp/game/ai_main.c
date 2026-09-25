@@ -10200,7 +10200,7 @@ static float NewBotAI_GetSelfFacingErrorToEnemy(bot_state_t *bs)
 		return 180.0f;
 	}
 
-	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->cur_ps.origin, toEnemy);
+	VectorSubtract(bs->currentEnemy->r.currentOrigin, bs->cur_ps.origin, toEnemy);
 	toEnemy[2] = 0.0f;
 	vectoangles(toEnemy, enemyAngles);
 
