@@ -13155,7 +13155,7 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 		return;
 	}
 	if (bs->fanPhase != FAN_PHASE_INACTIVE &&
-		(bs->currentEnemy->client->ps.saberInFlight ||
+		(NewBotAI_ShouldStabilizeAgainstEnemySaberThrow(bs) ||
 		 NewBotAI_IsEnemySaberThreatImminent(bs) ||
 		 NewBotAI_ShouldPreDefenseAgainstCollapse(bs)))
 	{
