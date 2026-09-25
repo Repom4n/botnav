@@ -6524,9 +6524,10 @@ static qboolean G_ExportTrackedQueryCSV(sqlite3 *db, const char *sql, const char
 	return qtrue;
 }
 
-static const char *G_GetTrackedSessionExportQuery(void)
+static void G_BuildTrackedSessionExportQuery(qboolean includeDuel, qboolean includeArcade,
+	char *out, int outSize)
 {
-	return
+	const char *duelSelect =
 		"SELECT 'duel_summary' AS record_type, source_context, id AS record_id, "
 		"start_time, end_time, duration, mapname, type, '' AS result, 0 AS arcade_level, "
 		"'' AS participant_key, '' AS participant_label, 0 AS participant_kind, "
@@ -6537,8 +6538,8 @@ static const char *G_GetTrackedSessionExportQuery(void)
 		"0 AS total_damage_taken, 0 AS total_damage_dealt, 0 AS low_force_windows, "
 		"0 AS knockdown_events, 0 AS counter_successes, 0 AS punish_successes, "
 		"0 AS reset_successes, 0 AS saber_return_punishes "
-		"FROM LocalDuelTrackSummary "
-		"UNION ALL "
+		"FROM LocalDuelTrackSummary";
+	const char *arcadeSelect =
 		"SELECT 'arcade_session' AS record_type, source_context, id AS record_id, "
 		"start_time, end_time, duration, mapname, 21 AS type, result, arcade_level, "
 		"participant_key, participant_label, participant_kind, "
@@ -6548,6 +6549,17 @@ static const char *G_GetTrackedSessionExportQuery(void)
 		"total_kills, total_force_spent, total_force_regen, total_damage_taken, total_damage_dealt, low_force_windows, "
 		"knockdown_events, counter_successes, punish_successes, reset_successes, saber_return_punishes "
 		"FROM LocalArcadeTrackSession";
+
+	if (!out || outSize < 1)
+		return;
+
+	out[0] = '\0';
+	if (includeDuel)
+		Q_strcat(out, outSize, duelSelect);
+	if (includeDuel && includeArcade)
+		Q_strcat(out, outSize, " UNION ALL ");
+	if (includeArcade)
+		Q_strcat(out, outSize, arcadeSelect);
 }
 
 static const char *G_GetTrackedParticipantExportQuery(void)
@@ -6563,38 +6575,62 @@ static const char *G_GetTrackedParticipantExportQuery(void)
 		"FROM LocalDuelTrackParticipant";
 }
 
-static const char *G_GetTrackedEventExportQuery(void)
+static void G_BuildTrackedEventExportQuery(qboolean includeDuel, qboolean includeArcade,
+	char *out, int outSize)
 {
-	return
+	const char *duelSelect =
 		"SELECT 'duel_event' AS record_type, 'duel' AS source_context, id AS record_id, summary_id AS parent_id, "
 		"participant_key, '' AS participant_label, 0 AS participant_kind, "
 		"opponent_key, opponent_label, opponent_kind, "
 		"rel_time, event_index, sequence_id, event_type, power, amount, state, range_bucket, "
 		"buttons, saber_move, enemy_saber_move, yaw_delta, note "
-		"FROM LocalDuelTrackEvent "
-		"UNION ALL "
+		"FROM LocalDuelTrackEvent";
+	const char *arcadeSelect =
 		"SELECT 'arcade_event' AS record_type, 'arcade' AS source_context, id AS record_id, session_id AS parent_id, "
 		"participant_key, participant_label, participant_kind, "
 		"opponent_key, opponent_label, opponent_kind, "
 		"rel_time, event_index, sequence_id, event_type, power, amount, state, range_bucket, "
 		"buttons, saber_move, enemy_saber_move, yaw_delta, note "
 		"FROM LocalArcadeTrackEvent";
+
+	if (!out || outSize < 1)
+		return;
+
+	out[0] = '\0';
+	if (includeDuel)
+		Q_strcat(out, outSize, duelSelect);
+	if (includeDuel && includeArcade)
+		Q_strcat(out, outSize, " UNION ALL ");
+	if (includeArcade)
+		Q_strcat(out, outSize, arcadeSelect);
 }
 
-static const char *G_GetTrackedGeometryExportQuery(void)
+static void G_BuildTrackedGeometryExportQuery(qboolean includeDuel, qboolean includeArcade,
+	char *out, int outSize)
 {
-	return
+	const char *duelSelect =
 		"SELECT 'duel_geometry' AS record_type, 'duel' AS source_context, id AS record_id, summary_id AS parent_id, "
 		"participant_key, opponent_key, rel_time, event_index, "
 		"self_x, self_y, self_z, enemy_x, enemy_y, enemy_z, "
 		"self_vx, self_vy, self_vz, enemy_vx, enemy_vy, enemy_vz, self_yaw, enemy_yaw "
-		"FROM LocalDuelTrackGeometry "
-		"UNION ALL "
+		"FROM LocalDuelTrackGeometry";
+	const char *arcadeSelect =
 		"SELECT 'arcade_geometry' AS record_type, 'arcade' AS source_context, id AS record_id, session_id AS parent_id, "
 		"participant_key, opponent_key, rel_time, event_index, "
 		"self_x, self_y, self_z, enemy_x, enemy_y, enemy_z, "
 		"self_vx, self_vy, self_vz, enemy_vx, enemy_vy, enemy_vz, self_yaw, enemy_yaw "
 		"FROM LocalArcadeTrackGeometry";
+
+	if (!out || outSize < 1)
+		return;
+
+	out[0] = '\0';
+	if (includeDuel)
+		Q_strcat(out, outSize, duelSelect);
+	if (includeDuel && includeArcade)
+		Q_strcat(out, outSize, " UNION ALL ");
+	if (includeArcade)
+		Q_strcat(out, outSize, arcadeSelect);
 }
 
 static const char *G_GetTrackedAggregateExportQuery(void)
@@ -6716,6 +6752,9 @@ void Svcmd_ExportDuelTrack_f(void)
 	qboolean hadArcadeSession;
 	qboolean hadArcadeEvent;
 	qboolean hadArcadeGeometry;
+	char sessionQuery[4096];
+	char eventQuery[3072];
+	char geometryQuery[3072];
 
 	optionalPrefix[0] = '\0';
 	if (trap->Argc() >= 2)
@@ -6764,6 +6803,9 @@ void Svcmd_ExportDuelTrack_f(void)
 	hadArcadeEvent = G_DoesTrackedDuelTableExist(db, "LocalArcadeTrackEvent");
 	hadArcadeGeometry = G_DoesTrackedDuelTableExist(db, "LocalArcadeTrackGeometry");
 	G_EnsureLocalDuelTrackingSchema(db);
+	G_BuildTrackedSessionExportQuery(hadDuelSummary, hadArcadeSession, sessionQuery, sizeof(sessionQuery));
+	G_BuildTrackedEventExportQuery(hadDuelEvent, hadArcadeEvent, eventQuery, sizeof(eventQuery));
+	G_BuildTrackedGeometryExportQuery(hadDuelGeometry, hadArcadeGeometry, geometryQuery, sizeof(geometryQuery));
 
 	Q_strncpyz(dbDir, effectiveDbPath, sizeof(dbDir));
 	slashPos = strrchr(dbDir, '/');
@@ -6781,8 +6823,8 @@ void Svcmd_ExportDuelTrack_f(void)
 #endif
 
 	G_BuildTrackedExportPath(dbDir, pathSep, safePrefix, "sessions.csv", outPath, sizeof(outPath));
-	if ((hadDuelSummary || hadArcadeSession) &&
-		G_ExportTrackedQueryCSV(db, G_GetTrackedSessionExportQuery(), outPath, &rows))
+	if (sessionQuery[0] &&
+		G_ExportTrackedQueryCSV(db, sessionQuery, outPath, &rows))
 		trap->Print("Exported tracked sessions (%d rows) -> %s\n", rows, outPath);
 
 	G_BuildTrackedExportPath(dbDir, pathSep, safePrefix, "participants.csv", outPath, sizeof(outPath));
@@ -6791,13 +6833,13 @@ void Svcmd_ExportDuelTrack_f(void)
 		trap->Print("Exported tracked participants (%d rows) -> %s\n", rows, outPath);
 
 	G_BuildTrackedExportPath(dbDir, pathSep, safePrefix, "events.csv", outPath, sizeof(outPath));
-	if ((hadDuelEvent || hadArcadeEvent) &&
-		G_ExportTrackedQueryCSV(db, G_GetTrackedEventExportQuery(), outPath, &rows))
+	if (eventQuery[0] &&
+		G_ExportTrackedQueryCSV(db, eventQuery, outPath, &rows))
 		trap->Print("Exported tracked events (%d rows) -> %s\n", rows, outPath);
 
 	G_BuildTrackedExportPath(dbDir, pathSep, safePrefix, "geometry.csv", outPath, sizeof(outPath));
-	if ((hadDuelGeometry || hadArcadeGeometry) &&
-		G_ExportTrackedQueryCSV(db, G_GetTrackedGeometryExportQuery(), outPath, &rows))
+	if (geometryQuery[0] &&
+		G_ExportTrackedQueryCSV(db, geometryQuery, outPath, &rows))
 		trap->Print("Exported tracked geometry (%d rows) -> %s\n", rows, outPath);
 
 	G_BuildTrackedExportPath(dbDir, pathSep, safePrefix, "aggregate.csv", outPath, sizeof(outPath));
