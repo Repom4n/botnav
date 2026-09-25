@@ -6878,39 +6878,39 @@ void Svcmd_ExportDuelTrack_f(void)
 #endif
 
 	G_BuildTrackedExportPath(dbDir, pathSep, safePrefix, "sessions.csv", outPath, sizeof(outPath));
-	if (wantSessionExport && sessionQuery[0] &&
+	if (!wantSessionExport || !sessionQuery[0])
+		G_RemoveTrackedExportFile(outPath);
+	else if (
 		G_ExportTrackedQueryCSV(db, sessionQuery, outPath, &rows))
 		trap->Print("Exported tracked sessions (%d rows) -> %s\n", rows, outPath);
-	else
-		G_RemoveTrackedExportFile(outPath);
 
 	G_BuildTrackedExportPath(dbDir, pathSep, safePrefix, "participants.csv", outPath, sizeof(outPath));
-	if (wantParticipantExport &&
+	if (!wantParticipantExport)
+		G_RemoveTrackedExportFile(outPath);
+	else if (
 		G_ExportTrackedQueryCSV(db, G_GetTrackedParticipantExportQuery(), outPath, &rows))
 		trap->Print("Exported tracked participants (%d rows) -> %s\n", rows, outPath);
-	else
-		G_RemoveTrackedExportFile(outPath);
 
 	G_BuildTrackedExportPath(dbDir, pathSep, safePrefix, "events.csv", outPath, sizeof(outPath));
-	if (wantEventExport && eventQuery[0] &&
+	if (!wantEventExport || !eventQuery[0])
+		G_RemoveTrackedExportFile(outPath);
+	else if (
 		G_ExportTrackedQueryCSV(db, eventQuery, outPath, &rows))
 		trap->Print("Exported tracked events (%d rows) -> %s\n", rows, outPath);
-	else
-		G_RemoveTrackedExportFile(outPath);
 
 	G_BuildTrackedExportPath(dbDir, pathSep, safePrefix, "geometry.csv", outPath, sizeof(outPath));
-	if (wantGeometryExport && geometryQuery[0] &&
+	if (!wantGeometryExport || !geometryQuery[0])
+		G_RemoveTrackedExportFile(outPath);
+	else if (
 		G_ExportTrackedQueryCSV(db, geometryQuery, outPath, &rows))
 		trap->Print("Exported tracked geometry (%d rows) -> %s\n", rows, outPath);
-	else
-		G_RemoveTrackedExportFile(outPath);
 
 	G_BuildTrackedExportPath(dbDir, pathSep, safePrefix, "aggregate.csv", outPath, sizeof(outPath));
-	if (wantAggregateExport &&
+	if (!wantAggregateExport)
+		G_RemoveTrackedExportFile(outPath);
+	else if (
 		G_ExportTrackedQueryCSV(db, G_GetTrackedAggregateExportQuery(), outPath, &rows))
 		trap->Print("Exported tracked aggregate (%d rows) -> %s\n", rows, outPath);
-	else
-		G_RemoveTrackedExportFile(outPath);
 
 	CALL_SQLITE(close(db));
 }
