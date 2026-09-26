@@ -2670,7 +2670,6 @@ void G_UpdateTrackedDuelFrame(gentity_t *ent)
 		if (runtime->lastDamageTakenTime > 0 &&
 			level.time - runtime->lastDamageTakenTime <= TRACKED_COUNTER_WINDOW_MS)
 		{
-			runtime->antiThrowSuccessEvents++;
 			G_AddTrackedDuelEvent(runtime, DUEL_TRACK_EVENT_COUNTER_SUCCESS, level.time - runtime->duelStartTime,
 				dealt, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, "counter", ent, opponent);
 		}
@@ -4279,7 +4278,7 @@ void Cmd_DuelTop10_f(gentity_t *ent) {
 				count = sqlite3_column_int(stmt, 2);
 				TS = sqlite3_column_int(stmt, 3);
 
-				tmpMsg = va("^5%2i^3: ^3%-18s ^3%-12i ^3%-9i %i\n", start+row, username, rank, count, TS);
+				tmpMsg = va("^5%2i^3: ^3%-18s ^3%-12i ^3%-9i %i\n", start+row, username, rank, TS, count);
 				if (strlen(msg) + strlen(tmpMsg) >= sizeof( msg)) {
 					trap->SendServerCommand( ent-g_entities, va("print \"%s\"", msg));
 					msg[0] = '\0';
@@ -6877,7 +6876,7 @@ static void G_BuildTrackedSessionExportQuery(qboolean includeDuel, qboolean incl
 	char *out, int outSize)
 {
 	const char *duelSelect =
-		"SELECT 1 AS export_format_version, 'duel_summary' AS record_type, source_context, id AS record_id, "
+		"SELECT 2 AS export_format_version, 'duel_summary' AS record_type, source_context, id AS record_id, "
 		"start_time, end_time, duration, mapname, type, '' AS result, 0 AS arcade_level, "
 		"'' AS participant_key, '' AS participant_label, 0 AS participant_kind, "
 		"winner_key, winner_label, winner_kind, winner_side, "
@@ -6889,7 +6888,7 @@ static void G_BuildTrackedSessionExportQuery(qboolean includeDuel, qboolean incl
 		"0 AS reset_successes, 0 AS saber_return_punishes "
 		"FROM LocalDuelTrackSummary";
 	const char *arcadeSelect =
-		"SELECT 1 AS export_format_version, 'arcade_session' AS record_type, source_context, id AS record_id, "
+		"SELECT 2 AS export_format_version, 'arcade_session' AS record_type, source_context, id AS record_id, "
 		"start_time, end_time, duration, mapname, 21 AS type, result, arcade_level, "
 		"participant_key, participant_label, participant_kind, "
 		"'' AS winner_key, '' AS winner_label, 0 AS winner_kind, 0 AS winner_side, "
@@ -6922,7 +6921,7 @@ static void G_BuildTrackedSessionExportQuery(qboolean includeDuel, qboolean incl
 static const char *G_GetTrackedParticipantExportQuery(void)
 {
 	return
-		"SELECT 1 AS export_format_version, 'duel_participant' AS record_type, 'duel' AS source_context, id AS record_id, summary_id, "
+		"SELECT 2 AS export_format_version, 'duel_participant' AS record_type, 'duel' AS source_context, id AS record_id, summary_id, "
 		"participant_key, participant_label, participant_kind, opponent_key, won, side, opponent_side, matchup, "
 		"total_force_spent, total_force_regen, ending_force, ending_hp, ending_armor, "
 		"low_force_windows, grip_cripple_events, saber_throw_punishes, knockdown_events, late_defense_spends, "
@@ -6936,7 +6935,7 @@ static void G_BuildTrackedEventExportQuery(qboolean includeDuel, qboolean includ
 	char *out, int outSize)
 {
 	const char *duelSelect =
-		"SELECT 1 AS export_format_version, 'duel_event' AS record_type, 'duel' AS source_context, id AS record_id, summary_id AS parent_id, "
+		"SELECT 2 AS export_format_version, 'duel_event' AS record_type, 'duel' AS source_context, id AS record_id, summary_id AS parent_id, "
 		"participant_key, '' AS participant_label, 0 AS participant_kind, "
 		"opponent_key, opponent_label, opponent_kind, "
 		"rel_time, event_index, sequence_id, event_type, power, amount, state, range_bucket, "
@@ -6944,7 +6943,7 @@ static void G_BuildTrackedEventExportQuery(qboolean includeDuel, qboolean includ
 		"self_hp, self_armor, self_force, enemy_hp, enemy_armor, enemy_force, sequence_label, quality, note "
 		"FROM LocalDuelTrackEvent";
 	const char *arcadeSelect =
-		"SELECT 1 AS export_format_version, 'arcade_event' AS record_type, 'arcade' AS source_context, id AS record_id, session_id AS parent_id, "
+		"SELECT 2 AS export_format_version, 'arcade_event' AS record_type, 'arcade' AS source_context, id AS record_id, session_id AS parent_id, "
 		"participant_key, participant_label, participant_kind, "
 		"opponent_key, opponent_label, opponent_kind, "
 		"rel_time, event_index, sequence_id, event_type, power, amount, state, range_bucket, "
@@ -6968,13 +6967,13 @@ static void G_BuildTrackedGeometryExportQuery(qboolean includeDuel, qboolean inc
 	char *out, int outSize)
 {
 	const char *duelSelect =
-		"SELECT 1 AS export_format_version, 'duel_geometry' AS record_type, 'duel' AS source_context, id AS record_id, summary_id AS parent_id, "
+		"SELECT 2 AS export_format_version, 'duel_geometry' AS record_type, 'duel' AS source_context, id AS record_id, summary_id AS parent_id, "
 		"participant_key, opponent_key, rel_time, event_index, "
 		"self_x, self_y, self_z, enemy_x, enemy_y, enemy_z, "
 		"self_vx, self_vy, self_vz, enemy_vx, enemy_vy, enemy_vz, self_yaw, enemy_yaw "
 		"FROM LocalDuelTrackGeometry";
 	const char *arcadeSelect =
-		"SELECT 1 AS export_format_version, 'arcade_geometry' AS record_type, 'arcade' AS source_context, id AS record_id, session_id AS parent_id, "
+		"SELECT 2 AS export_format_version, 'arcade_geometry' AS record_type, 'arcade' AS source_context, id AS record_id, session_id AS parent_id, "
 		"participant_key, opponent_key, rel_time, event_index, "
 		"self_x, self_y, self_z, enemy_x, enemy_y, enemy_z, "
 		"self_vx, self_vy, self_vz, enemy_vx, enemy_vy, enemy_vz, self_yaw, enemy_yaw "
@@ -6995,7 +6994,7 @@ static void G_BuildTrackedGeometryExportQuery(qboolean includeDuel, qboolean inc
 static const char *G_GetTrackedAggregateExportQuery(void)
 {
 	return
-		"SELECT 1 AS export_format_version, 'duel_aggregate' AS record_type, 'duel' AS source_context, "
+		"SELECT 2 AS export_format_version, 'duel_aggregate' AS record_type, 'duel' AS source_context, "
 		"participant_key, participant_kind, side, matchup, duels, wins, losses, "
 		"total_force_spent, total_force_regen, low_force_deaths, grip_cripples, saber_throw_punishes, "
 		"force_push, force_pull, force_grip, force_drain, force_rage, force_absorb, force_protect, force_heal, "
