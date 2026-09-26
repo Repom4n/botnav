@@ -450,6 +450,7 @@ static void G_ArcadeSetLastRoundBonuses(int clientNum, int baseBonus, int health
 static void G_ArcadeFormatRoundBreakdown(int clientNum, char *out, int outSize)
 {
 	int i;
+	int outIndex = 0;
 
 	if (!out || outSize <= 0)
 		return;
@@ -462,13 +463,22 @@ static void G_ArcadeFormatRoundBreakdown(int clientNum, char *out, int outSize)
 	{
 		const arcadeRoundBonusType_t bonusType = (arcadeRoundBonusType_t)i;
 		const int bonusValue = G_ArcadeGetLastRoundBonusValue(clientNum, bonusType);
+		char piece[48];
+		int pieceLen;
 
 		if (bonusType == ARCADE_BONUS_FLAWLESS && bonusValue <= 0)
 		{
 			continue;
 		}
-		Q_strcat(out, outSize, va("%s^7%s ^2%i", out[0] ? " " : "",
-			G_ArcadeGetRoundBonusLabel(bonusType), bonusValue));
+		Com_sprintf(piece, sizeof(piece), "%s^7%s ^2%i", outIndex ? " " : "",
+			G_ArcadeGetRoundBonusLabel(bonusType), bonusValue);
+		Q_strncpyz(out + outIndex, piece, outSize - outIndex);
+		pieceLen = strlen(piece);
+		if (pieceLen >= outSize - outIndex)
+		{
+			break;
+		}
+		outIndex += pieceLen;
 	}
 }
 

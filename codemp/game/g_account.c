@@ -8996,24 +8996,7 @@ void Cmd_AccountStats_f(gentity_t *ent) { //Should i bother to cache player stat
 
 #if 0
 			//Combat stats
-			sql = "WITH DuelRows AS (SELECT rowid AS duel_rowid, 1 AS duel_side, winner AS username, type, ROUND(winner_elo,0) AS elo, end_time FROM LocalDuel WHERE type = ? "
-				"UNION ALL SELECT rowid AS duel_rowid, 0 AS duel_side, loser AS username, type, ROUND(loser_elo,0) AS elo, end_time FROM LocalDuel WHERE type = ?), "
-				"LatestTimes AS (SELECT username, MAX(end_time) AS max_end_time FROM DuelRows GROUP BY username), "
-				"LatestRows AS (SELECT DuelRows.* FROM DuelRows INNER JOIN LatestTimes ON DuelRows.username = LatestTimes.username AND DuelRows.end_time = LatestTimes.max_end_time), "
-				"LatestRowIds AS (SELECT username, MAX(duel_rowid) AS max_duel_rowid FROM LatestRows GROUP BY username), "
-				"LatestRowsById AS (SELECT LatestRows.* FROM LatestRows INNER JOIN LatestRowIds ON LatestRows.username = LatestRowIds.username AND LatestRows.duel_rowid = LatestRowIds.max_duel_rowid), "
-				"LatestSides AS (SELECT username, MAX(duel_side) AS max_duel_side FROM LatestRowsById GROUP BY username), "
-				"LatestChosen AS (SELECT LatestRowsById.username, LatestRowsById.type, LatestRowsById.elo FROM LatestRowsById INNER JOIN LatestSides "
-				"ON LatestRowsById.username = LatestSides.username AND LatestRowsById.duel_side = LatestSides.max_duel_side) "
-				"SELECT D1.username, D1.elo, CASE WHEN (COALESCE(D2.win_count, 0) + COALESCE(D3.loss_count, 0)) > 0 "
-				"THEN 100-ROUND(100*(COALESCE(D2.win_ts, 0) + COALESCE(D3.loss_ts, 0))/"
-				"(COALESCE(D2.win_count, 0) + COALESCE(D3.loss_count, 0)), 0) ELSE 0 END AS TS, "
-				"COALESCE(D2.win_count, 0)+COALESCE(D3.loss_count, 0) AS count "
-				"FROM (SELECT username, type, elo FROM LatestChosen WHERE elo > -998 ORDER BY elo DESC) AS D1 "
-				"LEFT JOIN (SELECT winner AS username2, COUNT(*) AS win_count, SUM(odds) AS win_ts FROM LocalDuel WHERE type = ? GROUP BY username2) AS D2 "
-				"ON D1.username = D2.username2 "
-				"LEFT JOIN (SELECT loser AS username3, COUNT(*) AS loss_count, SUM(1-odds) AS loss_ts FROM LocalDuel WHERE type = ? GROUP BY username3) AS D3 "
-				"ON D1.username = D3.username3 ORDER BY elo desc LIMIT ?, 10";
+			// Keep any future combat-rank query in sync with the active duel-top query above.
 			CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
 			CALL_SQLITE(bind_text(stmt, 1, username, -1, SQLITE_STATIC));
 
