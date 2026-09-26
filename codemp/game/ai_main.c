@@ -16721,6 +16721,7 @@ static qboolean BotTryAcceptAnyDuelChallenge(bot_state_t *bs, int targetMode)
 	{
 		gentity_t *challenger = &g_entities[i];
 		int duelType;
+		const qboolean challengerIsBot = (challenger->r.svFlags & SVF_BOT) ? qtrue : qfalse;
 
 		if (!challenger->inuse || !challenger->client || i == bs->client)
 		{
@@ -16732,7 +16733,11 @@ static qboolean BotTryAcceptAnyDuelChallenge(bot_state_t *bs, int targetMode)
 			continue;
 		}
 		duelType = dueltypes[challenger->client->ps.clientNum];
-		if (BotTargetModeAllowsBotDuelChallenges(targetMode) && duelType != 1)
+		if (challengerIsBot && !BotTargetModeAllowsBotDuelChallenges(targetMode))
+		{
+			continue;
+		}
+		if (challengerIsBot && BotTargetModeIsForceDuelOnly(targetMode) && duelType != 1)
 		{
 			continue;
 		}

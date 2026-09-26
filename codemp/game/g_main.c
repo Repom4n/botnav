@@ -405,6 +405,40 @@ static qboolean G_ArcadeCanReceiveMessages(const gentity_t *ent)
 		ent->client->pers.connected == CON_CONNECTED) ? qtrue : qfalse;
 }
 
+static void G_ArcadeFormatSnapshotName(const char *input, char *output, int outputSize)
+{
+	char clean[MAX_NETNAME];
+	int readIndex = 0;
+	int writeIndex = 0;
+	int visibleChars = 0;
+	const int maxVisibleChars = 24;
+
+	if (!output || outputSize <= 0)
+		return;
+
+	output[0] = '\0';
+	if (!input || !input[0])
+	{
+		Q_strncpyz(output, "<unknown>", outputSize);
+		return;
+	}
+
+	Q_strncpyz(clean, input, sizeof(clean));
+	Q_CleanStr(clean);
+	if (!clean[0])
+	{
+		Q_strncpyz(output, "<unknown>", outputSize);
+		return;
+	}
+
+	while (clean[readIndex] && writeIndex < outputSize - 1 && visibleChars < maxVisibleChars)
+	{
+		output[writeIndex++] = clean[readIndex++];
+		visibleChars++;
+	}
+	output[writeIndex] = '\0';
+}
+
 static void G_ArcadeSyncClientScoreboardScore(gentity_t *ent)
 {
 	const int clientNum = ent - g_entities;
@@ -463,13 +497,14 @@ static void G_ArcadePrintScoreSnapshot(gentity_t *receiver, const char *title, q
 	}
 
 	trap->SendServerCommand(receiver - g_entities, va("print \"\n^5%s\n\"", title));
-	trap->SendServerCommand(receiver - g_entities, "print \" ^5#  Name                       Round      Total      Kills      Status\n\"");
+	trap->SendServerCommand(receiver - g_entities, "print \" ^5#  Name                     Round      Total      Kills      Status\n\"");
 	for (i = 0; i < count; i++)
 	{
 		const int clientNum = indices[i];
 		gentity_t *ent = &g_entities[clientNum];
 		const int roundScore = level.arcadeLastRoundScore[clientNum];
 		const char *status = "observer";
+		char displayName[32];
 
 		if (level.arcadeParticipant[clientNum])
 		{
@@ -484,9 +519,10 @@ static void G_ArcadePrintScoreSnapshot(gentity_t *receiver, const char *title, q
 			status = "spectator";
 		}
 
+		G_ArcadeFormatSnapshotName(ent->client->pers.netname, displayName, sizeof(displayName));
 		trap->SendServerCommand(receiver - g_entities, va(
-			"print \" ^2%-2i ^7%-25s ^2%-10i ^2%-10i ^2%-10i ^3%s\n\"",
-			i + 1, ent->client->pers.netname, roundScore, level.arcadeScore[clientNum], level.arcadeTotalKills[clientNum], status));
+			"print \" ^2%-2i ^7%-24s ^2%-10i ^2%-10i ^2%-10i ^3%s\n\"",
+			i + 1, displayName, roundScore, level.arcadeScore[clientNum], level.arcadeTotalKills[clientNum], status));
 	}
 
 	if (includeTopScore && G_GetArcadeTopScore(level.rawmapname, &topScore, topName, sizeof(topName), &topScoreQueryFailed) && topName[0])
