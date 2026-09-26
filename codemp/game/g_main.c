@@ -558,9 +558,18 @@ static void G_ArcadePrintScoreSnapshot(gentity_t *receiver, const char *title, q
 
 		G_ArcadeFormatSnapshotName(ent->client->pers.netname, displayName, sizeof(displayName));
 		G_ArcadeFormatRoundBreakdown(clientNum, breakdown, sizeof(breakdown));
-		trap->SendServerCommand(receiver - g_entities, va(
-			"print \" ^2%-2i ^7%-24s ^2%-10i ^2%-10i ^2%-10i ^3%s\n    ^5%s\n\"",
-			i + 1, displayName, roundScore, level.arcadeScore[clientNum], level.arcadeTotalKills[clientNum], status, breakdown));
+		if (breakdown[0])
+		{
+			trap->SendServerCommand(receiver - g_entities, va(
+				"print \" ^2%-2i ^7%-24s ^2%-10i ^2%-10i ^2%-10i ^3%s\n    ^5%s\n\"",
+				i + 1, displayName, roundScore, level.arcadeScore[clientNum], level.arcadeTotalKills[clientNum], status, breakdown));
+		}
+		else
+		{
+			trap->SendServerCommand(receiver - g_entities, va(
+				"print \" ^2%-2i ^7%-24s ^2%-10i ^2%-10i ^2%-10i ^3%s\n\"",
+				i + 1, displayName, roundScore, level.arcadeScore[clientNum], level.arcadeTotalKills[clientNum], status));
+		}
 	}
 
 	if (includeTopScore && G_GetArcadeTopScore(level.rawmapname, &topScore, topName, sizeof(topName), &topScoreQueryFailed) && topName[0])
