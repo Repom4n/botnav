@@ -297,6 +297,12 @@ void G_ArcadeResetClientRunState(int clientNum)
 	G_ClearTrackedArcadeCombat(clientNum);
 	level.arcadeScore[clientNum] = 0;
 	level.arcadeLastRoundScore[clientNum] = 0;
+	level.arcadeLastRoundBaseBonus[clientNum] = 0;
+	level.arcadeLastRoundHealthBonus[clientNum] = 0;
+	level.arcadeLastRoundArmorBonus[clientNum] = 0;
+	level.arcadeLastRoundTimeBonus[clientNum] = 0;
+	level.arcadeLastRoundKillBonus[clientNum] = 0;
+	level.arcadeLastRoundFlawlessBonus[clientNum] = 0;
 	level.arcadeLastRoundFlawless[clientNum] = qfalse;
 	level.arcadeRoundKills[clientNum] = 0;
 	level.arcadeTotalKills[clientNum] = 0;
@@ -321,6 +327,12 @@ void G_ArcadeClearClientParticipationState(int clientNum)
 	G_ClearTrackedArcadeCombat(clientNum);
 	level.arcadeRoundKills[clientNum] = 0;
 	level.arcadeLastRoundScore[clientNum] = 0;
+	level.arcadeLastRoundBaseBonus[clientNum] = 0;
+	level.arcadeLastRoundHealthBonus[clientNum] = 0;
+	level.arcadeLastRoundArmorBonus[clientNum] = 0;
+	level.arcadeLastRoundTimeBonus[clientNum] = 0;
+	level.arcadeLastRoundKillBonus[clientNum] = 0;
+	level.arcadeLastRoundFlawlessBonus[clientNum] = 0;
 	level.arcadeLastRoundFlawless[clientNum] = qfalse;
 	level.arcadeEliminated[clientNum] = qfalse;
 	level.arcadeParticipant[clientNum] = qfalse;
@@ -379,22 +391,46 @@ static qboolean G_ArcadePlayerIsLoggedIn(const gentity_t *ent)
 	return (ent && ent->client && ent->client->pers.userName[0]);
 }
 
+static void G_ArcadeFormatRoundBreakdown(int clientNum, char *out, int outSize)
+{
+	if (!out || outSize <= 0)
+		return;
+
+	out[0] = '\0';
+	if (clientNum < 0 || clientNum >= MAX_CLIENTS)
+		return;
+
+	Com_sprintf(out, outSize, "^7Base ^2%i ^7HP ^2%i ^7AP ^2%i ^7Time ^2%i ^7Kills ^2%i",
+		level.arcadeLastRoundBaseBonus[clientNum],
+		level.arcadeLastRoundHealthBonus[clientNum],
+		level.arcadeLastRoundArmorBonus[clientNum],
+		level.arcadeLastRoundTimeBonus[clientNum],
+		level.arcadeLastRoundKillBonus[clientNum]);
+	if (level.arcadeLastRoundFlawlessBonus[clientNum] > 0)
+	{
+		Q_strcat(out, outSize, va(" ^7Flawless ^2%i", level.arcadeLastRoundFlawlessBonus[clientNum]));
+	}
+}
+
 static void G_ArcadeSendCenterMessage(gentity_t *ent, const char *headline, int roundScore,
 	int totalScore, int topScore, qboolean flawlessVictory)
 {
 	const char *flawlessLine = flawlessVictory ? "^3Flawless Victory\n" : "";
+	char breakdown[160];
+
+	G_ArcadeFormatRoundBreakdown(ent - g_entities, breakdown, sizeof(breakdown));
 
 	if (topScore > 0)
 	{
 		trap->SendServerCommand(ent - g_entities, va(
-			"cp \"%s\n%s^7Round ^2+%i\n^7Score ^2%i\n^7Top ^2%i\n\"",
-			headline, flawlessLine, roundScore, totalScore, topScore));
+			"cp \"%s\n%s^7Round ^2+%i\n^7Score ^2%i\n^7Top ^2%i\n%s\n\"",
+			headline, flawlessLine, roundScore, totalScore, topScore, breakdown));
 	}
 	else
 	{
 		trap->SendServerCommand(ent - g_entities, va(
-			"cp \"%s\n%s^7Round ^2+%i\n^7Score ^2%i\n\"",
-			headline, flawlessLine, roundScore, totalScore));
+			"cp \"%s\n%s^7Round ^2+%i\n^7Score ^2%i\n%s\n\"",
+			headline, flawlessLine, roundScore, totalScore, breakdown));
 	}
 }
 
@@ -505,6 +541,7 @@ static void G_ArcadePrintScoreSnapshot(gentity_t *receiver, const char *title, q
 		const int roundScore = level.arcadeLastRoundScore[clientNum];
 		const char *status = "observer";
 		char displayName[32];
+		char breakdown[160];
 
 		if (level.arcadeParticipant[clientNum])
 		{
@@ -520,9 +557,11 @@ static void G_ArcadePrintScoreSnapshot(gentity_t *receiver, const char *title, q
 		}
 
 		G_ArcadeFormatSnapshotName(ent->client->pers.netname, displayName, sizeof(displayName));
+		G_ArcadeFormatRoundBreakdown(clientNum, breakdown, sizeof(breakdown));
 		trap->SendServerCommand(receiver - g_entities, va(
 			"print \" ^2%-2i ^7%-24s ^2%-10i ^2%-10i ^2%-10i ^3%s\n\"",
 			i + 1, displayName, roundScore, level.arcadeScore[clientNum], level.arcadeTotalKills[clientNum], status));
+		trap->SendServerCommand(receiver - g_entities, va("print \"    ^5%s\n\"", breakdown));
 	}
 
 	if (includeTopScore && G_GetArcadeTopScore(level.rawmapname, &topScore, topName, sizeof(topName), &topScoreQueryFailed) && topName[0])
@@ -1469,6 +1508,12 @@ static void G_ArcadeFinishRound(qboolean gameOver, qboolean arcadeComplete)
 		}
 		G_FinishTrackedArcadeCombat(ent, arcadeComplete ? "arcade_complete" : (gameOver ? "game_over" : "level_clear"));
 		level.arcadeLastRoundScore[i] = 0;
+		level.arcadeLastRoundBaseBonus[i] = 0;
+		level.arcadeLastRoundHealthBonus[i] = 0;
+		level.arcadeLastRoundArmorBonus[i] = 0;
+		level.arcadeLastRoundTimeBonus[i] = 0;
+		level.arcadeLastRoundKillBonus[i] = 0;
+		level.arcadeLastRoundFlawlessBonus[i] = 0;
 		level.arcadeLastRoundFlawless[i] = qfalse;
 
 		if (((!gameOver) || arcadeComplete) &&
@@ -1487,6 +1532,12 @@ static void G_ArcadeFinishRound(qboolean gameOver, qboolean arcadeComplete)
 			}
 			roundScore = 1000 + healthBonus + armorBonus + timeBonus + killBonus + flawlessBonus;
 			level.arcadeLastRoundScore[i] = roundScore;
+			level.arcadeLastRoundBaseBonus[i] = 1000;
+			level.arcadeLastRoundHealthBonus[i] = healthBonus;
+			level.arcadeLastRoundArmorBonus[i] = armorBonus;
+			level.arcadeLastRoundTimeBonus[i] = timeBonus;
+			level.arcadeLastRoundKillBonus[i] = killBonus;
+			level.arcadeLastRoundFlawlessBonus[i] = flawlessBonus;
 			level.arcadeLastRoundFlawless[i] = flawlessVictory;
 			level.arcadeScore[i] += roundScore;
 			G_ArcadeSyncClientScoreboardScore(ent);

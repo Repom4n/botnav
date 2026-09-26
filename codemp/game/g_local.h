@@ -1562,6 +1562,12 @@ typedef struct level_locals_s {
 	int			arcadeReserveAnnounceTime;
 	int			arcadeScore[MAX_CLIENTS];
 	int			arcadeLastRoundScore[MAX_CLIENTS];
+	int			arcadeLastRoundBaseBonus[MAX_CLIENTS];
+	int			arcadeLastRoundHealthBonus[MAX_CLIENTS];
+	int			arcadeLastRoundArmorBonus[MAX_CLIENTS];
+	int			arcadeLastRoundTimeBonus[MAX_CLIENTS];
+	int			arcadeLastRoundKillBonus[MAX_CLIENTS];
+	int			arcadeLastRoundFlawlessBonus[MAX_CLIENTS];
 	qboolean	arcadeLastRoundFlawless[MAX_CLIENTS];
 	int			arcadeRoundKills[MAX_CLIENTS];
 	int			arcadeTotalKills[MAX_CLIENTS];
