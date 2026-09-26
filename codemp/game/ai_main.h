@@ -377,6 +377,7 @@ typedef struct bot_state_s
 	int					fanAttackTime; // level.time the current fan-chain phase (hold/dwell) ends
 	int					fanAttackDir;
 	int					fanPhase; // FAN_PHASE_* - hold (exclusive strafe+attack) or dwell (free move)
+	int					fanPackage; // FAN_PACKAGE_* - selected human-style pressure package for current fan chain
 	int					fanPhaseStartTime; // level.time when the current fan-chain phase began
 	int					fanChainStartTime; // level.time the fan chain began - chain hard-caps at 3s
 	int					fanChainStartHealth; // health when the fan chain began

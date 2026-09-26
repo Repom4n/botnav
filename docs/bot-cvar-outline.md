@@ -52,6 +52,7 @@ These are all percentage-based (0-100) chance weights that gate specific behavio
 | `bot_saberthrowbias` | `0` | Chance weight for saber throw decisions. Higher = more throws. Feeds into `NewBotAI_GetSaberthrow()`. |
 | `bot_gripkickbias` | `0` | Chance weight for grip-kick combo initiation. Feeds into `NewBotAI_GetGrip()`. |
 | `bot_fanbias` | `0` | Chance weight for fan-chain attack patterns (horizontal swing chains). Used in `NewBotAI_PrepareHorizontalSwingStart()`. |
+| `bot_fan_debug` | `0` | Print selected fan package, direction, range, HP, and FP when a bot commits to a fan-pressure entry. |
 | `bot_fanhold` | `220` | How long (ms) each fan gate holds exclusive left/right strafe plus attack to start the current horizontal swing. |
 | `bot_firstfandwell` | `250` | Special dwell (ms) used only between the first and second swings of a fan chain. |
 | `bot_fandwell` | `250` | Free-movement dwell (ms) between all later fan swings in the chain. During this dwell the bot applies a triangular yaw offset: it drifts away from center during the first half of the dwell and returns by the end. |
@@ -145,7 +146,7 @@ Tracked duel data access:
 - Use server console command `exportDuelTrack [prefix]` to export timestamped CSV files for:
   - `LocalDuelTrackSummary`
   - `LocalDuelTrackParticipant`
-  - `LocalDuelTrackEvent`
+  - `LocalDuelTrackEvent` (includes sequence id/label, quality, buttons, saber moves, yaw delta, and self/opponent HP/AP/FP snapshots)
   - `LocalDuelTrackGeometry` (when `bot_dueltracking_geometry` is enabled)
   - `LocalDuelTrackAggregate`
 

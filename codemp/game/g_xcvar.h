@@ -385,6 +385,7 @@ XCVAR_DEF( bot_ffaexploretime,			"180000",		NULL,				CVAR_ARCHIVE,									qtrue
 XCVAR_DEF( bot_antidrainbias,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_speedbias,				"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_fanbias,					"0",			NULL,				CVAR_ARCHIVE,									qtrue )
+XCVAR_DEF( bot_fan_debug,				"0",			NULL,				CVAR_CHEAT,									qtrue )
 // How long (ms) a fan swing holds exclusive left/right strafe plus attack to start the swing.
 XCVAR_DEF( bot_fanhold,					"220",			NULL,				CVAR_ARCHIVE,									qtrue )
 // How long (ms) the first post-open dwell lasts, specifically between the first and second

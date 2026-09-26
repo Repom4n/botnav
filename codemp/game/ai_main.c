@@ -171,6 +171,12 @@ enum {
 	FAN_PHASE_DWELL
 };
 
+enum {
+	FAN_PACKAGE_NONE = 0,
+	FAN_PACKAGE_YELLOW_PRESSURE,
+	FAN_PACKAGE_STAFF_PRESSURE
+};
+
 static qboolean NewBotAI_CanUseSaberThrowDefenseBreakForce(bot_state_t *bs, qboolean preferPull);
 static void NewBotAI_TryRandomHop(bot_state_t *bs);
 static int NewBotAI_GetNextHopIntervalMs(bot_state_t *bs, float hopFrequency);
@@ -9973,7 +9979,8 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 		const qboolean preferDrainlockFan = (NewBotAI_IsDrainlockAdvantage(bs) &&
 			bs->cur_ps.fd.saberAnimLevel != SS_STAFF &&
 			bs->cur_ps.fd.saberAnimLevel != SS_DUAL) ? qtrue : qfalse;
-		if (bs->cur_ps.fd.forceSide == FORCE_LIGHTSIDE || preferDrainlockFan) { //Yellow sweep
+		if (bs->cur_ps.fd.forceSide == FORCE_LIGHTSIDE || preferDrainlockFan ||
+			g_entities[bs->client].client->ps.fd.saberAnimLevel == SS_STAFF) { //Yellow/staff sweep
 			if (preferDrainlockFan)
 			{
 				g_entities[bs->client].client->ps.fd.saberAnimLevel = SS_MEDIUM;
@@ -9983,7 +9990,8 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 				if (g_entities[bs->client].client->ps.fd.saberAnimLevel == SS_MEDIUM)
 					Cmd_SaberAttackCycle_f(&g_entities[bs->client]);
 			}
-			else if (g_entities[bs->client].client->ps.fd.saberAnimLevel == SS_STAFF)
+			else if (g_entities[bs->client].client->ps.fd.saberAnimLevel == SS_STAFF &&
+				bs->fanPackage != FAN_PACKAGE_STAFF_PRESSURE)
 				Cmd_SaberAttackCycle_f(&g_entities[bs->client]);
 				//g_entities[bs->client].client->ps.fd.saberAnimLevel = SS_MEDIUM; //SS_STAFF
 				//Cmd_SaberAttackCycle_f(&g_entities[bs->client]);
@@ -10631,32 +10639,22 @@ static void NewBotAI_SaberDuelIndecisionFallback(bot_state_t *bs, qboolean horiz
 {
 	const float fanBias = BotGetChanceBiasPercent(bot_fanbias.value);
 
-	//Single-blade bots pick split 50/50 between red (SS_STRONG) and yellow (SS_MEDIUM)
-	//rather than always defaulting to red. Staff-wielders can't switch to another style
-	//(see the main style-cycle logic below, which excludes SS_STAFF/SS_DUAL entirely) -
-	//so for them the same 50/50 roll instead randomly toggles the staff's second blade
-	//mid swing: on (SS_STAFF) or off (the saber's single-blade style), which is all
-	//Cmd_SaberAttackCycle_f does for a staff.
+	//Fan bias now prefers recorded human-like yellow/staff pressure packages over generic
+	//red/yellow coinflips. Staff keeps its package active, while single-blade fan pressure
+	//leans into yellow for more natural horizontal pressure strings.
 	if (fanBias > 0.0f && Q_irand(1, 100) <= (int)fanBias)
 	{
 		if (g_entities[bs->client].client->ps.fd.saberAnimLevel == SS_STAFF)
 		{
-			if (Q_irand(0, 1) && BG_SaberInAttack(bs->cur_ps.saberMove) &&
-				g_entities[bs->client].client->ps.weaponTime <= 0)
-			{
-				//Mid swing is good - the cycle queues into saberCycleQueue if the
-				//weapon is still busy.
-				Cmd_SaberAttackCycle_f(&g_entities[bs->client]);
-			}
+			bs->fanPackage = FAN_PACKAGE_STAFF_PRESSURE;
 		}
 		else
 		{
-			const int chosenStyle = Q_irand(0, 1) ? SS_STRONG : SS_MEDIUM;
-
-			if (g_entities[bs->client].client->ps.fd.saberAnimLevel != chosenStyle)
+			if (g_entities[bs->client].client->ps.fd.saberAnimLevel != SS_MEDIUM)
 			{
-				g_entities[bs->client].client->ps.fd.saberAnimLevel = chosenStyle;
+				g_entities[bs->client].client->ps.fd.saberAnimLevel = SS_MEDIUM;
 			}
+			bs->fanPackage = FAN_PACKAGE_YELLOW_PRESSURE;
 		}
 	}
 
@@ -13051,6 +13049,7 @@ static qboolean NewBotAI_IsSaberSwingStartWindow(bot_state_t *bs)
 static void NewBotAI_ResetFanChain(bot_state_t *bs)
 {
 	bs->fanPhase = FAN_PHASE_INACTIVE;
+	bs->fanPackage = FAN_PACKAGE_NONE;
 	bs->fanAttackDir = 0;
 	bs->fanAttackTime = 0;
 	bs->fanPhaseStartTime = 0;
@@ -13060,6 +13059,36 @@ static void NewBotAI_ResetFanChain(bot_state_t *bs)
 	bs->fanSwingStarted = 0;
 	bs->fanDwellYawOffset = 0.0f;
 	bs->fanWobbleStartTime = 0;
+}
+
+static int NewBotAI_GetFanPackage(bot_state_t *bs)
+{
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return FAN_PACKAGE_NONE;
+	}
+
+	if (g_entities[bs->client].client->ps.fd.saberAnimLevel == SS_STAFF)
+	{
+		return FAN_PACKAGE_STAFF_PRESSURE;
+	}
+
+	return FAN_PACKAGE_YELLOW_PRESSURE;
+}
+
+static const char *NewBotAI_GetFanPackageName(int packageId)
+{
+	switch (packageId)
+	{
+	case FAN_PACKAGE_YELLOW_PRESSURE:
+		return "yellow_pressure";
+	case FAN_PACKAGE_STAFF_PRESSURE:
+		return "staff_pressure";
+	default:
+		break;
+	}
+
+	return "none";
 }
 
 //Fan pressure should be strongest while healthy and pressing an advantage; outside of
@@ -13252,6 +13281,7 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 
 		if (startDir)
 		{
+			bs->fanPackage = NewBotAI_GetFanPackage(bs);
 			bs->fanAttackDir = startDir;
 			bs->fanPhase = FAN_PHASE_HOLD;
 			bs->fanPhaseStartTime = level.time;
@@ -13260,6 +13290,17 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 			bs->fanChainStartHealth = g_entities[bs->client].health;
 			bs->fanSwingCount = 0;
 			bs->fanSwingStarted = 0;
+			if (bot_fan_debug.integer)
+			{
+				Com_Printf("fan_debug: bot %i package=%s dir=%i enemy=%i range=%.1f hp=%i fp=%i\n",
+					bs->client,
+					NewBotAI_GetFanPackageName(bs->fanPackage),
+					startDir,
+					bs->currentEnemy ? bs->currentEnemy->s.number : -1,
+					bs->frame_Enemy_Len,
+					g_entities[bs->client].health,
+					bs->cur_ps.fd.forcePower);
+			}
 		}
 		break;
 	}
