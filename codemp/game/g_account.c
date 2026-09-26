@@ -2664,31 +2664,42 @@ void G_UpdateTrackedDuelFrame(gentity_t *ent)
 	if (runtime->lastOpponentHealthArmor > 0 && opponentHealthArmor < runtime->lastOpponentHealthArmor)
 	{
 		const int dealt = runtime->lastOpponentHealthArmor - opponentHealthArmor;
+		const qboolean recentAttackCredit = (runtime->lastAttackTime > 0 &&
+			level.time - runtime->lastAttackTime <= TRACKED_ATTACK_CHAIN_WINDOW_MS) ? qtrue : qfalse;
+		const qboolean recentForceCredit = (runtime->lastForceSpendTime > 0 &&
+			level.time - runtime->lastForceSpendTime <= TRACKED_COUNTER_WINDOW_MS) ? qtrue : qfalse;
+		const qboolean sustainedForceCredit = (ent->client->ps.fd.forcePowersActive &
+			((1 << FP_GRIP) | (1 << FP_DRAIN))) ? qtrue : qfalse;
+		const qboolean likelyAttributedDamage = (recentAttackCredit || recentForceCredit ||
+			sustainedForceCredit || ent->client->ps.saberInFlight) ? qtrue : qfalse;
 
-		G_TouchTrackedDuelSequence(runtime);
-		runtime->punishConfirmEvents++;
-		if (runtime->lastDamageTakenTime > 0 &&
-			level.time - runtime->lastDamageTakenTime <= TRACKED_COUNTER_WINDOW_MS)
+		if (likelyAttributedDamage)
 		{
-			G_AddTrackedDuelEvent(runtime, DUEL_TRACK_EVENT_COUNTER_SUCCESS, level.time - runtime->duelStartTime,
-				dealt, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, "counter", ent, opponent);
-		}
-		else if (runtime->lastAttackTime > 0 &&
-			level.time - runtime->lastAttackTime <= TRACKED_PUNISH_WINDOW_MS)
-		{
-			G_AddTrackedDuelEvent(runtime, DUEL_TRACK_EVENT_PUNISH_SUCCESS, level.time - runtime->duelStartTime,
-				dealt, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, "punish", ent, opponent);
-		}
-		if (opponent->client->ps.saberInFlight)
-		{
-			runtime->antiThrowSuccessEvents++;
-			G_AddTrackedDuelEvent(runtime, DUEL_TRACK_EVENT_SABER_RETURN_PUNISH, level.time - runtime->duelStartTime,
-				dealt, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, "return", ent, opponent);
-		}
-		if (BG_InKnockDown(opponent->client->ps.legsAnim))
-		{
-			G_AddTrackedDuelEvent(runtime, DUEL_TRACK_EVENT_KNOCKDOWN_FOLLOWUP, level.time - runtime->duelStartTime,
-				dealt, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, "followup", ent, opponent);
+			G_TouchTrackedDuelSequence(runtime);
+			runtime->punishConfirmEvents++;
+			if (runtime->lastDamageTakenTime > 0 &&
+				level.time - runtime->lastDamageTakenTime <= TRACKED_COUNTER_WINDOW_MS)
+			{
+				G_AddTrackedDuelEvent(runtime, DUEL_TRACK_EVENT_COUNTER_SUCCESS, level.time - runtime->duelStartTime,
+					dealt, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, "counter", ent, opponent);
+			}
+			else if (runtime->lastAttackTime > 0 &&
+				level.time - runtime->lastAttackTime <= TRACKED_PUNISH_WINDOW_MS)
+			{
+				G_AddTrackedDuelEvent(runtime, DUEL_TRACK_EVENT_PUNISH_SUCCESS, level.time - runtime->duelStartTime,
+					dealt, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, "punish", ent, opponent);
+			}
+			if (opponent->client->ps.saberInFlight)
+			{
+				runtime->antiThrowSuccessEvents++;
+				G_AddTrackedDuelEvent(runtime, DUEL_TRACK_EVENT_SABER_RETURN_PUNISH, level.time - runtime->duelStartTime,
+					dealt, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, "return", ent, opponent);
+			}
+			if (BG_InKnockDown(opponent->client->ps.legsAnim))
+			{
+				G_AddTrackedDuelEvent(runtime, DUEL_TRACK_EVENT_KNOCKDOWN_FOLLOWUP, level.time - runtime->duelStartTime,
+					dealt, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, "followup", ent, opponent);
+			}
 		}
 	}
 
