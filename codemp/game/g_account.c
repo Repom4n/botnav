@@ -4254,14 +4254,16 @@ void Cmd_DuelTop10_f(gentity_t *ent) {
 		//sql = "SELECT winner, winner_elo, 100, 100 FROM (SELECT winner, winner_elo, odds, end_time FROM LocalDuel WHERE type = ? ORDER BY end_time ASC) GROUP BY winner ORDER BY winner_elo DESC LIMIT 10";
 		sql = "WITH DuelRows AS (SELECT winner AS username, type, ROUND(winner_elo,0) AS elo, end_time FROM LocalDuel WHERE type = ? "
 				"UNION ALL SELECT loser AS username, type, ROUND(loser_elo,0) AS elo, end_time FROM LocalDuel WHERE type = ?), "
-				"LatestRows AS (SELECT DuelRows.username AS username, MAX(DuelRows.type) AS type, MAX(DuelRows.elo) AS elo "
-				"FROM DuelRows INNER JOIN (SELECT username, MAX(end_time) AS max_end_time FROM DuelRows GROUP BY username) AS Latest "
-				"ON DuelRows.username = Latest.username AND DuelRows.end_time = Latest.max_end_time GROUP BY DuelRows.username) "
-				"SELECT D1.username, elo, 100-ROUND(100*(win_ts + loss_ts)/(win_count+loss_count), 0) AS TS, win_count+loss_count AS count "
+				"LatestRows AS (SELECT DISTINCT DuelRows.username AS username, DuelRows.type AS type, DuelRows.elo AS elo "
+				"FROM DuelRows WHERE DuelRows.end_time = (SELECT MAX(end_time) FROM DuelRows AS Latest WHERE Latest.username = DuelRows.username) "
+				"AND NOT EXISTS (SELECT 1 FROM DuelRows AS TieBreak WHERE TieBreak.username = DuelRows.username AND TieBreak.end_time = DuelRows.end_time "
+				"AND TieBreak.elo > DuelRows.elo)) "
+				"SELECT D1.username, D1.elo, 100-ROUND(100*(COALESCE(D2.win_ts, 0) + COALESCE(D3.loss_ts, 0))/"
+				"(COALESCE(D2.win_count, 0) + COALESCE(D3.loss_count, 0)), 0) AS TS, COALESCE(D2.win_count, 0)+COALESCE(D3.loss_count, 0) AS count "
 				"FROM (SELECT username, type, elo FROM LatestRows WHERE elo > -998 ORDER BY elo DESC) AS D1 "
-				"INNER JOIN (SELECT winner AS username2, COUNT(*) AS win_count, SUM(odds) AS win_ts FROM LocalDuel WHERE type = ? GROUP BY username2) AS D2 "
+				"LEFT JOIN (SELECT winner AS username2, COUNT(*) AS win_count, SUM(odds) AS win_ts FROM LocalDuel WHERE type = ? GROUP BY username2) AS D2 "
 				"ON D1.username = D2.username2 "
-				"INNER JOIN (SELECT loser AS username3, COUNT(*) AS loss_count, SUM(1-odds) AS loss_ts FROM LocalDuel WHERE type = ? GROUP BY username3) AS D3 "
+				"LEFT JOIN (SELECT loser AS username3, COUNT(*) AS loss_count, SUM(1-odds) AS loss_ts FROM LocalDuel WHERE type = ? GROUP BY username3) AS D3 "
 				"ON D1.username = D3.username3 ORDER BY elo desc LIMIT ?, 10";
 
 		//loda fixme
@@ -8972,14 +8974,16 @@ void Cmd_AccountStats_f(gentity_t *ent) { //Should i bother to cache player stat
 			//Combat stats
 			sql = "WITH DuelRows AS (SELECT winner AS username, type, ROUND(winner_elo,0) AS elo, end_time FROM LocalDuel WHERE type = ? "
 				"UNION ALL SELECT loser AS username, type, ROUND(loser_elo,0) AS elo, end_time FROM LocalDuel WHERE type = ?), "
-				"LatestRows AS (SELECT DuelRows.username AS username, MAX(DuelRows.type) AS type, MAX(DuelRows.elo) AS elo "
-				"FROM DuelRows INNER JOIN (SELECT username, MAX(end_time) AS max_end_time FROM DuelRows GROUP BY username) AS Latest "
-				"ON DuelRows.username = Latest.username AND DuelRows.end_time = Latest.max_end_time GROUP BY DuelRows.username) "
-				"SELECT D1.username, elo, 100-ROUND(100*(win_ts + loss_ts)/(win_count+loss_count), 0) AS TS, win_count+loss_count AS count "
+				"LatestRows AS (SELECT DISTINCT DuelRows.username AS username, DuelRows.type AS type, DuelRows.elo AS elo "
+				"FROM DuelRows WHERE DuelRows.end_time = (SELECT MAX(end_time) FROM DuelRows AS Latest WHERE Latest.username = DuelRows.username) "
+				"AND NOT EXISTS (SELECT 1 FROM DuelRows AS TieBreak WHERE TieBreak.username = DuelRows.username AND TieBreak.end_time = DuelRows.end_time "
+				"AND TieBreak.elo > DuelRows.elo)) "
+				"SELECT D1.username, D1.elo, 100-ROUND(100*(COALESCE(D2.win_ts, 0) + COALESCE(D3.loss_ts, 0))/"
+				"(COALESCE(D2.win_count, 0) + COALESCE(D3.loss_count, 0)), 0) AS TS, COALESCE(D2.win_count, 0)+COALESCE(D3.loss_count, 0) AS count "
 				"FROM (SELECT username, type, elo FROM LatestRows WHERE elo > -998 ORDER BY elo DESC) AS D1 "
-				"INNER JOIN (SELECT winner AS username2, COUNT(*) AS win_count, SUM(odds) AS win_ts FROM LocalDuel WHERE type = ? GROUP BY username2) AS D2 "
+				"LEFT JOIN (SELECT winner AS username2, COUNT(*) AS win_count, SUM(odds) AS win_ts FROM LocalDuel WHERE type = ? GROUP BY username2) AS D2 "
 				"ON D1.username = D2.username2 "
-				"INNER JOIN (SELECT loser AS username3, COUNT(*) AS loss_count, SUM(1-odds) AS loss_ts FROM LocalDuel WHERE type = ? GROUP BY username3) AS D3 "
+				"LEFT JOIN (SELECT loser AS username3, COUNT(*) AS loss_count, SUM(1-odds) AS loss_ts FROM LocalDuel WHERE type = ? GROUP BY username3) AS D3 "
 				"ON D1.username = D3.username3 ORDER BY elo desc LIMIT ?, 10";
 			CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
 			CALL_SQLITE(bind_text(stmt, 1, username, -1, SQLITE_STATIC));

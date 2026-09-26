@@ -297,13 +297,7 @@ void G_ArcadeResetClientRunState(int clientNum)
 	G_ClearTrackedArcadeCombat(clientNum);
 	level.arcadeScore[clientNum] = 0;
 	level.arcadeLastRoundScore[clientNum] = 0;
-	level.arcadeLastRoundBaseBonus[clientNum] = 0;
-	level.arcadeLastRoundHealthBonus[clientNum] = 0;
-	level.arcadeLastRoundArmorBonus[clientNum] = 0;
-	level.arcadeLastRoundTimeBonus[clientNum] = 0;
-	level.arcadeLastRoundKillBonus[clientNum] = 0;
-	level.arcadeLastRoundFlawlessBonus[clientNum] = 0;
-	level.arcadeLastRoundFlawless[clientNum] = qfalse;
+	G_ArcadeSetLastRoundBonuses(clientNum, 0, 0, 0, 0, 0, 0, qfalse);
 	level.arcadeRoundKills[clientNum] = 0;
 	level.arcadeTotalKills[clientNum] = 0;
 	level.arcadeEliminated[clientNum] = qfalse;
@@ -327,13 +321,7 @@ void G_ArcadeClearClientParticipationState(int clientNum)
 	G_ClearTrackedArcadeCombat(clientNum);
 	level.arcadeRoundKills[clientNum] = 0;
 	level.arcadeLastRoundScore[clientNum] = 0;
-	level.arcadeLastRoundBaseBonus[clientNum] = 0;
-	level.arcadeLastRoundHealthBonus[clientNum] = 0;
-	level.arcadeLastRoundArmorBonus[clientNum] = 0;
-	level.arcadeLastRoundTimeBonus[clientNum] = 0;
-	level.arcadeLastRoundKillBonus[clientNum] = 0;
-	level.arcadeLastRoundFlawlessBonus[clientNum] = 0;
-	level.arcadeLastRoundFlawless[clientNum] = qfalse;
+	G_ArcadeSetLastRoundBonuses(clientNum, 0, 0, 0, 0, 0, 0, qfalse);
 	level.arcadeEliminated[clientNum] = qfalse;
 	level.arcadeParticipant[clientNum] = qfalse;
 	level.arcadeQueued[clientNum] = qfalse;
@@ -391,8 +379,75 @@ static qboolean G_ArcadePlayerIsLoggedIn(const gentity_t *ent)
 	return (ent && ent->client && ent->client->pers.userName[0]);
 }
 
+typedef enum
+{
+	ARCADE_BONUS_BASE,
+	ARCADE_BONUS_HEALTH,
+	ARCADE_BONUS_ARMOR,
+	ARCADE_BONUS_TIME,
+	ARCADE_BONUS_KILLS,
+	ARCADE_BONUS_FLAWLESS,
+	ARCADE_BONUS_COUNT
+} arcadeRoundBonusType_t;
+
+static const char *G_ArcadeGetRoundBonusLabel(arcadeRoundBonusType_t bonusType)
+{
+	switch (bonusType)
+	{
+	case ARCADE_BONUS_BASE:
+		return "Base";
+	case ARCADE_BONUS_HEALTH:
+		return "HP";
+	case ARCADE_BONUS_ARMOR:
+		return "AP";
+	case ARCADE_BONUS_TIME:
+		return "Time";
+	case ARCADE_BONUS_KILLS:
+		return "Kills";
+	case ARCADE_BONUS_FLAWLESS:
+		return "Flawless";
+	default:
+		return "";
+	}
+}
+
+static int G_ArcadeGetLastRoundBonusValue(int clientNum, arcadeRoundBonusType_t bonusType)
+{
+	switch (bonusType)
+	{
+	case ARCADE_BONUS_BASE:
+		return level.arcadeLastRoundBaseBonus[clientNum];
+	case ARCADE_BONUS_HEALTH:
+		return level.arcadeLastRoundHealthBonus[clientNum];
+	case ARCADE_BONUS_ARMOR:
+		return level.arcadeLastRoundArmorBonus[clientNum];
+	case ARCADE_BONUS_TIME:
+		return level.arcadeLastRoundTimeBonus[clientNum];
+	case ARCADE_BONUS_KILLS:
+		return level.arcadeLastRoundKillBonus[clientNum];
+	case ARCADE_BONUS_FLAWLESS:
+		return level.arcadeLastRoundFlawlessBonus[clientNum];
+	default:
+		return 0;
+	}
+}
+
+static void G_ArcadeSetLastRoundBonuses(int clientNum, int baseBonus, int healthBonus,
+	int armorBonus, int timeBonus, int killBonus, int flawlessBonus, qboolean flawlessVictory)
+{
+	level.arcadeLastRoundBaseBonus[clientNum] = baseBonus;
+	level.arcadeLastRoundHealthBonus[clientNum] = healthBonus;
+	level.arcadeLastRoundArmorBonus[clientNum] = armorBonus;
+	level.arcadeLastRoundTimeBonus[clientNum] = timeBonus;
+	level.arcadeLastRoundKillBonus[clientNum] = killBonus;
+	level.arcadeLastRoundFlawlessBonus[clientNum] = flawlessBonus;
+	level.arcadeLastRoundFlawless[clientNum] = flawlessVictory;
+}
+
 static void G_ArcadeFormatRoundBreakdown(int clientNum, char *out, int outSize)
 {
+	int i;
+
 	if (!out || outSize <= 0)
 		return;
 
@@ -400,15 +455,17 @@ static void G_ArcadeFormatRoundBreakdown(int clientNum, char *out, int outSize)
 	if (clientNum < 0 || clientNum >= MAX_CLIENTS)
 		return;
 
-	Com_sprintf(out, outSize, "^7Base ^2%i ^7HP ^2%i ^7AP ^2%i ^7Time ^2%i ^7Kills ^2%i",
-		level.arcadeLastRoundBaseBonus[clientNum],
-		level.arcadeLastRoundHealthBonus[clientNum],
-		level.arcadeLastRoundArmorBonus[clientNum],
-		level.arcadeLastRoundTimeBonus[clientNum],
-		level.arcadeLastRoundKillBonus[clientNum]);
-	if (level.arcadeLastRoundFlawlessBonus[clientNum] > 0)
+	for (i = 0; i < ARCADE_BONUS_COUNT; i++)
 	{
-		Q_strcat(out, outSize, va(" ^7Flawless ^2%i", level.arcadeLastRoundFlawlessBonus[clientNum]));
+		const arcadeRoundBonusType_t bonusType = (arcadeRoundBonusType_t)i;
+		const int bonusValue = G_ArcadeGetLastRoundBonusValue(clientNum, bonusType);
+
+		if (bonusType == ARCADE_BONUS_FLAWLESS && bonusValue <= 0)
+		{
+			continue;
+		}
+		Q_strcat(out, outSize, va("%s^7%s ^2%i", out[0] ? " " : "",
+			G_ArcadeGetRoundBonusLabel(bonusType), bonusValue));
 	}
 }
 
@@ -1516,13 +1573,7 @@ static void G_ArcadeFinishRound(qboolean gameOver, qboolean arcadeComplete)
 		}
 		G_FinishTrackedArcadeCombat(ent, arcadeComplete ? "arcade_complete" : (gameOver ? "game_over" : "level_clear"));
 		level.arcadeLastRoundScore[i] = 0;
-		level.arcadeLastRoundBaseBonus[i] = 0;
-		level.arcadeLastRoundHealthBonus[i] = 0;
-		level.arcadeLastRoundArmorBonus[i] = 0;
-		level.arcadeLastRoundTimeBonus[i] = 0;
-		level.arcadeLastRoundKillBonus[i] = 0;
-		level.arcadeLastRoundFlawlessBonus[i] = 0;
-		level.arcadeLastRoundFlawless[i] = qfalse;
+		G_ArcadeSetLastRoundBonuses(i, 0, 0, 0, 0, 0, 0, qfalse);
 
 		if (((!gameOver) || arcadeComplete) &&
 			ent->client->sess.sessionTeam != TEAM_SPECTATOR && ent->health > 0)
@@ -1540,13 +1591,7 @@ static void G_ArcadeFinishRound(qboolean gameOver, qboolean arcadeComplete)
 			}
 			roundScore = 1000 + healthBonus + armorBonus + timeBonus + killBonus + flawlessBonus;
 			level.arcadeLastRoundScore[i] = roundScore;
-			level.arcadeLastRoundBaseBonus[i] = 1000;
-			level.arcadeLastRoundHealthBonus[i] = healthBonus;
-			level.arcadeLastRoundArmorBonus[i] = armorBonus;
-			level.arcadeLastRoundTimeBonus[i] = timeBonus;
-			level.arcadeLastRoundKillBonus[i] = killBonus;
-			level.arcadeLastRoundFlawlessBonus[i] = flawlessBonus;
-			level.arcadeLastRoundFlawless[i] = flawlessVictory;
+			G_ArcadeSetLastRoundBonuses(i, 1000, healthBonus, armorBonus, timeBonus, killBonus, flawlessBonus, flawlessVictory);
 			level.arcadeScore[i] += roundScore;
 			G_ArcadeSyncClientScoreboardScore(ent);
 			if (!gameOver)
