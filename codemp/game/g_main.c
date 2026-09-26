@@ -287,6 +287,9 @@ static int G_ArcadeGetExtraBotCount(int arcadeLevel)
 	return 0;
 }
 
+static void G_ArcadeSetLastRoundBonuses(int clientNum, int baseBonus, int healthBonus,
+	int armorBonus, int timeBonus, int killBonus, int flawlessBonus, qboolean flawlessVictory);
+
 void G_ArcadeResetClientRunState(int clientNum)
 {
 	if (clientNum < 0 || clientNum >= MAX_CLIENTS)
