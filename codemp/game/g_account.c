@@ -1720,6 +1720,7 @@ static void G_MarkTrackedIssueAdvice(duel_advice_session_state_t *session, const
 static void G_FormatTrackedSequenceLabel(const char *label, char *out, int outSize)
 {
 	int i;
+	qboolean capitalizeNext = qtrue;
 
 	if (!out || outSize <= 0)
 		return;
@@ -1733,7 +1734,24 @@ static void G_FormatTrackedSequenceLabel(const char *label, char *out, int outSi
 
 	for (i = 0; label[i] && i < outSize - 1; i++)
 	{
-		out[i] = (label[i] == '_') ? ' ' : label[i];
+		char ch = label[i];
+
+		if (ch == '_')
+		{
+			out[i] = ' ';
+			capitalizeNext = qtrue;
+			continue;
+		}
+		if (capitalizeNext && ch >= 'a' && ch <= 'z')
+		{
+			ch = (char)(ch - ('a' - 'A'));
+		}
+		else if (!capitalizeNext && ch >= 'A' && ch <= 'Z')
+		{
+			ch = (char)(ch + ('a' - 'A'));
+		}
+		out[i] = ch;
+		capitalizeNext = qfalse;
 	}
 	out[i] = '\0';
 }
@@ -4254,10 +4272,9 @@ void Cmd_DuelTop10_f(gentity_t *ent) {
 		//sql = "SELECT winner, winner_elo, 100, 100 FROM (SELECT winner, winner_elo, odds, end_time FROM LocalDuel WHERE type = ? ORDER BY end_time ASC) GROUP BY winner ORDER BY winner_elo DESC LIMIT 10";
 		sql = "WITH DuelRows AS (SELECT winner AS username, type, ROUND(winner_elo,0) AS elo, end_time FROM LocalDuel WHERE type = ? "
 				"UNION ALL SELECT loser AS username, type, ROUND(loser_elo,0) AS elo, end_time FROM LocalDuel WHERE type = ?), "
-				"LatestRows AS (SELECT DISTINCT DuelRows.username AS username, DuelRows.type AS type, DuelRows.elo AS elo "
-				"FROM DuelRows WHERE DuelRows.end_time = (SELECT MAX(end_time) FROM DuelRows AS Latest WHERE Latest.username = DuelRows.username) "
-				"AND NOT EXISTS (SELECT 1 FROM DuelRows AS TieBreak WHERE TieBreak.username = DuelRows.username AND TieBreak.end_time = DuelRows.end_time "
-				"AND TieBreak.elo > DuelRows.elo)) "
+				"LatestRows AS (SELECT username, type, elo FROM (SELECT username, type, elo, "
+				"ROW_NUMBER() OVER (PARTITION BY username ORDER BY end_time DESC, elo DESC) AS row_rank FROM DuelRows) "
+				"WHERE row_rank = 1) "
 				"SELECT D1.username, D1.elo, CASE WHEN (COALESCE(D2.win_count, 0) + COALESCE(D3.loss_count, 0)) > 0 "
 				"THEN 100-ROUND(100*(COALESCE(D2.win_ts, 0) + COALESCE(D3.loss_ts, 0))/"
 				"(COALESCE(D2.win_count, 0) + COALESCE(D3.loss_count, 0)), 0) ELSE 0 END AS TS, "
@@ -8976,10 +8993,9 @@ void Cmd_AccountStats_f(gentity_t *ent) { //Should i bother to cache player stat
 			//Combat stats
 			sql = "WITH DuelRows AS (SELECT winner AS username, type, ROUND(winner_elo,0) AS elo, end_time FROM LocalDuel WHERE type = ? "
 				"UNION ALL SELECT loser AS username, type, ROUND(loser_elo,0) AS elo, end_time FROM LocalDuel WHERE type = ?), "
-				"LatestRows AS (SELECT DISTINCT DuelRows.username AS username, DuelRows.type AS type, DuelRows.elo AS elo "
-				"FROM DuelRows WHERE DuelRows.end_time = (SELECT MAX(end_time) FROM DuelRows AS Latest WHERE Latest.username = DuelRows.username) "
-				"AND NOT EXISTS (SELECT 1 FROM DuelRows AS TieBreak WHERE TieBreak.username = DuelRows.username AND TieBreak.end_time = DuelRows.end_time "
-				"AND TieBreak.elo > DuelRows.elo)) "
+				"LatestRows AS (SELECT username, type, elo FROM (SELECT username, type, elo, "
+				"ROW_NUMBER() OVER (PARTITION BY username ORDER BY end_time DESC, elo DESC) AS row_rank FROM DuelRows) "
+				"WHERE row_rank = 1) "
 				"SELECT D1.username, D1.elo, CASE WHEN (COALESCE(D2.win_count, 0) + COALESCE(D3.loss_count, 0)) > 0 "
 				"THEN 100-ROUND(100*(COALESCE(D2.win_ts, 0) + COALESCE(D3.loss_ts, 0))/"
 				"(COALESCE(D2.win_count, 0) + COALESCE(D3.loss_count, 0)), 0) ELSE 0 END AS TS, "
