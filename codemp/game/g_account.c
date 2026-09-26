@@ -2239,7 +2239,7 @@ static void G_InsertTrackedParticipant(sqlite3 *db, sqlite3_int64 summaryId, tra
 	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
 	CALL_SQLITE(bind_int64(stmt, 1, summaryId));
 	CALL_SQLITE(bind_text(stmt, 2, runtime->identityKey, -1, SQLITE_STATIC));
-	CALL_SQLITE(bind_text(stmt, 3, runtime->identityLabel, -1, SQLITE_STATIC));
+	CALL_SQLITE(bind_text(stmt, 3, runtime->identityLabel, -1, SQLITE_TRANSIENT));
 	CALL_SQLITE(bind_int(stmt, 4, runtime->identityKind));
 	CALL_SQLITE(bind_text(stmt, 5, runtime->opponentKey, -1, SQLITE_STATIC));
 	if (won < 0)
@@ -2339,7 +2339,7 @@ static void G_InsertTrackedEvents(sqlite3 *db, sqlite3_int64 summaryId, tracked_
 		CALL_SQLITE(bind_int(stmt, 13, event->saberMove));
 		CALL_SQLITE(bind_int(stmt, 14, event->enemySaberMove));
 		CALL_SQLITE(bind_int(stmt, 15, event->yawDelta));
-		CALL_SQLITE(bind_text(stmt, 16, event->opponentLabel, -1, SQLITE_STATIC));
+		CALL_SQLITE(bind_text(stmt, 16, event->opponentLabel, -1, SQLITE_TRANSIENT));
 		CALL_SQLITE(bind_int(stmt, 17, event->opponentKind));
 		CALL_SQLITE(bind_int(stmt, 18, event->selfHealth));
 		CALL_SQLITE(bind_int(stmt, 19, event->selfArmor));
@@ -2347,9 +2347,9 @@ static void G_InsertTrackedEvents(sqlite3 *db, sqlite3_int64 summaryId, tracked_
 		CALL_SQLITE(bind_int(stmt, 21, event->enemyHealth));
 		CALL_SQLITE(bind_int(stmt, 22, event->enemyArmor));
 		CALL_SQLITE(bind_int(stmt, 23, event->enemyForce));
-		CALL_SQLITE(bind_text(stmt, 24, event->sequenceLabel, -1, SQLITE_STATIC));
-		CALL_SQLITE(bind_text(stmt, 25, event->quality, -1, SQLITE_STATIC));
-		CALL_SQLITE(bind_text(stmt, 26, event->note, -1, SQLITE_STATIC));
+		CALL_SQLITE(bind_text(stmt, 24, event->sequenceLabel, -1, SQLITE_TRANSIENT));
+		CALL_SQLITE(bind_text(stmt, 25, event->quality, -1, SQLITE_TRANSIENT));
+		CALL_SQLITE(bind_text(stmt, 26, event->note, -1, SQLITE_TRANSIENT));
 		s = sqlite3_step(stmt);
 		if (s != SQLITE_DONE)
 		{
@@ -2838,7 +2838,7 @@ static qboolean G_InsertTrackedArcadeEvents(sqlite3 *db, sqlite3_int64 sessionId
 		CALL_SQLITE(bind_text(stmt, 3, runtime->identityLabel, -1, SQLITE_STATIC));
 		CALL_SQLITE(bind_int(stmt, 4, runtime->identityKind));
 		CALL_SQLITE(bind_text(stmt, 5, event->opponentKey, -1, SQLITE_STATIC));
-		CALL_SQLITE(bind_text(stmt, 6, event->opponentLabel, -1, SQLITE_STATIC));
+		CALL_SQLITE(bind_text(stmt, 6, event->opponentLabel, -1, SQLITE_TRANSIENT));
 		CALL_SQLITE(bind_int(stmt, 7, event->opponentKind));
 		CALL_SQLITE(bind_int(stmt, 8, event->relTime));
 		CALL_SQLITE(bind_int(stmt, 9, event->eventIndex));
@@ -2858,9 +2858,9 @@ static qboolean G_InsertTrackedArcadeEvents(sqlite3 *db, sqlite3_int64 sessionId
 		CALL_SQLITE(bind_int(stmt, 23, event->enemyHealth));
 		CALL_SQLITE(bind_int(stmt, 24, event->enemyArmor));
 		CALL_SQLITE(bind_int(stmt, 25, event->enemyForce));
-		CALL_SQLITE(bind_text(stmt, 26, event->sequenceLabel, -1, SQLITE_STATIC));
-		CALL_SQLITE(bind_text(stmt, 27, event->quality, -1, SQLITE_STATIC));
-		CALL_SQLITE(bind_text(stmt, 28, event->note, -1, SQLITE_STATIC));
+		CALL_SQLITE(bind_text(stmt, 26, event->sequenceLabel, -1, SQLITE_TRANSIENT));
+		CALL_SQLITE(bind_text(stmt, 27, event->quality, -1, SQLITE_TRANSIENT));
+		CALL_SQLITE(bind_text(stmt, 28, event->note, -1, SQLITE_TRANSIENT));
 		s = sqlite3_step(stmt);
 		if (s != SQLITE_DONE)
 		{
@@ -4241,7 +4241,7 @@ void Cmd_DuelTop10_f(gentity_t *ent) {
 		//We dont need to select from loser since we know a users highscore will always be from a winning duel.  And we can ignore users who have never won a duel(?)
 		//How to get count?
 		//sql = "SELECT winner, winner_elo, 100, 100 FROM (SELECT winner, winner_elo, odds, end_time FROM LocalDuel WHERE type = ? ORDER BY end_time ASC) GROUP BY winner ORDER BY winner_elo DESC LIMIT 10";
-		sql = "SELECT D1.username, elo, win_count+loss_count AS count, 100-ROUND(100*(win_ts + loss_ts)/(win_count+loss_count), 0) AS TS "
+		sql = "SELECT D1.username, elo, 100-ROUND(100*(win_ts + loss_ts)/(win_count+loss_count), 0) AS TS, win_count+loss_count AS count "
 				"FROM ((SELECT username, type, elo FROM ((SELECT winner AS username, type, ROUND(winner_elo,0) AS elo, end_time FROM LocalDuel WHERE type = ? "
 				"UNION ALL SELECT loser AS username, type, ROUND(loser_elo,0) AS elo, end_time FROM LocalDuel WHERE type = ? ORDER BY end_time ASC)) WHERE elo > -998 GROUP BY username ORDER BY elo DESC) AS D1 "
 				"INNER JOIN (SELECT winner AS username2, COUNT(*) AS win_count, SUM(odds) AS win_ts FROM LocalDuel WHERE type = ? GROUP BY username2) AS D2 "
@@ -4275,8 +4275,8 @@ void Cmd_DuelTop10_f(gentity_t *ent) {
 
 				Q_strncpyz(username, (char*)sqlite3_column_text(stmt, 0), sizeof(username));
 				rank = sqlite3_column_int(stmt, 1);
-				count = sqlite3_column_int(stmt, 2);
-				TS = sqlite3_column_int(stmt, 3);
+				TS = sqlite3_column_int(stmt, 2);
+				count = sqlite3_column_int(stmt, 3);
 
 				tmpMsg = va("^5%2i^3: ^3%-18s ^3%-12i ^3%-9i %i\n", start+row, username, rank, TS, count);
 				if (strlen(msg) + strlen(tmpMsg) >= sizeof( msg)) {
@@ -8955,7 +8955,7 @@ void Cmd_AccountStats_f(gentity_t *ent) { //Should i bother to cache player stat
 
 #if 0
 			//Combat stats
-			sql = "SELECT D1.username, elo, win_count+loss_count AS count, 100-ROUND(100*(win_ts + loss_ts)/(win_count+loss_count), 0) AS TS "
+			sql = "SELECT D1.username, elo, 100-ROUND(100*(win_ts + loss_ts)/(win_count+loss_count), 0) AS TS, win_count+loss_count AS count "
 				"FROM ((SELECT username, type, elo FROM ((SELECT winner AS username, type, ROUND(winner_elo,0) AS elo, end_time FROM LocalDuel WHERE type = ? "
 				"UNION ALL SELECT loser AS username, type, ROUND(loser_elo,0) AS elo, end_time FROM LocalDuel WHERE type = ? ORDER BY end_time ASC)) WHERE elo > -998 GROUP BY username ORDER BY elo DESC) AS D1 "
 				"INNER JOIN (SELECT winner AS username2, COUNT(*) AS win_count, SUM(odds) AS win_ts FROM LocalDuel WHERE type = ? GROUP BY username2) AS D2 "
