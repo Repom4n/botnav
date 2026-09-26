@@ -9990,7 +9990,8 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 				if (g_entities[bs->client].client->ps.fd.saberAnimLevel == SS_MEDIUM)
 					Cmd_SaberAttackCycle_f(&g_entities[bs->client]);
 			}
-			else if (g_entities[bs->client].client->ps.fd.saberAnimLevel == SS_STAFF && BotGetChanceBiasPercent(bot_fanbias.value) <= 0.0f)
+			else if (g_entities[bs->client].client->ps.fd.saberAnimLevel == SS_STAFF &&
+				bs->fanPackage != FAN_PACKAGE_STAFF_PRESSURE)
 				Cmd_SaberAttackCycle_f(&g_entities[bs->client]);
 				//g_entities[bs->client].client->ps.fd.saberAnimLevel = SS_MEDIUM; //SS_STAFF
 				//Cmd_SaberAttackCycle_f(&g_entities[bs->client]);
