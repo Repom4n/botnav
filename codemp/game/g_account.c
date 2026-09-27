@@ -4005,6 +4005,31 @@ static qboolean G_GetDuelBotIdentityName(gentity_t *ent, int botLevel, char *nam
 	return qtrue;
 }
 
+static int G_ParseBotLevelName(const char *name)
+{
+	int level = 0;
+	const char *tag = NULL;
+
+	if (!name || !name[0])
+		return 0;
+
+	if (!strncmp(name, "botlvl", 6))
+	{
+		level = atoi(name + 6);
+	}
+	else
+	{
+		tag = strstr(name, "[bot L");
+		if (tag)
+			level = atoi(tag + 6);
+	}
+
+	if (level < BOT_DUEL_LEVEL_MIN || level > BOT_DUEL_LEVEL_MAX)
+		return 0;
+
+	return level;
+}
+
 qboolean G_GetDuelParticipantName(gentity_t *ent, char *name, int nameSize) {
 	int level;
 

@@ -17111,7 +17111,7 @@ static qboolean NewBotAI_IsEnemyReadyToBlockFreshSaberThrow(bot_state_t *bs)
 	enemyPS = &bs->currentEnemy->client->ps;
 	if (enemyPS->weapon != WP_SABER || enemyPS->saberInFlight)
 		return qfalse;
-	if (BG_InKnockDown(enemyPS->legsAnim) || PM_InRoll(enemyPS->legsAnim))
+	if (BG_InKnockDown(enemyPS->legsAnim) || BG_InRoll((playerState_t *)enemyPS, enemyPS->legsAnim))
 		return qfalse;
 	if (BG_SaberInAttack(enemyPS->saberMove) || PM_SaberInStart(enemyPS->saberMove) ||
 		PM_SaberInTransition(enemyPS->saberMove))
@@ -17461,7 +17461,9 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		bs->enemyWaypointFallbackEnemyNum = bs->currentEnemy ? bs->currentEnemy->s.number : -1;
 	}
 	if (!bs->cur_ps.saberInFlight)
-		bs->saberThrowStartTime = 0;
+		{
+			bs->saberThrowStartTime = 0;
+		}
 		if (BotTryAcceptAnyDuelChallenge(bs, targetMode))
 		{
 			return;

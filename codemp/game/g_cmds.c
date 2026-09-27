@@ -1615,11 +1615,26 @@ void SetTeam( gentity_t *ent, char *s, qboolean forcedToJoin ) {//JAPRO - Modifi
 			ent->client->pers.lastUserName[0] && duelAgainst && duelAgainst->client && duelAgainst->client->pers.lastUserName[0]) {
 			if (!(ent->client->sess.accountFlags & JAPRO_ACCOUNTFLAG_NODUEL) && !(duelAgainst->client->sess.accountFlags & JAPRO_ACCOUNTFLAG_NODUEL))
 			{
+				char duelAgainstUserinfo[MAX_INFO_STRING];
+				char entUserinfo[MAX_INFO_STRING];
+				int winnerLevel = 0;
+				int loserLevel = 0;
+
+				if (duelAgainst->r.svFlags & SVF_BOT)
+				{
+					trap->GetUserinfo(duelAgainst->s.number, duelAgainstUserinfo, sizeof(duelAgainstUserinfo));
+					winnerLevel = atoi(Info_ValueForKey(duelAgainstUserinfo, "skill"));
+				}
+				if (ent->r.svFlags & SVF_BOT)
+				{
+					trap->GetUserinfo(ent->s.number, entUserinfo, sizeof(entUserinfo));
+					loserLevel = atoi(Info_ValueForKey(entUserinfo, "skill"));
+				}
 				G_AddDuel(
 					duelAgainst->client->pers.lastUserName,
 					ent->client->pers.lastUserName,
-					(duelAgainst->r.svFlags & SVF_BOT) ? atoi(Info_ValueForKey(duelAgainst->client->sess.userinfo, "skill")) : 0,
-					(ent->r.svFlags & SVF_BOT) ? atoi(Info_ValueForKey(ent->client->sess.userinfo, "skill")) : 0,
+					winnerLevel,
+					loserLevel,
 					duelAgainst->client->pers.duelStartTime,
 					dueltypes[ent->client->ps.clientNum],
 					duelAgainst->client->ps.stats[STAT_HEALTH],
