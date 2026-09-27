@@ -17242,7 +17242,6 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		gentity_t *duelEndedEnemy = oldEnemy;
 
 		NewBotAI_ClearCurrentEnemyLock(bs);
-		oldEnemy = NULL;
 		bs->lastVisibleEnemyIndex = -1;
 		bs->lastVisibleEnemyTime = 0;
 		bs->enemySeenTime = 0;
