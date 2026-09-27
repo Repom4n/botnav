@@ -5,6 +5,7 @@
 #include <string.h>
 #include "sqlite3.h"
 #include "ai_combat_tuning.h"
+#include "w_saber.h"
 
 #define _USE_CURL 0
 
@@ -47,6 +48,8 @@ static char LOCAL_DB_PATH[MAX_OSPATH];
 #define TRACKED_COUNTER_WINDOW_MS 1200
 #define TRACKED_PUNISH_WINDOW_MS 900
 #define TRACKED_FORCE_TO_SABER_WINDOW_MS 1000
+#define TRACKED_ATTACK_SWEEP_WINDOW_MS 350
+#define TRACKED_ATTACK_SWEEP_MAX_DEGREES 45
 #define TRACKED_ARCADE_LEADERBOARD_NAME_CHARS 18
 #define LOCAL_ARCADE_SCORE_ORDER "score DESC, end_time DESC"
 //#define GLOBAL_DB_PATH sv_globalDBPath.string
@@ -160,6 +163,11 @@ typedef struct
 	char sequenceLabel[32];
 	char quality[16];
 	char note[32];
+	char swingSide[12];
+	char preSwingStrafe[12];
+	short yawSweep;
+	unsigned short attackElapsedMs;
+	short throwYawOffset;
 } tracked_duel_event_t;
 
 typedef struct
@@ -181,8 +189,13 @@ typedef struct
 	int lastSaberMove;
 	int lastOpponentHealthArmor;
 	int lastAttackTime;
+	int lastAttackSwingSide;
+	int lastAttackStrafeDir;
 	int lastDamageTakenTime;
 	int lastForceSpendTime;
+	int lastThrowTime;
+	int lastThrowYawOffset;
+	int lastSaberInFlight;
 	int currentSequenceId;
 	int lastSequenceTime;
 	int totalForceSpent;
@@ -237,8 +250,13 @@ typedef struct
 	int lastOpponentClientNum;
 	int lastOpponentHealthArmor;
 	int lastAttackTime;
+	int lastAttackSwingSide;
+	int lastAttackStrafeDir;
 	int lastDamageTakenTime;
 	int lastForceSpendTime;
+	int lastThrowTime;
+	int lastThrowYawOffset;
+	int lastSaberInFlight;
 	int currentSequenceId;
 	int lastSequenceTime;
 	int totalForceSpent;
@@ -513,13 +531,16 @@ static void G_EnsureLocalDuelTrackingSchema(sqlite3 *db)
 	sql = "CREATE TABLE IF NOT EXISTS LocalDuelTrackEvent("
 		"id INTEGER PRIMARY KEY, summary_id INTEGER, participant_key VARCHAR(64), opponent_key VARCHAR(64), "
 		"rel_time UNSIGNED INTEGER, event_index UNSIGNED SMALLINT, event_type VARCHAR(16), power UNSIGNED TINYINT, "
-		"amount SMALLINT, state UNSIGNED TINYINT, range_bucket UNSIGNED TINYINT, note VARCHAR(32), "
+		"amount SMALLINT, state UNSIGNED TINYINT, range_bucket UNSIGNED TINYINT, note VARCHAR(32) DEFAULT '', "
 		"sequence_id UNSIGNED SMALLINT DEFAULT 0, buttons UNSIGNED SMALLINT DEFAULT 0, "
 		"saber_move INTEGER DEFAULT 0, enemy_saber_move INTEGER DEFAULT 0, yaw_delta SMALLINT DEFAULT 0, "
 		"opponent_label VARCHAR(36) DEFAULT '', opponent_kind UNSIGNED TINYINT DEFAULT 0, "
 		"self_hp SMALLINT DEFAULT 0, self_armor SMALLINT DEFAULT 0, self_force SMALLINT DEFAULT 0, "
 		"enemy_hp SMALLINT DEFAULT 0, enemy_armor SMALLINT DEFAULT 0, enemy_force SMALLINT DEFAULT 0, "
-		"sequence_label VARCHAR(32) DEFAULT '', quality VARCHAR(16) DEFAULT '')";
+		"sequence_label VARCHAR(32) DEFAULT '', quality VARCHAR(16) DEFAULT '', "
+		"swing_side VARCHAR(12) DEFAULT '', pre_swing_strafe VARCHAR(12) DEFAULT '', "
+		"yaw_sweep SMALLINT DEFAULT 0, attack_elapsed_ms UNSIGNED SMALLINT DEFAULT 0, "
+		"throw_yaw_offset SMALLINT DEFAULT 0)";
 	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
 	s = sqlite3_step(stmt);
 	if (s != SQLITE_DONE)
@@ -568,6 +589,12 @@ static void G_EnsureLocalDuelTrackingSchema(sqlite3 *db)
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "enemy_force", "SMALLINT DEFAULT 0");
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "sequence_label", "VARCHAR(32) DEFAULT ''");
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "quality", "VARCHAR(16) DEFAULT ''");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "note", "VARCHAR(32) DEFAULT ''");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "swing_side", "VARCHAR(12) DEFAULT ''");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "pre_swing_strafe", "VARCHAR(12) DEFAULT ''");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "yaw_sweep", "SMALLINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "attack_elapsed_ms", "UNSIGNED SMALLINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "throw_yaw_offset", "SMALLINT DEFAULT 0");
 
 	sql = "CREATE TABLE IF NOT EXISTS LocalArcadeTrackSession("
 		"id INTEGER PRIMARY KEY, source_context VARCHAR(16), start_time UNSIGNED INTEGER, end_time UNSIGNED INTEGER, "
@@ -590,7 +617,10 @@ static void G_EnsureLocalDuelTrackingSchema(sqlite3 *db)
 		"power UNSIGNED TINYINT, amount SMALLINT, state UNSIGNED TINYINT, range_bucket UNSIGNED TINYINT, "
 		"buttons UNSIGNED SMALLINT, saber_move INTEGER, enemy_saber_move INTEGER, yaw_delta SMALLINT, "
 		"self_hp SMALLINT, self_armor SMALLINT, self_force SMALLINT, enemy_hp SMALLINT, enemy_armor SMALLINT, enemy_force SMALLINT, "
-		"sequence_label VARCHAR(32), quality VARCHAR(16), note VARCHAR(32))";
+		"sequence_label VARCHAR(32), quality VARCHAR(16), note VARCHAR(32) DEFAULT '', "
+		"swing_side VARCHAR(12) DEFAULT '', pre_swing_strafe VARCHAR(12) DEFAULT '', "
+		"yaw_sweep SMALLINT DEFAULT 0, attack_elapsed_ms UNSIGNED SMALLINT DEFAULT 0, "
+		"throw_yaw_offset SMALLINT DEFAULT 0)";
 	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
 	s = sqlite3_step(stmt);
 	if (s != SQLITE_DONE)
@@ -604,6 +634,12 @@ static void G_EnsureLocalDuelTrackingSchema(sqlite3 *db)
 	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "enemy_force", "SMALLINT DEFAULT 0");
 	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "sequence_label", "VARCHAR(32) DEFAULT ''");
 	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "quality", "VARCHAR(16) DEFAULT ''");
+	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "note", "VARCHAR(32) DEFAULT ''");
+	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "swing_side", "VARCHAR(12) DEFAULT ''");
+	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "pre_swing_strafe", "VARCHAR(12) DEFAULT ''");
+	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "yaw_sweep", "SMALLINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "attack_elapsed_ms", "UNSIGNED SMALLINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "throw_yaw_offset", "SMALLINT DEFAULT 0");
 
 	sql = "CREATE TABLE IF NOT EXISTS LocalArcadeTrackGeometry("
 		"id INTEGER PRIMARY KEY, session_id INTEGER, participant_key VARCHAR(64), opponent_key VARCHAR(64), "
@@ -1156,6 +1192,185 @@ static const char *G_GetTrackedEventQualityName(const tracked_duel_event_t *even
 	return "";
 }
 
+static int G_GetTrackedSwingSideValue(int saberMove)
+{
+	return BG_SaberHorizontalSweepDir(saberMove);
+}
+
+static const char *G_GetTrackedSwingSideName(int swingSide)
+{
+	if (swingSide < 0)
+		return "leftward";
+	if (swingSide > 0)
+		return "rightward";
+	return "";
+}
+
+static int G_GetTrackedStrafeDirValue(const usercmd_t *cmd)
+{
+	if (!cmd)
+		return 0;
+	if (cmd->rightmove > 0)
+		return 1;
+	if (cmd->rightmove < 0)
+		return -1;
+	return 0;
+}
+
+static const char *G_GetTrackedStrafeDirName(int strafeDir)
+{
+	if (strafeDir < 0)
+		return "left";
+	if (strafeDir > 0)
+		return "right";
+	return "";
+}
+
+static gentity_t *G_GetTrackedOwnSaberEntity(gentity_t *self)
+{
+	int saberEntNum;
+
+	if (!self || !self->client)
+		return NULL;
+
+	saberEntNum = self->client->ps.saberEntityNum;
+	if (!saberEntNum && self->client->saberStoredIndex > 0)
+		saberEntNum = self->client->saberStoredIndex;
+	if (saberEntNum <= 0 || saberEntNum >= ENTITYNUM_MAX_NORMAL)
+		return NULL;
+
+	return &g_entities[saberEntNum];
+}
+
+static int G_GetTrackedThrowYawOffset(gentity_t *self, gentity_t *enemy)
+{
+	vec3_t enemyVec;
+	gentity_t *saberEnt;
+	vec3_t throwDir;
+	float releaseYaw;
+	float yawToEnemy;
+
+	if (!self || !self->client || !enemy || !enemy->client)
+		return 0;
+
+	VectorSubtract(enemy->client->ps.origin, self->client->ps.origin, enemyVec);
+	if (VectorLengthSquared(enemyVec) <= 1.0f)
+		return 0;
+
+	saberEnt = G_GetTrackedOwnSaberEntity(self);
+	if (saberEnt && VectorLengthSquared(saberEnt->s.pos.trDelta) > 1.0f)
+	{
+		VectorCopy(saberEnt->s.pos.trDelta, throwDir);
+		throwDir[2] = 0.0f;
+		if (VectorLengthSquared(throwDir) > 1.0f)
+			releaseYaw = vectoyaw(throwDir);
+		else
+			releaseYaw = self->client->ps.viewangles[YAW];
+	}
+	else
+	{
+		releaseYaw = self->client->ps.viewangles[YAW];
+	}
+
+	yawToEnemy = vectoyaw(enemyVec);
+	return (int)AngleNormalize180(AngleSubtract(releaseYaw, yawToEnemy));
+}
+
+static short G_GetTrackedAttackSweepValue(int swingSide, int attackElapsedMs)
+{
+	int clampedElapsed;
+	int sweepMagnitude;
+
+	if (!swingSide || attackElapsedMs <= 0)
+		return 0;
+
+	clampedElapsed = attackElapsedMs;
+	if (clampedElapsed > TRACKED_ATTACK_SWEEP_WINDOW_MS)
+		clampedElapsed = TRACKED_ATTACK_SWEEP_WINDOW_MS;
+
+	sweepMagnitude = (TRACKED_ATTACK_SWEEP_MAX_DEGREES * clampedElapsed) / TRACKED_ATTACK_SWEEP_WINDOW_MS;
+	return (short)(swingSide * sweepMagnitude);
+}
+
+static qboolean G_IsTrackedSaberThrowRelease(gentity_t *ent)
+{
+	if (!ent || !ent->client)
+		return qfalse;
+	if (ent->client->ps.weapon != WP_SABER)
+		return qfalse;
+	if (ent->client->ps.saberEntityState != SES_LEAVING)
+		return qfalse;
+	if (ent->client->ps.weaponstate != WEAPON_FIRING)
+		return qfalse;
+	return qtrue;
+}
+
+static void G_FillTrackedEventCoachingContext(tracked_duel_event_t *event, int eventType,
+	int lastAttackTime, int lastAttackSwingSide, int lastAttackStrafeDir,
+	int lastThrowTime, int lastThrowYawOffset, gentity_t *self, gentity_t *enemy)
+{
+	int swingSide;
+	int attackContextSwingSide;
+	int strafeDir;
+	int elapsed;
+	const qboolean attackContextFresh = (lastAttackTime > 0 &&
+		level.time - lastAttackTime <= TRACKED_ATTACK_CHAIN_WINDOW_MS) ? qtrue : qfalse;
+
+	if (!event || !self || !self->client)
+		return;
+
+	swingSide = G_GetTrackedSwingSideValue(self->client->ps.saberMove);
+	if (!swingSide && attackContextFresh)
+	{
+		swingSide = lastAttackSwingSide;
+	}
+	strafeDir = G_GetTrackedStrafeDirValue(&self->client->pers.cmd);
+	if (!strafeDir && attackContextFresh)
+	{
+		strafeDir = lastAttackStrafeDir;
+	}
+
+	Q_strncpyz(event->swingSide, G_GetTrackedSwingSideName(swingSide), sizeof(event->swingSide));
+	Q_strncpyz(event->preSwingStrafe, G_GetTrackedStrafeDirName(strafeDir), sizeof(event->preSwingStrafe));
+
+	attackContextSwingSide = attackContextFresh ? lastAttackSwingSide : swingSide;
+	if (!attackContextSwingSide)
+		attackContextSwingSide = swingSide;
+
+	if (attackContextFresh &&
+		(eventType == DUEL_TRACK_EVENT_ATTACK_START ||
+		 eventType == DUEL_TRACK_EVENT_ATTACK_CHAIN ||
+		 eventType == DUEL_TRACK_EVENT_DAMAGE ||
+		 eventType == DUEL_TRACK_EVENT_COUNTER_SUCCESS ||
+		 eventType == DUEL_TRACK_EVENT_PUNISH_SUCCESS ||
+		 eventType == DUEL_TRACK_EVENT_SABER_RETURN_PUNISH ||
+		 eventType == DUEL_TRACK_EVENT_FORCE_TO_SABER ||
+		 eventType == DUEL_TRACK_EVENT_KNOCKDOWN_FOLLOWUP))
+	{
+		elapsed = level.time - lastAttackTime;
+		if (elapsed < 0)
+			elapsed = 0;
+		else if (elapsed > 65535)
+			elapsed = 65535;
+		event->attackElapsedMs = (unsigned short)elapsed;
+		event->yawSweep = G_GetTrackedAttackSweepValue(attackContextSwingSide, elapsed);
+	}
+
+	if (lastThrowTime > 0 &&
+		level.time - lastThrowTime <= TRACKED_ATTACK_CHAIN_WINDOW_MS &&
+		(self->client->ps.saberInFlight ||
+		 eventType == DUEL_TRACK_EVENT_DAMAGE ||
+		 eventType == DUEL_TRACK_EVENT_PUNISH_SUCCESS ||
+		 eventType == DUEL_TRACK_EVENT_SABER_RETURN_PUNISH))
+	{
+		event->throwYawOffset = (short)lastThrowYawOffset;
+	}
+	else if (self->client->ps.saberInFlight)
+	{
+		event->throwYawOffset = (short)G_GetTrackedThrowYawOffset(self, enemy);
+	}
+}
+
 static void G_SetTrackedSequenceLabel(char *out, int outSize, int eventType, duel_track_power_t power,
 	const char *note, const gentity_t *self, const gentity_t *enemy)
 {
@@ -1165,6 +1380,8 @@ static void G_SetTrackedSequenceLabel(char *out, int outSize, int eventType, due
 		(selfPs->saberMove >= LS_KICK_F && selfPs->saberMove <= LS_KICK_L_AIR))) ? qtrue : qfalse;
 	const qboolean flipKick = (selfPs && (selfPs->legsAnim == BOTH_WALL_FLIP_BACK1 || selfPs->torsoAnim == BOTH_WALL_FLIP_BACK1)) ? qtrue : qfalse;
 	const qboolean saberThrowPunish = ((note && !Q_stricmp(note, "saberthrow")) || eventType == DUEL_TRACK_EVENT_SABER_RETURN_PUNISH) ? qtrue : qfalse;
+	const int swingSide = selfPs ? G_GetTrackedSwingSideValue(selfPs->saberMove) : 0;
+	const char *swingSuffix = (swingSide < 0) ? "left" : ((swingSide > 0) ? "right" : NULL);
 
 	if (!out || outSize <= 0)
 		return;
@@ -1231,17 +1448,26 @@ static void G_SetTrackedSequenceLabel(char *out, int outSize, int eventType, due
 	{
 		if (selfPs->fd.saberAnimLevel == SS_STAFF)
 		{
-			Q_strncpyz(out, "staff_pressure", outSize);
+			if (swingSuffix)
+				Com_sprintf(out, outSize, "staff_%s_pressure", swingSuffix);
+			else
+				Q_strncpyz(out, "staff_pressure", outSize);
 			return;
 		}
 		if (selfPs->fd.saberAnimLevel == SS_MEDIUM)
 		{
-			Q_strncpyz(out, "yellow_pressure", outSize);
+			if (swingSuffix)
+				Com_sprintf(out, outSize, "yellow_%s_pressure", swingSuffix);
+			else
+				Q_strncpyz(out, "yellow_pressure", outSize);
 			return;
 		}
 		if (selfPs->fd.saberAnimLevel == SS_STRONG)
 		{
-			Q_strncpyz(out, "red_pressure", outSize);
+			if (swingSuffix)
+				Com_sprintf(out, outSize, "red_%s_pressure", swingSuffix);
+			else
+				Q_strncpyz(out, "red_pressure", outSize);
 			return;
 		}
 		if (selfPs->fd.saberAnimLevel == SS_DUAL)
@@ -1387,6 +1613,14 @@ static void G_AddTrackedDuelEvent(tracked_duel_runtime_t *runtime, int eventType
 	event->rangeBucket = (unsigned char)rangeBucket;
 	event->sequenceId = (unsigned short)((runtime->currentSequenceId > 0) ? runtime->currentSequenceId : 0);
 	G_FillTrackedEventContext(event, self, enemy, captureGeometry);
+	G_FillTrackedEventCoachingContext(event, eventType,
+		runtime->lastAttackTime,
+		runtime->lastAttackSwingSide,
+		runtime->lastAttackStrafeDir,
+		runtime->lastThrowTime,
+		runtime->lastThrowYawOffset,
+		self,
+		enemy);
 	G_SetTrackedSequenceLabel(event->sequenceLabel, sizeof(event->sequenceLabel), eventType, power, note, self, enemy);
 	Q_strncpyz(event->quality, G_GetTrackedEventQualityName(event), sizeof(event->quality));
 	if (note)
@@ -1551,6 +1785,14 @@ static void G_AddTrackedArcadeEvent(tracked_arcade_runtime_t *runtime, int event
 	event->rangeBucket = (unsigned char)rangeBucket;
 	event->sequenceId = (unsigned short)((runtime->currentSequenceId > 0) ? runtime->currentSequenceId : 0);
 	G_FillTrackedEventContext(event, self, enemy, captureGeometry);
+	G_FillTrackedEventCoachingContext(event, eventType,
+		runtime->lastAttackTime,
+		runtime->lastAttackSwingSide,
+		runtime->lastAttackStrafeDir,
+		runtime->lastThrowTime,
+		runtime->lastThrowYawOffset,
+		self,
+		enemy);
 	G_SetTrackedSequenceLabel(event->sequenceLabel, sizeof(event->sequenceLabel), eventType, power, note, self, enemy);
 	Q_strncpyz(event->quality, G_GetTrackedEventQualityName(event), sizeof(event->quality));
 	if (note)
@@ -2213,6 +2455,7 @@ static void G_InitTrackedDuelRuntimeForClient(gentity_t *ent, gentity_t *opponen
 	runtime->lastGripCripple = ent->client->ps.fd.forceGripCripple ? 1 : 0;
 	runtime->lastButtons = ent->client->pers.cmd.buttons;
 	runtime->lastSaberMove = ent->client->ps.saberMove;
+	runtime->lastSaberInFlight = ent->client->ps.saberInFlight ? 1 : 0;
 	runtime->lastOpponentHealthArmor = G_GetTrackedCombatHealthArmor(opponent);
 	runtime->pendingResetRecovery = 0;
 	runtime->side = G_GetTrackedParticipantSide(ent);
@@ -2320,7 +2563,7 @@ static void G_InsertTrackedEvents(sqlite3 *db, sqlite3_int64 summaryId, tracked_
 	if (!runtime || runtime->eventCount <= 0)
 		return;
 
-	sql = "INSERT INTO LocalDuelTrackEvent(summary_id, participant_key, opponent_key, rel_time, event_index, event_type, power, amount, state, range_bucket, sequence_id, buttons, saber_move, enemy_saber_move, yaw_delta, opponent_label, opponent_kind, self_hp, self_armor, self_force, enemy_hp, enemy_armor, enemy_force, sequence_label, quality, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+	sql = "INSERT INTO LocalDuelTrackEvent(summary_id, participant_key, opponent_key, rel_time, event_index, event_type, power, amount, state, range_bucket, sequence_id, buttons, saber_move, enemy_saber_move, yaw_delta, opponent_label, opponent_kind, self_hp, self_armor, self_force, enemy_hp, enemy_armor, enemy_force, sequence_label, quality, note, swing_side, pre_swing_strafe, yaw_sweep, attack_elapsed_ms, throw_yaw_offset) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
 	captureGeometry = G_IsTrackedGeometryEnabled();
 	if (captureGeometry)
@@ -2369,6 +2612,11 @@ static void G_InsertTrackedEvents(sqlite3 *db, sqlite3_int64 summaryId, tracked_
 		CALL_SQLITE(bind_text(stmt, 24, event->sequenceLabel, -1, SQLITE_TRANSIENT));
 		CALL_SQLITE(bind_text(stmt, 25, event->quality, -1, SQLITE_TRANSIENT));
 		CALL_SQLITE(bind_text(stmt, 26, event->note, -1, SQLITE_TRANSIENT));
+		CALL_SQLITE(bind_text(stmt, 27, event->swingSide, -1, SQLITE_TRANSIENT));
+		CALL_SQLITE(bind_text(stmt, 28, event->preSwingStrafe, -1, SQLITE_TRANSIENT));
+		CALL_SQLITE(bind_int(stmt, 29, event->yawSweep));
+		CALL_SQLITE(bind_int(stmt, 30, event->attackElapsedMs));
+		CALL_SQLITE(bind_int(stmt, 31, event->throwYawOffset));
 		s = sqlite3_step(stmt);
 		if (s != SQLITE_DONE)
 		{
@@ -2595,6 +2843,14 @@ void G_UpdateTrackedDuelFrame(gentity_t *ent)
 	state = G_InferTrackedForceState(ent, opponent);
 	opponentHealthArmor = G_GetTrackedCombatHealthArmor(opponent);
 	attackButtons = ent->client->pers.cmd.buttons & attackMask;
+	if (ent->client->ps.saberInFlight &&
+		!runtime->lastSaberInFlight &&
+		G_IsTrackedSaberThrowRelease(ent))
+	{
+		runtime->lastThrowTime = level.time;
+		runtime->lastThrowYawOffset = G_GetTrackedThrowYawOffset(ent, opponent);
+		G_TouchTrackedDuelSequence(runtime);
+	}
 	if ((state == DUEL_TRACK_STATE_PANIC || state == DUEL_TRACK_STATE_DISADVANTAGE) &&
 		curForce <= TRACKED_DUEL_LOW_FORCE_THRESHOLD)
 	{
@@ -2605,6 +2861,8 @@ void G_UpdateTrackedDuelFrame(gentity_t *ent)
 	{
 		G_TouchTrackedDuelSequence(runtime);
 		runtime->lastAttackTime = level.time;
+		runtime->lastAttackSwingSide = G_GetTrackedSwingSideValue(ent->client->ps.saberMove);
+		runtime->lastAttackStrafeDir = G_GetTrackedStrafeDirValue(&ent->client->pers.cmd);
 		G_AddTrackedDuelEvent(runtime, DUEL_TRACK_EVENT_ATTACK_START, level.time - runtime->duelStartTime,
 			attackButtons, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket,
 			(attackButtons & BUTTON_ALT_ATTACK) ? "alt" : "attack", ent, opponent);
@@ -2624,6 +2882,8 @@ void G_UpdateTrackedDuelFrame(gentity_t *ent)
 	{
 		G_TouchTrackedDuelSequence(runtime);
 		runtime->lastAttackTime = level.time;
+		runtime->lastAttackSwingSide = G_GetTrackedSwingSideValue(ent->client->ps.saberMove);
+		runtime->lastAttackStrafeDir = G_GetTrackedStrafeDirValue(&ent->client->pers.cmd);
 		G_AddTrackedDuelEvent(runtime, DUEL_TRACK_EVENT_ATTACK_CHAIN, level.time - runtime->duelStartTime,
 			ent->client->ps.saberMove, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, "chain", ent, opponent);
 	}
@@ -2743,6 +3003,7 @@ void G_UpdateTrackedDuelFrame(gentity_t *ent)
 	runtime->lastForce = curForce;
 	runtime->lastHealthArmor = curHealthArmor;
 	runtime->lastSelectedPower = ent->client->ps.fd.forcePowerSelected;
+	runtime->lastSaberInFlight = ent->client->ps.saberInFlight ? 1 : 0;
 	runtime->lastPowersActive = ent->client->ps.fd.forcePowersActive;
 	runtime->lastRangeBucket = curRangeBucket;
 	runtime->lastAirborne = airborne;
@@ -2852,7 +3113,7 @@ static qboolean G_InsertTrackedArcadeEvents(sqlite3 *db, sqlite3_int64 sessionId
 			}
 		}
 	}
-	sql = "INSERT INTO LocalArcadeTrackEvent(session_id, participant_key, participant_label, participant_kind, opponent_key, opponent_label, opponent_kind, rel_time, event_index, sequence_id, event_type, power, amount, state, range_bucket, buttons, saber_move, enemy_saber_move, yaw_delta, self_hp, self_armor, self_force, enemy_hp, enemy_armor, enemy_force, sequence_label, quality, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+	sql = "INSERT INTO LocalArcadeTrackEvent(session_id, participant_key, participant_label, participant_kind, opponent_key, opponent_label, opponent_kind, rel_time, event_index, sequence_id, event_type, power, amount, state, range_bucket, buttons, saber_move, enemy_saber_move, yaw_delta, self_hp, self_armor, self_force, enemy_hp, enemy_armor, enemy_force, sequence_label, quality, note, swing_side, pre_swing_strafe, yaw_sweep, attack_elapsed_ms, throw_yaw_offset) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
 	if (captureGeometry && hasAnyGeometry)
 	{
@@ -2891,6 +3152,11 @@ static qboolean G_InsertTrackedArcadeEvents(sqlite3 *db, sqlite3_int64 sessionId
 		CALL_SQLITE(bind_text(stmt, 26, event->sequenceLabel, -1, SQLITE_TRANSIENT));
 		CALL_SQLITE(bind_text(stmt, 27, event->quality, -1, SQLITE_TRANSIENT));
 		CALL_SQLITE(bind_text(stmt, 28, event->note, -1, SQLITE_TRANSIENT));
+		CALL_SQLITE(bind_text(stmt, 29, event->swingSide, -1, SQLITE_TRANSIENT));
+		CALL_SQLITE(bind_text(stmt, 30, event->preSwingStrafe, -1, SQLITE_TRANSIENT));
+		CALL_SQLITE(bind_int(stmt, 31, event->yawSweep));
+		CALL_SQLITE(bind_int(stmt, 32, event->attackElapsedMs));
+		CALL_SQLITE(bind_int(stmt, 33, event->throwYawOffset));
 		s = sqlite3_step(stmt);
 		if (s != SQLITE_DONE)
 		{
@@ -3041,6 +3307,7 @@ void G_StartTrackedArcadeCombat(gentity_t *ent)
 	runtime->lastGripCripple = ent->client->ps.fd.forceGripCripple ? 1 : 0;
 	runtime->lastButtons = ent->client->pers.cmd.buttons;
 	runtime->lastSaberMove = ent->client->ps.saberMove;
+	runtime->lastSaberInFlight = ent->client->ps.saberInFlight ? 1 : 0;
 	G_GetDuelTrackingIdentity(ent, runtime->identityKey, sizeof(runtime->identityKey), runtime->identityLabel, sizeof(runtime->identityLabel), &runtime->identityKind);
 
 	opponent = G_GetTrackedArcadePrimaryOpponent(ent);
@@ -3095,6 +3362,15 @@ void G_UpdateTrackedArcadeCombatFrame(gentity_t *ent)
 	curHealthArmor = G_GetTrackedCombatHealthArmor(ent);
 	airborne = (ent->client->ps.groundEntityNum == ENTITYNUM_NONE) ? 1 : 0;
 	knockedDown = BG_InKnockDown(ent->client->ps.legsAnim) ? 1 : 0;
+	if (opponent &&
+		ent->client->ps.saberInFlight &&
+		!runtime->lastSaberInFlight &&
+		G_IsTrackedSaberThrowRelease(ent))
+	{
+		runtime->lastThrowTime = level.time;
+		runtime->lastThrowYawOffset = G_GetTrackedThrowYawOffset(ent, opponent);
+		G_TouchTrackedArcadeSequence(runtime);
+	}
 
 	if ((state == DUEL_TRACK_STATE_PANIC || state == DUEL_TRACK_STATE_DISADVANTAGE) &&
 		curForce <= TRACKED_DUEL_LOW_FORCE_THRESHOLD)
@@ -3107,6 +3383,8 @@ void G_UpdateTrackedArcadeCombatFrame(gentity_t *ent)
 	{
 		G_TouchTrackedArcadeSequence(runtime);
 		runtime->lastAttackTime = level.time;
+		runtime->lastAttackSwingSide = G_GetTrackedSwingSideValue(ent->client->ps.saberMove);
+		runtime->lastAttackStrafeDir = G_GetTrackedStrafeDirValue(&ent->client->pers.cmd);
 		G_AddTrackedArcadeEvent(runtime, DUEL_TRACK_EVENT_ATTACK_START, level.time - runtime->startTime, attackButtons, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, (attackButtons & BUTTON_ALT_ATTACK) ? "alt" : "attack", ent, opponent);
 		if (runtime->lastForceSpendTime > 0 &&
 			level.time - runtime->lastForceSpendTime <= TRACKED_FORCE_TO_SABER_WINDOW_MS)
@@ -3122,6 +3400,8 @@ void G_UpdateTrackedArcadeCombatFrame(gentity_t *ent)
 	{
 		G_TouchTrackedArcadeSequence(runtime);
 		runtime->lastAttackTime = level.time;
+		runtime->lastAttackSwingSide = G_GetTrackedSwingSideValue(ent->client->ps.saberMove);
+		runtime->lastAttackStrafeDir = G_GetTrackedStrafeDirValue(&ent->client->pers.cmd);
 		G_AddTrackedArcadeEvent(runtime, DUEL_TRACK_EVENT_ATTACK_CHAIN, level.time - runtime->startTime, ent->client->ps.saberMove, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, "chain", ent, opponent);
 	}
 
@@ -3212,6 +3492,7 @@ void G_UpdateTrackedArcadeCombatFrame(gentity_t *ent)
 	runtime->lastHealthArmor = curHealthArmor;
 	runtime->lastSelectedPower = ent->client->ps.fd.forcePowerSelected;
 	runtime->lastPowersActive = ent->client->ps.fd.forcePowersActive;
+	runtime->lastSaberInFlight = ent->client->ps.saberInFlight ? 1 : 0;
 	runtime->lastRangeBucket = curRangeBucket;
 	runtime->lastAirborne = airborne;
 	runtime->lastKnockdown = knockedDown;
@@ -6976,20 +7257,22 @@ static void G_BuildTrackedEventExportQuery(qboolean includeDuel, qboolean includ
 	char *out, int outSize)
 {
 	const char *duelSelect =
-		"SELECT 2 AS export_format_version, 'duel_event' AS record_type, 'duel' AS source_context, id AS record_id, summary_id AS parent_id, "
+		"SELECT 3 AS export_format_version, 'duel_event' AS record_type, 'duel' AS source_context, id AS record_id, summary_id AS parent_id, "
 		"participant_key, '' AS participant_label, 0 AS participant_kind, "
 		"opponent_key, opponent_label, opponent_kind, "
 		"rel_time, event_index, sequence_id, event_type, power, amount, state, range_bucket, "
 		"buttons, saber_move, enemy_saber_move, yaw_delta, "
-		"self_hp, self_armor, self_force, enemy_hp, enemy_armor, enemy_force, sequence_label, quality, note "
+		"self_hp, self_armor, self_force, enemy_hp, enemy_armor, enemy_force, sequence_label, quality, note, "
+		"swing_side, pre_swing_strafe, yaw_sweep, attack_elapsed_ms, throw_yaw_offset "
 		"FROM LocalDuelTrackEvent";
 	const char *arcadeSelect =
-		"SELECT 2 AS export_format_version, 'arcade_event' AS record_type, 'arcade' AS source_context, id AS record_id, session_id AS parent_id, "
+		"SELECT 3 AS export_format_version, 'arcade_event' AS record_type, 'arcade' AS source_context, id AS record_id, session_id AS parent_id, "
 		"participant_key, participant_label, participant_kind, "
 		"opponent_key, opponent_label, opponent_kind, "
 		"rel_time, event_index, sequence_id, event_type, power, amount, state, range_bucket, "
 		"buttons, saber_move, enemy_saber_move, yaw_delta, "
-		"self_hp, self_armor, self_force, enemy_hp, enemy_armor, enemy_force, sequence_label, quality, note "
+		"self_hp, self_armor, self_force, enemy_hp, enemy_armor, enemy_force, sequence_label, quality, note, "
+		"swing_side, pre_swing_strafe, yaw_sweep, attack_elapsed_ms, throw_yaw_offset "
 		"FROM LocalArcadeTrackEvent";
 
 	if (!out || outSize < 1)

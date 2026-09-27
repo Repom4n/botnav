@@ -263,6 +263,8 @@ qboolean NewBotAI_IsEnemyPullable(bot_state_t *bs);
 static qboolean NewBotAI_IsDirectPathToEnemyBlocked(bot_state_t *bs);
 static qboolean NewBotAI_ShouldForcePulledFlipkickOverride(bot_state_t *bs, int *timeToKickRangeMsOut, int *timingModeOut);
 static void NewBotAI_ApplyFanAttackWobble(bot_state_t *bs);
+static void NewBotAI_ApplyHumanSwingAimOffset(bot_state_t *bs);
+static void NewBotAI_AdjustCloseRangeSaberThrowRoute(bot_state_t *bs);
 void Cmd_EngageDuel_f(gentity_t *ent, int dueltype);
 extern void DownedSaberThink(gentity_t *saberent);
 extern void CreateNewWP(vec3_t origin, int flags);
@@ -6796,6 +6798,26 @@ static void NewBotAI_ApplyFanAttackWobble(bot_state_t *bs)
 	yawAmplitude = Com_Clamp(0.0f, 45.0f, bot_wobbleyaw.value);
 	pitchAmplitude = Com_Clamp(0.0f, 20.0f, bot_wobblepitch.value);
 	speed = Com_Clamp(0.0f, 20.0f, bot_wobblespeed.value);
+	if (bs->fanPackage == FAN_PACKAGE_STAFF_PRESSURE)
+	{
+		yawAmplitude *= 1.15f;
+		pitchAmplitude *= 0.45f;
+	}
+	else if (bs->fanPackage == FAN_PACKAGE_YELLOW_PRESSURE)
+	{
+		yawAmplitude *= 0.85f;
+		pitchAmplitude *= 0.3f;
+	}
+	if (bs->frame_Enemy_Len < 128.0f)
+	{
+		yawAmplitude *= 0.55f;
+		pitchAmplitude *= 0.25f;
+	}
+	else if (bs->frame_Enemy_Len < 196.0f)
+	{
+		yawAmplitude *= 0.75f;
+		pitchAmplitude *= 0.5f;
+	}
 	if (!NewBotAI_ShouldApplyFanWobble(
 		fanActive,
 		attackHeld,
@@ -6825,6 +6847,79 @@ static void NewBotAI_ApplyFanAttackWobble(bot_state_t *bs)
 	{
 		bs->goalAngles[PITCH] = AngleNormalize180(bs->goalAngles[PITCH] + pitchOffset);
 	}
+}
+
+static int NewBotAI_GetHorizontalSwingSweepDir(int saberMove)
+{
+	return BG_SaberHorizontalSweepDir(saberMove);
+}
+
+static void NewBotAI_ApplyRelativeAimPointOffset(bot_state_t *bs, float sideOffsetUnits, float heightOffset)
+{
+	vec3_t centerPoint, adjustedPoint, toEnemy, lateral;
+	vec3_t centerAim, adjustedAim;
+	float len;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client || sideOffsetUnits == 0.0f)
+		return;
+
+	VectorCopy(bs->currentEnemy->client->ps.origin, centerPoint);
+	centerPoint[2] += bs->currentEnemy->client->ps.viewheight - 16 + heightOffset;
+	VectorSubtract(centerPoint, bs->eye, toEnemy);
+	toEnemy[2] = 0.0f;
+	len = VectorLength(toEnemy);
+	if (len <= 1.0f)
+		return;
+
+	VectorScale(toEnemy, 1.0f / len, toEnemy);
+	lateral[0] = -toEnemy[1];
+	lateral[1] = toEnemy[0];
+	lateral[2] = 0.0f;
+
+	VectorMA(centerPoint, sideOffsetUnits, lateral, adjustedPoint);
+	VectorSubtract(centerPoint, bs->eye, centerAim);
+	VectorSubtract(adjustedPoint, bs->eye, adjustedAim);
+	vectoangles(centerAim, centerAim);
+	vectoangles(adjustedAim, adjustedAim);
+
+	bs->goalAngles[YAW] = AngleNormalize360(bs->goalAngles[YAW] +
+		AngleSubtract(adjustedAim[YAW], centerAim[YAW]));
+	bs->goalAngles[PITCH] = AngleNormalize180(bs->goalAngles[PITCH] +
+		AngleSubtract(adjustedAim[PITCH], centerAim[PITCH]));
+}
+
+static void NewBotAI_ApplyHumanSwingAimOffset(bot_state_t *bs)
+{
+	int sweepDir;
+	float sideOffsetUnits;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+		return;
+	if (bs->cur_ps.weapon != WP_SABER || bs->cur_ps.saberInFlight)
+		return;
+	if (bs->frame_Enemy_Len <= 0.0f || bs->frame_Enemy_Len > 220.0f)
+		return;
+	if (!BG_SaberInAttack(bs->cur_ps.saberMove))
+		return;
+
+	sweepDir = NewBotAI_GetHorizontalSwingSweepDir(bs->cur_ps.saberMove);
+	if (!sweepDir)
+		return;
+
+	sideOffsetUnits = 24.0f;
+	if (bs->cur_ps.fd.saberAnimLevel == SS_STAFF)
+		sideOffsetUnits = 32.0f;
+	else if (bs->cur_ps.fd.saberAnimLevel == SS_STRONG)
+		sideOffsetUnits = 20.0f;
+
+	if (bs->frame_Enemy_Len < 96.0f)
+		sideOffsetUnits *= 1.15f;
+	else if (bs->frame_Enemy_Len > 176.0f)
+		sideOffsetUnits *= 0.75f;
+
+	/* Sweep direction is opposite the side the saber starts on:
+	 * a leftward swing (R2L) starts from the right, so offset the aim right first. */
+	NewBotAI_ApplyRelativeAimPointOffset(bs, -((float)sweepDir) * sideOffsetUnits, 0.0f);
 }
 
 static void NewBotAI_ApplyFanDwellYaw(bot_state_t *bs)
@@ -6985,6 +7080,11 @@ void NewBotAI_GetAim(bot_state_t *bs)
 		if (bs->cur_ps.saberInFlight)
 		{
 			NewBotAI_AdjustSaberThrowLead(bs);
+			NewBotAI_AdjustCloseRangeSaberThrowRoute(bs);
+		}
+		else
+		{
+			NewBotAI_ApplyHumanSwingAimOffset(bs);
 		}
 	}
 	NewBotAI_ApplyFanDwellYaw(bs);
@@ -9218,12 +9318,15 @@ void NewBotAI_Speeding(bot_state_t *bs)
 	const qboolean beingGripped = (bs->cur_ps.fd.forceGripBeingGripped > level.time) ? qtrue : qfalse;
 	const qboolean enemyGripActive = (bs->currentEnemy && bs->currentEnemy->client &&
 		(bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_GRIP))) ? qtrue : qfalse;
+	const qboolean enemyDrainActive = (bs->currentEnemy && bs->currentEnemy->client &&
+		(bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_DRAIN))) ? qtrue : qfalse;
 	const qboolean imminentSaberThrowThreat = NewBotAI_IsEnemySaberThreatImminent(bs);
 	int ourHealthTotal = g_entities[bs->client].health + bs->cur_ps.stats[STAT_ARMOR];
 	int enemyHealthTotal = 0;
 	int enemyForce = 0;
 	const int ourForce = bs->cur_ps.fd.forcePower;
 	qboolean lostAdvantage = qfalse;
+	qboolean trappedByDrain = qfalse;
 
 	if (bs->currentEnemy && bs->currentEnemy->client)
 	{
@@ -9233,10 +9336,22 @@ void NewBotAI_Speeding(bot_state_t *bs)
 		{
 			lostAdvantage = qtrue;
 		}
+		if (NewBotAI_ShouldAbortSpeedAttack(
+			beingGripped ? 1 : 0,
+			enemyGripActive ? 1 : 0,
+			enemyDrainActive ? 1 : 0,
+			ourForce,
+			ourForce - enemyForce,
+			bs->frame_Enemy_Len,
+			MAX_DRAIN_DISTANCE))
+		{
+			trappedByDrain = qtrue;
+		}
 	}
 
 	if (enemyKnockedDown ||
 		beingGripped ||
+		trappedByDrain ||
 		(enemyGripActive && bs->frame_Enemy_Len < 512.0f) ||
 		imminentSaberThrowThreat ||
 		lostAdvantage ||
@@ -12755,11 +12870,17 @@ static int NewBotAI_GetSpeedAttackWeight(bot_state_t *bs)
 	int healthLead;
 	int forceLead;
 	int weight;
+	qboolean beingGripped;
+	qboolean enemyGripActive;
+	qboolean enemyDrainActive;
 
 	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
 	{
 		return 0;
 	}
+	beingGripped = (bs->cur_ps.fd.forceGripBeingGripped > level.time) ? qtrue : qfalse;
+	enemyGripActive = (bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_GRIP)) ? qtrue : qfalse;
+	enemyDrainActive = (bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_DRAIN)) ? qtrue : qfalse;
 
 	speedBias = BotGetChanceBiasPercent(bot_speedbias.value);
 	aggressionBias = BotGetAggressionBias(bs);
@@ -12791,6 +12912,17 @@ static int NewBotAI_GetSpeedAttackWeight(bot_state_t *bs)
 		return 0;
 	}
 	if (ourForce < 70 || !bs->frame_Enemy_Vis || bs->frame_Enemy_Len < 96.0f || bs->frame_Enemy_Len > 640.0f)
+	{
+		return 0;
+	}
+	if (NewBotAI_ShouldAbortSpeedAttack(
+		beingGripped ? 1 : 0,
+		enemyGripActive ? 1 : 0,
+		enemyDrainActive ? 1 : 0,
+		ourForce,
+		forceLead,
+		bs->frame_Enemy_Len,
+		MAX_DRAIN_DISTANCE))
 	{
 		return 0;
 	}
@@ -13458,6 +13590,58 @@ static void NewBotAI_AdjustSaberThrowLead(bot_state_t *bs)
 
 	//Lead towards whichever side their motion is on, relative to the saber->target line.
 	bs->goalAngles[YAW] = AngleNormalize360(bs->goalAngles[YAW] + ((yawDelta < 0.0f) ? -leadDeg : leadDeg));
+}
+
+static void NewBotAI_AdjustCloseRangeSaberThrowRoute(bot_state_t *bs)
+{
+	vec3_t enemyVel, enemyVec, lateral;
+	float dist, lateralDir, sideOffsetUnits, heightOffset;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client || !bs->cur_ps.saberInFlight)
+		return;
+	if (bs->frame_Enemy_Len <= 0.0f || bs->frame_Enemy_Len > 192.0f)
+		return;
+	if (NewBotAI_CanUseSaberThrowDefenseBreakForce(bs, BotGetAggressionBias(bs) > 0.0f ? qtrue : qfalse))
+		return;
+
+	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->cur_ps.origin, enemyVec);
+	enemyVec[2] = 0.0f;
+	dist = VectorLength(enemyVec);
+	if (dist <= 1.0f)
+		return;
+
+	VectorScale(enemyVec, 1.0f / dist, enemyVec);
+	lateral[0] = -enemyVec[1];
+	lateral[1] = enemyVec[0];
+	lateral[2] = 0.0f;
+
+	VectorCopy(bs->currentEnemy->client->ps.velocity, enemyVel);
+	enemyVel[2] = 0.0f;
+	lateralDir = DotProduct(enemyVel, lateral);
+	if (fabsf(lateralDir) < 10.0f)
+	{
+		lateralDir = 0.0f;
+	}
+	else
+	{
+		lateralDir = (lateralDir > 0.0f) ? 1.0f : -1.0f;
+	}
+
+	sideOffsetUnits = 42.0f;
+	heightOffset = 12.0f;
+	if (dist < 128.0f)
+	{
+		sideOffsetUnits = 56.0f;
+		heightOffset = 24.0f;
+	}
+	if (bs->currentEnemy->client->ps.weapon == WP_SABER &&
+		!bs->currentEnemy->client->ps.saberInFlight)
+	{
+		sideOffsetUnits += 12.0f;
+		heightOffset += 8.0f;
+	}
+
+	NewBotAI_ApplyRelativeAimPointOffset(bs, lateralDir * sideOffsetUnits, heightOffset);
 }
 
 // True once the enemy's own thrown saber has started heading back toward their hand

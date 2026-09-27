@@ -186,6 +186,30 @@ static inline float NewBotAI_GetImmediateFlipkickYawTolerance(int immediateConta
 	return immediateContact ? 60.0f : 35.0f;
 }
 
+static inline int NewBotAI_ShouldAbortSpeedAttack(
+	int beingGripped, int enemyGripActive, int enemyDrainActive,
+	int ourForce, int forceLead, float enemyDistance, float maxDrainDistance)
+{
+	if (beingGripped)
+	{
+		return 1;
+	}
+
+	if (enemyGripActive && enemyDistance < 512.0f)
+	{
+		return 1;
+	}
+
+	if (enemyDrainActive &&
+		(ourForce <= 35 || forceLead <= 0) &&
+		enemyDistance < maxDrainDistance)
+	{
+		return 1;
+	}
+
+	return 0;
+}
+
 static inline float NewBotAI_GetViewAngleAxisFactor(float factor, int isYawAxis, int escapeYawOverrideActive)
 {
 	if (isYawAxis && escapeYawOverrideActive)
