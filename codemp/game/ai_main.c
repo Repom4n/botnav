@@ -12870,14 +12870,17 @@ static int NewBotAI_GetSpeedAttackWeight(bot_state_t *bs)
 	int healthLead;
 	int forceLead;
 	int weight;
-	const qboolean beingGripped = (bs->cur_ps.fd.forceGripBeingGripped > level.time) ? qtrue : qfalse;
-	const qboolean enemyGripActive = (bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_GRIP)) ? qtrue : qfalse;
-	const qboolean enemyDrainActive = (bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_DRAIN)) ? qtrue : qfalse;
+	qboolean beingGripped;
+	qboolean enemyGripActive;
+	qboolean enemyDrainActive;
 
 	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
 	{
 		return 0;
 	}
+	beingGripped = (bs->cur_ps.fd.forceGripBeingGripped > level.time) ? qtrue : qfalse;
+	enemyGripActive = (bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_GRIP)) ? qtrue : qfalse;
+	enemyDrainActive = (bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_DRAIN)) ? qtrue : qfalse;
 
 	speedBias = BotGetChanceBiasPercent(bot_speedbias.value);
 	aggressionBias = BotGetAggressionBias(bs);
@@ -13615,7 +13618,7 @@ static void NewBotAI_AdjustCloseRangeSaberThrowRoute(bot_state_t *bs)
 	VectorCopy(bs->currentEnemy->client->ps.velocity, enemyVel);
 	enemyVel[2] = 0.0f;
 	lateralDir = DotProduct(enemyVel, lateral);
-	if (fabs(lateralDir) < 10.0f)
+	if (fabsf(lateralDir) < 10.0f)
 	{
 		lateralDir = (AngleSubtract(bs->goalAngles[YAW], bs->currentEnemy->client->ps.viewangles[YAW]) >= 0.0f) ? 1.0f : -1.0f;
 	}

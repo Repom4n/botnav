@@ -1,3 +1,5 @@
+#include <math.h>
+
 #include "ai_combat_tuning.h"
 
 #include <boost/test/unit_test.hpp>

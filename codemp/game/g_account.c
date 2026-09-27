@@ -1255,6 +1255,17 @@ static short G_GetTrackedAttackSweepValue(int swingSide, int attackElapsedMs)
 	return (short)(swingSide * sweepMagnitude);
 }
 
+static qboolean G_IsTrackedSaberThrowRelease(gentity_t *ent)
+{
+	if (!ent || !ent->client)
+		return qfalse;
+	if (ent->client->ps.weapon != WP_SABER)
+		return qfalse;
+	if (!(ent->client->pers.cmd.buttons & BUTTON_ALT_ATTACK))
+		return qfalse;
+	return qtrue;
+}
+
 static void G_FillTrackedEventCoachingContext(tracked_duel_event_t *event, int eventType,
 	int lastAttackTime, int lastAttackSwingSide, int lastAttackStrafeDir,
 	int lastThrowTime, int lastThrowYawOffset, gentity_t *self, gentity_t *enemy)
@@ -1262,21 +1273,19 @@ static void G_FillTrackedEventCoachingContext(tracked_duel_event_t *event, int e
 	int swingSide;
 	int strafeDir;
 	int elapsed;
+	const qboolean attackContextFresh = (lastAttackTime > 0 &&
+		level.time - lastAttackTime <= TRACKED_ATTACK_CHAIN_WINDOW_MS) ? qtrue : qfalse;
 
 	if (!event || !self || !self->client)
 		return;
 
 	swingSide = G_GetTrackedSwingSideValue(self->client->ps.saberMove);
-	if (!swingSide &&
-		lastAttackTime > 0 &&
-		level.time - lastAttackTime <= TRACKED_ATTACK_CHAIN_WINDOW_MS)
+	if (!swingSide && attackContextFresh)
 	{
 		swingSide = lastAttackSwingSide;
 	}
 	strafeDir = G_GetTrackedStrafeDirValue(&self->client->pers.cmd);
-	if (!strafeDir &&
-		lastAttackTime > 0 &&
-		level.time - lastAttackTime <= TRACKED_ATTACK_CHAIN_WINDOW_MS)
+	if (!strafeDir && attackContextFresh)
 	{
 		strafeDir = lastAttackStrafeDir;
 	}
@@ -1284,7 +1293,7 @@ static void G_FillTrackedEventCoachingContext(tracked_duel_event_t *event, int e
 	Q_strncpyz(event->swingSide, G_GetTrackedSwingSideName(swingSide), sizeof(event->swingSide));
 	Q_strncpyz(event->preSwingStrafe, G_GetTrackedStrafeDirName(strafeDir), sizeof(event->preSwingStrafe));
 
-	if (lastAttackTime > 0 &&
+	if (attackContextFresh &&
 		(eventType == DUEL_TRACK_EVENT_ATTACK_START ||
 		 eventType == DUEL_TRACK_EVENT_ATTACK_CHAIN ||
 		 eventType == DUEL_TRACK_EVENT_DAMAGE ||
@@ -2790,7 +2799,9 @@ void G_UpdateTrackedDuelFrame(gentity_t *ent)
 	state = G_InferTrackedForceState(ent, opponent);
 	opponentHealthArmor = G_GetTrackedCombatHealthArmor(opponent);
 	attackButtons = ent->client->pers.cmd.buttons & attackMask;
-	if (ent->client->ps.saberInFlight && !runtime->lastSaberInFlight)
+	if (ent->client->ps.saberInFlight &&
+		!runtime->lastSaberInFlight &&
+		G_IsTrackedSaberThrowRelease(ent))
 	{
 		runtime->lastThrowTime = level.time;
 		runtime->lastThrowYawOffset = G_GetTrackedThrowYawOffset(ent, opponent);
@@ -3307,7 +3318,10 @@ void G_UpdateTrackedArcadeCombatFrame(gentity_t *ent)
 	curHealthArmor = G_GetTrackedCombatHealthArmor(ent);
 	airborne = (ent->client->ps.groundEntityNum == ENTITYNUM_NONE) ? 1 : 0;
 	knockedDown = BG_InKnockDown(ent->client->ps.legsAnim) ? 1 : 0;
-	if (opponent && ent->client->ps.saberInFlight && !runtime->lastSaberInFlight)
+	if (opponent &&
+		ent->client->ps.saberInFlight &&
+		!runtime->lastSaberInFlight &&
+		G_IsTrackedSaberThrowRelease(ent))
 	{
 		runtime->lastThrowTime = level.time;
 		runtime->lastThrowYawOffset = G_GetTrackedThrowYawOffset(ent, opponent);
