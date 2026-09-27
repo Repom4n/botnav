@@ -16993,10 +16993,7 @@ static qboolean BotTryAcceptAnyDuelChallenge(bot_state_t *bs, int targetMode)
 		if (duelType <= 1 && bs->cur_ps.weapon == WP_SABER && !bs->cur_ps.saberHolstered)
 		{
 			Cmd_ToggleSaber_f(&g_entities[bs->client]);
-			if (g_entities[bs->client].client->ps.saberHolstered)
-			{
-				Cmd_EngageDuel_f(&g_entities[bs->client], duelType);
-			}
+			Cmd_EngageDuel_f(&g_entities[bs->client], duelType);
 		}
 		else
 		{
