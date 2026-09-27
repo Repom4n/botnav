@@ -530,7 +530,7 @@ static void G_EnsureLocalDuelTrackingSchema(sqlite3 *db)
 	sql = "CREATE TABLE IF NOT EXISTS LocalDuelTrackEvent("
 		"id INTEGER PRIMARY KEY, summary_id INTEGER, participant_key VARCHAR(64), opponent_key VARCHAR(64), "
 		"rel_time UNSIGNED INTEGER, event_index UNSIGNED SMALLINT, event_type VARCHAR(16), power UNSIGNED TINYINT, "
-		"amount SMALLINT, state UNSIGNED TINYINT, range_bucket UNSIGNED TINYINT, note VARCHAR(32), "
+		"amount SMALLINT, state UNSIGNED TINYINT, range_bucket UNSIGNED TINYINT, note VARCHAR(32) DEFAULT '', "
 		"sequence_id UNSIGNED SMALLINT DEFAULT 0, buttons UNSIGNED SMALLINT DEFAULT 0, "
 		"saber_move INTEGER DEFAULT 0, enemy_saber_move INTEGER DEFAULT 0, yaw_delta SMALLINT DEFAULT 0, "
 		"opponent_label VARCHAR(36) DEFAULT '', opponent_kind UNSIGNED TINYINT DEFAULT 0, "
@@ -616,7 +616,7 @@ static void G_EnsureLocalDuelTrackingSchema(sqlite3 *db)
 		"power UNSIGNED TINYINT, amount SMALLINT, state UNSIGNED TINYINT, range_bucket UNSIGNED TINYINT, "
 		"buttons UNSIGNED SMALLINT, saber_move INTEGER, enemy_saber_move INTEGER, yaw_delta SMALLINT, "
 		"self_hp SMALLINT, self_armor SMALLINT, self_force SMALLINT, enemy_hp SMALLINT, enemy_armor SMALLINT, enemy_force SMALLINT, "
-		"sequence_label VARCHAR(32), quality VARCHAR(16), note VARCHAR(32), "
+		"sequence_label VARCHAR(32), quality VARCHAR(16), note VARCHAR(32) DEFAULT '', "
 		"swing_side VARCHAR(12) DEFAULT '', pre_swing_strafe VARCHAR(12) DEFAULT '', "
 		"yaw_sweep SMALLINT DEFAULT 0, attack_elapsed_ms UNSIGNED SMALLINT DEFAULT 0, "
 		"throw_yaw_offset SMALLINT DEFAULT 0)";
