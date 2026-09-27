@@ -17463,28 +17463,28 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		bs->enemyWaypointFallbackEnemyNum = bs->currentEnemy ? bs->currentEnemy->s.number : -1;
 	}
 	if (!bs->cur_ps.saberInFlight)
-		{
-			bs->saberThrowStartTime = 0;
-		}
-		if (BotTryAcceptAnyDuelChallenge(bs, targetMode))
-		{
-			return;
-		}
+	{
+	bs->saberThrowStartTime = 0;
+	}
+	if (BotTryAcceptAnyDuelChallenge(bs, targetMode))
+	{
+	return;
+	}
 
-		responseDelay = BotGetReflexScaledResponseDelayMs(bs);
-		if (responseDelay > 0 && bs->currentEnemy && bs->currentEnemy->client)
-		{
-			if (bs->currentEnemy != oldEnemy)
-			{
-				bs->timeToReact = level.time + responseDelay;
-			}
-		if (bs->timeToReact > level.time)
-		{
-			bs->doAttack = 0;
-			bs->doAltAttack = 0;
-			bs->beStill = level.time + 50;
-			return;
-		}
+	responseDelay = BotGetReflexScaledResponseDelayMs(bs);
+	if (responseDelay > 0 && bs->currentEnemy && bs->currentEnemy->client)
+	{
+	if (bs->currentEnemy != oldEnemy)
+	{
+		bs->timeToReact = level.time + responseDelay;
+	}
+	if (bs->timeToReact > level.time)
+	{
+		bs->doAttack = 0;
+		bs->doAltAttack = 0;
+		bs->beStill = level.time + 50;
+		return;
+	}
 	}
 
 	if (NewBotAI_TryIssueBotDuelChallenge(bs, targetMode))
