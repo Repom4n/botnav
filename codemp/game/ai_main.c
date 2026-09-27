@@ -17005,7 +17005,7 @@ static qboolean BotTryAcceptAnyDuelChallenge(bot_state_t *bs, int targetMode)
 
 		bs->doAttack = 0;
 		bs->doAltAttack = 0;
-		bs->timeToReact = level.time;
+		bs->timeToReact = level.time + BotGetReflexScaledResponseDelayMs(bs);
 		bs->botDuelRequestThrottleUntil = level.time + NEWBOTAI_DUEL_REQUEST_MIN_INTERVAL_MS;
 		bs->duelNoStrafeUntil = level.time + Com_Clampi(0, 10000, bot_duel_nostrafetime.integer);
 		bs->beStill = level.time + 2500;
