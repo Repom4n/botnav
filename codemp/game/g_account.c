@@ -5,6 +5,7 @@
 #include <string.h>
 #include "sqlite3.h"
 #include "ai_combat_tuning.h"
+#include "w_saber.h"
 
 #define _USE_CURL 0
 
@@ -1297,7 +1298,9 @@ static qboolean G_IsTrackedSaberThrowRelease(gentity_t *ent)
 		return qfalse;
 	if (ent->client->ps.weapon != WP_SABER)
 		return qfalse;
-	if (!(ent->client->pers.cmd.buttons & BUTTON_ALT_ATTACK))
+	if (ent->client->ps.saberEntityState != SES_LEAVING)
+		return qfalse;
+	if (ent->client->ps.weaponstate != WEAPON_FIRING)
 		return qfalse;
 	return qtrue;
 }
@@ -1307,6 +1310,7 @@ static void G_FillTrackedEventCoachingContext(tracked_duel_event_t *event, int e
 	int lastThrowTime, int lastThrowYawOffset, gentity_t *self, gentity_t *enemy)
 {
 	int swingSide;
+	int attackContextSwingSide;
 	int strafeDir;
 	int elapsed;
 	const qboolean attackContextFresh = (lastAttackTime > 0 &&
@@ -1329,6 +1333,10 @@ static void G_FillTrackedEventCoachingContext(tracked_duel_event_t *event, int e
 	Q_strncpyz(event->swingSide, G_GetTrackedSwingSideName(swingSide), sizeof(event->swingSide));
 	Q_strncpyz(event->preSwingStrafe, G_GetTrackedStrafeDirName(strafeDir), sizeof(event->preSwingStrafe));
 
+	attackContextSwingSide = attackContextFresh ? lastAttackSwingSide : swingSide;
+	if (!attackContextSwingSide)
+		attackContextSwingSide = swingSide;
+
 	if (attackContextFresh &&
 		(eventType == DUEL_TRACK_EVENT_ATTACK_START ||
 		 eventType == DUEL_TRACK_EVENT_ATTACK_CHAIN ||
@@ -1345,7 +1353,7 @@ static void G_FillTrackedEventCoachingContext(tracked_duel_event_t *event, int e
 		else if (elapsed > 65535)
 			elapsed = 65535;
 		event->attackElapsedMs = (unsigned short)elapsed;
-		event->yawSweep = G_GetTrackedAttackSweepValue(swingSide, elapsed);
+		event->yawSweep = G_GetTrackedAttackSweepValue(attackContextSwingSide, elapsed);
 	}
 
 	if (lastThrowTime > 0 &&
