@@ -16960,6 +16960,8 @@ static gentity_t *NewBotAI_GetPendingDuelChallenger(bot_state_t *bs, int targetM
 		return NULL;
 	if (bs->botDuelRequestThrottleUntil > level.time)
 		return NULL;
+	if (NewBotAI_InFFAExploreWindow(bs, targetMode))
+		return NULL;
 
 	for (i = 0; i < MAX_CLIENTS; i++)
 	{
@@ -17001,6 +17003,13 @@ static qboolean BotTryAcceptAnyDuelChallenge(bot_state_t *bs, int targetMode)
 	NewBotAI_FaceEntityImmediately(bs, challenger);
 	if (duelType <= 1 && bs->cur_ps.weapon == WP_SABER && !bs->cur_ps.saberHolstered)
 	{
+		if (!bs->cur_ps.saberInFlight && g_entities[bs->client].client->ps.weaponTime < 1)
+		{
+			Cmd_ToggleSaber_f(&g_entities[bs->client]);
+			bs->botDuelRequestThrottleUntil = level.time + NEWBOTAI_DUEL_REQUEST_MIN_INTERVAL_MS;
+			bs->duelNoStrafeUntil = level.time + Com_Clampi(0, 10000, bot_duel_nostrafetime.integer);
+			bs->beStill = level.time + 2500;
+		}
 		return qfalse;
 	}
 	Cmd_EngageDuel_f(&g_entities[bs->client], duelType);

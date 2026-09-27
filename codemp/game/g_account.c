@@ -2886,7 +2886,11 @@ static void G_PersistTrackedDuel(tracked_duel_runtime_t *winnerRuntime, tracked_
 	if (persistOk)
 		persistOk = G_UpdateTrackedAggregate(db, loserRuntime, qfalse, draw);
 
-	CALL_SQLITE(exec(db, persistOk ? "COMMIT" : "ROLLBACK", NULL, NULL, NULL));
+	s = sqlite3_exec(db, persistOk ? "COMMIT" : "ROLLBACK", NULL, NULL, NULL);
+	if (s != SQLITE_OK)
+		G_ErrorPrint(persistOk ?
+			"ERROR: SQL Commit Failed (LocalDuelTrack persist)" :
+			"ERROR: SQL Rollback Failed (LocalDuelTrack persist)", s);
 
 	CALL_SQLITE(close(db));
 }
