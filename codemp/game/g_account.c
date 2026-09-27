@@ -1193,34 +1193,7 @@ static const char *G_GetTrackedEventQualityName(const tracked_duel_event_t *even
 
 static int G_GetTrackedSwingSideValue(int saberMove)
 {
-	switch (saberMove)
-	{
-	case LS_A_R2L:
-	case LS_S_R2L:
-	case LS_R_R2L:
-	case LS_T1__R__L:
-	case LS_T1_TR__L:
-	case LS_T1_T___L:
-	case LS_T1_TL__L:
-	case LS_T1__L_TL:
-	case LS_T1_BL__L:
-		return -1;
-	case LS_A_L2R:
-	case LS_S_L2R:
-	case LS_R_L2R:
-	case LS_T1_BR__R:
-	case LS_T1__R_BR:
-	case LS_T1_TR__R:
-	case LS_T1_T___R:
-	case LS_T1_TL__R:
-	case LS_T1__L__R:
-	case LS_T1_BL__R:
-		return 1;
-	default:
-		break;
-	}
-
-	return 0;
+	return BG_SaberHorizontalSweepDir(saberMove);
 }
 
 static const char *G_GetTrackedSwingSideName(int swingSide)

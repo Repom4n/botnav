@@ -6851,33 +6851,7 @@ static void NewBotAI_ApplyFanAttackWobble(bot_state_t *bs)
 
 static int NewBotAI_GetHorizontalSwingSweepDir(int saberMove)
 {
-	switch (saberMove)
-	{
-	case LS_A_R2L:
-	case LS_S_R2L:
-	case LS_R_R2L:
-	case LS_T1__R__L:
-	case LS_T1_TR__L:
-	case LS_T1_T___L:
-	case LS_T1_TL__L:
-	case LS_T1_BL__L:
-		return -1;
-	case LS_A_L2R:
-	case LS_S_L2R:
-	case LS_R_L2R:
-	case LS_T1_BR__R:
-	case LS_T1__R_BR:
-	case LS_T1_TR__R:
-	case LS_T1_T___R:
-	case LS_T1_TL__R:
-	case LS_T1__L__R:
-	case LS_T1_BL__R:
-		return 1;
-	default:
-		break;
-	}
-
-	return 0;
+	return BG_SaberHorizontalSweepDir(saberMove);
 }
 
 static void NewBotAI_ApplyRelativeAimPointOffset(bot_state_t *bs, float sideOffsetUnits, float heightOffset)
