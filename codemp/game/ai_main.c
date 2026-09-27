@@ -16992,13 +16992,18 @@ static qboolean BotTryAcceptAnyDuelChallenge(bot_state_t *bs, int targetMode)
 
 		if (duelType <= 1 && bs->cur_ps.weapon == WP_SABER && !bs->cur_ps.saberHolstered)
 		{
-			Cmd_ToggleSaber_f(&g_entities[bs->client]);
-			Cmd_EngageDuel_f(&g_entities[bs->client], duelType);
+			if (g_entities[bs->client].client->ps.weaponTime < 1)
+			{
+				Cmd_ToggleSaber_f(&g_entities[bs->client]);
+			}
+			bs->doAttack = 0;
+			bs->doAltAttack = 0;
+			bs->timeToReact = level.time + BotGetReflexScaledResponseDelayMs(bs);
+			bs->duelNoStrafeUntil = level.time + Com_Clampi(0, 10000, bot_duel_nostrafetime.integer);
+			bs->beStill = level.time + 2500;
+			return qtrue;
 		}
-		else
-		{
-			Cmd_EngageDuel_f(&g_entities[bs->client], duelType);
-		}
+		Cmd_EngageDuel_f(&g_entities[bs->client], duelType);
 
 		bs->doAttack = 0;
 		bs->doAltAttack = 0;

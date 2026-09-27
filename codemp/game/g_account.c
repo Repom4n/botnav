@@ -690,6 +690,9 @@ static void G_EnsureLocalDuelTrackingSchema(sqlite3 *db)
 	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "attack_elapsed_ms", "UNSIGNED SMALLINT DEFAULT 0");
 	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "throw_yaw_offset", "SMALLINT DEFAULT 0");
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackAggregate", "duels", "UNSIGNED INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackAggregate", "participant_kind", "UNSIGNED TINYINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackAggregate", "side", "UNSIGNED TINYINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackAggregate", "matchup", "UNSIGNED TINYINT DEFAULT 0");
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackAggregate", "wins", "UNSIGNED INTEGER DEFAULT 0");
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackAggregate", "losses", "UNSIGNED INTEGER DEFAULT 0");
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackAggregate", "total_force_spent", "UNSIGNED INTEGER DEFAULT 0");
@@ -2693,7 +2696,7 @@ static qboolean G_InsertTrackedEvents(sqlite3 *db, sqlite3_int64 summaryId, trac
 		{
 			G_ErrorPrint("ERROR: SQL Insert Failed (LocalDuelTrackEvent)", s);
 			CALL_SQLITE(finalize(stmt));
-			if (captureGeometry && hasAnyGeometry)
+			if (geomStmt)
 				CALL_SQLITE(finalize(geomStmt));
 			return qfalse;
 		}
@@ -2725,7 +2728,8 @@ static qboolean G_InsertTrackedEvents(sqlite3 *db, sqlite3_int64 summaryId, trac
 			{
 				G_ErrorPrint("ERROR: SQL Insert Failed (LocalDuelTrackGeometry)", s);
 				CALL_SQLITE(finalize(stmt));
-				CALL_SQLITE(finalize(geomStmt));
+				if (geomStmt)
+					CALL_SQLITE(finalize(geomStmt));
 				return qfalse;
 			}
 			CALL_SQLITE(reset(geomStmt));
@@ -2733,7 +2737,7 @@ static qboolean G_InsertTrackedEvents(sqlite3 *db, sqlite3_int64 summaryId, trac
 		}
 	}
 	CALL_SQLITE(finalize(stmt));
-	if (captureGeometry && hasAnyGeometry)
+	if (geomStmt)
 		CALL_SQLITE(finalize(geomStmt));
 	return qtrue;
 }
