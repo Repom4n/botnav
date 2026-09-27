@@ -113,6 +113,15 @@ BOOST_AUTO_TEST_CASE( immediate_flipkick_contact_widens_yaw_tolerance )
 	BOOST_CHECK_EQUAL( NewBotAI_GetImmediateFlipkickYawTolerance( 1 ), 60.0f );
 }
 
+BOOST_AUTO_TEST_CASE( speed_attack_abort_respects_grip_and_drain_traps )
+{
+	BOOST_CHECK( NewBotAI_ShouldAbortSpeedAttack( 1, 0, 0, 80, 20, 200.0f, 256.0f ) );
+	BOOST_CHECK( NewBotAI_ShouldAbortSpeedAttack( 0, 1, 0, 80, 20, 200.0f, 256.0f ) );
+	BOOST_CHECK( NewBotAI_ShouldAbortSpeedAttack( 0, 0, 1, 35, 0, 200.0f, 256.0f ) );
+	BOOST_CHECK( !NewBotAI_ShouldAbortSpeedAttack( 0, 0, 1, 60, 20, 300.0f, 256.0f ) );
+	BOOST_CHECK( !NewBotAI_ShouldAbortSpeedAttack( 0, 0, 0, 80, 20, 200.0f, 256.0f ) );
+}
+
 BOOST_AUTO_TEST_CASE( escape_yaw_override_forces_fixed_turn_rate )
 {
 	BOOST_CHECK_EQUAL( NewBotAI_GetViewAngleAxisFactor( 0.35f, 1, 1 ), 1.0f );

@@ -1241,6 +1241,22 @@ static int G_GetTrackedThrowYawOffset(gentity_t *self, gentity_t *enemy)
 	return (int)AngleNormalize180(AngleSubtract(self->client->ps.viewangles[YAW], yawToEnemy));
 }
 
+static short G_GetTrackedAttackSweepValue(int swingSide, int attackElapsedMs)
+{
+	int clampedElapsed;
+	int sweepMagnitude;
+
+	if (!swingSide || attackElapsedMs <= 0)
+		return 0;
+
+	clampedElapsed = attackElapsedMs;
+	if (clampedElapsed > 350)
+		clampedElapsed = 350;
+
+	sweepMagnitude = (45 * clampedElapsed) / 350;
+	return (short)(swingSide * sweepMagnitude);
+}
+
 static void G_FillTrackedEventCoachingContext(tracked_duel_event_t *event, int eventType,
 	int lastAttackTime, int lastAttackYaw, int lastAttackSwingSide, int lastAttackStrafeDir,
 	int lastThrowTime, int lastThrowYawOffset, gentity_t *self, gentity_t *enemy)
@@ -1286,7 +1302,7 @@ static void G_FillTrackedEventCoachingContext(tracked_duel_event_t *event, int e
 		else if (elapsed > 65535)
 			elapsed = 65535;
 		event->attackElapsedMs = (unsigned short)elapsed;
-		event->yawSweep = (short)AngleNormalize180(AngleSubtract(self->client->ps.viewangles[YAW], (float)lastAttackYaw));
+		event->yawSweep = G_GetTrackedAttackSweepValue(swingSide, elapsed);
 	}
 
 	if (lastThrowTime > 0 &&

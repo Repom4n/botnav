@@ -9336,8 +9336,14 @@ void NewBotAI_Speeding(bot_state_t *bs)
 		{
 			lostAdvantage = qtrue;
 		}
-		if (enemyDrainActive && bs->frame_Enemy_Len < MAX_DRAIN_DISTANCE &&
-			(ourForce <= 30 || enemyForce >= ourForce))
+		if (NewBotAI_ShouldAbortSpeedAttack(
+			beingGripped ? 1 : 0,
+			enemyGripActive ? 1 : 0,
+			enemyDrainActive ? 1 : 0,
+			ourForce,
+			ourForce - enemyForce,
+			bs->frame_Enemy_Len,
+			MAX_DRAIN_DISTANCE))
 		{
 			trappedByDrain = qtrue;
 		}
@@ -12906,11 +12912,14 @@ static int NewBotAI_GetSpeedAttackWeight(bot_state_t *bs)
 	{
 		return 0;
 	}
-	if (beingGripped || (enemyGripActive && bs->frame_Enemy_Len < 512.0f))
-	{
-		return 0;
-	}
-	if (enemyDrainActive && (ourForce <= 35 || forceLead <= 0) && bs->frame_Enemy_Len < MAX_DRAIN_DISTANCE)
+	if (NewBotAI_ShouldAbortSpeedAttack(
+		beingGripped ? 1 : 0,
+		enemyGripActive ? 1 : 0,
+		enemyDrainActive ? 1 : 0,
+		ourForce,
+		forceLead,
+		bs->frame_Enemy_Len,
+		MAX_DRAIN_DISTANCE))
 	{
 		return 0;
 	}
