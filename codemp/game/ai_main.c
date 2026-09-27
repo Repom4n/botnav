@@ -6907,9 +6907,9 @@ static void NewBotAI_ApplyHumanSwingAimOffset(bot_state_t *bs)
 		return;
 
 	sideOffsetUnits = 24.0f;
-	if (g_entities[bs->client].client->ps.fd.saberAnimLevel == SS_STAFF)
+	if (bs->cur_ps.fd.saberAnimLevel == SS_STAFF)
 		sideOffsetUnits = 32.0f;
-	else if (g_entities[bs->client].client->ps.fd.saberAnimLevel == SS_STRONG)
+	else if (bs->cur_ps.fd.saberAnimLevel == SS_STRONG)
 		sideOffsetUnits = 20.0f;
 
 	if (bs->frame_Enemy_Len < 96.0f)
@@ -13620,7 +13620,7 @@ static void NewBotAI_AdjustCloseRangeSaberThrowRoute(bot_state_t *bs)
 	lateralDir = DotProduct(enemyVel, lateral);
 	if (fabsf(lateralDir) < 10.0f)
 	{
-		lateralDir = (AngleSubtract(bs->goalAngles[YAW], bs->currentEnemy->client->ps.viewangles[YAW]) >= 0.0f) ? 1.0f : -1.0f;
+		lateralDir = 0.0f;
 	}
 	else
 	{

@@ -47,6 +47,8 @@ static char LOCAL_DB_PATH[MAX_OSPATH];
 #define TRACKED_COUNTER_WINDOW_MS 1200
 #define TRACKED_PUNISH_WINDOW_MS 900
 #define TRACKED_FORCE_TO_SABER_WINDOW_MS 1000
+#define TRACKED_ATTACK_SWEEP_WINDOW_MS 350
+#define TRACKED_ATTACK_SWEEP_MAX_DEGREES 45
 #define TRACKED_ARCADE_LEADERBOARD_NAME_CHARS 18
 #define LOCAL_ARCADE_SCORE_ORDER "score DESC, end_time DESC"
 //#define GLOBAL_DB_PATH sv_globalDBPath.string
@@ -1223,9 +1225,28 @@ static const char *G_GetTrackedStrafeDirName(int strafeDir)
 	return "";
 }
 
+static gentity_t *G_GetTrackedOwnSaberEntity(gentity_t *self)
+{
+	int saberEntNum;
+
+	if (!self || !self->client)
+		return NULL;
+
+	saberEntNum = self->client->ps.saberEntityNum;
+	if (!saberEntNum && self->client->saberStoredIndex > 0)
+		saberEntNum = self->client->saberStoredIndex;
+	if (saberEntNum <= 0 || saberEntNum >= ENTITYNUM_MAX_NORMAL)
+		return NULL;
+
+	return &g_entities[saberEntNum];
+}
+
 static int G_GetTrackedThrowYawOffset(gentity_t *self, gentity_t *enemy)
 {
 	vec3_t enemyVec;
+	gentity_t *saberEnt;
+	vec3_t throwDir;
+	float releaseYaw;
 	float yawToEnemy;
 
 	if (!self || !self->client || !enemy || !enemy->client)
@@ -1235,8 +1256,23 @@ static int G_GetTrackedThrowYawOffset(gentity_t *self, gentity_t *enemy)
 	if (VectorLengthSquared(enemyVec) <= 1.0f)
 		return 0;
 
+	saberEnt = G_GetTrackedOwnSaberEntity(self);
+	if (saberEnt && VectorLengthSquared(saberEnt->s.pos.trDelta) > 1.0f)
+	{
+		VectorCopy(saberEnt->s.pos.trDelta, throwDir);
+		throwDir[2] = 0.0f;
+		if (VectorLengthSquared(throwDir) > 1.0f)
+			releaseYaw = vectoyaw(throwDir);
+		else
+			releaseYaw = self->client->ps.viewangles[YAW];
+	}
+	else
+	{
+		releaseYaw = self->client->ps.viewangles[YAW];
+	}
+
 	yawToEnemy = vectoyaw(enemyVec);
-	return (int)AngleNormalize180(AngleSubtract(self->client->ps.viewangles[YAW], yawToEnemy));
+	return (int)AngleNormalize180(AngleSubtract(releaseYaw, yawToEnemy));
 }
 
 static short G_GetTrackedAttackSweepValue(int swingSide, int attackElapsedMs)
@@ -1248,10 +1284,10 @@ static short G_GetTrackedAttackSweepValue(int swingSide, int attackElapsedMs)
 		return 0;
 
 	clampedElapsed = attackElapsedMs;
-	if (clampedElapsed > 350)
-		clampedElapsed = 350;
+	if (clampedElapsed > TRACKED_ATTACK_SWEEP_WINDOW_MS)
+		clampedElapsed = TRACKED_ATTACK_SWEEP_WINDOW_MS;
 
-	sweepMagnitude = (45 * clampedElapsed) / 350;
+	sweepMagnitude = (TRACKED_ATTACK_SWEEP_MAX_DEGREES * clampedElapsed) / TRACKED_ATTACK_SWEEP_WINDOW_MS;
 	return (short)(swingSide * sweepMagnitude);
 }
 
