@@ -146,7 +146,7 @@ Tracked duel data access:
 - Use server console command `exportDuelTrack [prefix]` to export timestamped CSV files for:
   - `LocalDuelTrackSummary`
   - `LocalDuelTrackParticipant`
-  - `LocalDuelTrackEvent` (includes sequence id/label, quality, buttons, saber moves, yaw delta, and self/opponent HP/AP/FP snapshots)
+  - `LocalDuelTrackEvent` (includes sequence id/label, quality, buttons, saber moves, yaw delta, self/opponent HP/AP/FP snapshots, swing side, pre-swing strafe direction, yaw sweep, attack elapsed time, and saber-throw yaw offset)
   - `LocalDuelTrackGeometry` (when `bot_dueltracking_geometry` is enabled)
   - `LocalDuelTrackAggregate`
 
