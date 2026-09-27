@@ -17464,7 +17464,6 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	pendingDuelChallenger = NewBotAI_GetPendingDuelChallenger(bs, targetMode, &pendingDuelType);
 	if (pendingDuelChallenger)
 	{
-	bs->currentEnemy = pendingDuelChallenger;
 	NewBotAI_FaceEntityImmediately(bs, pendingDuelChallenger);
 	}
 
