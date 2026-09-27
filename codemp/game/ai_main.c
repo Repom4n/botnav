@@ -242,6 +242,7 @@ static void NewBotAI_ClearCurrentEnemyLock(bot_state_t *bs);
 static void NewBotAI_FaceEntityImmediately(bot_state_t *bs, gentity_t *target);
 static qboolean NewBotAI_HasSafeSaberThrowClearance(bot_state_t *bs);
 static qboolean NewBotAI_IsEnemyReadyToBlockFreshSaberThrow(bot_state_t *bs);
+static gentity_t *NewBotAI_GetPendingDuelChallenger(bot_state_t *bs, int targetMode, int *duelTypeOut);
 
 #define NEWBOTAI_DRAIN_TICK_MSEC 100
 #define NEWBOTAI_COMBAT_DISENGAGE_COOLDOWN_MS 2500
@@ -16949,18 +16950,16 @@ int NewBotAI_ScanForEnemies(bot_state_t* bs) {
 
 #define _ADVANCEDBOTSHIT 1
 
-static qboolean BotTryAcceptAnyDuelChallenge(bot_state_t *bs, int targetMode)
+static gentity_t *NewBotAI_GetPendingDuelChallenger(bot_state_t *bs, int targetMode, int *duelTypeOut)
 {
 	int i;
 
-	if (!bot_honorableduelacceptance.integer || !g_privateDuel.integer || bs->cur_ps.duelInProgress)
-	{
-		return qfalse;
-	}
+	if (duelTypeOut)
+		*duelTypeOut = -1;
+	if (!bot_honorableduelacceptance.integer || !g_privateDuel.integer || !bs || bs->cur_ps.duelInProgress)
+		return NULL;
 	if (bs->botDuelRequestThrottleUntil > level.time)
-	{
-		return qfalse;
-	}
+		return NULL;
 
 	for (i = 0; i < MAX_CLIENTS; i++)
 	{
@@ -16969,52 +16968,46 @@ static qboolean BotTryAcceptAnyDuelChallenge(bot_state_t *bs, int targetMode)
 		const qboolean challengerIsBot = (challenger->r.svFlags & SVF_BOT) ? qtrue : qfalse;
 
 		if (!challenger->inuse || !challenger->client || i == bs->client)
-		{
 			continue;
-		}
-
 		if (challenger->health < 1 || challenger->client->ps.duelIndex != bs->client || challenger->client->ps.duelTime <= level.time)
-		{
 			continue;
-		}
+
 		duelType = dueltypes[challenger->client->ps.clientNum];
 		if (challengerIsBot && !BotTargetModeAllowsBotDuelChallenges(targetMode))
-		{
 			continue;
-		}
 		if (challengerIsBot && BotTargetModeIsForceDuelOnly(targetMode) && duelType != 1)
-		{
 			continue;
-		}
 
-		bs->currentEnemy = challenger;
-		NewBotAI_FaceEntityImmediately(bs, challenger);
-
-		if (duelType <= 1 && bs->cur_ps.weapon == WP_SABER && !bs->cur_ps.saberHolstered)
-		{
-			if (g_entities[bs->client].client->ps.weaponTime < 1)
-			{
-				Cmd_ToggleSaber_f(&g_entities[bs->client]);
-			}
-			bs->doAttack = 0;
-			bs->doAltAttack = 0;
-			bs->timeToReact = level.time + BotGetReflexScaledResponseDelayMs(bs);
-			bs->duelNoStrafeUntil = level.time + Com_Clampi(0, 10000, bot_duel_nostrafetime.integer);
-			bs->beStill = level.time + 2500;
-			return qtrue;
-		}
-		Cmd_EngageDuel_f(&g_entities[bs->client], duelType);
-
-		bs->doAttack = 0;
-		bs->doAltAttack = 0;
-		bs->timeToReact = level.time + BotGetReflexScaledResponseDelayMs(bs);
-		bs->botDuelRequestThrottleUntil = level.time + NEWBOTAI_DUEL_REQUEST_MIN_INTERVAL_MS;
-		bs->duelNoStrafeUntil = level.time + Com_Clampi(0, 10000, bot_duel_nostrafetime.integer);
-		bs->beStill = level.time + 2500;
-		return qtrue;
+		if (duelTypeOut)
+			*duelTypeOut = duelType;
+		return challenger;
 	}
 
-	return qfalse;
+	return NULL;
+}
+
+static qboolean BotTryAcceptAnyDuelChallenge(bot_state_t *bs, int targetMode)
+{
+	gentity_t *challenger;
+	int duelType;
+
+	challenger = NewBotAI_GetPendingDuelChallenger(bs, targetMode, &duelType);
+	if (!challenger)
+	{
+		return qfalse;
+	}
+
+	bs->currentEnemy = challenger;
+	NewBotAI_FaceEntityImmediately(bs, challenger);
+	Cmd_EngageDuel_f(&g_entities[bs->client], duelType);
+
+	bs->doAttack = 0;
+	bs->doAltAttack = 0;
+	bs->timeToReact = level.time + BotGetReflexScaledResponseDelayMs(bs);
+	bs->botDuelRequestThrottleUntil = level.time + NEWBOTAI_DUEL_REQUEST_MIN_INTERVAL_MS;
+	bs->duelNoStrafeUntil = level.time + Com_Clampi(0, 10000, bot_duel_nostrafetime.integer);
+	bs->beStill = level.time + 2500;
+	return qtrue;
 }
 
 static void NewBotAI_RunForceDuelOnly(bot_state_t *bs)
@@ -17206,9 +17199,11 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	int i;
 	int responseDelay;
 	int targetMode;
+	int pendingDuelType = -1;
 	qboolean someonesHere = qfalse;
 	vec3_t headlevel;
 	gentity_t *oldEnemy = bs->currentEnemy;
+	gentity_t *pendingDuelChallenger = NULL;
 
 	bs->isCamper = 0; //reset this
 
@@ -17466,9 +17461,11 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	{
 	bs->saberThrowStartTime = 0;
 	}
-	if (BotTryAcceptAnyDuelChallenge(bs, targetMode))
+	pendingDuelChallenger = NewBotAI_GetPendingDuelChallenger(bs, targetMode, &pendingDuelType);
+	if (pendingDuelChallenger)
 	{
-	return;
+	bs->currentEnemy = pendingDuelChallenger;
+	NewBotAI_FaceEntityImmediately(bs, pendingDuelChallenger);
 	}
 
 	responseDelay = BotGetReflexScaledResponseDelayMs(bs);
@@ -17485,6 +17482,26 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		bs->beStill = level.time + 50;
 		return;
 	}
+	}
+	if (pendingDuelChallenger &&
+	pendingDuelType <= 1 &&
+	bs->cur_ps.weapon == WP_SABER &&
+	!bs->cur_ps.saberInFlight &&
+	!bs->cur_ps.saberHolstered)
+	{
+	if (g_entities[bs->client].client->ps.weaponTime < 1)
+	{
+		Cmd_ToggleSaber_f(&g_entities[bs->client]);
+	}
+	bs->doAttack = 0;
+	bs->doAltAttack = 0;
+	bs->duelNoStrafeUntil = level.time + Com_Clampi(0, 10000, bot_duel_nostrafetime.integer);
+	bs->beStill = level.time + 2500;
+	return;
+	}
+	if (BotTryAcceptAnyDuelChallenge(bs, targetMode))
+	{
+	return;
 	}
 
 	if (NewBotAI_TryIssueBotDuelChallenge(bs, targetMode))

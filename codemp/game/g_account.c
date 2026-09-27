@@ -4191,7 +4191,7 @@ int GetEloKValue(int numDuels) { //Also take rank into account
 	return k3;
 }
 
-static int G_GetRankedBotVsBotLevelDuelsToday(int botLevel, int end_time, sqlite3 *db)
+static int G_GetRankedBotVsBotLevelDuelsToday(int botLevel, int opponentLevel, int end_time, sqlite3 *db)
 {
 	char *sql;
 	sqlite3_stmt *stmt;
@@ -4202,8 +4202,12 @@ static int G_GetRankedBotVsBotLevelDuelsToday(int botLevel, int end_time, sqlite
 	sqlite3_int64 endTime64;
 	char botLevelName[16];
 	char botLevelTaggedName[32];
+	char opponentLevelName[16];
+	char opponentLevelTaggedName[32];
 
-	if (!db || botLevel < BOT_DUEL_LEVEL_MIN || botLevel > BOT_DUEL_LEVEL_MAX)
+	if (!db ||
+		botLevel < BOT_DUEL_LEVEL_MIN || botLevel > BOT_DUEL_LEVEL_MAX ||
+		opponentLevel < BOT_DUEL_LEVEL_MIN || opponentLevel > BOT_DUEL_LEVEL_MAX)
 	{
 		return 0;
 	}
@@ -4214,22 +4218,28 @@ static int G_GetRankedBotVsBotLevelDuelsToday(int botLevel, int end_time, sqlite
 	dayEnd = dayStart + 86400;
 	Com_sprintf(botLevelName, sizeof(botLevelName), "botlvl%i", botLevel);
 	Com_sprintf(botLevelTaggedName, sizeof(botLevelTaggedName), "%% [bot L%i]", botLevel);
+	Com_sprintf(opponentLevelName, sizeof(opponentLevelName), "botlvl%i", opponentLevel);
+	Com_sprintf(opponentLevelTaggedName, sizeof(opponentLevelTaggedName), "%% [bot L%i]", opponentLevel);
 
 	sql = "SELECT COUNT(*) FROM LocalDuel "
 		"WHERE end_time >= ? AND end_time < ? "
 		"AND winner_elo > -998 AND loser_elo > -998 "
 		"AND ("
-			"(((winner = ? OR winner LIKE ?) AND (loser LIKE 'botlvl%' OR loser LIKE '% [bot L%]')))"
+			"(((winner = ? OR winner LIKE ?) AND (loser = ? OR loser LIKE ?)))"
 			" OR "
-			"(((loser = ? OR loser LIKE ?) AND (winner LIKE 'botlvl%' OR winner LIKE '% [bot L%]')))"
+			"(((loser = ? OR loser LIKE ?) AND (winner = ? OR winner LIKE ?)))"
 		")";
 	CALL_SQLITE (prepare_v2 (db, sql, strlen (sql) + 1, & stmt, NULL));
 	CALL_SQLITE (bind_int64 (stmt, 1, dayStart));
 	CALL_SQLITE (bind_int64 (stmt, 2, dayEnd));
 	CALL_SQLITE (bind_text (stmt, 3, botLevelName, -1, SQLITE_TRANSIENT));
 	CALL_SQLITE (bind_text (stmt, 4, botLevelTaggedName, -1, SQLITE_TRANSIENT));
-	CALL_SQLITE (bind_text (stmt, 5, botLevelName, -1, SQLITE_TRANSIENT));
-	CALL_SQLITE (bind_text (stmt, 6, botLevelTaggedName, -1, SQLITE_TRANSIENT));
+	CALL_SQLITE (bind_text (stmt, 5, opponentLevelName, -1, SQLITE_TRANSIENT));
+	CALL_SQLITE (bind_text (stmt, 6, opponentLevelTaggedName, -1, SQLITE_TRANSIENT));
+	CALL_SQLITE (bind_text (stmt, 7, botLevelName, -1, SQLITE_TRANSIENT));
+	CALL_SQLITE (bind_text (stmt, 8, botLevelTaggedName, -1, SQLITE_TRANSIENT));
+	CALL_SQLITE (bind_text (stmt, 9, opponentLevelName, -1, SQLITE_TRANSIENT));
+	CALL_SQLITE (bind_text (stmt, 10, opponentLevelTaggedName, -1, SQLITE_TRANSIENT));
 
 	s = sqlite3_step(stmt);
 	if (s == SQLITE_ROW) {
@@ -4253,9 +4263,9 @@ static qboolean G_ShouldRankBotVsBotDuel(int winnerLevel, int loserLevel, int en
 		return qtrue;
 	}
 
-	winnerDailyCount = G_GetRankedBotVsBotLevelDuelsToday(winnerLevel, end_time, db);
+	winnerDailyCount = G_GetRankedBotVsBotLevelDuelsToday(winnerLevel, loserLevel, end_time, db);
 	loserDailyCount = (loserLevel == winnerLevel) ? winnerDailyCount :
-		G_GetRankedBotVsBotLevelDuelsToday(loserLevel, end_time, db);
+		G_GetRankedBotVsBotLevelDuelsToday(loserLevel, winnerLevel, end_time, db);
 
 	if (loserLevel == winnerLevel)
 	{
