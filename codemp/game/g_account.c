@@ -2836,7 +2836,13 @@ static void G_PersistTrackedDuel(tracked_duel_runtime_t *winnerRuntime, tracked_
 		return;
 	G_EnsureLocalArcadeSchema(db);
 	G_EnsureLocalDuelTrackingSchema(db);
-	CALL_SQLITE(exec(db, "BEGIN TRANSACTION", NULL, NULL, NULL));
+	s = sqlite3_exec(db, "BEGIN TRANSACTION", NULL, NULL, NULL);
+	if (s != SQLITE_OK)
+	{
+		G_ErrorPrint("ERROR: SQL Begin Failed (LocalDuelTrack persist)", s);
+		CALL_SQLITE(close(db));
+		return;
+	}
 
 	sql = "INSERT INTO LocalDuelTrackSummary(source_context, start_time, end_time, duration, type, mapname, winner_key, winner_label, winner_kind, winner_side, loser_key, loser_label, loser_kind, loser_side, draw, winner_opening, loser_opening) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));

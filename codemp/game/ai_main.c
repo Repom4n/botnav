@@ -16999,6 +16999,10 @@ static qboolean BotTryAcceptAnyDuelChallenge(bot_state_t *bs, int targetMode)
 
 	bs->currentEnemy = challenger;
 	NewBotAI_FaceEntityImmediately(bs, challenger);
+	if (duelType <= 1 && bs->cur_ps.weapon == WP_SABER && !bs->cur_ps.saberHolstered)
+	{
+		return qfalse;
+	}
 	Cmd_EngageDuel_f(&g_entities[bs->client], duelType);
 
 	bs->doAttack = 0;
@@ -17490,6 +17494,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		Cmd_ToggleSaber_f(&g_entities[bs->client]);
 		bs->doAttack = 0;
 		bs->doAltAttack = 0;
+		bs->botDuelRequestThrottleUntil = level.time + NEWBOTAI_DUEL_REQUEST_MIN_INTERVAL_MS;
 		bs->duelNoStrafeUntil = level.time + Com_Clampi(0, 10000, bot_duel_nostrafetime.integer);
 		bs->beStill = level.time + 2500;
 		return;
