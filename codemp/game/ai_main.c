@@ -17001,7 +17001,7 @@ static qboolean BotTryAcceptAnyDuelChallenge(bot_state_t *bs, int targetMode)
 
 	bs->currentEnemy = challenger;
 	NewBotAI_FaceEntityImmediately(bs, challenger);
-	if (duelType <= 1 && bs->cur_ps.weapon == WP_SABER && !bs->cur_ps.saberHolstered)
+	if (duelType <= 1 && bs->cur_ps.weapon == WP_SABER && bs->cur_ps.saberHolstered)
 	{
 		if (!bs->cur_ps.saberInFlight && g_entities[bs->client].client->ps.weaponTime < 1)
 		{
@@ -17495,7 +17495,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	pendingDuelType <= 1 &&
 	bs->cur_ps.weapon == WP_SABER &&
 	!bs->cur_ps.saberInFlight &&
-	!bs->cur_ps.saberHolstered)
+	bs->cur_ps.saberHolstered)
 	{
 	if (g_entities[bs->client].client->ps.weaponTime < 1)
 	{

@@ -2882,7 +2882,7 @@ static void G_PersistTrackedDuel(tracked_duel_runtime_t *winnerRuntime, tracked_
 	if (persistOk)
 		persistOk = G_InsertTrackedEvents(db, summaryId, loserRuntime);
 	if (persistOk)
-		persistOk = G_UpdateTrackedAggregate(db, winnerRuntime, qtrue, draw);
+		persistOk = G_UpdateTrackedAggregate(db, winnerRuntime, draw ? qfalse : qtrue, draw);
 	if (persistOk)
 		persistOk = G_UpdateTrackedAggregate(db, loserRuntime, qfalse, draw);
 
