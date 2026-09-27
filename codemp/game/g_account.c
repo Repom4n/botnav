@@ -574,6 +574,41 @@ static void G_EnsureLocalDuelTrackingSchema(sqlite3 *db)
 	CALL_SQLITE(finalize(stmt));
 
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackSummary", "source_context", "VARCHAR(16) DEFAULT 'duel'");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackSummary", "draw", "UNSIGNED TINYINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackSummary", "winner_opening", "VARCHAR(32) DEFAULT ''");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackSummary", "loser_opening", "VARCHAR(32) DEFAULT ''");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "participant_label", "VARCHAR(36) DEFAULT ''");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "participant_kind", "UNSIGNED TINYINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "opponent_side", "UNSIGNED TINYINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "matchup", "UNSIGNED TINYINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "total_force_spent", "UNSIGNED INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "total_force_regen", "UNSIGNED INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "ending_force", "SMALLINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "ending_hp", "SMALLINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "ending_armor", "SMALLINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "low_force_windows", "UNSIGNED SMALLINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "grip_cripple_events", "UNSIGNED SMALLINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "saber_throw_punishes", "UNSIGNED SMALLINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "knockdown_events", "UNSIGNED SMALLINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "late_defense_spends", "UNSIGNED SMALLINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "opening_tactic", "VARCHAR(32) DEFAULT ''");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "primary_issue", "VARCHAR(32) DEFAULT ''");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "spent_neutral", "UNSIGNED INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "spent_advantage", "UNSIGNED INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "spent_disadvantage", "UNSIGNED INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "spent_panic", "UNSIGNED INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "spent_finishing", "UNSIGNED INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "force_push", "UNSIGNED INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "force_pull", "UNSIGNED INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "force_grip", "UNSIGNED INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "force_drain", "UNSIGNED INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "force_rage", "UNSIGNED INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "force_absorb", "UNSIGNED INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "force_protect", "UNSIGNED INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "force_heal", "UNSIGNED INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "force_speed", "UNSIGNED INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "force_seeing", "UNSIGNED INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "force_unknown", "UNSIGNED INTEGER DEFAULT 0");
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "sequence_id", "UNSIGNED SMALLINT DEFAULT 0");
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "buttons", "UNSIGNED SMALLINT DEFAULT 0");
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "saber_move", "INTEGER DEFAULT 0");
@@ -609,6 +644,20 @@ static void G_EnsureLocalDuelTrackingSchema(sqlite3 *db)
 	if (s != SQLITE_DONE)
 		G_ErrorPrint("ERROR: SQL Create Failed (LocalArcadeTrackSession)", s);
 	CALL_SQLITE(finalize(stmt));
+	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackSession", "source_context", "VARCHAR(16) DEFAULT 'arcade'");
+	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackSession", "result", "VARCHAR(24) DEFAULT ''");
+	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackSession", "arcade_level", "UNSIGNED SMALLINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackSession", "total_kills", "UNSIGNED SMALLINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackSession", "total_force_spent", "UNSIGNED INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackSession", "total_force_regen", "UNSIGNED INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackSession", "total_damage_taken", "UNSIGNED INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackSession", "total_damage_dealt", "UNSIGNED INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackSession", "low_force_windows", "UNSIGNED SMALLINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackSession", "knockdown_events", "UNSIGNED SMALLINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackSession", "counter_successes", "UNSIGNED SMALLINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackSession", "punish_successes", "UNSIGNED SMALLINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackSession", "reset_successes", "UNSIGNED SMALLINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackSession", "saber_return_punishes", "UNSIGNED SMALLINT DEFAULT 0");
 
 	sql = "CREATE TABLE IF NOT EXISTS LocalArcadeTrackEvent("
 		"id INTEGER PRIMARY KEY, session_id INTEGER, participant_key VARCHAR(64), participant_label VARCHAR(36), "
@@ -640,6 +689,28 @@ static void G_EnsureLocalDuelTrackingSchema(sqlite3 *db)
 	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "yaw_sweep", "SMALLINT DEFAULT 0");
 	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "attack_elapsed_ms", "UNSIGNED SMALLINT DEFAULT 0");
 	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "throw_yaw_offset", "SMALLINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackAggregate", "duels", "UNSIGNED INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackAggregate", "participant_kind", "UNSIGNED TINYINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackAggregate", "side", "UNSIGNED TINYINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackAggregate", "matchup", "UNSIGNED TINYINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackAggregate", "wins", "UNSIGNED INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackAggregate", "losses", "UNSIGNED INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackAggregate", "total_force_spent", "UNSIGNED INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackAggregate", "total_force_regen", "UNSIGNED INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackAggregate", "low_force_deaths", "UNSIGNED INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackAggregate", "grip_cripples", "UNSIGNED INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackAggregate", "saber_throw_punishes", "UNSIGNED INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackAggregate", "force_push", "UNSIGNED INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackAggregate", "force_pull", "UNSIGNED INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackAggregate", "force_grip", "UNSIGNED INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackAggregate", "force_drain", "UNSIGNED INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackAggregate", "force_rage", "UNSIGNED INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackAggregate", "force_absorb", "UNSIGNED INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackAggregate", "force_protect", "UNSIGNED INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackAggregate", "force_heal", "UNSIGNED INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackAggregate", "force_speed", "UNSIGNED INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackAggregate", "force_seeing", "UNSIGNED INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackAggregate", "force_unknown", "UNSIGNED INTEGER DEFAULT 0");
 
 	sql = "CREATE TABLE IF NOT EXISTS LocalArcadeTrackGeometry("
 		"id INTEGER PRIMARY KEY, session_id INTEGER, participant_key VARCHAR(64), opponent_key VARCHAR(64), "
@@ -2486,7 +2557,7 @@ static duel_track_power_t G_InferTrackedPowerSpend(gentity_t *ent, tracked_duel_
 	return G_MapForcePowerToTrackedPower(runtime->lastSelectedPower);
 }
 
-static void G_InsertTrackedParticipant(sqlite3 *db, sqlite3_int64 summaryId, tracked_duel_runtime_t *runtime, int won)
+static qboolean G_InsertTrackedParticipant(sqlite3 *db, sqlite3_int64 summaryId, tracked_duel_runtime_t *runtime, int won)
 {
 	sqlite3_stmt *stmt = NULL;
 	char *sql;
@@ -2494,7 +2565,7 @@ static void G_InsertTrackedParticipant(sqlite3 *db, sqlite3_int64 summaryId, tra
 	int matchup;
 
 	if (!runtime)
-		return;
+		return qfalse;
 
 	matchup = G_GetTrackedMatchup(runtime->side, runtime->opponentSide);
 	sql = "INSERT INTO LocalDuelTrackParticipant(summary_id, participant_key, participant_label, participant_kind, opponent_key, won, side, opponent_side, matchup, total_force_spent, total_force_regen, ending_force, ending_hp, ending_armor, low_force_windows, grip_cripple_events, saber_throw_punishes, knockdown_events, late_defense_spends, opening_tactic, primary_issue, spent_neutral, spent_advantage, spent_disadvantage, spent_panic, spent_finishing, force_push, force_pull, force_grip, force_drain, force_rage, force_absorb, force_protect, force_heal, force_speed, force_seeing, force_unknown) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
@@ -2545,11 +2616,16 @@ static void G_InsertTrackedParticipant(sqlite3 *db, sqlite3_int64 summaryId, tra
 	CALL_SQLITE(bind_int(stmt, 37, runtime->forceSpentByPower[DUEL_TRACK_POWER_UNKNOWN]));
 	s = sqlite3_step(stmt);
 	if (s != SQLITE_DONE)
+	{
 		G_ErrorPrint("ERROR: SQL Insert Failed (LocalDuelTrackParticipant)", s);
+		CALL_SQLITE(finalize(stmt));
+		return qfalse;
+	}
 	CALL_SQLITE(finalize(stmt));
+	return qtrue;
 }
 
-static void G_InsertTrackedEvents(sqlite3 *db, sqlite3_int64 summaryId, tracked_duel_runtime_t *runtime)
+static qboolean G_InsertTrackedEvents(sqlite3 *db, sqlite3_int64 summaryId, tracked_duel_runtime_t *runtime)
 {
 	sqlite3_stmt *stmt = NULL;
 	sqlite3_stmt *geomStmt = NULL;
@@ -2558,10 +2634,9 @@ static void G_InsertTrackedEvents(sqlite3 *db, sqlite3_int64 summaryId, tracked_
 	int s;
 	qboolean captureGeometry = qfalse;
 	qboolean hasAnyGeometry = qfalse;
-	qboolean insertFailed = qfalse;
 
 	if (!runtime || runtime->eventCount <= 0)
-		return;
+		return qtrue;
 
 	sql = "INSERT INTO LocalDuelTrackEvent(summary_id, participant_key, opponent_key, rel_time, event_index, event_type, power, amount, state, range_bucket, sequence_id, buttons, saber_move, enemy_saber_move, yaw_delta, opponent_label, opponent_kind, self_hp, self_armor, self_force, enemy_hp, enemy_armor, enemy_force, sequence_label, quality, note, swing_side, pre_swing_strafe, yaw_sweep, attack_elapsed_ms, throw_yaw_offset) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
@@ -2582,7 +2657,6 @@ static void G_InsertTrackedEvents(sqlite3 *db, sqlite3_int64 summaryId, tracked_
 		sql = "INSERT INTO LocalDuelTrackGeometry(summary_id, participant_key, opponent_key, rel_time, event_index, self_x, self_y, self_z, enemy_x, enemy_y, enemy_z, self_vx, self_vy, self_vz, enemy_vx, enemy_vy, enemy_vz, self_yaw, enemy_yaw) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 		CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &geomStmt, NULL));
 	}
-	CALL_SQLITE(exec(db, "BEGIN TRANSACTION", NULL, NULL, NULL));
 	for (i = 0; i < runtime->eventCount; i++)
 	{
 		tracked_duel_event_t *event = &runtime->events[i];
@@ -2621,8 +2695,10 @@ static void G_InsertTrackedEvents(sqlite3 *db, sqlite3_int64 summaryId, tracked_
 		if (s != SQLITE_DONE)
 		{
 			G_ErrorPrint("ERROR: SQL Insert Failed (LocalDuelTrackEvent)", s);
-			insertFailed = qtrue;
-			break;
+			CALL_SQLITE(finalize(stmt));
+			if (geomStmt)
+				CALL_SQLITE(finalize(geomStmt));
+			return qfalse;
 		}
 		CALL_SQLITE(reset(stmt));
 		CALL_SQLITE(clear_bindings(stmt));
@@ -2651,27 +2727,22 @@ static void G_InsertTrackedEvents(sqlite3 *db, sqlite3_int64 summaryId, tracked_
 			if (s != SQLITE_DONE)
 			{
 				G_ErrorPrint("ERROR: SQL Insert Failed (LocalDuelTrackGeometry)", s);
-				insertFailed = qtrue;
-				break;
+				CALL_SQLITE(finalize(stmt));
+				if (geomStmt)
+					CALL_SQLITE(finalize(geomStmt));
+				return qfalse;
 			}
 			CALL_SQLITE(reset(geomStmt));
 			CALL_SQLITE(clear_bindings(geomStmt));
 		}
 	}
-	if (insertFailed)
-	{
-		CALL_SQLITE(exec(db, "ROLLBACK", NULL, NULL, NULL));
-	}
-	else
-	{
-		CALL_SQLITE(exec(db, "COMMIT", NULL, NULL, NULL));
-	}
 	CALL_SQLITE(finalize(stmt));
-	if (captureGeometry && hasAnyGeometry)
+	if (geomStmt)
 		CALL_SQLITE(finalize(geomStmt));
+	return qtrue;
 }
 
-static void G_UpdateTrackedAggregate(sqlite3 *db, tracked_duel_runtime_t *runtime, qboolean won, qboolean draw)
+static qboolean G_UpdateTrackedAggregate(sqlite3 *db, tracked_duel_runtime_t *runtime, qboolean won, qboolean draw)
 {
 	sqlite3_stmt *stmt = NULL;
 	char *sql;
@@ -2679,7 +2750,7 @@ static void G_UpdateTrackedAggregate(sqlite3 *db, tracked_duel_runtime_t *runtim
 	int matchup;
 
 	if (!runtime)
-		return;
+		return qfalse;
 
 	matchup = G_GetTrackedMatchup(runtime->side, runtime->opponentSide);
 	sql = "INSERT OR IGNORE INTO LocalDuelTrackAggregate(participant_key, participant_kind, side, matchup, duels, wins, losses, total_force_spent, total_force_regen, low_force_deaths, grip_cripples, saber_throw_punishes, force_push, force_pull, force_grip, force_drain, force_rage, force_absorb, force_protect, force_heal, force_speed, force_seeing, force_unknown) VALUES (?, ?, ?, ?, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)";
@@ -2690,7 +2761,11 @@ static void G_UpdateTrackedAggregate(sqlite3 *db, tracked_duel_runtime_t *runtim
 	CALL_SQLITE(bind_int(stmt, 4, matchup));
 	s = sqlite3_step(stmt);
 	if (s != SQLITE_DONE)
+	{
 		G_ErrorPrint("ERROR: SQL Insert Failed (LocalDuelTrackAggregate init)", s);
+		CALL_SQLITE(finalize(stmt));
+		return qfalse;
+	}
 	CALL_SQLITE(finalize(stmt));
 
 	sql = "UPDATE LocalDuelTrackAggregate SET duels = duels + 1, wins = wins + ?, losses = losses + ?, total_force_spent = total_force_spent + ?, total_force_regen = total_force_regen + ?, low_force_deaths = low_force_deaths + ?, grip_cripples = grip_cripples + ?, saber_throw_punishes = saber_throw_punishes + ?, force_push = force_push + ?, force_pull = force_pull + ?, force_grip = force_grip + ?, force_drain = force_drain + ?, force_rage = force_rage + ?, force_absorb = force_absorb + ?, force_protect = force_protect + ?, force_heal = force_heal + ?, force_speed = force_speed + ?, force_seeing = force_seeing + ?, force_unknown = force_unknown + ? WHERE participant_key = ? AND participant_kind = ? AND side = ? AND matchup = ?";
@@ -2719,8 +2794,13 @@ static void G_UpdateTrackedAggregate(sqlite3 *db, tracked_duel_runtime_t *runtim
 	CALL_SQLITE(bind_int(stmt, 22, matchup));
 	s = sqlite3_step(stmt);
 	if (s != SQLITE_DONE)
+	{
 		G_ErrorPrint("ERROR: SQL Update Failed (LocalDuelTrackAggregate update)", s);
+		CALL_SQLITE(finalize(stmt));
+		return qfalse;
+	}
 	CALL_SQLITE(finalize(stmt));
+	return qtrue;
 }
 
 static void G_PersistTrackedDuel(tracked_duel_runtime_t *winnerRuntime, tracked_duel_runtime_t *loserRuntime, int duelType, qboolean draw)
@@ -2737,6 +2817,7 @@ static void G_PersistTrackedDuel(tracked_duel_runtime_t *winnerRuntime, tracked_
 	int startTimestamp;
 	tracked_duel_runtime_t *summaryFirst = winnerRuntime;
 	tracked_duel_runtime_t *summarySecond = loserRuntime;
+	qboolean persistOk = qtrue;
 
 	if (!winnerRuntime || !loserRuntime)
 		return;
@@ -2755,6 +2836,13 @@ static void G_PersistTrackedDuel(tracked_duel_runtime_t *winnerRuntime, tracked_
 		return;
 	G_EnsureLocalArcadeSchema(db);
 	G_EnsureLocalDuelTrackingSchema(db);
+	s = sqlite3_exec(db, "BEGIN TRANSACTION", NULL, NULL, NULL);
+	if (s != SQLITE_OK)
+	{
+		G_ErrorPrint("ERROR: SQL Begin Failed (LocalDuelTrack persist)", s);
+		CALL_SQLITE(close(db));
+		return;
+	}
 
 	sql = "INSERT INTO LocalDuelTrackSummary(source_context, start_time, end_time, duration, type, mapname, winner_key, winner_label, winner_kind, winner_side, loser_key, loser_label, loser_kind, loser_side, draw, winner_opening, loser_opening) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
@@ -2777,16 +2865,32 @@ static void G_PersistTrackedDuel(tracked_duel_runtime_t *winnerRuntime, tracked_
 	CALL_SQLITE(bind_text(stmt, 17, summarySecond->openingTactic, -1, SQLITE_STATIC));
 	s = sqlite3_step(stmt);
 	if (s != SQLITE_DONE)
+	{
 		G_ErrorPrint("ERROR: SQL Insert Failed (LocalDuelTrackSummary)", s);
+		persistOk = qfalse;
+	}
 	CALL_SQLITE(finalize(stmt));
-	summaryId = sqlite3_last_insert_rowid(db);
+	if (persistOk)
+	{
+		summaryId = sqlite3_last_insert_rowid(db);
+		persistOk = G_InsertTrackedParticipant(db, summaryId, winnerRuntime, draw ? -1 : 1);
+	}
+	if (persistOk)
+		persistOk = G_InsertTrackedParticipant(db, summaryId, loserRuntime, draw ? -1 : 0);
+	if (persistOk)
+		persistOk = G_InsertTrackedEvents(db, summaryId, winnerRuntime);
+	if (persistOk)
+		persistOk = G_InsertTrackedEvents(db, summaryId, loserRuntime);
+	if (persistOk)
+		persistOk = G_UpdateTrackedAggregate(db, winnerRuntime, draw ? qfalse : qtrue, draw);
+	if (persistOk)
+		persistOk = G_UpdateTrackedAggregate(db, loserRuntime, qfalse, draw);
 
-	G_InsertTrackedParticipant(db, summaryId, winnerRuntime, draw ? -1 : 1);
-	G_InsertTrackedParticipant(db, summaryId, loserRuntime, draw ? -1 : 0);
-	G_InsertTrackedEvents(db, summaryId, winnerRuntime);
-	G_InsertTrackedEvents(db, summaryId, loserRuntime);
-	G_UpdateTrackedAggregate(db, winnerRuntime, qtrue, draw);
-	G_UpdateTrackedAggregate(db, loserRuntime, qfalse, draw);
+	s = sqlite3_exec(db, persistOk ? "COMMIT" : "ROLLBACK", NULL, NULL, NULL);
+	if (s != SQLITE_OK)
+		G_ErrorPrint(persistOk ?
+			"ERROR: SQL Commit Failed (LocalDuelTrack persist)" :
+			"ERROR: SQL Rollback Failed (LocalDuelTrack persist)", s);
 
 	CALL_SQLITE(close(db));
 }
@@ -3847,8 +3951,100 @@ void G_AddPlayerLog(char *name, char *strIP, char *guid) {
 	//Somehow make this sorted..
 }
 
-qboolean G_GetDuelParticipantName(gentity_t *ent, char *name, int nameSize) {
+static int G_GetDuelParticipantBotLevel(gentity_t *ent)
+{
 	char userinfo[MAX_INFO_STRING];
+	int level;
+
+	if (!g_eloRanking.integer || !g_newBotAI.integer || !ent || !ent->client || !(ent->r.svFlags & SVF_BOT))
+		return 0;
+
+	trap->GetUserinfo(ent->s.number, userinfo, sizeof(userinfo));
+	level = atoi(Info_ValueForKey(userinfo, "skill"));
+	if (level < BOT_DUEL_LEVEL_MIN || level > BOT_DUEL_LEVEL_MAX)
+		return 0;
+
+	return level;
+}
+
+static qboolean G_GetDuelBotIdentityName(gentity_t *ent, int botLevel, char *name, int nameSize)
+{
+	char userinfo[MAX_INFO_STRING];
+	char personality[MAX_QPATH];
+	char baseName[64];
+	const char *sourceName = NULL;
+	char *slash;
+	char *backslash;
+	char *dot;
+
+	if (!ent || !ent->client || !name || nameSize < 1)
+		return qfalse;
+
+	baseName[0] = '\0';
+	if (ent->client->pers.netname_nocolor[0])
+	{
+		Q_strncpyz(baseName, ent->client->pers.netname_nocolor, sizeof(baseName));
+	}
+	else if (ent->client->pers.netname[0])
+	{
+		Q_strncpyz(baseName, ent->client->pers.netname, sizeof(baseName));
+	}
+	else
+	{
+		trap->GetUserinfo(ent->s.number, userinfo, sizeof(userinfo));
+		Q_strncpyz(personality, Info_ValueForKey(userinfo, "personality"), sizeof(personality));
+		sourceName = personality;
+		slash = strrchr(personality, '/');
+		backslash = strrchr(personality, '\\');
+		if (backslash && (!slash || backslash > slash))
+			slash = backslash;
+		if (slash)
+			sourceName = slash + 1;
+		if (sourceName && sourceName[0])
+		{
+			Q_strncpyz(baseName, sourceName, sizeof(baseName));
+			dot = strrchr(baseName, '.');
+			if (dot)
+				*dot = '\0';
+		}
+	}
+
+	if (!baseName[0])
+		return qfalse;
+
+	if (botLevel > 0)
+		Com_sprintf(name, nameSize, "%s [bot L%i]", baseName, botLevel);
+	else
+		Q_strncpyz(name, baseName, nameSize);
+	return qtrue;
+}
+
+static int G_ParseBotLevelName(const char *name)
+{
+	int level = 0;
+	const char *tag = NULL;
+
+	if (!name || !name[0])
+		return 0;
+
+	if (!strncmp(name, "botlvl", 6))
+	{
+		level = atoi(name + 6);
+	}
+	else
+	{
+		tag = strstr(name, "[bot L");
+		if (tag)
+			level = atoi(tag + 6);
+	}
+
+	if (level < BOT_DUEL_LEVEL_MIN || level > BOT_DUEL_LEVEL_MAX)
+		return 0;
+
+	return level;
+}
+
+qboolean G_GetDuelParticipantName(gentity_t *ent, char *name, int nameSize) {
 	int level;
 
 	if (!name || nameSize < 1) {
@@ -3866,18 +4062,12 @@ qboolean G_GetDuelParticipantName(gentity_t *ent, char *name, int nameSize) {
 		return qtrue;
 	}
 
-	if (!g_eloRanking.integer || !g_newBotAI.integer || !(ent->r.svFlags & SVF_BOT)) {
+	level = G_GetDuelParticipantBotLevel(ent);
+	if (!level) {
 		return qfalse;
 	}
 
-	trap->GetUserinfo(ent->s.number, userinfo, sizeof(userinfo));
-	level = atoi(Info_ValueForKey(userinfo, "skill"));
-	if (level < 1 || level > 10) {
-		return qfalse;
-	}
-
-	Com_sprintf(name, nameSize, "botlvl%i", level);
-	return qtrue;
+	return G_GetDuelBotIdentityName(ent, level, name, nameSize);
 }
 
 #if _ELORANKING	
@@ -4011,40 +4201,7 @@ int GetEloKValue(int numDuels) { //Also take rank into account
 	return k3;
 }
 
-static int G_ParseBotLevelName(const char *name)
-{
-	int level = 0;
-	const char *suffix;
-	const char *p;
-
-	if (!name || strncmp(name, "botlvl", 6))
-	{
-		return 0;
-	}
-
-	suffix = name + 6;
-	if (!suffix[0])
-	{
-		return 0;
-	}
-	for (p = suffix; *p; p++)
-	{
-		if (*p < '0' || *p > '9')
-		{
-			return 0;
-		}
-	}
-
-	level = atoi(suffix);
-	if (level < BOT_DUEL_LEVEL_MIN || level > BOT_DUEL_LEVEL_MAX)
-	{
-		return 0;
-	}
-
-	return level;
-}
-
-static int G_GetRankedBotVsBotLevelDuelsToday(int botLevel, int end_time, sqlite3 *db)
+static int G_GetRankedBotVsBotLevelDuelsToday(int botLevel, int opponentLevel, int end_time, sqlite3 *db)
 {
 	char *sql;
 	sqlite3_stmt *stmt;
@@ -4054,8 +4211,13 @@ static int G_GetRankedBotVsBotLevelDuelsToday(int botLevel, int end_time, sqlite
 	sqlite3_int64 dayEnd;
 	sqlite3_int64 endTime64;
 	char botLevelName[16];
+	char botLevelTaggedName[32];
+	char opponentLevelName[16];
+	char opponentLevelTaggedName[32];
 
-	if (!db || botLevel < BOT_DUEL_LEVEL_MIN || botLevel > BOT_DUEL_LEVEL_MAX)
+	if (!db ||
+		botLevel < BOT_DUEL_LEVEL_MIN || botLevel > BOT_DUEL_LEVEL_MAX ||
+		opponentLevel < BOT_DUEL_LEVEL_MIN || opponentLevel > BOT_DUEL_LEVEL_MAX)
 	{
 		return 0;
 	}
@@ -4065,17 +4227,29 @@ static int G_GetRankedBotVsBotLevelDuelsToday(int botLevel, int end_time, sqlite
 	dayStart = endTime64 - (endTime64 % 86400);
 	dayEnd = dayStart + 86400;
 	Com_sprintf(botLevelName, sizeof(botLevelName), "botlvl%i", botLevel);
+	Com_sprintf(botLevelTaggedName, sizeof(botLevelTaggedName), "%% [bot L%i]", botLevel);
+	Com_sprintf(opponentLevelName, sizeof(opponentLevelName), "botlvl%i", opponentLevel);
+	Com_sprintf(opponentLevelTaggedName, sizeof(opponentLevelTaggedName), "%% [bot L%i]", opponentLevel);
 
 	sql = "SELECT COUNT(*) FROM LocalDuel "
 		"WHERE end_time >= ? AND end_time < ? "
 		"AND winner_elo > -998 AND loser_elo > -998 "
-		"AND winner LIKE 'botlvl%' AND loser LIKE 'botlvl%' "
-		"AND (winner = ? OR loser = ?)";
+		"AND ("
+			"(((winner = ? OR winner LIKE ?) AND (loser = ? OR loser LIKE ?)))"
+			" OR "
+			"(((loser = ? OR loser LIKE ?) AND (winner = ? OR winner LIKE ?)))"
+		")";
 	CALL_SQLITE (prepare_v2 (db, sql, strlen (sql) + 1, & stmt, NULL));
 	CALL_SQLITE (bind_int64 (stmt, 1, dayStart));
 	CALL_SQLITE (bind_int64 (stmt, 2, dayEnd));
 	CALL_SQLITE (bind_text (stmt, 3, botLevelName, -1, SQLITE_TRANSIENT));
-	CALL_SQLITE (bind_text (stmt, 4, botLevelName, -1, SQLITE_TRANSIENT));
+	CALL_SQLITE (bind_text (stmt, 4, botLevelTaggedName, -1, SQLITE_TRANSIENT));
+	CALL_SQLITE (bind_text (stmt, 5, opponentLevelName, -1, SQLITE_TRANSIENT));
+	CALL_SQLITE (bind_text (stmt, 6, opponentLevelTaggedName, -1, SQLITE_TRANSIENT));
+	CALL_SQLITE (bind_text (stmt, 7, botLevelName, -1, SQLITE_TRANSIENT));
+	CALL_SQLITE (bind_text (stmt, 8, botLevelTaggedName, -1, SQLITE_TRANSIENT));
+	CALL_SQLITE (bind_text (stmt, 9, opponentLevelName, -1, SQLITE_TRANSIENT));
+	CALL_SQLITE (bind_text (stmt, 10, opponentLevelTaggedName, -1, SQLITE_TRANSIENT));
 
 	s = sqlite3_step(stmt);
 	if (s == SQLITE_ROW) {
@@ -4089,26 +4263,19 @@ static int G_GetRankedBotVsBotLevelDuelsToday(int botLevel, int end_time, sqlite
 	return count;
 }
 
-static qboolean G_ShouldRankBotVsBotDuel(const char *winner, const char *loser, int end_time, sqlite3 *db)
+static qboolean G_ShouldRankBotVsBotDuel(int winnerLevel, int loserLevel, int end_time, sqlite3 *db)
 {
-	int winnerLevel;
-	int loserLevel;
 	int winnerDailyCount;
 	int loserDailyCount;
-
-	winnerLevel = G_ParseBotLevelName(winner);
-	loserLevel = G_ParseBotLevelName(loser);
-	// Duel result names come from G_GetDuelParticipantName: bots without account names are
-	// normalized to botlvlN so rank throttling can treat bot levels as a shared bucket.
 
 	if (!winnerLevel || !loserLevel)
 	{
 		return qtrue;
 	}
 
-	winnerDailyCount = G_GetRankedBotVsBotLevelDuelsToday(winnerLevel, end_time, db);
+	winnerDailyCount = G_GetRankedBotVsBotLevelDuelsToday(winnerLevel, loserLevel, end_time, db);
 	loserDailyCount = (loserLevel == winnerLevel) ? winnerDailyCount :
-		G_GetRankedBotVsBotLevelDuelsToday(loserLevel, end_time, db);
+		G_GetRankedBotVsBotLevelDuelsToday(loserLevel, winnerLevel, end_time, db);
 
 	if (loserLevel == winnerLevel)
 	{
@@ -4624,7 +4791,7 @@ void Cmd_DuelTop10_f(gentity_t *ent) {
 }
 #endif
 
-void G_AddDuel(char *winner, char *loser, int start_time, int type, int winner_hp, int winner_shield) {
+void G_AddDuel(char *winner, char *loser, int winnerLevel, int loserLevel, int start_time, int type, int winner_hp, int winner_shield) {
 	sqlite3 * db;
 	time_t	rawtime;
 	char	string[256] = {0};
@@ -4645,7 +4812,7 @@ void G_AddDuel(char *winner, char *loser, int start_time, int type, int winner_h
 	if (g_eloRanking.integer && duelLogType != 21) {
 		CALL_SQLITE (open (LOCAL_DB_PATH, & db));
 		{
-			const qboolean shouldRankDuel = G_ShouldRankBotVsBotDuel(winner, loser, rawtime, db);
+			const qboolean shouldRankDuel = G_ShouldRankBotVsBotDuel(winnerLevel, loserLevel, rawtime, db);
 			if (shouldRankDuel)
 			{
 				G_AddDuelElo(winner, loser, duelLogType, duration, winner_hp, winner_shield, 0, rawtime, db);
