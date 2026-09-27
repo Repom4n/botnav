@@ -239,6 +239,9 @@ static qboolean BotTargetModeAllowsBotEnemies(int targetMode);
 static int BotGetTargetTimeoutMs(void);
 static qboolean NewBotAI_ShouldRetainLostSightTarget(bot_state_t *bs, gentity_t *enemy);
 static void NewBotAI_ClearCurrentEnemyLock(bot_state_t *bs);
+static void NewBotAI_FaceEntityImmediately(bot_state_t *bs, gentity_t *target);
+static qboolean NewBotAI_HasSafeSaberThrowClearance(bot_state_t *bs);
+static qboolean NewBotAI_IsEnemyReadyToBlockFreshSaberThrow(bot_state_t *bs);
 
 #define NEWBOTAI_DRAIN_TICK_MSEC 100
 #define NEWBOTAI_COMBAT_DISENGAGE_COOLDOWN_MS 2500
@@ -15487,6 +15490,7 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 	const int forceLead = ourForce - hisForce;
 	const qboolean enemyKnockedDown = BG_InKnockDown(bs->currentEnemy->client->ps.legsAnim) ? qtrue : qfalse;
 	const qboolean enemyPreGetupResponse = NewBotAI_IsEnemyPreGetupKnockdownState(bs);
+	const qboolean enemyAirborne = (bs->currentEnemy->client->ps.groundEntityNum == ENTITYNUM_NONE) ? qtrue : qfalse;
 	const float saberthrowBias = BotGetChanceBiasPercent(bot_saberthrowbias.value);
 	const int antiDrainWeight = NewBotAI_GetAntiDrainWeight(bs);
 	int weight = 0;
@@ -15522,6 +15526,10 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 	//throw that is a very clear kill: otherwise keep the saber in hand and cash the
 	//force advantage in with drain taps and pullkicks instead of extending the throw.
 	if (NewBotAI_ShouldSuppressDrainlockSaberThrow(bs))
+	{
+		return 0;
+	}
+	if (!NewBotAI_HasSafeSaberThrowClearance(bs))
 	{
 		return 0;
 	}
@@ -15577,6 +15585,9 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 		int aggressionBonus = BotGetAggressionWeightedBonus(bs, saberthrowBias, 45, qtrue);
 		int finishingBonus = 0;
 		int armorForceBonus = 0;
+		const qboolean aggressiveFinishWindow = ((enemyHealth > 0 && enemyHealth <= 35) ||
+			(enemyTotalHealth > 0 && enemyTotalHealth <= 45) ||
+			(enemyKnockedDown && enemyTotalHealth <= 70)) ? qtrue : qfalse;
 		const qboolean flipkickUnavailable = (!NewBotAI_CanAttemptFlipkick(bs)) ? qtrue : qfalse;
 		const qboolean enemyAttacking = BG_SaberInAttack(bs->currentEnemy->client->ps.saberMove) ? qtrue : qfalse;
 		const qboolean enemyUsingForce = (bs->currentEnemy->client->ps.fd.forcePowersActive != 0) ? qtrue : qfalse;
@@ -15587,6 +15598,7 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 		const qboolean enemyDefenseDown = (enemyAttacking || enemyUsingForce || enemyThrowing) ? qtrue : qfalse;
 		const qboolean closePTKNoPull = (NewBotAI_GetPTKWeight(bs) > 0 &&
 			NewBotAI_ShouldSkipPullForNaturalFlipkickPTK(bs)) ? qtrue : qfalse;
+		const qboolean enemyStableDefense = NewBotAI_IsEnemyReadyToBlockFreshSaberThrow(bs);
 
 		if (enemyTotalHealth <= 70)
 		{
@@ -15611,6 +15623,15 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 		{
 			finishingBonus += 20;
 		}
+		if ((enemyKnockedDown && enemyPreGetupResponse) ||
+			(enemyAirborne && forceLead >= 0 && enemyTotalHealth <= 60))
+		{
+			finishingBonus += 20;
+		}
+		if (aggressiveFinishWindow && (enemyDefenseDown || enemyAirborne || enemyKnockedDown))
+		{
+			finishingBonus += 20;
+		}
 		if (forceLead > 0 && enemyArmor > 0)
 		{
 			armorForceBonus = armorForceBonusBase;
@@ -15622,6 +15643,10 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 			{
 				armorForceBonus += armorForceBonusStep;
 			}
+		}
+		if (enemyStableDefense && !aggressiveFinishWindow)
+		{
+			return 0;
 		}
 
 		if (aggressionBonus + finishingBonus + antiDrainWeight + armorForceBonus > weight)
@@ -16937,11 +16962,6 @@ static qboolean BotTryAcceptAnyDuelChallenge(bot_state_t *bs, int targetMode)
 		return qfalse;
 	}
 
-	if (NewBotAI_InFFAExploreWindow(bs, targetMode))
-	{
-		return qfalse;
-	}
-
 	for (i = 0; i < MAX_CLIENTS; i++)
 	{
 		gentity_t *challenger = &g_entities[i];
@@ -16967,18 +16987,25 @@ static qboolean BotTryAcceptAnyDuelChallenge(bot_state_t *bs, int targetMode)
 			continue;
 		}
 
+		bs->currentEnemy = challenger;
+		NewBotAI_FaceEntityImmediately(bs, challenger);
+
 		if (duelType <= 1 && bs->cur_ps.weapon == WP_SABER && !bs->cur_ps.saberHolstered)
 		{
 			Cmd_ToggleSaber_f(&g_entities[bs->client]);
+			if (g_entities[bs->client].client->ps.saberHolstered)
+			{
+				Cmd_EngageDuel_f(&g_entities[bs->client], duelType);
+			}
 		}
 		else
 		{
 			Cmd_EngageDuel_f(&g_entities[bs->client], duelType);
 		}
 
-		bs->currentEnemy = challenger;
 		bs->doAttack = 0;
 		bs->doAltAttack = 0;
+		bs->timeToReact = level.time;
 		bs->botDuelRequestThrottleUntil = level.time + NEWBOTAI_DUEL_REQUEST_MIN_INTERVAL_MS;
 		bs->duelNoStrafeUntil = level.time + Com_Clampi(0, 10000, bot_duel_nostrafetime.integer);
 		bs->beStill = level.time + 2500;
@@ -17009,6 +17036,101 @@ static void NewBotAI_RunForceDuelOnly(bot_state_t *bs)
 	{
 		NewBotAI_RunNavigationOrAlone(bs, 0.0f);
 	}
+}
+
+static void NewBotAI_FaceEntityImmediately(bot_state_t *bs, gentity_t *target)
+{
+	vec3_t toTarget;
+	vec3_t targetAngles;
+
+	if (!bs || !target || !target->client)
+		return;
+
+	VectorSubtract(target->client->ps.origin, bs->origin, toTarget);
+	toTarget[2] += target->client->ps.viewheight - bs->cur_ps.viewheight;
+	vectoangles(toTarget, targetAngles);
+	VectorCopy(targetAngles, bs->goalAngles);
+	VectorCopy(targetAngles, bs->ideal_viewangles);
+	SetClientViewAngle(&g_entities[bs->client], targetAngles);
+}
+
+static qboolean NewBotAI_HasSafeSaberThrowClearance(bot_state_t *bs)
+{
+	trace_t tr;
+	vec3_t start;
+	vec3_t end;
+	vec3_t toEnemy;
+	vec3_t forward;
+	vec3_t right;
+	vec3_t traceEnds[3];
+	int i;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+		return qfalse;
+
+	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->origin, toEnemy);
+	if (VectorNormalize(toEnemy) <= 0.0f)
+		return qfalse;
+
+	VectorCopy(bs->origin, start);
+	start[2] += (float)(bs->cur_ps.viewheight - 8);
+	VectorCopy(toEnemy, forward);
+	VectorSet(right, -forward[1], forward[0], 0.0f);
+	if (VectorNormalize(right) <= 0.0f)
+	{
+		VectorSet(right, 0.0f, 1.0f, 0.0f);
+	}
+
+	VectorMA(start, 48.0f, forward, traceEnds[0]);
+	VectorMA(traceEnds[0], 16.0f, right, traceEnds[1]);
+	VectorMA(traceEnds[0], -16.0f, right, traceEnds[2]);
+
+	for (i = 0; i < 3; i++)
+	{
+		JP_Trace(&tr, start, NULL, NULL, traceEnds[i], bs->client, MASK_PLAYERSOLID, qfalse, 0, 0);
+		if (tr.fraction < 1.0f && tr.entityNum != bs->currentEnemy->s.number)
+			return qfalse;
+	}
+
+	end[0] = start[0];
+	end[1] = start[1];
+	end[2] = start[2] + 12.0f;
+	JP_Trace(&tr, start, NULL, NULL, end, bs->client, MASK_PLAYERSOLID, qfalse, 0, 0);
+	return (tr.fraction == 1.0f) ? qtrue : qfalse;
+}
+
+static qboolean NewBotAI_IsEnemyReadyToBlockFreshSaberThrow(bot_state_t *bs)
+{
+	vec3_t toBot;
+	vec3_t toBotAngles;
+	const playerState_t *enemyPS;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+		return qfalse;
+
+	enemyPS = &bs->currentEnemy->client->ps;
+	if (enemyPS->weapon != WP_SABER || enemyPS->saberInFlight)
+		return qfalse;
+	if (BG_InKnockDown(enemyPS->legsAnim) || PM_InRoll(enemyPS->legsAnim))
+		return qfalse;
+	if (BG_SaberInAttack(enemyPS->saberMove) || PM_SaberInStart(enemyPS->saberMove) ||
+		PM_SaberInTransition(enemyPS->saberMove))
+		return qfalse;
+	if (enemyPS->fd.forcePowersActive != 0)
+		return qfalse;
+	if (enemyPS->weaponstate != WEAPON_READY && enemyPS->weaponstate != WEAPON_IDLE)
+		return qfalse;
+	if (bs->frame_Enemy_Len > 256.0f)
+		return qfalse;
+
+	VectorSubtract(bs->origin, bs->currentEnemy->client->ps.origin, toBot);
+	vectoangles(toBot, toBotAngles);
+	if (fabs(AngleDelta(enemyPS->viewangles[YAW], toBotAngles[YAW])) > 35.0f)
+		return qfalse;
+	if (fabs(AngleDelta(enemyPS->viewangles[PITCH], toBotAngles[PITCH])) > 20.0f)
+		return qfalse;
+
+	return qtrue;
 }
 
 static qboolean NewBotAI_IsDirectPathToEnemyBlocked(bot_state_t *bs)
@@ -17107,7 +17229,18 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	if (bs->wasDuelInProgress && !bs->cur_ps.duelInProgress &&
 		BotTargetModeAllowsBotDuelChallenges(targetMode))
 	{
-		if (oldEnemy && (g_entities[bs->client].r.svFlags & SVF_BOT) && (oldEnemy->r.svFlags & SVF_BOT))
+		gentity_t *duelEndedEnemy = oldEnemy;
+
+		NewBotAI_ClearCurrentEnemyLock(bs);
+		oldEnemy = NULL;
+		bs->lastVisibleEnemyIndex = -1;
+		bs->lastVisibleEnemyTime = 0;
+		bs->enemySeenTime = 0;
+		bs->enemyWaypointFallbackIndex = -1;
+		bs->enemyWaypointFallbackTime = 0;
+		bs->enemyWaypointFallbackEnemyNum = -1;
+
+		if (duelEndedEnemy && (g_entities[bs->client].r.svFlags & SVF_BOT) && (duelEndedEnemy->r.svFlags & SVF_BOT))
 		{
 			bot_state_t *oldEnemyBS = NULL;
 			const int blacklistUntil = level.time + NEWBOTAI_DUEL_TARGET_BLACKLIST_MS;
@@ -17117,13 +17250,13 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 				BotTargetModeUsesExtendedBotDuelCooldown(targetMode) ? 1 : 0,
 				1,
 				1);
-			if (oldEnemy->s.number >= 0 && oldEnemy->s.number < MAX_CLIENTS)
+			if (duelEndedEnemy->s.number >= 0 && duelEndedEnemy->s.number < MAX_CLIENTS)
 			{
-				oldEnemyBS = botstates[oldEnemy->s.number];
+				oldEnemyBS = botstates[duelEndedEnemy->s.number];
 			}
-			bs->duelBlacklistIndex = oldEnemy->s.number;
+			bs->duelBlacklistIndex = duelEndedEnemy->s.number;
 			bs->duelBlacklistUntil = blacklistUntil;
-			if (bs->currentEnemy == oldEnemy)
+			if (bs->currentEnemy == duelEndedEnemy)
 			{
 				NewBotAI_ClearCurrentEnemyLock(bs);
 			}
@@ -17153,9 +17286,9 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		bs->duelCompletedCount++;
 		if (bs->duelCompletedCount >= bot_duelcountmax.integer)
 		{
-			if (bs->currentEnemy && bs->currentEnemy->client)
+			if (duelEndedEnemy && duelEndedEnemy->client)
 			{
-				bs->duelBlacklistIndex = bs->currentEnemy->s.number;
+				bs->duelBlacklistIndex = duelEndedEnemy->s.number;
 				bs->duelBlacklistUntil = level.time + NEWBOTAI_DUEL_TARGET_BLACKLIST_MS;
 			}
 			if (bot_ffaexploretime.integer > 0)
@@ -17329,14 +17462,18 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	}
 	if (!bs->cur_ps.saberInFlight)
 		bs->saberThrowStartTime = 0;
-
-	responseDelay = BotGetReflexScaledResponseDelayMs(bs);
-	if (responseDelay > 0 && bs->currentEnemy && bs->currentEnemy->client)
-	{
-		if (bs->currentEnemy != oldEnemy)
+		if (BotTryAcceptAnyDuelChallenge(bs, targetMode))
 		{
-			bs->timeToReact = level.time + responseDelay;
+			return;
 		}
+
+		responseDelay = BotGetReflexScaledResponseDelayMs(bs);
+		if (responseDelay > 0 && bs->currentEnemy && bs->currentEnemy->client)
+		{
+			if (bs->currentEnemy != oldEnemy)
+			{
+				bs->timeToReact = level.time + responseDelay;
+			}
 		if (bs->timeToReact > level.time)
 		{
 			bs->doAttack = 0;
@@ -17346,10 +17483,6 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		}
 	}
 
-	if (BotTryAcceptAnyDuelChallenge(bs, targetMode))
-	{
-		return;
-	}
 	if (NewBotAI_TryIssueBotDuelChallenge(bs, targetMode))
 	{
 		return;

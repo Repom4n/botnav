@@ -1155,7 +1155,7 @@ static int GetTeamPlayers(int team) {
 SetTeam
 =================
 */
- void G_AddDuel(char *winner, char *loser, int start_time, int type, int winner_hp, int winner_shield);
+ void G_AddDuel(char *winner, char *loser, int winnerLevel, int loserLevel, int start_time, int type, int winner_hp, int winner_shield);
 qboolean G_GetDuelParticipantName(gentity_t *ent, char *name, int nameSize);
 
 qboolean g_dontPenalizeTeam = qfalse;
@@ -1615,7 +1615,15 @@ void SetTeam( gentity_t *ent, char *s, qboolean forcedToJoin ) {//JAPRO - Modifi
 			ent->client->pers.lastUserName[0] && duelAgainst && duelAgainst->client && duelAgainst->client->pers.lastUserName[0]) {
 			if (!(ent->client->sess.accountFlags & JAPRO_ACCOUNTFLAG_NODUEL) && !(duelAgainst->client->sess.accountFlags & JAPRO_ACCOUNTFLAG_NODUEL))
 			{
-				G_AddDuel(duelAgainst->client->pers.lastUserName, ent->client->pers.lastUserName, duelAgainst->client->pers.duelStartTime, dueltypes[ent->client->ps.clientNum], duelAgainst->client->ps.stats[STAT_HEALTH], duelAgainst->client->ps.stats[STAT_ARMOR]);
+				G_AddDuel(
+					duelAgainst->client->pers.lastUserName,
+					ent->client->pers.lastUserName,
+					(duelAgainst->r.svFlags & SVF_BOT) ? atoi(Info_ValueForKey(duelAgainst->client->sess.userinfo, "skill")) : 0,
+					(ent->r.svFlags & SVF_BOT) ? atoi(Info_ValueForKey(ent->client->sess.userinfo, "skill")) : 0,
+					duelAgainst->client->pers.duelStartTime,
+					dueltypes[ent->client->ps.clientNum],
+					duelAgainst->client->ps.stats[STAT_HEALTH],
+					duelAgainst->client->ps.stats[STAT_ARMOR]);
 			}
 		}
 	}
