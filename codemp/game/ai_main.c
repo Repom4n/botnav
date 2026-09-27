@@ -17462,10 +17462,6 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	bs->saberThrowStartTime = 0;
 	}
 	pendingDuelChallenger = NewBotAI_GetPendingDuelChallenger(bs, targetMode, &pendingDuelType);
-	if (pendingDuelChallenger)
-	{
-	NewBotAI_FaceEntityImmediately(bs, pendingDuelChallenger);
-	}
 
 	responseDelay = BotGetReflexScaledResponseDelayMs(bs);
 	if (responseDelay > 0 && bs->currentEnemy && bs->currentEnemy->client)
@@ -17490,13 +17486,14 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	{
 	if (g_entities[bs->client].client->ps.weaponTime < 1)
 	{
+		NewBotAI_FaceEntityImmediately(bs, pendingDuelChallenger);
 		Cmd_ToggleSaber_f(&g_entities[bs->client]);
+		bs->doAttack = 0;
+		bs->doAltAttack = 0;
+		bs->duelNoStrafeUntil = level.time + Com_Clampi(0, 10000, bot_duel_nostrafetime.integer);
+		bs->beStill = level.time + 2500;
+		return;
 	}
-	bs->doAttack = 0;
-	bs->doAltAttack = 0;
-	bs->duelNoStrafeUntil = level.time + Com_Clampi(0, 10000, bot_duel_nostrafetime.integer);
-	bs->beStill = level.time + 2500;
-	return;
 	}
 	if (BotTryAcceptAnyDuelChallenge(bs, targetMode))
 	{
