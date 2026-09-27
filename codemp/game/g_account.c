@@ -186,7 +186,6 @@ typedef struct
 	int lastSaberMove;
 	int lastOpponentHealthArmor;
 	int lastAttackTime;
-	int lastAttackYaw;
 	int lastAttackSwingSide;
 	int lastAttackStrafeDir;
 	int lastDamageTakenTime;
@@ -248,7 +247,6 @@ typedef struct
 	int lastOpponentClientNum;
 	int lastOpponentHealthArmor;
 	int lastAttackTime;
-	int lastAttackYaw;
 	int lastAttackSwingSide;
 	int lastAttackStrafeDir;
 	int lastDamageTakenTime;
@@ -1258,7 +1256,7 @@ static short G_GetTrackedAttackSweepValue(int swingSide, int attackElapsedMs)
 }
 
 static void G_FillTrackedEventCoachingContext(tracked_duel_event_t *event, int eventType,
-	int lastAttackTime, int lastAttackYaw, int lastAttackSwingSide, int lastAttackStrafeDir,
+	int lastAttackTime, int lastAttackSwingSide, int lastAttackStrafeDir,
 	int lastThrowTime, int lastThrowYawOffset, gentity_t *self, gentity_t *enemy)
 {
 	int swingSide;
@@ -1564,7 +1562,6 @@ static void G_AddTrackedDuelEvent(tracked_duel_runtime_t *runtime, int eventType
 	G_FillTrackedEventContext(event, self, enemy, captureGeometry);
 	G_FillTrackedEventCoachingContext(event, eventType,
 		runtime->lastAttackTime,
-		runtime->lastAttackYaw,
 		runtime->lastAttackSwingSide,
 		runtime->lastAttackStrafeDir,
 		runtime->lastThrowTime,
@@ -1737,7 +1734,6 @@ static void G_AddTrackedArcadeEvent(tracked_arcade_runtime_t *runtime, int event
 	G_FillTrackedEventContext(event, self, enemy, captureGeometry);
 	G_FillTrackedEventCoachingContext(event, eventType,
 		runtime->lastAttackTime,
-		runtime->lastAttackYaw,
 		runtime->lastAttackSwingSide,
 		runtime->lastAttackStrafeDir,
 		runtime->lastThrowTime,
@@ -2810,7 +2806,6 @@ void G_UpdateTrackedDuelFrame(gentity_t *ent)
 	{
 		G_TouchTrackedDuelSequence(runtime);
 		runtime->lastAttackTime = level.time;
-		runtime->lastAttackYaw = (int)AngleNormalize180(ent->client->ps.viewangles[YAW]);
 		runtime->lastAttackSwingSide = G_GetTrackedSwingSideValue(ent->client->ps.saberMove);
 		runtime->lastAttackStrafeDir = G_GetTrackedStrafeDirValue(&ent->client->pers.cmd);
 		G_AddTrackedDuelEvent(runtime, DUEL_TRACK_EVENT_ATTACK_START, level.time - runtime->duelStartTime,
@@ -2832,7 +2827,6 @@ void G_UpdateTrackedDuelFrame(gentity_t *ent)
 	{
 		G_TouchTrackedDuelSequence(runtime);
 		runtime->lastAttackTime = level.time;
-		runtime->lastAttackYaw = (int)AngleNormalize180(ent->client->ps.viewangles[YAW]);
 		runtime->lastAttackSwingSide = G_GetTrackedSwingSideValue(ent->client->ps.saberMove);
 		runtime->lastAttackStrafeDir = G_GetTrackedStrafeDirValue(&ent->client->pers.cmd);
 		G_AddTrackedDuelEvent(runtime, DUEL_TRACK_EVENT_ATTACK_CHAIN, level.time - runtime->duelStartTime,
@@ -3331,7 +3325,6 @@ void G_UpdateTrackedArcadeCombatFrame(gentity_t *ent)
 	{
 		G_TouchTrackedArcadeSequence(runtime);
 		runtime->lastAttackTime = level.time;
-		runtime->lastAttackYaw = (int)AngleNormalize180(ent->client->ps.viewangles[YAW]);
 		runtime->lastAttackSwingSide = G_GetTrackedSwingSideValue(ent->client->ps.saberMove);
 		runtime->lastAttackStrafeDir = G_GetTrackedStrafeDirValue(&ent->client->pers.cmd);
 		G_AddTrackedArcadeEvent(runtime, DUEL_TRACK_EVENT_ATTACK_START, level.time - runtime->startTime, attackButtons, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, (attackButtons & BUTTON_ALT_ATTACK) ? "alt" : "attack", ent, opponent);
@@ -3349,7 +3342,6 @@ void G_UpdateTrackedArcadeCombatFrame(gentity_t *ent)
 	{
 		G_TouchTrackedArcadeSequence(runtime);
 		runtime->lastAttackTime = level.time;
-		runtime->lastAttackYaw = (int)AngleNormalize180(ent->client->ps.viewangles[YAW]);
 		runtime->lastAttackSwingSide = G_GetTrackedSwingSideValue(ent->client->ps.saberMove);
 		runtime->lastAttackStrafeDir = G_GetTrackedStrafeDirValue(&ent->client->pers.cmd);
 		G_AddTrackedArcadeEvent(runtime, DUEL_TRACK_EVENT_ATTACK_CHAIN, level.time - runtime->startTime, ent->client->ps.saberMove, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, "chain", ent, opponent);
