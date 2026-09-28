@@ -210,6 +210,13 @@ static inline int NewBotAI_ShouldAbortSpeedAttack(
 	return 0;
 }
 
+static inline int NewBotAI_IsSpeedFinisherWindow(int enemyHealth, int enemyArmor)
+{
+	const int enemyTotalHealth = enemyHealth + enemyArmor;
+
+	return ((enemyHealth <= 30 && enemyArmor <= 0) || enemyTotalHealth < 50) ? 1 : 0;
+}
+
 static inline float NewBotAI_GetViewAngleAxisFactor(float factor, int isYawAxis, int escapeYawOverrideActive)
 {
 	if (isYawAxis && escapeYawOverrideActive)

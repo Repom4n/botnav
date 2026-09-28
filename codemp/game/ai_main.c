@@ -9342,6 +9342,7 @@ void NewBotAI_Speeding(bot_state_t *bs)
 	const int ourForce = bs->cur_ps.fd.forcePower;
 	qboolean lostAdvantage = qfalse;
 	qboolean trappedByDrain = qfalse;
+	qboolean enemyGripThreat = qfalse;
 	qboolean speedFinisherWindow = qfalse;
 
 	if (bs->currentEnemy && bs->currentEnemy->client)
@@ -9350,8 +9351,8 @@ void NewBotAI_Speeding(bot_state_t *bs)
 		enemyArmor = bs->currentEnemy->client->ps.stats[STAT_ARMOR];
 		enemyHealthTotal = enemyHealth + enemyArmor;
 		enemyForce = bs->currentEnemy->client->ps.fd.forcePower;
-		speedFinisherWindow = ((enemyHealth <= 30 && enemyArmor <= 0) ||
-			enemyHealthTotal < 50) ? qtrue : qfalse;
+		speedFinisherWindow = NewBotAI_IsSpeedFinisherWindow(enemyHealth, enemyArmor) ? qtrue : qfalse;
+		enemyGripThreat = (enemyGripActive && bs->frame_Enemy_Len < 512.0f) ? qtrue : qfalse;
 		if (ourHealthTotal + 10 < enemyHealthTotal || ourForce + 15 < enemyForce)
 		{
 			lostAdvantage = qtrue;
@@ -9372,7 +9373,7 @@ void NewBotAI_Speeding(bot_state_t *bs)
 	if (enemyKnockedDown ||
 		beingGripped ||
 		trappedByDrain ||
-		enemyGripActive ||
+		enemyGripThreat ||
 		imminentSaberThrowThreat ||
 		!speedFinisherWindow ||
 		lostAdvantage ||
@@ -12888,6 +12889,7 @@ static int NewBotAI_GetSpeedAttackWeight(bot_state_t *bs)
 	int enemyHealth;
 	int enemyArmor;
 	int enemyTotalHealth;
+	int ourTotalHealth;
 	int ourForce;
 	int enemyForce;
 	int healthLead;
@@ -12912,12 +12914,12 @@ static int NewBotAI_GetSpeedAttackWeight(bot_state_t *bs)
 	enemyHealth = bs->currentEnemy->health;
 	enemyArmor = bs->currentEnemy->client->ps.stats[STAT_ARMOR];
 	enemyTotalHealth = enemyHealth + enemyArmor;
+	ourTotalHealth = ourHealth + bs->cur_ps.stats[STAT_ARMOR];
 	ourForce = bs->cur_ps.fd.forcePower;
 	enemyForce = bs->currentEnemy->client->ps.fd.forcePower;
-	healthLead = ourHealth - enemyHealth;
+	healthLead = ourTotalHealth - enemyTotalHealth;
 	forceLead = ourForce - enemyForce;
-	speedFinisherWindow = ((enemyHealth <= 30 && enemyArmor <= 0) ||
-		enemyTotalHealth < 50) ? qtrue : qfalse;
+	speedFinisherWindow = NewBotAI_IsSpeedFinisherWindow(enemyHealth, enemyArmor) ? qtrue : qfalse;
 
 	if (speedBias <= 0.0f)
 	{

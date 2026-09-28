@@ -124,6 +124,13 @@ BOOST_AUTO_TEST_CASE( speed_attack_abort_respects_grip_and_drain_traps )
 	BOOST_CHECK( !NewBotAI_ShouldAbortSpeedAttack( 0, 0, 0, 80, 20, 200.0f, 256.0f ) );
 }
 
+BOOST_AUTO_TEST_CASE( speed_finisher_window_requires_true_kill_pressure )
+{
+	BOOST_CHECK( NewBotAI_IsSpeedFinisherWindow( 30, 0 ) );
+	BOOST_CHECK( NewBotAI_IsSpeedFinisherWindow( 45, 4 ) );
+	BOOST_CHECK( !NewBotAI_IsSpeedFinisherWindow( 30, 20 ) );
+}
+
 BOOST_AUTO_TEST_CASE( escape_yaw_override_forces_fixed_turn_rate )
 {
 	BOOST_CHECK_EQUAL( NewBotAI_GetViewAngleAxisFactor( 0.35f, 1, 1 ), 1.0f );
