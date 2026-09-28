@@ -13960,19 +13960,20 @@ static qboolean NewBotAI_ShouldEmergencyDrainRollSaberThrow(bot_state_t *bs)
 	{
 		return qfalse;
 	}
-	//Tighten to only truly immediate lethal windows when we can estimate flight timing.
-	if (NewBotAI_GetEnemySaberFlightThreat(bs, &forwardDist, &saberSpeed, &isReturning) && saberSpeed > 0.0f)
+	//Tighten to only truly immediate lethal windows with computable flight timing.
+	if (!NewBotAI_GetEnemySaberFlightThreat(bs, &forwardDist, &saberSpeed, &isReturning) || saberSpeed <= 0.0f)
 	{
-		(void)isReturning;
-		if (forwardDist < 0.0f)
-		{
-			forwardDist = -forwardDist;
-		}
-		timeToImpactMs = (forwardDist / saberSpeed) * 1000.0f;
-		if (timeToImpactMs > 300.0f)
-		{
-			return qfalse;
-		}
+		return qfalse;
+	}
+	(void)isReturning;
+	if (forwardDist < 0.0f)
+	{
+		forwardDist = -forwardDist;
+	}
+	timeToImpactMs = (forwardDist / saberSpeed) * 1000.0f;
+	if (timeToImpactMs > 300.0f)
+	{
+		return qfalse;
 	}
 
 	return qtrue;
