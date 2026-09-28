@@ -235,7 +235,7 @@ static inline int NewBotAI_PassesSpeedAttackResourceLeadGate(
 	const int healthLead = ourTotalHealth - enemyTotalHealth;
 	const int forceLead = ourForce - enemyForce;
 
-	if (ourHealth <= 70 || aggressionBias < 0.35f)
+	if (ourTotalHealth <= 70 || aggressionBias < 0.35f)
 	{
 		return 0;
 	}
