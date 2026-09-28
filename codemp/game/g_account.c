@@ -3931,6 +3931,7 @@ void DebugWriteToDB(char *entrypoint) {
 	sqlite3 * db;
     char * sql;
     sqlite3_stmt * stmt;
+	char effectiveDuelTrackPath[MAX_OSPATH];
 	int s;
 	char username[16], password[16];
 
@@ -12462,8 +12463,7 @@ void InitGameAccountStuff( void ) { //Called every mapload , move the create tab
 	CALL_SQLITE (close(db));
 
 	db = NULL;
-	s = sqlite3_open(LOCAL_DUELTRACK_DB_PATH, &db);
-	if (s == SQLITE_OK)
+	if (G_OpenTrackedLocalDB(&db, effectiveDuelTrackPath, sizeof(effectiveDuelTrackPath)))
 	{
 		G_EnsureLocalDuelTrackingSchema(db);
 		if (Q_stricmp(g_trackedLegacyMigrationPath, LOCAL_DB_PATH) &&
@@ -12475,7 +12475,7 @@ void InitGameAccountStuff( void ) { //Called every mapload , move the create tab
 	}
 	else
 	{
-		G_ErrorPrint("ERROR: could not open dedicated duel tracking database", s);
+		G_ErrorPrint("ERROR: could not open dedicated duel tracking database", SQLITE_CANTOPEN);
 		if (db)
 			sqlite3_close(db);
 	}
