@@ -8682,15 +8682,23 @@ void NewBotAI_ReactToBeingGripped(bot_state_t *bs) //Test this more, does it pus
 	vec3_t a_fo;
 	qboolean useTheForce = qfalse;
 	qboolean gripMistakeActive;
+	qboolean currentEnemyGripThreat = qfalse;
 
 	if (!(g_entities[bs->client].r.svFlags & SVF_BOT))
 	{
 		return;
 	}
+	if (bs->currentEnemy && bs->currentEnemy->client &&
+		(bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_GRIP)) &&
+		bs->frame_Enemy_Len < 512.0f)
+	{
+		currentEnemyGripThreat = qtrue;
+	}
 	//If speed is active while gripped, turn it off immediately so FP regen resumes and
 	//follow-up escape powers (push/pull) become available again.
 	if ((bs->cur_ps.fd.forcePowersActive & (1 << FP_SPEED)) &&
-		(bs->cur_ps.fd.forcePowersKnown & (1 << FP_SPEED)))
+		(bs->cur_ps.fd.forcePowersKnown & (1 << FP_SPEED)) &&
+		currentEnemyGripThreat)
 	{
 		bs->cur_ps.fd.forcePowerSelected = FP_SPEED;
 		level.clients[bs->client].ps.fd.forcePowerSelected = FP_SPEED;
