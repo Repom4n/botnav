@@ -143,8 +143,9 @@ Notes:
 
 Tracked duel data access:
 - Stored in `fs_homepath/fs_game/dueltrack.db` (fallback: `fs_game/dueltrack.db`); Elo and account data remain in `data.db`.
-- Both database paths are printed to the server console on map load (`Account database: ...` / `Duel tracking database: ...`), and `exportDuelTrack` prints the tracking database it read from. If a path cannot be opened or created, the failure is printed with the sqlite error instead of failing silently.
+- Database paths are printed to the server console on map load. `exportDuelTrack` reports exported CSV filenames and row counts without printing their filesystem paths. If a database cannot be opened or created, the failure is printed with the sqlite error instead of failing silently.
 - Existing tracked rows in `data.db` are copied to `dueltrack.db` on startup and retained in the original file.
+- Use server console command `resetdueltrack` to clear duel tracking summaries, participants, events, geometry, and aggregates in both databases. This does not reset accounts, Elo duel history, or arcade tracking.
 - Use server console command `exportDuelTrack [prefix]` to export timestamped CSV files for:
   - `LocalDuelTrackSummary`
   - `LocalDuelTrackParticipant`

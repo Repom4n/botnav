@@ -7981,6 +7981,151 @@ cleanup:
 	return success;
 }
 
+void Svcmd_ResetDuelTrack_f(void)
+{
+	static const char *const tables[] = {
+		"LocalDuelTrackParticipant",
+		"LocalDuelTrackEvent",
+		"LocalDuelTrackGeometry",
+		"LocalDuelTrackAggregate",
+		"LocalDuelTrackSummary"
+	};
+	sqlite3 *db = NULL;
+	sqlite3 *accountDb = NULL;
+	sqlite3_stmt *stmt = NULL;
+	char effectiveDbPath[MAX_OSPATH];
+	char sql[128];
+	int s;
+	int i;
+	int trackedRows = 0;
+	int legacyRows = 0;
+	qboolean attached = qfalse;
+	qboolean transactionStarted = qfalse;
+	qboolean success = qtrue;
+
+	if (trap->Argc() != 1)
+	{
+		trap->Print("Usage: resetdueltrack\n");
+		return;
+	}
+
+	if (!LOCAL_DUELTRACK_DB_PATH[0] || !G_OpenLocalAccountDB(&accountDb))
+	{
+		trap->Print("resetdueltrack failed: database paths are not initialized or unavailable.\n");
+		return;
+	}
+	s = sqlite3_close(accountDb);
+	if (s != SQLITE_OK)
+	{
+		trap->Print("resetdueltrack failed: unable to close the account database.\n");
+		return;
+	}
+
+	if (!G_OpenTrackedLocalDB(&db, effectiveDbPath, sizeof(effectiveDbPath)))
+	{
+		trap->Print("resetdueltrack failed: unable to open the duel tracking database.\n");
+		return;
+	}
+
+	G_EnsureLocalDuelTrackingSchema(db);
+	for (i = 0; i < (int)(sizeof(tables) / sizeof(tables[0])); i++)
+	{
+		if (!G_DoesTrackedDuelTableExist(db, tables[i]))
+		{
+			trap->Print("resetdueltrack failed: duel tracking schema is unavailable.\n");
+			sqlite3_close(db);
+			return;
+		}
+	}
+
+	if (Q_stricmp(effectiveDbPath, LOCAL_DB_PATH))
+	{
+		s = sqlite3_prepare_v2(db, "ATTACH DATABASE ? AS legacy", -1, &stmt, NULL);
+		if (s == SQLITE_OK)
+			s = sqlite3_bind_text(stmt, 1, LOCAL_DB_PATH, -1, SQLITE_TRANSIENT);
+		if (s == SQLITE_OK)
+			s = sqlite3_step(stmt);
+		if (stmt)
+		{
+			int finalizeStatus = sqlite3_finalize(stmt);
+			stmt = NULL;
+			if (s == SQLITE_DONE && finalizeStatus != SQLITE_OK)
+				s = finalizeStatus;
+		}
+		if (s != SQLITE_DONE)
+		{
+			trap->Print("resetdueltrack failed: unable to access legacy tracking data.\n");
+			sqlite3_close(db);
+			return;
+		}
+		attached = qtrue;
+	}
+
+	if (sqlite3_exec(db, "BEGIN TRANSACTION", NULL, NULL, NULL) != SQLITE_OK)
+		success = qfalse;
+	else
+		transactionStarted = qtrue;
+
+	for (i = 0; success && i < (int)(sizeof(tables) / sizeof(tables[0])); i++)
+	{
+		if (G_DoesTrackedDuelTableExist(db, tables[i]))
+		{
+			Com_sprintf(sql, sizeof(sql), "DELETE FROM main.%s", tables[i]);
+			if (sqlite3_exec(db, sql, NULL, NULL, NULL) != SQLITE_OK)
+				success = qfalse;
+			else
+				trackedRows += sqlite3_changes(db);
+		}
+
+		if (success && attached)
+		{
+			s = sqlite3_prepare_v2(db,
+				"SELECT 1 FROM legacy.sqlite_master WHERE type='table' AND name=? LIMIT 1",
+				-1, &stmt, NULL);
+			if (s == SQLITE_OK)
+				s = sqlite3_bind_text(stmt, 1, tables[i], -1, SQLITE_STATIC);
+			if (s == SQLITE_OK)
+				s = sqlite3_step(stmt);
+			if (stmt)
+			{
+				int finalizeStatus = sqlite3_finalize(stmt);
+				stmt = NULL;
+				if ((s == SQLITE_ROW || s == SQLITE_DONE) && finalizeStatus != SQLITE_OK)
+					s = finalizeStatus;
+			}
+			if (s == SQLITE_ROW)
+			{
+				Com_sprintf(sql, sizeof(sql), "DELETE FROM legacy.%s", tables[i]);
+				if (sqlite3_exec(db, sql, NULL, NULL, NULL) != SQLITE_OK)
+					success = qfalse;
+				else
+					legacyRows += sqlite3_changes(db);
+			}
+			else if (s != SQLITE_DONE)
+			{
+				success = qfalse;
+			}
+		}
+	}
+
+	if (success && sqlite3_exec(db, "COMMIT", NULL, NULL, NULL) == SQLITE_OK)
+		transactionStarted = qfalse;
+	else
+		success = qfalse;
+
+	if (transactionStarted)
+		sqlite3_exec(db, "ROLLBACK", NULL, NULL, NULL);
+	if (attached && sqlite3_exec(db, "DETACH DATABASE legacy", NULL, NULL, NULL) != SQLITE_OK)
+		success = qfalse;
+	sqlite3_close(db);
+
+	if (success)
+		trap->Print("resetdueltrack: cleared %i tracking rows (%i current, %i legacy); account and Elo data were not changed.\n",
+			trackedRows + legacyRows, trackedRows, legacyRows);
+	else
+		trap->Print("resetdueltrack failed: unable to clear duel tracking data; no account or Elo tables were targeted.\n");
+}
+
 void Svcmd_ExportDuelTrack_f(void)
 {
 	sqlite3 *db;
@@ -8077,7 +8222,6 @@ void Svcmd_ExportDuelTrack_f(void)
 		trap->Print("exportDuelTrack failed: unable to open local duel database.\n");
 		return;
 	}
-	trap->Print("Using duel tracking database: %s\n", effectiveDbPath);
 	preHadDuelSummary = G_DoesTrackedDuelTableExist(db, "LocalDuelTrackSummary");
 	preHadDuelParticipant = G_DoesTrackedDuelTableExist(db, "LocalDuelTrackParticipant");
 	preHadDuelEvent = G_DoesTrackedDuelTableExist(db, "LocalDuelTrackEvent");
@@ -8156,7 +8300,7 @@ void Svcmd_ExportDuelTrack_f(void)
 		if (!timestampedExport)
 			G_RemoveTrackedExportFile(outPath);
 		if (G_ExportTrackedQueryCSV(db, sessionQuery, outPath, &rows))
-			trap->Print("Exported tracked sessions (%d rows) -> %s\n", rows, outPath);
+			trap->Print("Exported tracked sessions (%d rows): %s\n", rows, exportFileName);
 	}
 
 	Com_sprintf(exportFileName, sizeof(exportFileName), "participants%s.csv", exportSuffix);
@@ -8168,7 +8312,7 @@ void Svcmd_ExportDuelTrack_f(void)
 		if (!timestampedExport)
 			G_RemoveTrackedExportFile(outPath);
 		if (G_ExportTrackedQueryCSV(db, G_GetTrackedParticipantExportQuery(), outPath, &rows))
-			trap->Print("Exported tracked participants (%d rows) -> %s\n", rows, outPath);
+			trap->Print("Exported tracked participants (%d rows): %s\n", rows, exportFileName);
 	}
 
 	Com_sprintf(exportFileName, sizeof(exportFileName), "events%s.csv", exportSuffix);
@@ -8180,7 +8324,7 @@ void Svcmd_ExportDuelTrack_f(void)
 		if (!timestampedExport)
 			G_RemoveTrackedExportFile(outPath);
 		if (G_ExportTrackedQueryCSV(db, eventQuery, outPath, &rows))
-			trap->Print("Exported tracked events (%d rows) -> %s\n", rows, outPath);
+			trap->Print("Exported tracked events (%d rows): %s\n", rows, exportFileName);
 	}
 
 	Com_sprintf(exportFileName, sizeof(exportFileName), "geometry%s.csv", exportSuffix);
@@ -8192,7 +8336,7 @@ void Svcmd_ExportDuelTrack_f(void)
 		if (!timestampedExport)
 			G_RemoveTrackedExportFile(outPath);
 		if (G_ExportTrackedQueryCSV(db, geometryQuery, outPath, &rows))
-			trap->Print("Exported tracked geometry (%d rows) -> %s\n", rows, outPath);
+			trap->Print("Exported tracked geometry (%d rows): %s\n", rows, exportFileName);
 	}
 
 	Com_sprintf(exportFileName, sizeof(exportFileName), "aggregate%s.csv", exportSuffix);
@@ -8204,7 +8348,7 @@ void Svcmd_ExportDuelTrack_f(void)
 		if (!timestampedExport)
 			G_RemoveTrackedExportFile(outPath);
 		if (G_ExportTrackedQueryCSV(db, G_GetTrackedAggregateExportQuery(), outPath, &rows))
-			trap->Print("Exported tracked aggregate (%d rows) -> %s\n", rows, outPath);
+			trap->Print("Exported tracked aggregate (%d rows): %s\n", rows, exportFileName);
 	}
 
 	CALL_SQLITE(close(db));
