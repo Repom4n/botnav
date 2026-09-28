@@ -8120,10 +8120,16 @@ void Svcmd_ResetDuelTrack_f(void)
 	sqlite3_close(db);
 
 	if (success)
-		trap->Print("resetdueltrack: cleared %i tracking rows (%i current, %i legacy); account and Elo data were not changed.\n",
-			trackedRows + legacyRows, trackedRows, legacyRows);
+	{
+		memset(g_trackedDuels, 0, sizeof(g_trackedDuels));
+		memset(g_duelAdviceSessions, 0, sizeof(g_duelAdviceSessions));
+		Q_strncpyz(g_trackedLegacyMigrationPath, LOCAL_DB_PATH, sizeof(g_trackedLegacyMigrationPath));
+		trap->Print("resetdueltrack: cleared %i tracking rows (%i current, %i legacy) in \"%s\" and \"%s\"; account, Elo, and arcade data were not changed.\n",
+			trackedRows + legacyRows, trackedRows, legacyRows, effectiveDbPath, LOCAL_DB_PATH);
+	}
 	else
-		trap->Print("resetdueltrack failed: unable to clear duel tracking data; no account or Elo tables were targeted.\n");
+		trap->Print("resetdueltrack failed: unable to clear duel tracking data in \"%s\" and \"%s\"; no account, Elo, or arcade tables were targeted.\n",
+			effectiveDbPath, LOCAL_DB_PATH);
 }
 
 void Svcmd_ExportDuelTrack_f(void)
