@@ -13966,6 +13966,10 @@ static qboolean NewBotAI_ShouldEmergencyDrainRollSaberThrow(bot_state_t *bs)
 	if (NewBotAI_GetEnemySaberFlightThreat(bs, &forwardDist, &saberSpeed, &isReturning) && saberSpeed > 0.0f)
 	{
 		(void)isReturning;
+		if (forwardDist < 0.0f)
+		{
+			forwardDist = -forwardDist;
+		}
 		timeToImpactMs = (forwardDist / saberSpeed) * 1000.0f;
 		if (timeToImpactMs > 300.0f)
 		{
