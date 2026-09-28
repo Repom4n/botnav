@@ -343,6 +343,8 @@ static char g_trackedLegacyMigrationPath[MAX_OSPATH];
 static void G_EnsureLocalArcadeSchema(sqlite3 *db);
 static qboolean G_DoesTrackedDuelTableExist(sqlite3 *db, const char *tableName);
 static qboolean G_OpenTrackedLocalDB(sqlite3 **dbOut, char *resolvedPath, int resolvedPathSize);
+static qboolean G_OpenSQLiteFile(const char *path, sqlite3 **dbOut, const char *context);
+static qboolean G_OpenLocalAccountDB(sqlite3 **dbOut);
 static void G_QueueBotTutorialMessage(int botClientNum, int targetClientNum, const char *message);
 static void G_FormatArcadeLeaderboardName(const char *input, char *output, int outputSize)
 {
@@ -4440,7 +4442,8 @@ static void G_AddDuelToDBWithHandle(sqlite3 *db, char *winner, char *loser, int 
 void G_AddDuelToDB(char *winner, char *loser, int type, int duration, int winner_hp, int winner_shield, int end_time) {
 	sqlite3 * db;
 
-	CALL_SQLITE (open (LOCAL_DB_PATH, & db));
+	if (!G_OpenSQLiteFile(LOCAL_DB_PATH, &db, "account"))
+		return;
 	if (type == 21)
 	{
 		G_EnsureLocalArcadeSchema(db);
@@ -4931,7 +4934,8 @@ void G_AddDuel(char *winner, char *loser, int winnerLevel, int loserLevel, int s
 
 #if _ELORANKING	
 	if (g_eloRanking.integer && duelLogType != 21) {
-		CALL_SQLITE (open (LOCAL_DB_PATH, & db));
+		if (!G_OpenSQLiteFile(LOCAL_DB_PATH, &db, "account"))
+			return;
 		{
 			const qboolean shouldRankDuel = G_ShouldRankBotVsBotDuel(winnerLevel, loserLevel, rawtime, db);
 			if (shouldRankDuel)
@@ -4948,7 +4952,8 @@ void G_AddDuel(char *winner, char *loser, int winnerLevel, int loserLevel, int s
 	}
 	else if (duelLogType == 21)
 	{
-		CALL_SQLITE (open (LOCAL_DB_PATH, & db));
+		if (!G_OpenSQLiteFile(LOCAL_DB_PATH, &db, "account"))
+			return;
 		G_AddDuelToDBWithHandle(db, winner, loser, duelLogType, duration, winner_hp, winner_shield, rawtime);
 		CALL_SQLITE (close(db));
 	}
@@ -7682,6 +7687,50 @@ static qboolean G_DoesTrackedDuelTableExist(sqlite3 *db, const char *tableName)
 	return exists;
 }
 
+static void G_GetLocalDBGameDir(char *out, int outSize)
+{
+	if (!out || outSize < 1)
+		return;
+
+	trap->Cvar_VariableStringBuffer("fs_game", out, outSize);
+	if (!VALIDSTRING(out))
+	{
+		trap->Cvar_VariableStringBuffer("fs_basegame", out, outSize);
+		if (!VALIDSTRING(out))
+			Q_strncpyz(out, TAYSTJKGAME, outSize);
+	}
+}
+
+//sqlite3_open() only records the path, the file itself is not touched (or created)
+//until the first real access. Run a trivial statement so a broken directory or a
+//read-only location fails here (and so the database file is actually created).
+static qboolean G_OpenSQLiteFile(const char *path, sqlite3 **dbOut, const char *context)
+{
+	sqlite3 *db = NULL;
+	int s;
+
+	if (!dbOut)
+		return qfalse;
+	*dbOut = NULL;
+	if (!path || !path[0])
+		return qfalse;
+
+	s = sqlite3_open(path, &db);
+	if (s == SQLITE_OK)
+		s = sqlite3_exec(db, "PRAGMA user_version;", NULL, NULL, NULL);
+	if (s == SQLITE_OK)
+	{
+		*dbOut = db;
+		return qtrue;
+	}
+
+	trap->Print("ERROR: could not open %s database \"%s\" (%i: %s)\n",
+		context ? context : "sqlite", path, s, db ? sqlite3_errmsg(db) : "unknown error");
+	if (db)
+		sqlite3_close(db);
+	return qfalse;
+}
+
 static qboolean G_OpenTrackedLocalDB(sqlite3 **dbOut, char *resolvedPath, int resolvedPathSize)
 {
 	char fallbackDbPath[MAX_OSPATH];
@@ -7694,35 +7743,59 @@ static qboolean G_OpenTrackedLocalDB(sqlite3 **dbOut, char *resolvedPath, int re
 	if (!LOCAL_DUELTRACK_DB_PATH[0])
 		return qfalse;
 
-	trap->Cvar_VariableStringBuffer("fs_game", fs_game, sizeof(fs_game));
-	if (!VALIDSTRING(fs_game))
-	{
-		trap->Cvar_VariableStringBuffer("fs_basegame", fs_game, sizeof(fs_game));
-		if (!VALIDSTRING(fs_game))
-			Q_strncpyz(fs_game, TAYSTJKGAME, sizeof(fs_game));
-	}
+	G_GetLocalDBGameDir(fs_game, sizeof(fs_game));
 	Com_sprintf(fallbackDbPath, sizeof(fallbackDbPath), "%s/dueltrack.db", fs_game);
 
-	if (sqlite3_open(LOCAL_DUELTRACK_DB_PATH, &db) == SQLITE_OK)
+	if (G_OpenSQLiteFile(LOCAL_DUELTRACK_DB_PATH, &db, "duel tracking"))
 	{
 		*dbOut = db;
 		if (resolvedPath && resolvedPathSize > 0)
 			Q_strncpyz(resolvedPath, LOCAL_DUELTRACK_DB_PATH, resolvedPathSize);
 		return qtrue;
 	}
-	if (db)
-		sqlite3_close(db);
-	db = NULL;
 
-	if (Q_stricmp(LOCAL_DUELTRACK_DB_PATH, fallbackDbPath) && sqlite3_open(fallbackDbPath, &db) == SQLITE_OK)
+	if (Q_stricmp(LOCAL_DUELTRACK_DB_PATH, fallbackDbPath) &&
+		G_OpenSQLiteFile(fallbackDbPath, &db, "duel tracking"))
 	{
 		*dbOut = db;
 		if (resolvedPath && resolvedPathSize > 0)
 			Q_strncpyz(resolvedPath, fallbackDbPath, resolvedPathSize);
 		return qtrue;
 	}
-	if (db)
-		sqlite3_close(db);
+	return qfalse;
+}
+
+//The account/elo database is opened all over this file through LOCAL_DB_PATH. Resolve
+//(and if needed repoint) that path once during init so a bad path is reported loudly
+//instead of turning every later query into a SQLITE_MISUSE (21) failure.
+static qboolean G_OpenLocalAccountDB(sqlite3 **dbOut)
+{
+	char fallbackDbPath[MAX_OSPATH];
+	char fs_game[MAX_QPATH];
+	sqlite3 *db = NULL;
+
+	if (!dbOut)
+		return qfalse;
+	*dbOut = NULL;
+	if (!LOCAL_DB_PATH[0])
+		return qfalse;
+
+	if (G_OpenSQLiteFile(LOCAL_DB_PATH, &db, "account"))
+	{
+		*dbOut = db;
+		return qtrue;
+	}
+
+	G_GetLocalDBGameDir(fs_game, sizeof(fs_game));
+	Com_sprintf(fallbackDbPath, sizeof(fallbackDbPath), "%s/data.db", fs_game);
+	if (Q_stricmp(LOCAL_DB_PATH, fallbackDbPath) &&
+		G_OpenSQLiteFile(fallbackDbPath, &db, "account"))
+	{
+		trap->Print("Account database falling back to \"%s\".\n", fallbackDbPath);
+		Q_strncpyz(LOCAL_DB_PATH, fallbackDbPath, sizeof(LOCAL_DB_PATH));
+		*dbOut = db;
+		return qtrue;
+	}
 	return qfalse;
 }
 
@@ -8004,6 +8077,7 @@ void Svcmd_ExportDuelTrack_f(void)
 		trap->Print("exportDuelTrack failed: unable to open local duel database.\n");
 		return;
 	}
+	trap->Print("Using duel tracking database: %s\n", effectiveDbPath);
 	preHadDuelSummary = G_DoesTrackedDuelTableExist(db, "LocalDuelTrackSummary");
 	preHadDuelParticipant = G_DoesTrackedDuelTableExist(db, "LocalDuelTrackParticipant");
 	preHadDuelEvent = G_DoesTrackedDuelTableExist(db, "LocalDuelTrackEvent");
@@ -12355,7 +12429,12 @@ void InitGameAccountStuff( void ) { //Called every mapload , move the create tab
 	g_duelTrackingSchemaReady = qfalse;
 	g_duelTrackingSchemaPath[0] = '\0';
 
-	CALL_SQLITE (open (LOCAL_DB_PATH, & db));
+	if (!G_OpenLocalAccountDB(&db))
+	{
+		trap->Print("ERROR: account database unavailable, accounts/elo will not be saved this map.\n");
+		return;
+	}
+	trap->Print("Account database: %s\n", LOCAL_DB_PATH);
 
 	//sqlite_exec(db, "VACUUM;", 0, 0);
 	//index LocalRun on RANK
@@ -12472,9 +12551,12 @@ void InitGameAccountStuff( void ) { //Called every mapload , move the create tab
 			Q_strncpyz(g_trackedLegacyMigrationPath, LOCAL_DB_PATH, sizeof(g_trackedLegacyMigrationPath));
 		}
 		CALL_SQLITE(close(db));
+		trap->Print("Duel tracking database: %s\n", effectiveDuelTrackPath);
 	}
 	else
 	{
+		trap->Print("ERROR: could not open dedicated duel tracking database \"%s\", duel tracking is disabled.\n",
+			LOCAL_DUELTRACK_DB_PATH);
 		G_ErrorPrint("ERROR: could not open dedicated duel tracking database", SQLITE_CANTOPEN);
 		if (db)
 			sqlite3_close(db);
