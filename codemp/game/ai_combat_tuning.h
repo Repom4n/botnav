@@ -210,6 +210,43 @@ static inline int NewBotAI_ShouldAbortSpeedAttack(
 	return 0;
 }
 
+static const int NEWBOTAI_TUNING_SPEED_FINISHER_NO_ARMOR_HP_MAX = 30;
+static const int NEWBOTAI_TUNING_SPEED_FINISHER_TOTAL_HP_AP_MAX = 50;
+static const int NEWBOTAI_TUNING_SPEED_FINISHER_ARMORED_HP_MAX = 35;
+
+static inline int NewBotAI_IsSpeedFinisherWindow(int enemyHealth, int enemyArmor)
+{
+	const int enemyTotalHealth = enemyHealth + enemyArmor;
+	const int exposedNoArmorFinish =
+		(enemyHealth <= NEWBOTAI_TUNING_SPEED_FINISHER_NO_ARMOR_HP_MAX && enemyArmor <= 0);
+	const int lowPoolArmoredFinish =
+		(enemyHealth <= NEWBOTAI_TUNING_SPEED_FINISHER_ARMORED_HP_MAX &&
+		 enemyTotalHealth < NEWBOTAI_TUNING_SPEED_FINISHER_TOTAL_HP_AP_MAX);
+
+	return (exposedNoArmorFinish || lowPoolArmoredFinish) ? 1 : 0;
+}
+
+static inline int NewBotAI_PassesSpeedAttackResourceLeadGate(
+	int ourHealth, int ourArmor, int enemyHealth, int enemyArmor,
+	float aggressionBias, int ourForce, int enemyForce)
+{
+	const int ourTotalHealth = ourHealth + ourArmor;
+	const int enemyTotalHealth = enemyHealth + enemyArmor;
+	const int healthLead = ourTotalHealth - enemyTotalHealth;
+	const int forceLead = ourForce - enemyForce;
+
+	if (ourTotalHealth <= 70 || aggressionBias < 0.35f)
+	{
+		return 0;
+	}
+	if (healthLead < 25 || forceLead < 15)
+	{
+		return 0;
+	}
+
+	return 1;
+}
+
 static inline float NewBotAI_GetViewAngleAxisFactor(float factor, int isYawAxis, int escapeYawOverrideActive)
 {
 	if (isYawAxis && escapeYawOverrideActive)

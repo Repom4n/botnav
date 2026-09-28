@@ -8682,9 +8682,27 @@ void NewBotAI_ReactToBeingGripped(bot_state_t *bs) //Test this more, does it pus
 	vec3_t a_fo;
 	qboolean useTheForce = qfalse;
 	qboolean gripMistakeActive;
+	qboolean currentEnemyGripThreat = qfalse;
 
 	if (!(g_entities[bs->client].r.svFlags & SVF_BOT))
 	{
+		return;
+	}
+	if (bs->currentEnemy && bs->currentEnemy->client &&
+		(bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_GRIP)) &&
+		bs->frame_Enemy_Len < 512.0f)
+	{
+		currentEnemyGripThreat = qtrue;
+	}
+	//If speed is active while gripped, turn it off immediately so FP regen resumes and
+	//follow-up escape powers (push/pull) become available again.
+	if ((bs->cur_ps.fd.forcePowersActive & (1 << FP_SPEED)) &&
+		(bs->cur_ps.fd.forcePowersKnown & (1 << FP_SPEED)) &&
+		currentEnemyGripThreat)
+	{
+		bs->cur_ps.fd.forcePowerSelected = FP_SPEED;
+		level.clients[bs->client].ps.fd.forcePowerSelected = FP_SPEED;
+		trap->EA_ForcePower(bs->client);
 		return;
 	}
 
@@ -9327,15 +9345,23 @@ void NewBotAI_Speeding(bot_state_t *bs)
 	const qboolean imminentSaberThrowThreat = NewBotAI_IsEnemySaberThreatImminent(bs);
 	int ourHealthTotal = g_entities[bs->client].health + bs->cur_ps.stats[STAT_ARMOR];
 	int enemyHealthTotal = 0;
+	int enemyHealth = 0;
+	int enemyArmor = 0;
 	int enemyForce = 0;
 	const int ourForce = bs->cur_ps.fd.forcePower;
 	qboolean lostAdvantage = qfalse;
 	qboolean trappedByDrain = qfalse;
+	qboolean enemyGripThreat = qfalse;
+	qboolean speedFinisherWindow = qfalse;
 
 	if (bs->currentEnemy && bs->currentEnemy->client)
 	{
-		enemyHealthTotal = bs->currentEnemy->health + bs->currentEnemy->client->ps.stats[STAT_ARMOR];
+		enemyHealth = bs->currentEnemy->health;
+		enemyArmor = bs->currentEnemy->client->ps.stats[STAT_ARMOR];
+		enemyHealthTotal = enemyHealth + enemyArmor;
 		enemyForce = bs->currentEnemy->client->ps.fd.forcePower;
+		speedFinisherWindow = NewBotAI_IsSpeedFinisherWindow(enemyHealth, enemyArmor) ? qtrue : qfalse;
+		enemyGripThreat = (enemyGripActive && bs->frame_Enemy_Len < 512.0f) ? qtrue : qfalse;
 		if (ourHealthTotal + 10 < enemyHealthTotal || ourForce + 15 < enemyForce)
 		{
 			lostAdvantage = qtrue;
@@ -9356,8 +9382,9 @@ void NewBotAI_Speeding(bot_state_t *bs)
 	if (enemyKnockedDown ||
 		beingGripped ||
 		trappedByDrain ||
-		(enemyGripActive && bs->frame_Enemy_Len < 512.0f) ||
+		enemyGripThreat ||
 		imminentSaberThrowThreat ||
+		!speedFinisherWindow ||
 		lostAdvantage ||
 		(g_entities[bs->client].health) < 50 ||
 		(ourForce < 20))
@@ -12869,14 +12896,15 @@ static int NewBotAI_GetSpeedAttackWeight(bot_state_t *bs)
 	float aggressionBias;
 	int ourHealth;
 	int enemyHealth;
+	int enemyArmor;
 	int ourForce;
 	int enemyForce;
-	int healthLead;
 	int forceLead;
 	int weight;
 	qboolean beingGripped;
 	qboolean enemyGripActive;
 	qboolean enemyDrainActive;
+	qboolean speedFinisherWindow;
 
 	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
 	{
@@ -12890,10 +12918,11 @@ static int NewBotAI_GetSpeedAttackWeight(bot_state_t *bs)
 	aggressionBias = BotGetAggressionBias(bs);
 	ourHealth = g_entities[bs->client].health;
 	enemyHealth = bs->currentEnemy->health;
+	enemyArmor = bs->currentEnemy->client->ps.stats[STAT_ARMOR];
 	ourForce = bs->cur_ps.fd.forcePower;
 	enemyForce = bs->currentEnemy->client->ps.fd.forcePower;
-	healthLead = ourHealth - enemyHealth;
 	forceLead = ourForce - enemyForce;
+	speedFinisherWindow = NewBotAI_IsSpeedFinisherWindow(enemyHealth, enemyArmor) ? qtrue : qfalse;
 
 	if (speedBias <= 0.0f)
 	{
@@ -12907,11 +12936,18 @@ static int NewBotAI_GetSpeedAttackWeight(bot_state_t *bs)
 	{
 		return 0;
 	}
-	if (ourHealth <= 70 || aggressionBias < 0.35f)
+	if (!speedFinisherWindow)
 	{
 		return 0;
 	}
-	if (healthLead < 25 || forceLead < 15)
+	if (!NewBotAI_PassesSpeedAttackResourceLeadGate(
+		ourHealth,
+		bs->cur_ps.stats[STAT_ARMOR],
+		enemyHealth,
+		enemyArmor,
+		aggressionBias,
+		ourForce,
+		enemyForce))
 	{
 		return 0;
 	}
@@ -13911,6 +13947,12 @@ static qboolean NewBotAI_ShouldJumpDrainVsSaberThrow(bot_state_t *bs)
 // sideways and yaw while attempting drain instead of taking the direct line hit.
 static qboolean NewBotAI_ShouldEmergencyDrainRollSaberThrow(bot_state_t *bs)
 {
+	float forwardDist;
+	float saberSpeed;
+	float timeToImpactMs;
+	qboolean isReturning;
+	const int ourHealth = g_entities[bs->client].health;
+	const int ourTotalHealth = ourHealth + bs->cur_ps.stats[STAT_ARMOR];
 	qboolean canEmergencyDrainRoll;
 
 	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
@@ -13919,10 +13961,30 @@ static qboolean NewBotAI_ShouldEmergencyDrainRollSaberThrow(bot_state_t *bs)
 	}
 	canEmergencyDrainRoll = (bs->currentEnemy->client->ps.saberInFlight &&
 		NewBotAI_IsEnemySaberThreatImminent(bs) &&
-		g_entities[bs->client].health < 20 &&
-		bs->frame_Enemy_Len < 240) ? qtrue : qfalse;
+		ourHealth < 25 &&
+		ourTotalHealth <= 40 &&
+		bs->frame_Enemy_Len < 220) ? qtrue : qfalse;
+	if (!canEmergencyDrainRoll)
+	{
+		return qfalse;
+	}
+	//Tighten to only truly immediate lethal windows with computable flight timing.
+	if (!NewBotAI_GetEnemySaberFlightThreat(bs, &forwardDist, &saberSpeed, &isReturning) || saberSpeed <= 0.0f)
+	{
+		return qfalse;
+	}
+	(void)isReturning;
+	if (forwardDist < 0.0f)
+	{
+		forwardDist = -forwardDist;
+	}
+	timeToImpactMs = (forwardDist / saberSpeed) * 1000.0f;
+	if (timeToImpactMs > 300.0f)
+	{
+		return qfalse;
+	}
 
-	return canEmergencyDrainRoll;
+	return qtrue;
 }
 
 static void NewBotAI_ApplySidewaysDrainRoll(bot_state_t *bs, qboolean moveBack)
