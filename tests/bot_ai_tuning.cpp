@@ -133,6 +133,14 @@ BOOST_AUTO_TEST_CASE( speed_finisher_window_requires_true_kill_pressure )
 	BOOST_CHECK( !NewBotAI_IsSpeedFinisherWindow( 30, 20 ) );
 }
 
+BOOST_AUTO_TEST_CASE( speed_resource_gate_uses_total_health_lead_with_armor )
+{
+	BOOST_CHECK( NewBotAI_PassesSpeedAttackResourceLeadGate( 80, 30, 35, 40, 0.5f, 90, 60 ) );
+	BOOST_CHECK( !NewBotAI_PassesSpeedAttackResourceLeadGate( 80, 0, 35, 40, 0.5f, 90, 60 ) );
+	BOOST_CHECK( !NewBotAI_PassesSpeedAttackResourceLeadGate( 80, 30, 35, 40, 0.2f, 90, 60 ) );
+	BOOST_CHECK( !NewBotAI_PassesSpeedAttackResourceLeadGate( 80, 30, 35, 40, 0.5f, 60, 50 ) );
+}
+
 BOOST_AUTO_TEST_CASE( escape_yaw_override_forces_fixed_turn_rate )
 {
 	BOOST_CHECK_EQUAL( NewBotAI_GetViewAngleAxisFactor( 0.35f, 1, 1 ), 1.0f );

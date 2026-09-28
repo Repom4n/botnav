@@ -8692,6 +8692,7 @@ void NewBotAI_ReactToBeingGripped(bot_state_t *bs) //Test this more, does it pus
 	if ((bs->cur_ps.fd.forcePowersActive & (1 << FP_SPEED)) &&
 		(bs->cur_ps.fd.forcePowersKnown & (1 << FP_SPEED)))
 	{
+		bs->cur_ps.fd.forcePowerSelected = FP_SPEED;
 		level.clients[bs->client].ps.fd.forcePowerSelected = FP_SPEED;
 		trap->EA_ForcePower(bs->client);
 		return;
@@ -12888,11 +12889,8 @@ static int NewBotAI_GetSpeedAttackWeight(bot_state_t *bs)
 	int ourHealth;
 	int enemyHealth;
 	int enemyArmor;
-	int enemyTotalHealth;
-	int ourTotalHealth;
 	int ourForce;
 	int enemyForce;
-	int healthLead;
 	int forceLead;
 	int weight;
 	qboolean beingGripped;
@@ -12913,11 +12911,8 @@ static int NewBotAI_GetSpeedAttackWeight(bot_state_t *bs)
 	ourHealth = g_entities[bs->client].health;
 	enemyHealth = bs->currentEnemy->health;
 	enemyArmor = bs->currentEnemy->client->ps.stats[STAT_ARMOR];
-	enemyTotalHealth = enemyHealth + enemyArmor;
-	ourTotalHealth = ourHealth + bs->cur_ps.stats[STAT_ARMOR];
 	ourForce = bs->cur_ps.fd.forcePower;
 	enemyForce = bs->currentEnemy->client->ps.fd.forcePower;
-	healthLead = ourTotalHealth - enemyTotalHealth;
 	forceLead = ourForce - enemyForce;
 	speedFinisherWindow = NewBotAI_IsSpeedFinisherWindow(enemyHealth, enemyArmor) ? qtrue : qfalse;
 
@@ -12937,11 +12932,14 @@ static int NewBotAI_GetSpeedAttackWeight(bot_state_t *bs)
 	{
 		return 0;
 	}
-	if (ourHealth <= 70 || aggressionBias < 0.35f)
-	{
-		return 0;
-	}
-	if (healthLead < 25 || forceLead < 15)
+	if (!NewBotAI_PassesSpeedAttackResourceLeadGate(
+		ourHealth,
+		bs->cur_ps.stats[STAT_ARMOR],
+		enemyHealth,
+		enemyArmor,
+		aggressionBias,
+		ourForce,
+		enemyForce))
 	{
 		return 0;
 	}

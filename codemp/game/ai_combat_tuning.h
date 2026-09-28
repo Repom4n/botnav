@@ -226,6 +226,27 @@ static inline int NewBotAI_IsSpeedFinisherWindow(int enemyHealth, int enemyArmor
 	return (exposedNoArmorFinish || lowPoolArmoredFinish) ? 1 : 0;
 }
 
+static inline int NewBotAI_PassesSpeedAttackResourceLeadGate(
+	int ourHealth, int ourArmor, int enemyHealth, int enemyArmor,
+	float aggressionBias, int ourForce, int enemyForce)
+{
+	const int ourTotalHealth = ourHealth + ourArmor;
+	const int enemyTotalHealth = enemyHealth + enemyArmor;
+	const int healthLead = ourTotalHealth - enemyTotalHealth;
+	const int forceLead = ourForce - enemyForce;
+
+	if (ourHealth <= 70 || aggressionBias < 0.35f)
+	{
+		return 0;
+	}
+	if (healthLead < 25 || forceLead < 15)
+	{
+		return 0;
+	}
+
+	return 1;
+}
+
 static inline float NewBotAI_GetViewAngleAxisFactor(float factor, int isYawAxis, int escapeYawOverrideActive)
 {
 	if (isYawAxis && escapeYawOverrideActive)
