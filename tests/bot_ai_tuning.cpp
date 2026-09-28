@@ -137,10 +137,14 @@ BOOST_AUTO_TEST_CASE( speed_resource_gate_uses_total_health_lead_with_armor )
 {
 	BOOST_CHECK( NewBotAI_PassesSpeedAttackResourceLeadGate( 80, 30, 35, 40, 0.5f, 90, 60 ) );
 	BOOST_CHECK( NewBotAI_PassesSpeedAttackResourceLeadGate( 65, 35, 35, 40, 0.5f, 90, 60 ) );
+	BOOST_CHECK( NewBotAI_PassesSpeedAttackResourceLeadGate( 70, 1, 35, 11, 0.5f, 85, 70 ) ); // total 71, lead 25, force lead 15
 	BOOST_CHECK( !NewBotAI_PassesSpeedAttackResourceLeadGate( 80, 0, 35, 40, 0.5f, 90, 60 ) );
 	BOOST_CHECK( !NewBotAI_PassesSpeedAttackResourceLeadGate( 80, 30, 35, 40, 0.2f, 90, 60 ) );
 	BOOST_CHECK( !NewBotAI_PassesSpeedAttackResourceLeadGate( 80, 30, 35, 40, 0.5f, 60, 50 ) );
 	BOOST_CHECK( !NewBotAI_PassesSpeedAttackResourceLeadGate( 65, 5, 35, 40, 0.5f, 90, 60 ) );
+	BOOST_CHECK( !NewBotAI_PassesSpeedAttackResourceLeadGate( 70, 0, 35, 10, 0.5f, 85, 70 ) ); // total 70 cutoff
+	BOOST_CHECK( !NewBotAI_PassesSpeedAttackResourceLeadGate( 70, 1, 35, 12, 0.5f, 85, 70 ) ); // lead 24 cutoff
+	BOOST_CHECK( !NewBotAI_PassesSpeedAttackResourceLeadGate( 70, 1, 35, 11, 0.5f, 84, 70 ) ); // force lead 14 cutoff
 }
 
 BOOST_AUTO_TEST_CASE( escape_yaw_override_forces_fixed_turn_rate )

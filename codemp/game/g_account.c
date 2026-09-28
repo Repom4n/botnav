@@ -2743,9 +2743,16 @@ static qboolean G_InsertTrackedEvents(sqlite3 *db, sqlite3_int64 summaryId, trac
 		if (s != SQLITE_OK || !geomStmt)
 		{
 			G_ErrorPrint("ERROR: SQL Prepare Failed (LocalDuelTrackGeometry)", s);
-			CALL_SQLITE(finalize(stmt));
+			if (stmt)
+			{
+				sqlite3_finalize(stmt);
+				stmt = NULL;
+			}
 			if (geomStmt)
-				CALL_SQLITE(finalize(geomStmt));
+			{
+				sqlite3_finalize(geomStmt);
+				geomStmt = NULL;
+			}
 			return qfalse;
 		}
 	}
@@ -3325,9 +3332,16 @@ static qboolean G_InsertTrackedArcadeEvents(sqlite3 *db, sqlite3_int64 sessionId
 		if (s != SQLITE_OK || !geomStmt)
 		{
 			G_ErrorPrint("ERROR: SQL Prepare Failed (LocalArcadeTrackGeometry)", s);
-			CALL_SQLITE(finalize(stmt));
+			if (stmt)
+			{
+				sqlite3_finalize(stmt);
+				stmt = NULL;
+			}
 			if (geomStmt)
-				CALL_SQLITE(finalize(geomStmt));
+			{
+				sqlite3_finalize(geomStmt);
+				geomStmt = NULL;
+			}
 			return qfalse;
 		}
 	}
