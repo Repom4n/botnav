@@ -419,7 +419,82 @@ static qboolean G_IsAllowedTrackedTableName(const char *tableName)
 
 static qboolean G_IsAllowedTrackedColumnName(const char *columnName)
 {
+	static const char *const allowedColumns[] = {
+		"source_context",
+		"draw",
+		"winner_opening",
+		"loser_opening",
+		"participant_label",
+		"participant_kind",
+		"opponent_side",
+		"side",
+		"matchup",
+		"total_force_spent",
+		"total_force_regen",
+		"ending_force",
+		"ending_hp",
+		"ending_armor",
+		"low_force_windows",
+		"grip_cripple_events",
+		"saber_throw_punishes",
+		"knockdown_events",
+		"late_defense_spends",
+		"opening_tactic",
+		"primary_issue",
+		"spent_neutral",
+		"spent_advantage",
+		"spent_disadvantage",
+		"spent_panic",
+		"spent_finishing",
+		"force_push",
+		"force_pull",
+		"force_grip",
+		"force_drain",
+		"force_rage",
+		"force_absorb",
+		"force_protect",
+		"force_heal",
+		"force_speed",
+		"force_seeing",
+		"force_unknown",
+		"sequence_id",
+		"buttons",
+		"saber_move",
+		"enemy_saber_move",
+		"yaw_delta",
+		"opponent_label",
+		"opponent_kind",
+		"self_hp",
+		"self_armor",
+		"self_force",
+		"enemy_hp",
+		"enemy_armor",
+		"enemy_force",
+		"sequence_label",
+		"quality",
+		"note",
+		"swing_side",
+		"pre_swing_strafe",
+		"yaw_sweep",
+		"attack_elapsed_ms",
+		"throw_yaw_offset",
+		"result",
+		"arcade_level",
+		"total_kills",
+		"total_damage_taken",
+		"total_damage_dealt",
+		"counter_successes",
+		"punish_successes",
+		"reset_successes",
+		"saber_return_punishes",
+		"duels",
+		"wins",
+		"losses",
+		"low_force_deaths",
+		"grip_cripples"
+	};
 	const char *p;
+	int i;
 
 	if (!columnName || !columnName[0])
 		return qfalse;
@@ -434,7 +509,13 @@ static qboolean G_IsAllowedTrackedColumnName(const char *columnName)
 			return qfalse;
 		}
 	}
-	return qtrue;
+
+	for (i = 0; i < (int)(sizeof(allowedColumns) / sizeof(allowedColumns[0])); i++)
+	{
+		if (!Q_stricmp(columnName, allowedColumns[i]))
+			return qtrue;
+	}
+	return qfalse;
 }
 
 static qboolean G_TrackedTableHasColumn(sqlite3 *db, const char *tableName, const char *columnName)
