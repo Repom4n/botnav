@@ -419,27 +419,22 @@ static qboolean G_IsAllowedTrackedTableName(const char *tableName)
 
 static qboolean G_IsAllowedTrackedColumnName(const char *columnName)
 {
-	static const char *const allowedColumns[] = {
-		"source_context",
-		"sequence_id",
-		"buttons",
-		"saber_move",
-		"enemy_saber_move",
-		"yaw_delta",
-		"opponent_label",
-		"opponent_kind"
-	};
-	int i;
+	const char *p;
 
 	if (!columnName || !columnName[0])
 		return qfalse;
 
-	for (i = 0; i < (int)(sizeof(allowedColumns) / sizeof(allowedColumns[0])); i++)
+	//Allow only lowercase snake_case identifiers for tracked schema migrations.
+	for (p = columnName; *p; ++p)
 	{
-		if (!Q_stricmp(columnName, allowedColumns[i]))
-			return qtrue;
+		if (!((*p >= 'a' && *p <= 'z') ||
+			(*p >= '0' && *p <= '9') ||
+			*p == '_'))
+		{
+			return qfalse;
+		}
 	}
-	return qfalse;
+	return qtrue;
 }
 
 static qboolean G_TrackedTableHasColumn(sqlite3 *db, const char *tableName, const char *columnName)
@@ -2639,7 +2634,14 @@ static qboolean G_InsertTrackedEvents(sqlite3 *db, sqlite3_int64 summaryId, trac
 		return qtrue;
 
 	sql = "INSERT INTO LocalDuelTrackEvent(summary_id, participant_key, opponent_key, rel_time, event_index, event_type, power, amount, state, range_bucket, sequence_id, buttons, saber_move, enemy_saber_move, yaw_delta, opponent_label, opponent_kind, self_hp, self_armor, self_force, enemy_hp, enemy_armor, enemy_force, sequence_label, quality, note, swing_side, pre_swing_strafe, yaw_sweep, attack_elapsed_ms, throw_yaw_offset) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
-	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
+	s = sqlite3_prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL);
+	if (s != SQLITE_OK || !stmt)
+	{
+		G_ErrorPrint("ERROR: SQL Prepare Failed (LocalDuelTrackEvent)", s);
+		if (stmt)
+			CALL_SQLITE(finalize(stmt));
+		return qfalse;
+	}
 	captureGeometry = G_IsTrackedGeometryEnabled();
 	if (captureGeometry)
 	{
@@ -2655,7 +2657,15 @@ static qboolean G_InsertTrackedEvents(sqlite3 *db, sqlite3_int64 summaryId, trac
 	if (captureGeometry && hasAnyGeometry)
 	{
 		sql = "INSERT INTO LocalDuelTrackGeometry(summary_id, participant_key, opponent_key, rel_time, event_index, self_x, self_y, self_z, enemy_x, enemy_y, enemy_z, self_vx, self_vy, self_vz, enemy_vx, enemy_vy, enemy_vz, self_yaw, enemy_yaw) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
-		CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &geomStmt, NULL));
+		s = sqlite3_prepare_v2(db, sql, strlen(sql) + 1, &geomStmt, NULL);
+		if (s != SQLITE_OK || !geomStmt)
+		{
+			G_ErrorPrint("ERROR: SQL Prepare Failed (LocalDuelTrackGeometry)", s);
+			CALL_SQLITE(finalize(stmt));
+			if (geomStmt)
+				CALL_SQLITE(finalize(geomStmt));
+			return qfalse;
+		}
 	}
 	for (i = 0; i < runtime->eventCount; i++)
 	{
@@ -3218,11 +3228,26 @@ static qboolean G_InsertTrackedArcadeEvents(sqlite3 *db, sqlite3_int64 sessionId
 		}
 	}
 	sql = "INSERT INTO LocalArcadeTrackEvent(session_id, participant_key, participant_label, participant_kind, opponent_key, opponent_label, opponent_kind, rel_time, event_index, sequence_id, event_type, power, amount, state, range_bucket, buttons, saber_move, enemy_saber_move, yaw_delta, self_hp, self_armor, self_force, enemy_hp, enemy_armor, enemy_force, sequence_label, quality, note, swing_side, pre_swing_strafe, yaw_sweep, attack_elapsed_ms, throw_yaw_offset) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
-	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
+	s = sqlite3_prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL);
+	if (s != SQLITE_OK || !stmt)
+	{
+		G_ErrorPrint("ERROR: SQL Prepare Failed (LocalArcadeTrackEvent)", s);
+		if (stmt)
+			CALL_SQLITE(finalize(stmt));
+		return qfalse;
+	}
 	if (captureGeometry && hasAnyGeometry)
 	{
 		sql = "INSERT INTO LocalArcadeTrackGeometry(session_id, participant_key, opponent_key, rel_time, event_index, self_x, self_y, self_z, enemy_x, enemy_y, enemy_z, self_vx, self_vy, self_vz, enemy_vx, enemy_vy, enemy_vz, self_yaw, enemy_yaw) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
-		CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &geomStmt, NULL));
+		s = sqlite3_prepare_v2(db, sql, strlen(sql) + 1, &geomStmt, NULL);
+		if (s != SQLITE_OK || !geomStmt)
+		{
+			G_ErrorPrint("ERROR: SQL Prepare Failed (LocalArcadeTrackGeometry)", s);
+			CALL_SQLITE(finalize(stmt));
+			if (geomStmt)
+				CALL_SQLITE(finalize(geomStmt));
+			return qfalse;
+		}
 	}
 
 	for (i = 0; i < runtime->eventCount; i++)
