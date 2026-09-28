@@ -210,11 +210,20 @@ static inline int NewBotAI_ShouldAbortSpeedAttack(
 	return 0;
 }
 
+static const int NEWBOTAI_TUNING_SPEED_FINISHER_NO_ARMOR_HP_MAX = 30;
+static const int NEWBOTAI_TUNING_SPEED_FINISHER_TOTAL_HP_AP_MAX = 50;
+static const int NEWBOTAI_TUNING_SPEED_FINISHER_ARMORED_HP_MAX = 35;
+
 static inline int NewBotAI_IsSpeedFinisherWindow(int enemyHealth, int enemyArmor)
 {
 	const int enemyTotalHealth = enemyHealth + enemyArmor;
+	const int exposedNoArmorFinish =
+		(enemyHealth <= NEWBOTAI_TUNING_SPEED_FINISHER_NO_ARMOR_HP_MAX && enemyArmor <= 0);
+	const int lowPoolArmoredFinish =
+		(enemyHealth <= NEWBOTAI_TUNING_SPEED_FINISHER_ARMORED_HP_MAX &&
+		 enemyTotalHealth < NEWBOTAI_TUNING_SPEED_FINISHER_TOTAL_HP_AP_MAX);
 
-	return ((enemyHealth <= 30 && enemyArmor <= 0) || enemyTotalHealth < 50) ? 1 : 0;
+	return (exposedNoArmorFinish || lowPoolArmoredFinish) ? 1 : 0;
 }
 
 static inline float NewBotAI_GetViewAngleAxisFactor(float factor, int isYawAxis, int escapeYawOverrideActive)
