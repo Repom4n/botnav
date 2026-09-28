@@ -15,6 +15,7 @@
 #endif
 
 static char LOCAL_DB_PATH[MAX_OSPATH];
+static char LOCAL_DUELTRACK_DB_PATH[MAX_OSPATH];
 #define BOT_DUEL_RANKED_LIMIT_PER_LEVEL 5
 #define BOT_DUEL_LEVEL_MIN 1
 #define BOT_DUEL_LEVEL_MAX 10
@@ -337,6 +338,7 @@ static bot_tutorial_queue_t g_botTutorialQueues[MAX_CLIENTS];
 static duel_advice_session_state_t g_duelAdviceSessions[MAX_CLIENTS];
 static qboolean g_duelTrackingSchemaReady = qfalse;
 static char g_duelTrackingSchemaPath[MAX_OSPATH];
+static char g_trackedLegacyMigrationPath[MAX_OSPATH];
 
 static void G_EnsureLocalArcadeSchema(sqlite3 *db);
 static qboolean G_DoesTrackedDuelTableExist(sqlite3 *db, const char *tableName);
@@ -801,7 +803,7 @@ static void G_EnsureLocalDuelTrackingSchema(sqlite3 *db)
 		G_ErrorPrint("ERROR: SQL Create Failed (LocalArcadeTrackGeometry)", s);
 	CALL_SQLITE(finalize(stmt));
 	g_duelTrackingSchemaReady = qtrue;
-	Q_strncpyz(g_duelTrackingSchemaPath, LOCAL_DB_PATH, sizeof(g_duelTrackingSchemaPath));
+	Q_strncpyz(g_duelTrackingSchemaPath, LOCAL_DUELTRACK_DB_PATH, sizeof(g_duelTrackingSchemaPath));
 }
 
 static void G_ClearTrackedDuelRuntime(int clientNum)
@@ -2933,7 +2935,6 @@ static void G_PersistTrackedDuel(tracked_duel_runtime_t *winnerRuntime, tracked_
 
 	if (!G_OpenTrackedLocalDB(&db, NULL, 0))
 		return;
-	G_EnsureLocalArcadeSchema(db);
 	G_EnsureLocalDuelTrackingSchema(db);
 	s = sqlite3_exec(db, "BEGIN TRANSACTION", NULL, NULL, NULL);
 	if (s != SQLITE_OK)
@@ -3460,7 +3461,6 @@ static void G_PersistTrackedArcadeCombat(tracked_arcade_runtime_t *runtime, cons
 
 	if (!G_OpenTrackedLocalDB(&db, NULL, 0))
 		return;
-	G_EnsureLocalArcadeSchema(db);
 	G_EnsureLocalDuelTrackingSchema(db);
 	CALL_SQLITE(exec(db, "BEGIN TRANSACTION", NULL, NULL, NULL));
 
@@ -7691,7 +7691,7 @@ static qboolean G_OpenTrackedLocalDB(sqlite3 **dbOut, char *resolvedPath, int re
 	if (!dbOut)
 		return qfalse;
 	*dbOut = NULL;
-	if (!LOCAL_DB_PATH[0])
+	if (!LOCAL_DUELTRACK_DB_PATH[0])
 		return qfalse;
 
 	trap->Cvar_VariableStringBuffer("fs_game", fs_game, sizeof(fs_game));
@@ -7701,20 +7701,20 @@ static qboolean G_OpenTrackedLocalDB(sqlite3 **dbOut, char *resolvedPath, int re
 		if (!VALIDSTRING(fs_game))
 			Q_strncpyz(fs_game, TAYSTJKGAME, sizeof(fs_game));
 	}
-	Com_sprintf(fallbackDbPath, sizeof(fallbackDbPath), "%s/data.db", fs_game);
+	Com_sprintf(fallbackDbPath, sizeof(fallbackDbPath), "%s/dueltrack.db", fs_game);
 
-	if (sqlite3_open(LOCAL_DB_PATH, &db) == SQLITE_OK)
+	if (sqlite3_open(LOCAL_DUELTRACK_DB_PATH, &db) == SQLITE_OK)
 	{
 		*dbOut = db;
 		if (resolvedPath && resolvedPathSize > 0)
-			Q_strncpyz(resolvedPath, LOCAL_DB_PATH, resolvedPathSize);
+			Q_strncpyz(resolvedPath, LOCAL_DUELTRACK_DB_PATH, resolvedPathSize);
 		return qtrue;
 	}
 	if (db)
 		sqlite3_close(db);
 	db = NULL;
 
-	if (Q_stricmp(LOCAL_DB_PATH, fallbackDbPath) && sqlite3_open(fallbackDbPath, &db) == SQLITE_OK)
+	if (Q_stricmp(LOCAL_DUELTRACK_DB_PATH, fallbackDbPath) && sqlite3_open(fallbackDbPath, &db) == SQLITE_OK)
 	{
 		*dbOut = db;
 		if (resolvedPath && resolvedPathSize > 0)
@@ -7724,6 +7724,188 @@ static qboolean G_OpenTrackedLocalDB(sqlite3 **dbOut, char *resolvedPath, int re
 	if (db)
 		sqlite3_close(db);
 	return qfalse;
+}
+
+static qboolean G_MigrateLegacyTrackedData(sqlite3 *db)
+{
+	static const char *const tables[] = {
+		"LocalDuelTrackSummary",
+		"LocalDuelTrackParticipant",
+		"LocalDuelTrackEvent",
+		"LocalDuelTrackGeometry",
+		"LocalDuelTrackAggregate",
+		"LocalArcadeTrackSession",
+		"LocalArcadeTrackEvent",
+		"LocalArcadeTrackGeometry"
+	};
+	char targetColumns[64][64];
+	char sourceSql[128];
+	char tableSql[192];
+	char insertSql[8192];
+	char columnList[4096];
+	sqlite3_stmt *stmt = NULL;
+	sqlite3_stmt *tableStmt = NULL;
+	sqlite3_stmt *targetStmt = NULL;
+	sqlite3_stmt *sourceStmt = NULL;
+	int s;
+	int tableIndex;
+	qboolean attached = qfalse;
+	qboolean transactionStarted = qfalse;
+	qboolean success = qfalse;
+
+	if (!db || !LOCAL_DB_PATH[0] || !LOCAL_DUELTRACK_DB_PATH[0] ||
+		!Q_stricmp(LOCAL_DB_PATH, LOCAL_DUELTRACK_DB_PATH))
+		return qfalse;
+
+	if (sqlite3_prepare_v2(db, "ATTACH DATABASE ? AS legacy", -1, &stmt, NULL) != SQLITE_OK)
+		goto cleanup;
+	if (sqlite3_bind_text(stmt, 1, LOCAL_DB_PATH, -1, SQLITE_TRANSIENT) != SQLITE_OK ||
+		sqlite3_step(stmt) != SQLITE_DONE)
+		goto cleanup;
+	sqlite3_finalize(stmt);
+	stmt = NULL;
+	attached = qtrue;
+
+	if (sqlite3_exec(db, "BEGIN TRANSACTION", NULL, NULL, NULL) != SQLITE_OK)
+		goto cleanup;
+	transactionStarted = qtrue;
+
+	for (tableIndex = 0; tableIndex < (int)(sizeof(tables) / sizeof(tables[0])); tableIndex++)
+	{
+		int targetColumnCount = 0;
+
+		if (sqlite3_prepare_v2(db,
+			"SELECT 1 FROM legacy.sqlite_master WHERE type='table' AND name=? LIMIT 1",
+			-1, &tableStmt, NULL) != SQLITE_OK)
+			goto rollback;
+		if (sqlite3_bind_text(tableStmt, 1, tables[tableIndex], -1, SQLITE_STATIC) != SQLITE_OK)
+			goto rollback;
+		s = sqlite3_step(tableStmt);
+		sqlite3_finalize(tableStmt);
+		tableStmt = NULL;
+		if (s == SQLITE_DONE)
+			continue;
+		if (s != SQLITE_ROW)
+			goto rollback;
+
+		Com_sprintf(tableSql, sizeof(tableSql), "PRAGMA main.table_info(%s)", tables[tableIndex]);
+		if (sqlite3_prepare_v2(db, tableSql, -1, &targetStmt, NULL) != SQLITE_OK)
+			goto rollback;
+		while ((s = sqlite3_step(targetStmt)) == SQLITE_ROW && targetColumnCount < 64)
+		{
+			const unsigned char *name = sqlite3_column_text(targetStmt, 1);
+			if (name)
+				Q_strncpyz(targetColumns[targetColumnCount++], (const char *)name, sizeof(targetColumns[0]));
+		}
+		sqlite3_finalize(targetStmt);
+		targetStmt = NULL;
+		if (s != SQLITE_DONE)
+			goto rollback;
+
+		Com_sprintf(sourceSql, sizeof(sourceSql), "PRAGMA legacy.table_info(%s)", tables[tableIndex]);
+		if (sqlite3_prepare_v2(db, sourceSql, -1, &sourceStmt, NULL) != SQLITE_OK)
+			goto rollback;
+		columnList[0] = '\0';
+		while ((s = sqlite3_step(sourceStmt)) == SQLITE_ROW)
+		{
+			const unsigned char *name = sqlite3_column_text(sourceStmt, 1);
+			char columnName[64];
+			char quotedColumn[68];
+			const char *p;
+			int i;
+			qboolean found = qfalse;
+			qboolean safeIdentifier = qtrue;
+
+			if (!name)
+				continue;
+			Q_strncpyz(columnName, (const char *)name, sizeof(columnName));
+			for (p = columnName; *p; p++)
+			{
+				if (!( (*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
+					(*p >= '0' && *p <= '9') || *p == '_' ))
+				{
+					safeIdentifier = qfalse;
+					break;
+				}
+			}
+			if (!safeIdentifier)
+				continue;
+			for (i = 0; i < targetColumnCount; i++)
+			{
+				if (!Q_stricmp(columnName, targetColumns[i]))
+				{
+					found = qtrue;
+					break;
+				}
+			}
+			if (!found)
+				continue;
+			Com_sprintf(quotedColumn, sizeof(quotedColumn), "\"%s\"", columnName);
+			if (columnList[0])
+				Q_strcat(columnList, sizeof(columnList), ", ");
+			if (strlen(columnList) + strlen(quotedColumn) >= sizeof(columnList))
+				break;
+			Q_strcat(columnList, sizeof(columnList), quotedColumn);
+		}
+		sqlite3_finalize(sourceStmt);
+		sourceStmt = NULL;
+		if (s != SQLITE_DONE)
+			goto rollback;
+		if (!columnList[0])
+			continue;
+
+		Com_sprintf(insertSql, sizeof(insertSql),
+			"INSERT OR IGNORE INTO main.%s (%s) SELECT %s FROM legacy.%s",
+			tables[tableIndex], columnList, columnList, tables[tableIndex]);
+		if (sqlite3_exec(db, insertSql, NULL, NULL, NULL) != SQLITE_OK)
+			goto rollback;
+	}
+
+	if (sqlite3_exec(db, "COMMIT", NULL, NULL, NULL) != SQLITE_OK)
+		goto rollback;
+	transactionStarted = qfalse;
+	success = qtrue;
+	goto cleanup;
+
+rollback:
+	if (stmt)
+	{
+		sqlite3_finalize(stmt);
+		stmt = NULL;
+	}
+	if (tableStmt)
+	{
+		sqlite3_finalize(tableStmt);
+		tableStmt = NULL;
+	}
+	if (targetStmt)
+	{
+		sqlite3_finalize(targetStmt);
+		targetStmt = NULL;
+	}
+	if (sourceStmt)
+	{
+		sqlite3_finalize(sourceStmt);
+		sourceStmt = NULL;
+	}
+	if (transactionStarted)
+		sqlite3_exec(db, "ROLLBACK", NULL, NULL, NULL);
+	transactionStarted = qfalse;
+
+cleanup:
+	if (stmt)
+		sqlite3_finalize(stmt);
+	if (tableStmt)
+		sqlite3_finalize(tableStmt);
+	if (targetStmt)
+		sqlite3_finalize(targetStmt);
+	if (sourceStmt)
+		sqlite3_finalize(sourceStmt);
+	if (attached && sqlite3_exec(db, "DETACH DATABASE legacy", NULL, NULL, NULL) != SQLITE_OK)
+		success = qfalse;
+	if (!success)
+		G_ErrorPrint("WARNING: legacy duel tracking data migration failed", sqlite3_errcode(db));
+	return success;
 }
 
 void Svcmd_ExportDuelTrack_f(void)
@@ -7811,9 +7993,9 @@ void Svcmd_ExportDuelTrack_f(void)
 		safePrefix[0] = '\0';
 	}
 
-	if (!LOCAL_DB_PATH[0])
+	if (!LOCAL_DUELTRACK_DB_PATH[0])
 	{
-		trap->Print("Duel tracking export unavailable: LOCAL_DB_PATH is not initialized yet.\n");
+		trap->Print("Duel tracking export unavailable: tracking database path is not initialized yet.\n");
 		return;
 	}
 
@@ -12164,15 +12346,15 @@ void InitGameAccountStuff( void ) { //Called every mapload , move the create tab
 	trap->Cvar_VariableStringBuffer("fs_homepath", fs_homepath, sizeof(fs_homepath));
 	if (VALIDSTRING(fs_homepath)) {
 		Com_sprintf(LOCAL_DB_PATH, sizeof(LOCAL_DB_PATH), "%s/%s/data.db", fs_homepath, fs_game);
+		Com_sprintf(LOCAL_DUELTRACK_DB_PATH, sizeof(LOCAL_DUELTRACK_DB_PATH), "%s/%s/dueltrack.db", fs_homepath, fs_game);
 	} else {
 		Com_sprintf(LOCAL_DB_PATH, sizeof(LOCAL_DB_PATH), "%s/data.db", fs_game);
+		Com_sprintf(LOCAL_DUELTRACK_DB_PATH, sizeof(LOCAL_DUELTRACK_DB_PATH), "%s/dueltrack.db", fs_game);
 	}
 	g_duelTrackingSchemaReady = qfalse;
 	g_duelTrackingSchemaPath[0] = '\0';
 
 	CALL_SQLITE (open (LOCAL_DB_PATH, & db));
-	G_EnsureLocalArcadeSchema(db);
-	G_EnsureLocalDuelTrackingSchema(db);
 
 	//sqlite_exec(db, "VACUUM;", 0, 0);
 	//index LocalRun on RANK
@@ -12278,6 +12460,25 @@ void InitGameAccountStuff( void ) { //Called every mapload , move the create tab
 	CALL_SQLITE(finalize(stmt));
 
 	CALL_SQLITE (close(db));
+
+	db = NULL;
+	s = sqlite3_open(LOCAL_DUELTRACK_DB_PATH, &db);
+	if (s == SQLITE_OK)
+	{
+		G_EnsureLocalDuelTrackingSchema(db);
+		if (Q_stricmp(g_trackedLegacyMigrationPath, LOCAL_DB_PATH) &&
+			G_MigrateLegacyTrackedData(db))
+		{
+			Q_strncpyz(g_trackedLegacyMigrationPath, LOCAL_DB_PATH, sizeof(g_trackedLegacyMigrationPath));
+		}
+		CALL_SQLITE(close(db));
+	}
+	else
+	{
+		G_ErrorPrint("ERROR: could not open dedicated duel tracking database", s);
+		if (db)
+			sqlite3_close(db);
+	}
 
 	CleanupLocalRun(); //Deletes useless shit from LocalRun database table
 #if !_NEWRACERANKING
