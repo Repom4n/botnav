@@ -8001,6 +8001,7 @@ void Svcmd_ResetDuelTrack_f(void)
 	int legacyRows = 0;
 	qboolean attached = qfalse;
 	qboolean transactionStarted = qfalse;
+	qboolean committed = qfalse;
 	qboolean success = qtrue;
 
 	if (trap->Argc() != 1)
@@ -8109,7 +8110,10 @@ void Svcmd_ResetDuelTrack_f(void)
 	}
 
 	if (success && sqlite3_exec(db, "COMMIT", NULL, NULL, NULL) == SQLITE_OK)
+	{
 		transactionStarted = qfalse;
+		committed = qtrue;
+	}
 	else
 		success = qfalse;
 
@@ -8119,14 +8123,20 @@ void Svcmd_ResetDuelTrack_f(void)
 		success = qfalse;
 	sqlite3_close(db);
 
-	if (success)
+	if (committed)
 	{
 		memset(g_trackedDuels, 0, sizeof(g_trackedDuels));
 		memset(g_duelAdviceSessions, 0, sizeof(g_duelAdviceSessions));
 		Q_strncpyz(g_trackedLegacyMigrationPath, LOCAL_DB_PATH, sizeof(g_trackedLegacyMigrationPath));
+	}
+	if (success)
+	{
 		trap->Print("resetdueltrack: cleared %i tracking rows (%i current, %i legacy) in \"%s\" and \"%s\"; account, Elo, and arcade data were not changed.\n",
 			trackedRows + legacyRows, trackedRows, legacyRows, effectiveDbPath, LOCAL_DB_PATH);
 	}
+	else if (committed)
+		trap->Print("resetdueltrack: cleared %i tracking rows (%i current, %i legacy), but database cleanup failed for \"%s\" and \"%s\".\n",
+			trackedRows + legacyRows, trackedRows, legacyRows, effectiveDbPath, LOCAL_DB_PATH);
 	else
 		trap->Print("resetdueltrack failed: unable to clear duel tracking data in \"%s\" and \"%s\"; no account, Elo, or arcade tables were targeted.\n",
 			effectiveDbPath, LOCAL_DB_PATH);
