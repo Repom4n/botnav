@@ -3931,7 +3931,6 @@ void DebugWriteToDB(char *entrypoint) {
 	sqlite3 * db;
     char * sql;
     sqlite3_stmt * stmt;
-	char effectiveDuelTrackPath[MAX_OSPATH];
 	int s;
 	char username[16], password[16];
 
@@ -12326,6 +12325,7 @@ void InitGameAccountStuff( void ) { //Called every mapload , move the create tab
 	sqlite3 * db;
     char * sql;
     sqlite3_stmt * stmt;
+	char effectiveDuelTrackPath[MAX_OSPATH];
 	int s;
 
 	memset(g_trackedDuels, 0, sizeof(g_trackedDuels));
