@@ -499,10 +499,11 @@ static qboolean G_IsAllowedTrackedColumnName(const char *columnName)
 	if (!columnName || !columnName[0])
 		return qfalse;
 
-	//Allow only lowercase snake_case identifiers for tracked schema migrations.
+	//Allow only identifier-safe names here; membership is still enforced by allowlist below.
 	for (p = columnName; *p; ++p)
 	{
 		if (!((*p >= 'a' && *p <= 'z') ||
+			(*p >= 'A' && *p <= 'Z') ||
 			(*p >= '0' && *p <= '9') ||
 			*p == '_'))
 		{
