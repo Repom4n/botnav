@@ -128,6 +128,7 @@ BOOST_AUTO_TEST_CASE( speed_finisher_window_requires_true_kill_pressure )
 {
 	BOOST_CHECK( NewBotAI_IsSpeedFinisherWindow( 30, 0 ) );
 	BOOST_CHECK( NewBotAI_IsSpeedFinisherWindow( 45, 4 ) );
+	BOOST_CHECK( !NewBotAI_IsSpeedFinisherWindow( 40, 10 ) );
 	BOOST_CHECK( !NewBotAI_IsSpeedFinisherWindow( 30, 20 ) );
 }
 

@@ -13953,20 +13953,27 @@ static qboolean NewBotAI_ShouldEmergencyDrainRollSaberThrow(bot_state_t *bs)
 	{
 		return qfalse;
 	}
-	if (!NewBotAI_GetEnemySaberFlightThreat(bs, &forwardDist, &saberSpeed, &isReturning) || saberSpeed <= 0.0f)
-	{
-		return qfalse;
-	}
-	(void)isReturning;
-	timeToImpactMs = (forwardDist / saberSpeed) * 1000.0f;
 	canEmergencyDrainRoll = (bs->currentEnemy->client->ps.saberInFlight &&
 		NewBotAI_IsEnemySaberThreatImminent(bs) &&
 		ourHealth < 25 &&
 		ourTotalHealth <= 40 &&
-		bs->frame_Enemy_Len < 220 &&
-		timeToImpactMs <= 300.0f) ? qtrue : qfalse;
+		bs->frame_Enemy_Len < 220) ? qtrue : qfalse;
+	if (!canEmergencyDrainRoll)
+	{
+		return qfalse;
+	}
+	//Tighten to only truly immediate lethal windows when we can estimate flight timing.
+	if (NewBotAI_GetEnemySaberFlightThreat(bs, &forwardDist, &saberSpeed, &isReturning) && saberSpeed > 0.0f)
+	{
+		(void)isReturning;
+		timeToImpactMs = (forwardDist / saberSpeed) * 1000.0f;
+		if (timeToImpactMs > 300.0f)
+		{
+			return qfalse;
+		}
+	}
 
-	return canEmergencyDrainRoll;
+	return qtrue;
 }
 
 static void NewBotAI_ApplySidewaysDrainRoll(bot_state_t *bs, qboolean moveBack)
