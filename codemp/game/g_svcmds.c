@@ -1615,6 +1615,7 @@ void Svcmd_RenameAccount_f( void );
 void Svcmd_ClearIP_f( void );
 void Svcmd_DBInfo_f( void );
 void Svcmd_ExportDuelTrack_f(void);
+void Svcmd_ResetDuelTrack_f(void);
 #if _ELORANKING
 #if 0
 void G_TestAddDuel( void );
@@ -1703,6 +1704,7 @@ svcmd_t svcmds[] = {
 
 	{ "removeip",					Svcmd_RemoveIP_f,					qfalse },
 	{ "renameAccount",				Svcmd_RenameAccount_f,				qfalse },
+	{ "resetdueltrack",				Svcmd_ResetDuelTrack_f,				qfalse },
 	{ "resetScores",				Svcmd_ResetScores_f,				qfalse },
 
 	{ "saberDisable",				Svcmd_ToggleSaberDisable_f,			qfalse },
