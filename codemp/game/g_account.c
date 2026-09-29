@@ -338,7 +338,6 @@ static bot_tutorial_queue_t g_botTutorialQueues[MAX_CLIENTS];
 static duel_advice_session_state_t g_duelAdviceSessions[MAX_CLIENTS];
 static qboolean g_duelTrackingSchemaReady = qfalse;
 static char g_duelTrackingSchemaPath[MAX_OSPATH];
-static char g_trackedLegacyMigrationPath[MAX_OSPATH];
 
 static void G_EnsureLocalArcadeSchema(sqlite3 *db);
 static qboolean G_DoesTrackedDuelTableExist(sqlite3 *db, const char *tableName);
@@ -7744,7 +7743,7 @@ static qboolean G_OpenTrackedLocalDB(sqlite3 **dbOut, char *resolvedPath, int re
 		return qfalse;
 
 	G_GetLocalDBGameDir(fs_game, sizeof(fs_game));
-	Com_sprintf(fallbackDbPath, sizeof(fallbackDbPath), "%s/dueltrack.db", fs_game);
+	Com_sprintf(fallbackDbPath, sizeof(fallbackDbPath), "%s/dueltracks.db", fs_game);
 
 	if (G_OpenSQLiteFile(LOCAL_DUELTRACK_DB_PATH, &db, "duel tracking"))
 	{
@@ -7991,15 +7990,10 @@ void Svcmd_ResetDuelTrack_f(void)
 		"LocalDuelTrackSummary"
 	};
 	sqlite3 *db = NULL;
-	sqlite3 *accountDb = NULL;
-	sqlite3_stmt *stmt = NULL;
 	char effectiveDbPath[MAX_OSPATH];
 	char sql[128];
-	int s;
 	int i;
 	int trackedRows = 0;
-	int legacyRows = 0;
-	qboolean attached = qfalse;
 	qboolean transactionStarted = qfalse;
 	qboolean committed = qfalse;
 	qboolean success = qtrue;
@@ -8010,15 +8004,9 @@ void Svcmd_ResetDuelTrack_f(void)
 		return;
 	}
 
-	if (!LOCAL_DUELTRACK_DB_PATH[0] || !G_OpenLocalAccountDB(&accountDb))
+	if (!LOCAL_DUELTRACK_DB_PATH[0])
 	{
-		trap->Print("resetdueltrack failed: database paths are not initialized or unavailable.\n");
-		return;
-	}
-	s = sqlite3_close(accountDb);
-	if (s != SQLITE_OK)
-	{
-		trap->Print("resetdueltrack failed: unable to close the account database.\n");
+		trap->Print("resetdueltrack failed: duel tracking database path is not initialized.\n");
 		return;
 	}
 
@@ -8039,29 +8027,6 @@ void Svcmd_ResetDuelTrack_f(void)
 		}
 	}
 
-	if (Q_stricmp(effectiveDbPath, LOCAL_DB_PATH))
-	{
-		s = sqlite3_prepare_v2(db, "ATTACH DATABASE ? AS legacy", -1, &stmt, NULL);
-		if (s == SQLITE_OK)
-			s = sqlite3_bind_text(stmt, 1, LOCAL_DB_PATH, -1, SQLITE_TRANSIENT);
-		if (s == SQLITE_OK)
-			s = sqlite3_step(stmt);
-		if (stmt)
-		{
-			int finalizeStatus = sqlite3_finalize(stmt);
-			stmt = NULL;
-			if (s == SQLITE_DONE && finalizeStatus != SQLITE_OK)
-				s = finalizeStatus;
-		}
-		if (s != SQLITE_DONE)
-		{
-			trap->Print("resetdueltrack failed: unable to access legacy tracking data.\n");
-			sqlite3_close(db);
-			return;
-		}
-		attached = qtrue;
-	}
-
 	if (sqlite3_exec(db, "BEGIN TRANSACTION", NULL, NULL, NULL) != SQLITE_OK)
 		success = qfalse;
 	else
@@ -8077,36 +8042,6 @@ void Svcmd_ResetDuelTrack_f(void)
 			else
 				trackedRows += sqlite3_changes(db);
 		}
-
-		if (success && attached)
-		{
-			s = sqlite3_prepare_v2(db,
-				"SELECT 1 FROM legacy.sqlite_master WHERE type='table' AND name=? LIMIT 1",
-				-1, &stmt, NULL);
-			if (s == SQLITE_OK)
-				s = sqlite3_bind_text(stmt, 1, tables[i], -1, SQLITE_STATIC);
-			if (s == SQLITE_OK)
-				s = sqlite3_step(stmt);
-			if (stmt)
-			{
-				int finalizeStatus = sqlite3_finalize(stmt);
-				stmt = NULL;
-				if ((s == SQLITE_ROW || s == SQLITE_DONE) && finalizeStatus != SQLITE_OK)
-					s = finalizeStatus;
-			}
-			if (s == SQLITE_ROW)
-			{
-				Com_sprintf(sql, sizeof(sql), "DELETE FROM legacy.%s", tables[i]);
-				if (sqlite3_exec(db, sql, NULL, NULL, NULL) != SQLITE_OK)
-					success = qfalse;
-				else
-					legacyRows += sqlite3_changes(db);
-			}
-			else if (s != SQLITE_DONE)
-			{
-				success = qfalse;
-			}
-		}
 	}
 
 	if (success && sqlite3_exec(db, "COMMIT", NULL, NULL, NULL) == SQLITE_OK)
@@ -8119,27 +8054,24 @@ void Svcmd_ResetDuelTrack_f(void)
 
 	if (transactionStarted)
 		sqlite3_exec(db, "ROLLBACK", NULL, NULL, NULL);
-	if (attached && sqlite3_exec(db, "DETACH DATABASE legacy", NULL, NULL, NULL) != SQLITE_OK)
-		success = qfalse;
 	sqlite3_close(db);
 
 	if (committed)
 	{
 		memset(g_trackedDuels, 0, sizeof(g_trackedDuels));
 		memset(g_duelAdviceSessions, 0, sizeof(g_duelAdviceSessions));
-		Q_strncpyz(g_trackedLegacyMigrationPath, LOCAL_DB_PATH, sizeof(g_trackedLegacyMigrationPath));
 	}
 	if (success)
 	{
-		trap->Print("resetdueltrack: cleared %i tracking rows (%i current, %i legacy) in \"%s\" and \"%s\"; account, Elo, and arcade data were not changed.\n",
-			trackedRows + legacyRows, trackedRows, legacyRows, effectiveDbPath, LOCAL_DB_PATH);
+		trap->Print("resetdueltrack: cleared %i tracking rows in \"%s\"; account, Elo, arcade, and legacy data were not changed.\n",
+			trackedRows, effectiveDbPath);
 	}
 	else if (committed)
-		trap->Print("resetdueltrack: cleared %i tracking rows (%i current, %i legacy), but database cleanup failed for \"%s\" and \"%s\".\n",
-			trackedRows + legacyRows, trackedRows, legacyRows, effectiveDbPath, LOCAL_DB_PATH);
+		trap->Print("resetdueltrack: cleared %i tracking rows, but database cleanup failed for \"%s\".\n",
+			trackedRows, effectiveDbPath);
 	else
-		trap->Print("resetdueltrack failed: unable to clear duel tracking data in \"%s\" and \"%s\"; no account, Elo, or arcade tables were targeted.\n",
-			effectiveDbPath, LOCAL_DB_PATH);
+		trap->Print("resetdueltrack failed: unable to clear duel tracking data in \"%s\"; no account, Elo, arcade, or legacy tables were targeted.\n",
+			effectiveDbPath);
 }
 
 void Svcmd_ExportDuelTrack_f(void)
@@ -12581,10 +12513,10 @@ void InitGameAccountStuff( void ) { //Called every mapload , move the create tab
 	trap->Cvar_VariableStringBuffer("fs_homepath", fs_homepath, sizeof(fs_homepath));
 	if (VALIDSTRING(fs_homepath)) {
 		Com_sprintf(LOCAL_DB_PATH, sizeof(LOCAL_DB_PATH), "%s/%s/data.db", fs_homepath, fs_game);
-		Com_sprintf(LOCAL_DUELTRACK_DB_PATH, sizeof(LOCAL_DUELTRACK_DB_PATH), "%s/%s/dueltrack.db", fs_homepath, fs_game);
+		Com_sprintf(LOCAL_DUELTRACK_DB_PATH, sizeof(LOCAL_DUELTRACK_DB_PATH), "%s/%s/dueltracks.db", fs_homepath, fs_game);
 	} else {
 		Com_sprintf(LOCAL_DB_PATH, sizeof(LOCAL_DB_PATH), "%s/data.db", fs_game);
-		Com_sprintf(LOCAL_DUELTRACK_DB_PATH, sizeof(LOCAL_DUELTRACK_DB_PATH), "%s/dueltrack.db", fs_game);
+		Com_sprintf(LOCAL_DUELTRACK_DB_PATH, sizeof(LOCAL_DUELTRACK_DB_PATH), "%s/dueltracks.db", fs_game);
 	}
 	g_duelTrackingSchemaReady = qfalse;
 	g_duelTrackingSchemaPath[0] = '\0';
@@ -12705,11 +12637,6 @@ void InitGameAccountStuff( void ) { //Called every mapload , move the create tab
 	if (G_OpenTrackedLocalDB(&db, effectiveDuelTrackPath, sizeof(effectiveDuelTrackPath)))
 	{
 		G_EnsureLocalDuelTrackingSchema(db);
-		if (Q_stricmp(g_trackedLegacyMigrationPath, LOCAL_DB_PATH) &&
-			G_MigrateLegacyTrackedData(db))
-		{
-			Q_strncpyz(g_trackedLegacyMigrationPath, LOCAL_DB_PATH, sizeof(g_trackedLegacyMigrationPath));
-		}
 		CALL_SQLITE(close(db));
 		trap->Print("Duel tracking database: %s\n", effectiveDuelTrackPath);
 	}
