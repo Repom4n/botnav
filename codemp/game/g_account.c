@@ -344,7 +344,26 @@ static qboolean G_DoesTrackedDuelTableExist(sqlite3 *db, const char *tableName);
 static qboolean G_OpenTrackedLocalDB(sqlite3 **dbOut, char *resolvedPath, int resolvedPathSize);
 static qboolean G_OpenSQLiteFile(const char *path, sqlite3 **dbOut, const char *context);
 static qboolean G_OpenLocalAccountDB(sqlite3 **dbOut);
+static qboolean G_TrackedTableHasColumn(sqlite3 *db, const char *tableName, const char *columnName);
 static void G_QueueBotTutorialMessage(int botClientNum, int targetClientNum, const char *message);
+
+//The CALL_SQLITE macro only writes to stderr, which is invisible on a hosted dedicated
+//server. Duel tracking used to fail silently because of that, so route the tracking
+//failures through trap->Print where the operator can actually see them.
+static void G_TrackedDBError(const char *context, sqlite3 *db, int status)
+{
+	trap->Print("Duel tracking: %s failed (%i: %s)\n",
+		context ? context : "sqlite operation", status,
+		db ? sqlite3_errmsg(db) : "no database handle");
+}
+
+static const char *const g_trackedDuelTableNames[] = {
+	"LocalDuelTrackSummary",
+	"LocalDuelTrackParticipant",
+	"LocalDuelTrackEvent",
+	"LocalDuelTrackGeometry",
+	"LocalDuelTrackAggregate"
+};
 static void G_FormatArcadeLeaderboardName(const char *input, char *output, int outputSize)
 {
 	char clean[MAX_NETNAME];
@@ -424,6 +443,17 @@ static qboolean G_IsAllowedTrackedColumnName(const char *columnName)
 {
 	static const char *const allowedColumns[] = {
 		"source_context",
+		"summary_id",
+		"session_id",
+		"participant_key",
+		"opponent_key",
+		"rel_time",
+		"event_index",
+		"event_type",
+		"power",
+		"amount",
+		"state",
+		"range_bucket",
 		"draw",
 		"winner_opening",
 		"loser_opening",
@@ -494,7 +524,35 @@ static qboolean G_IsAllowedTrackedColumnName(const char *columnName)
 		"wins",
 		"losses",
 		"low_force_deaths",
-		"grip_cripples"
+		"grip_cripples",
+		"start_time",
+		"end_time",
+		"duration",
+		"mapname",
+		"type",
+		"winner_key",
+		"winner_label",
+		"winner_kind",
+		"winner_side",
+		"loser_key",
+		"loser_label",
+		"loser_kind",
+		"loser_side",
+		"won",
+		"self_x",
+		"self_y",
+		"self_z",
+		"enemy_x",
+		"enemy_y",
+		"enemy_z",
+		"self_vx",
+		"self_vy",
+		"self_vz",
+		"enemy_vx",
+		"enemy_vy",
+		"enemy_vz",
+		"self_yaw",
+		"enemy_yaw"
 	};
 	const char *p;
 	int i;
@@ -565,10 +623,20 @@ static void G_EnsureTrackedTableColumn(sqlite3 *db, const char *tableName, const
 		return;
 
 	Com_sprintf(sql, sizeof(sql), "ALTER TABLE %s ADD COLUMN %s %s", tableName, columnName, definition);
-	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
+	s = sqlite3_prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL);
+	if (s != SQLITE_OK || !stmt)
+	{
+		G_TrackedDBError(va("ALTER TABLE %s ADD COLUMN %s", tableName, columnName), db, s);
+		if (stmt)
+			sqlite3_finalize(stmt);
+		return;
+	}
 	s = sqlite3_step(stmt);
 	if (s != SQLITE_DONE)
+	{
 		G_ErrorPrint("ERROR: SQL Alter Failed (tracked add column)", s);
+		G_TrackedDBError(va("ALTER TABLE %s ADD COLUMN %s", tableName, columnName), db, s);
+	}
 	CALL_SQLITE(finalize(stmt));
 }
 
@@ -587,7 +655,10 @@ static void G_EnsureLocalDuelTrackingSchema(sqlite3 *db)
 	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
 	s = sqlite3_step(stmt);
 	if (s != SQLITE_DONE)
+	{
 		G_ErrorPrint("ERROR: SQL Create Failed (LocalDuelTrackSummary)", s);
+		G_TrackedDBError("CREATE TABLE LocalDuelTrackSummary", db, s);
+	}
 	CALL_SQLITE(finalize(stmt));
 
 	sql = "CREATE TABLE IF NOT EXISTS LocalDuelTrackParticipant("
@@ -605,7 +676,10 @@ static void G_EnsureLocalDuelTrackingSchema(sqlite3 *db)
 	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
 	s = sqlite3_step(stmt);
 	if (s != SQLITE_DONE)
+	{
 		G_ErrorPrint("ERROR: SQL Create Failed (LocalDuelTrackParticipant)", s);
+		G_TrackedDBError("CREATE TABLE LocalDuelTrackParticipant", db, s);
+	}
 	CALL_SQLITE(finalize(stmt));
 
 	sql = "CREATE TABLE IF NOT EXISTS LocalDuelTrackEvent("
@@ -624,7 +698,10 @@ static void G_EnsureLocalDuelTrackingSchema(sqlite3 *db)
 	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
 	s = sqlite3_step(stmt);
 	if (s != SQLITE_DONE)
+	{
 		G_ErrorPrint("ERROR: SQL Create Failed (LocalDuelTrackEvent)", s);
+		G_TrackedDBError("CREATE TABLE LocalDuelTrackEvent", db, s);
+	}
 	CALL_SQLITE(finalize(stmt));
 
 	sql = "CREATE TABLE IF NOT EXISTS LocalDuelTrackGeometry("
@@ -636,7 +713,10 @@ static void G_EnsureLocalDuelTrackingSchema(sqlite3 *db)
 	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
 	s = sqlite3_step(stmt);
 	if (s != SQLITE_DONE)
+	{
 		G_ErrorPrint("ERROR: SQL Create Failed (LocalDuelTrackGeometry)", s);
+		G_TrackedDBError("CREATE TABLE LocalDuelTrackGeometry", db, s);
+	}
 	CALL_SQLITE(finalize(stmt));
 
 	sql = "CREATE TABLE IF NOT EXISTS LocalDuelTrackAggregate("
@@ -650,7 +730,10 @@ static void G_EnsureLocalDuelTrackingSchema(sqlite3 *db)
 	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
 	s = sqlite3_step(stmt);
 	if (s != SQLITE_DONE)
+	{
 		G_ErrorPrint("ERROR: SQL Create Failed (LocalDuelTrackAggregate)", s);
+		G_TrackedDBError("CREATE TABLE LocalDuelTrackAggregate", db, s);
+	}
 	CALL_SQLITE(finalize(stmt));
 
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackSummary", "source_context", "VARCHAR(16) DEFAULT 'duel'");
@@ -689,6 +772,16 @@ static void G_EnsureLocalDuelTrackingSchema(sqlite3 *db)
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "force_speed", "UNSIGNED INTEGER DEFAULT 0");
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "force_seeing", "UNSIGNED INTEGER DEFAULT 0");
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "force_unknown", "UNSIGNED INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "summary_id", "INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "participant_key", "VARCHAR(64) DEFAULT ''");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "opponent_key", "VARCHAR(64) DEFAULT ''");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "rel_time", "UNSIGNED INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "event_index", "UNSIGNED SMALLINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "event_type", "VARCHAR(16) DEFAULT ''");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "power", "UNSIGNED TINYINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "amount", "SMALLINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "state", "UNSIGNED TINYINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "range_bucket", "UNSIGNED TINYINT DEFAULT 0");
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "sequence_id", "UNSIGNED SMALLINT DEFAULT 0");
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "buttons", "UNSIGNED SMALLINT DEFAULT 0");
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "saber_move", "INTEGER DEFAULT 0");
@@ -722,7 +815,10 @@ static void G_EnsureLocalDuelTrackingSchema(sqlite3 *db)
 	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
 	s = sqlite3_step(stmt);
 	if (s != SQLITE_DONE)
+	{
 		G_ErrorPrint("ERROR: SQL Create Failed (LocalArcadeTrackSession)", s);
+		G_TrackedDBError("CREATE TABLE LocalArcadeTrackSession", db, s);
+	}
 	CALL_SQLITE(finalize(stmt));
 	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackSession", "source_context", "VARCHAR(16) DEFAULT 'arcade'");
 	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackSession", "result", "VARCHAR(24) DEFAULT ''");
@@ -753,8 +849,30 @@ static void G_EnsureLocalDuelTrackingSchema(sqlite3 *db)
 	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
 	s = sqlite3_step(stmt);
 	if (s != SQLITE_DONE)
+	{
 		G_ErrorPrint("ERROR: SQL Create Failed (LocalArcadeTrackEvent)", s);
+		G_TrackedDBError("CREATE TABLE LocalArcadeTrackEvent", db, s);
+	}
 	CALL_SQLITE(finalize(stmt));
+	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "session_id", "INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "participant_key", "VARCHAR(64) DEFAULT ''");
+	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "participant_label", "VARCHAR(36) DEFAULT ''");
+	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "participant_kind", "UNSIGNED TINYINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "opponent_key", "VARCHAR(64) DEFAULT ''");
+	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "opponent_label", "VARCHAR(36) DEFAULT ''");
+	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "opponent_kind", "UNSIGNED TINYINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "rel_time", "UNSIGNED INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "event_index", "UNSIGNED SMALLINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "sequence_id", "UNSIGNED SMALLINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "event_type", "VARCHAR(24) DEFAULT ''");
+	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "power", "UNSIGNED TINYINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "amount", "SMALLINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "state", "UNSIGNED TINYINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "range_bucket", "UNSIGNED TINYINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "buttons", "UNSIGNED SMALLINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "saber_move", "INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "enemy_saber_move", "INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "yaw_delta", "SMALLINT DEFAULT 0");
 	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "self_hp", "SMALLINT DEFAULT 0");
 	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "self_armor", "SMALLINT DEFAULT 0");
 	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "self_force", "SMALLINT DEFAULT 0");
@@ -801,7 +919,10 @@ static void G_EnsureLocalDuelTrackingSchema(sqlite3 *db)
 	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
 	s = sqlite3_step(stmt);
 	if (s != SQLITE_DONE)
+	{
 		G_ErrorPrint("ERROR: SQL Create Failed (LocalArcadeTrackGeometry)", s);
+		G_TrackedDBError("CREATE TABLE LocalArcadeTrackGeometry", db, s);
+	}
 	CALL_SQLITE(finalize(stmt));
 	g_duelTrackingSchemaReady = qtrue;
 	Q_strncpyz(g_duelTrackingSchemaPath, LOCAL_DUELTRACK_DB_PATH, sizeof(g_duelTrackingSchemaPath));
@@ -2698,6 +2819,7 @@ static qboolean G_InsertTrackedParticipant(sqlite3 *db, sqlite3_int64 summaryId,
 	if (s != SQLITE_DONE)
 	{
 		G_ErrorPrint("ERROR: SQL Insert Failed (LocalDuelTrackParticipant)", s);
+		G_TrackedDBError("insert LocalDuelTrackParticipant", db, s);
 		CALL_SQLITE(finalize(stmt));
 		return qfalse;
 	}
@@ -2723,6 +2845,7 @@ static qboolean G_InsertTrackedEvents(sqlite3 *db, sqlite3_int64 summaryId, trac
 	if (s != SQLITE_OK || !stmt)
 	{
 		G_ErrorPrint("ERROR: SQL Prepare Failed (LocalDuelTrackEvent)", s);
+		G_TrackedDBError("prepare LocalDuelTrackEvent", db, s);
 		if (stmt)
 			CALL_SQLITE(finalize(stmt));
 		return qfalse;
@@ -2746,6 +2869,7 @@ static qboolean G_InsertTrackedEvents(sqlite3 *db, sqlite3_int64 summaryId, trac
 		if (s != SQLITE_OK || !geomStmt)
 		{
 			G_ErrorPrint("ERROR: SQL Prepare Failed (LocalDuelTrackGeometry)", s);
+			G_TrackedDBError("prepare LocalDuelTrackGeometry", db, s);
 			if (stmt)
 			{
 				sqlite3_finalize(stmt);
@@ -2797,6 +2921,7 @@ static qboolean G_InsertTrackedEvents(sqlite3 *db, sqlite3_int64 summaryId, trac
 		if (s != SQLITE_DONE)
 		{
 			G_ErrorPrint("ERROR: SQL Insert Failed (LocalDuelTrackEvent)", s);
+			G_TrackedDBError("insert LocalDuelTrackEvent", db, s);
 			CALL_SQLITE(finalize(stmt));
 			if (geomStmt)
 				CALL_SQLITE(finalize(geomStmt));
@@ -2829,6 +2954,7 @@ static qboolean G_InsertTrackedEvents(sqlite3 *db, sqlite3_int64 summaryId, trac
 			if (s != SQLITE_DONE)
 			{
 				G_ErrorPrint("ERROR: SQL Insert Failed (LocalDuelTrackGeometry)", s);
+				G_TrackedDBError("insert LocalDuelTrackGeometry", db, s);
 				CALL_SQLITE(finalize(stmt));
 				if (geomStmt)
 					CALL_SQLITE(finalize(geomStmt));
@@ -2865,6 +2991,7 @@ static qboolean G_UpdateTrackedAggregate(sqlite3 *db, tracked_duel_runtime_t *ru
 	if (s != SQLITE_DONE)
 	{
 		G_ErrorPrint("ERROR: SQL Insert Failed (LocalDuelTrackAggregate init)", s);
+		G_TrackedDBError("insert LocalDuelTrackAggregate init", db, s);
 		CALL_SQLITE(finalize(stmt));
 		return qfalse;
 	}
@@ -2898,6 +3025,7 @@ static qboolean G_UpdateTrackedAggregate(sqlite3 *db, tracked_duel_runtime_t *ru
 	if (s != SQLITE_DONE)
 	{
 		G_ErrorPrint("ERROR: SQL Update Failed (LocalDuelTrackAggregate update)", s);
+		G_TrackedDBError("update LocalDuelTrackAggregate update", db, s);
 		CALL_SQLITE(finalize(stmt));
 		return qfalse;
 	}
@@ -2941,6 +3069,7 @@ static void G_PersistTrackedDuel(tracked_duel_runtime_t *winnerRuntime, tracked_
 	if (s != SQLITE_OK)
 	{
 		G_ErrorPrint("ERROR: SQL Begin Failed (LocalDuelTrack persist)", s);
+		G_TrackedDBError("begin LocalDuelTrack persist", db, s);
 		CALL_SQLITE(close(db));
 		return;
 	}
@@ -2968,6 +3097,7 @@ static void G_PersistTrackedDuel(tracked_duel_runtime_t *winnerRuntime, tracked_
 	if (s != SQLITE_DONE)
 	{
 		G_ErrorPrint("ERROR: SQL Insert Failed (LocalDuelTrackSummary)", s);
+		G_TrackedDBError("insert LocalDuelTrackSummary", db, s);
 		persistOk = qfalse;
 	}
 	CALL_SQLITE(finalize(stmt));
@@ -3323,6 +3453,7 @@ static qboolean G_InsertTrackedArcadeEvents(sqlite3 *db, sqlite3_int64 sessionId
 	if (s != SQLITE_OK || !stmt)
 	{
 		G_ErrorPrint("ERROR: SQL Prepare Failed (LocalArcadeTrackEvent)", s);
+		G_TrackedDBError("prepare LocalArcadeTrackEvent", db, s);
 		if (stmt)
 			CALL_SQLITE(finalize(stmt));
 		return qfalse;
@@ -3334,6 +3465,7 @@ static qboolean G_InsertTrackedArcadeEvents(sqlite3 *db, sqlite3_int64 sessionId
 		if (s != SQLITE_OK || !geomStmt)
 		{
 			G_ErrorPrint("ERROR: SQL Prepare Failed (LocalArcadeTrackGeometry)", s);
+			G_TrackedDBError("prepare LocalArcadeTrackGeometry", db, s);
 			if (stmt)
 			{
 				sqlite3_finalize(stmt);
@@ -3390,6 +3522,7 @@ static qboolean G_InsertTrackedArcadeEvents(sqlite3 *db, sqlite3_int64 sessionId
 			if (s != SQLITE_BUSY && s != SQLITE_LOCKED)
 			{
 				G_ErrorPrint("ERROR: SQL Insert Failed (LocalArcadeTrackEvent)", s);
+				G_TrackedDBError("insert LocalArcadeTrackEvent", db, s);
 			}
 			insertFailed = qtrue;
 			break;
@@ -3424,6 +3557,7 @@ static qboolean G_InsertTrackedArcadeEvents(sqlite3 *db, sqlite3_int64 sessionId
 				if (s != SQLITE_BUSY && s != SQLITE_LOCKED)
 				{
 					G_ErrorPrint("ERROR: SQL Insert Failed (LocalArcadeTrackGeometry)", s);
+					G_TrackedDBError("insert LocalArcadeTrackGeometry", db, s);
 				}
 				insertFailed = qtrue;
 				break;
@@ -3494,6 +3628,7 @@ static void G_PersistTrackedArcadeCombat(tracked_arcade_runtime_t *runtime, cons
 		if (s != SQLITE_BUSY && s != SQLITE_LOCKED)
 		{
 			G_ErrorPrint("ERROR: SQL Insert Failed (LocalArcadeTrackSession)", s);
+			G_TrackedDBError("insert LocalArcadeTrackSession", db, s);
 		}
 	}
 	CALL_SQLITE(finalize(stmt));
@@ -7432,10 +7567,19 @@ static qboolean G_ExportTrackedQueryCSV(sqlite3 *db, const char *sql, const char
 	if (!db || !sql || !sql[0] || !outputPath)
 		return qfalse;
 
-	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
+	s = sqlite3_prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL);
+	if (s != SQLITE_OK || !stmt)
+	{
+		trap->Print("Duel tracking: could not prepare export query for \"%s\" (%i: %s)\n",
+			outputPath, s, sqlite3_errmsg(db));
+		if (stmt)
+			sqlite3_finalize(stmt);
+		return qfalse;
+	}
 	colCount = sqlite3_column_count(stmt);
 	if (colCount <= 0)
 	{
+		trap->Print("Duel tracking: export query for \"%s\" returned no columns.\n", outputPath);
 		CALL_SQLITE(finalize(stmt));
 		return qfalse;
 	}
@@ -7473,6 +7617,7 @@ static qboolean G_ExportTrackedQueryCSV(sqlite3 *db, const char *sql, const char
 	if (s != SQLITE_DONE)
 	{
 		G_ErrorPrint("ERROR: SQL Select Failed (G_ExportTrackedQueryCSV)", s);
+		G_TrackedDBError(va("export query for \"%s\"", outputPath), db, s);
 		fclose(out);
 		remove(outputPath);
 		CALL_SQLITE(finalize(stmt));
@@ -7485,6 +7630,87 @@ static qboolean G_ExportTrackedQueryCSV(sqlite3 *db, const char *sql, const char
 		*rowsWritten = localRows;
 	return qtrue;
 }
+
+static qboolean G_TrackedTableHasAllColumns(sqlite3 *db, const char *tableName,
+	const char *const *columns, int count)
+{
+	int i;
+
+	for (i = 0; i < count; i++)
+	{
+		if (!G_TrackedTableHasColumn(db, tableName, columns[i]))
+		{
+			trap->Print("Duel tracking: %s is missing column \"%s\", excluding it from this export.\n",
+				tableName, columns[i]);
+			return qfalse;
+		}
+	}
+	return qtrue;
+}
+
+//A single missing column used to break the whole UNION ALL statement, silently wiping the
+//export file. Retry with the duel-only branch so duel rows still get written.
+static qboolean G_ExportTrackedCSVWithFallback(sqlite3 *db, const char *primarySql,
+	const char *fallbackSql, const char *label, const char *outputPath, int *rowsWritten)
+{
+	if (G_ExportTrackedQueryCSV(db, primarySql, outputPath, rowsWritten))
+		return qtrue;
+
+	if (!fallbackSql || !fallbackSql[0] || !primarySql || !strcmp(primarySql, fallbackSql))
+		return qfalse;
+
+	trap->Print("Duel tracking: %s export falling back to duel-only rows, arcade rows skipped.\n",
+		label ? label : "combined");
+	return G_ExportTrackedQueryCSV(db, fallbackSql, outputPath, rowsWritten);
+}
+
+static const char *const g_trackedDuelSummaryColumns[] = {
+	"source_context", "start_time", "end_time", "duration", "mapname", "type",
+	"winner_key", "winner_label", "winner_kind", "winner_side",
+	"loser_key", "loser_label", "loser_kind", "loser_side",
+	"draw", "winner_opening", "loser_opening"
+};
+
+static const char *const g_trackedArcadeSessionColumns[] = {
+	"source_context", "start_time", "end_time", "duration", "mapname",
+	"participant_key", "participant_label", "participant_kind", "result", "arcade_level",
+	"total_kills", "total_force_spent", "total_force_regen", "total_damage_taken",
+	"total_damage_dealt", "low_force_windows", "knockdown_events", "counter_successes",
+	"punish_successes", "reset_successes", "saber_return_punishes"
+};
+
+static const char *const g_trackedDuelEventColumns[] = {
+	"summary_id", "participant_key", "opponent_key", "opponent_label", "opponent_kind",
+	"rel_time", "event_index", "sequence_id", "event_type", "power", "amount", "state",
+	"range_bucket", "buttons", "saber_move", "enemy_saber_move", "yaw_delta",
+	"self_hp", "self_armor", "self_force", "enemy_hp", "enemy_armor", "enemy_force",
+	"sequence_label", "quality", "note", "swing_side", "pre_swing_strafe",
+	"yaw_sweep", "attack_elapsed_ms", "throw_yaw_offset"
+};
+
+static const char *const g_trackedArcadeEventColumns[] = {
+	"session_id", "participant_key", "participant_label", "participant_kind",
+	"opponent_key", "opponent_label", "opponent_kind",
+	"rel_time", "event_index", "sequence_id", "event_type", "power", "amount", "state",
+	"range_bucket", "buttons", "saber_move", "enemy_saber_move", "yaw_delta",
+	"self_hp", "self_armor", "self_force", "enemy_hp", "enemy_armor", "enemy_force",
+	"sequence_label", "quality", "note", "swing_side", "pre_swing_strafe",
+	"yaw_sweep", "attack_elapsed_ms", "throw_yaw_offset"
+};
+
+static const char *const g_trackedDuelGeometryColumns[] = {
+	"summary_id", "participant_key", "opponent_key", "rel_time", "event_index",
+	"self_x", "self_y", "self_z", "enemy_x", "enemy_y", "enemy_z",
+	"self_vx", "self_vy", "self_vz", "enemy_vx", "enemy_vy", "enemy_vz",
+	"self_yaw", "enemy_yaw"
+};
+
+static const char *const g_trackedArcadeGeometryColumns[] = {
+	"session_id", "participant_key", "opponent_key", "rel_time", "event_index",
+	"self_x", "self_y", "self_z", "enemy_x", "enemy_y", "enemy_z",
+	"self_vx", "self_vy", "self_vz", "enemy_vx", "enemy_vy", "enemy_vz",
+	"self_yaw", "enemy_yaw"
+};
 
 static void G_BuildTrackedSessionExportQuery(qboolean includeDuel, qboolean includeArcade,
 	char *out, int outSize)
@@ -7798,15 +8024,76 @@ static qboolean G_OpenLocalAccountDB(sqlite3 **dbOut)
 	return qfalse;
 }
 
+static int G_CountTrackedDuelTableRows(sqlite3 *db, const char *tableName)
+{
+	sqlite3_stmt *stmt = NULL;
+	char sql[128];
+	int s;
+	int count = -1;
+
+	if (!db || !G_IsAllowedTrackedTableName(tableName))
+		return -1;
+	if (!G_DoesTrackedDuelTableExist(db, tableName))
+		return -1;
+
+	Com_sprintf(sql, sizeof(sql), "SELECT COUNT(*) FROM main.%s", tableName);
+	s = sqlite3_prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL);
+	if (s != SQLITE_OK || !stmt)
+	{
+		G_TrackedDBError(va("count rows in %s", tableName), db, s);
+		if (stmt)
+			sqlite3_finalize(stmt);
+		return -1;
+	}
+	s = sqlite3_step(stmt);
+	if (s == SQLITE_ROW)
+		count = sqlite3_column_int(stmt, 0);
+	else
+		G_TrackedDBError(va("count rows in %s", tableName), db, s);
+	CALL_SQLITE(finalize(stmt));
+	return count;
+}
+
+static void G_PrintTrackedDuelTableCounts(sqlite3 *db, const char *dbPath)
+{
+	int i;
+
+	trap->Print("Duel tracking database: %s\n", (dbPath && dbPath[0]) ? dbPath : LOCAL_DUELTRACK_DB_PATH);
+	for (i = 0; i < (int)ARRAY_LEN(g_trackedDuelTableNames); i++)
+	{
+		const int count = G_CountTrackedDuelTableRows(db, g_trackedDuelTableNames[i]);
+		if (count < 0)
+			trap->Print("  %-26s unavailable\n", g_trackedDuelTableNames[i]);
+		else
+			trap->Print("  %-26s %i rows\n", g_trackedDuelTableNames[i], count);
+	}
+}
+
+void Svcmd_DuelTrackInfo_f(void)
+{
+	sqlite3 *db = NULL;
+	char effectiveDbPath[MAX_OSPATH];
+
+	if (!LOCAL_DUELTRACK_DB_PATH[0])
+	{
+		trap->Print("dueltrackinfo failed: duel tracking database path is not initialized.\n");
+		return;
+	}
+
+	if (!G_OpenTrackedLocalDB(&db, effectiveDbPath, sizeof(effectiveDbPath)))
+	{
+		trap->Print("dueltrackinfo failed: unable to open the duel tracking database \"%s\".\n",
+			LOCAL_DUELTRACK_DB_PATH);
+		return;
+	}
+
+	G_EnsureLocalDuelTrackingSchema(db);
+	G_PrintTrackedDuelTableCounts(db, effectiveDbPath);
+	CALL_SQLITE(close(db));
+}
+
 void Svcmd_ResetDuelTrack_f(void)
 {
-	static const char *const tables[] = {
-		"LocalDuelTrackParticipant",
-		"LocalDuelTrackEvent",
-		"LocalDuelTrackGeometry",
-		"LocalDuelTrackAggregate",
-		"LocalDuelTrackSummary"
-	};
 	sqlite3 *db = NULL;
 	char effectiveDbPath[MAX_OSPATH];
 	char sql[128];
@@ -7830,66 +8117,113 @@ void Svcmd_ResetDuelTrack_f(void)
 
 	if (!G_OpenTrackedLocalDB(&db, effectiveDbPath, sizeof(effectiveDbPath)))
 	{
-		trap->Print("resetdueltrack failed: unable to open the duel tracking database.\n");
+		trap->Print("resetdueltrack failed: unable to open the duel tracking database \"%s\".\n",
+			LOCAL_DUELTRACK_DB_PATH);
 		return;
 	}
 
 	G_EnsureLocalDuelTrackingSchema(db);
-	for (i = 0; i < (int)(sizeof(tables) / sizeof(tables[0])); i++)
+	for (i = 0; i < (int)ARRAY_LEN(g_trackedDuelTableNames); i++)
 	{
-		if (!G_DoesTrackedDuelTableExist(db, tables[i]))
+		if (!G_DoesTrackedDuelTableExist(db, g_trackedDuelTableNames[i]))
 		{
-			trap->Print("resetdueltrack failed: duel tracking schema is unavailable.\n");
+			trap->Print("resetdueltrack failed: duel tracking schema is unavailable in \"%s\" (missing %s).\n",
+				effectiveDbPath, g_trackedDuelTableNames[i]);
 			sqlite3_close(db);
 			return;
 		}
 	}
 
-	if (sqlite3_exec(db, "BEGIN TRANSACTION", NULL, NULL, NULL) != SQLITE_OK)
+	i = sqlite3_exec(db, "BEGIN TRANSACTION", NULL, NULL, NULL);
+	if (i != SQLITE_OK)
+	{
+		G_TrackedDBError("begin resetdueltrack transaction", db, i);
 		success = qfalse;
+	}
 	else
 		transactionStarted = qtrue;
 
-	for (i = 0; success && i < (int)(sizeof(tables) / sizeof(tables[0])); i++)
+	for (i = 0; success && i < (int)ARRAY_LEN(g_trackedDuelTableNames); i++)
 	{
-		if (G_DoesTrackedDuelTableExist(db, tables[i]))
+		int s;
+		Com_sprintf(sql, sizeof(sql), "DELETE FROM main.%s", g_trackedDuelTableNames[i]);
+		s = sqlite3_exec(db, sql, NULL, NULL, NULL);
+		if (s != SQLITE_OK)
 		{
-			Com_sprintf(sql, sizeof(sql), "DELETE FROM main.%s", tables[i]);
-			if (sqlite3_exec(db, sql, NULL, NULL, NULL) != SQLITE_OK)
+			G_TrackedDBError(va("clear %s", g_trackedDuelTableNames[i]), db, s);
+			success = qfalse;
+		}
+		else
+			trackedRows += sqlite3_changes(db);
+	}
+
+	//Only the tracking tables are targeted here; account, Elo, race and arcade score data
+	//lives in other tables (and in data.db) and must never be touched by this command.
+	if (success && G_DoesTrackedDuelTableExist(db, "sqlite_sequence"))
+	{
+		for (i = 0; success && i < (int)ARRAY_LEN(g_trackedDuelTableNames); i++)
+		{
+			int s;
+			Com_sprintf(sql, sizeof(sql), "DELETE FROM main.sqlite_sequence WHERE name='%s'",
+				g_trackedDuelTableNames[i]);
+			s = sqlite3_exec(db, sql, NULL, NULL, NULL);
+			if (s != SQLITE_OK)
+			{
+				G_TrackedDBError(va("reset rowid sequence for %s", g_trackedDuelTableNames[i]), db, s);
 				success = qfalse;
-			else
-				trackedRows += sqlite3_changes(db);
+			}
 		}
 	}
 
-	if (success && sqlite3_exec(db, "COMMIT", NULL, NULL, NULL) == SQLITE_OK)
+	if (success)
 	{
-		transactionStarted = qfalse;
-		committed = qtrue;
+		int s = sqlite3_exec(db, "COMMIT", NULL, NULL, NULL);
+		if (s == SQLITE_OK)
+		{
+			transactionStarted = qfalse;
+			committed = qtrue;
+		}
+		else
+		{
+			G_TrackedDBError("commit resetdueltrack transaction", db, s);
+			success = qfalse;
+		}
 	}
-	else
-		success = qfalse;
 
 	if (transactionStarted)
 		sqlite3_exec(db, "ROLLBACK", NULL, NULL, NULL);
-	sqlite3_close(db);
 
 	if (committed)
 	{
+		//VACUUM has to run outside a transaction; it shrinks the file so the reset really
+		//does leave a clean tracking database behind.
+		const int s = sqlite3_exec(db, "VACUUM", NULL, NULL, NULL);
+		if (s != SQLITE_OK)
+			G_TrackedDBError("vacuum duel tracking database", db, s);
+		G_EnsureLocalDuelTrackingSchema(db);
 		memset(g_trackedDuels, 0, sizeof(g_trackedDuels));
 		memset(g_duelAdviceSessions, 0, sizeof(g_duelAdviceSessions));
 	}
+
 	if (success)
 	{
 		trap->Print("resetdueltrack: cleared %i tracking rows in \"%s\"; account, Elo, arcade, and legacy data were not changed.\n",
 			trackedRows, effectiveDbPath);
+		G_PrintTrackedDuelTableCounts(db, effectiveDbPath);
 	}
 	else if (committed)
+	{
 		trap->Print("resetdueltrack: cleared %i tracking rows, but database cleanup failed for \"%s\".\n",
 			trackedRows, effectiveDbPath);
+		G_PrintTrackedDuelTableCounts(db, effectiveDbPath);
+	}
 	else
+	{
 		trap->Print("resetdueltrack failed: unable to clear duel tracking data in \"%s\"; no account, Elo, arcade, or legacy tables were targeted.\n",
 			effectiveDbPath);
+	}
+
+	sqlite3_close(db);
 }
 
 void Svcmd_ExportDuelTrack_f(void)
@@ -7936,6 +8270,9 @@ void Svcmd_ExportDuelTrack_f(void)
 	char sessionQuery[4096];
 	char eventQuery[3072];
 	char geometryQuery[3072];
+	char sessionFallbackQuery[4096];
+	char eventFallbackQuery[3072];
+	char geometryFallbackQuery[3072];
 	char exportSuffix[32];
 	char exportFileName[64];
 	qboolean timestampedExport;
@@ -8037,9 +8374,46 @@ void Svcmd_ExportDuelTrack_f(void)
 		wantAggregateExport = hadDuelAggregate;
 	}
 
+	if (includeSessionDuel && !G_TrackedTableHasAllColumns(db, "LocalDuelTrackSummary",
+		g_trackedDuelSummaryColumns, ARRAY_LEN(g_trackedDuelSummaryColumns)))
+	{
+		includeSessionDuel = qfalse;
+	}
+	if (includeSessionArcade && !G_TrackedTableHasAllColumns(db, "LocalArcadeTrackSession",
+		g_trackedArcadeSessionColumns, ARRAY_LEN(g_trackedArcadeSessionColumns)))
+	{
+		includeSessionArcade = qfalse;
+	}
+	if (includeEventDuel && !G_TrackedTableHasAllColumns(db, "LocalDuelTrackEvent",
+		g_trackedDuelEventColumns, ARRAY_LEN(g_trackedDuelEventColumns)))
+	{
+		includeEventDuel = qfalse;
+	}
+	if (includeEventArcade && !G_TrackedTableHasAllColumns(db, "LocalArcadeTrackEvent",
+		g_trackedArcadeEventColumns, ARRAY_LEN(g_trackedArcadeEventColumns)))
+	{
+		includeEventArcade = qfalse;
+	}
+	if (includeGeometryDuel && !G_TrackedTableHasAllColumns(db, "LocalDuelTrackGeometry",
+		g_trackedDuelGeometryColumns, ARRAY_LEN(g_trackedDuelGeometryColumns)))
+	{
+		includeGeometryDuel = qfalse;
+	}
+	if (includeGeometryArcade && !G_TrackedTableHasAllColumns(db, "LocalArcadeTrackGeometry",
+		g_trackedArcadeGeometryColumns, ARRAY_LEN(g_trackedArcadeGeometryColumns)))
+	{
+		includeGeometryArcade = qfalse;
+	}
+	wantSessionExport = includeSessionDuel || includeSessionArcade;
+	wantEventExport = includeEventDuel || includeEventArcade;
+	wantGeometryExport = includeGeometryDuel || includeGeometryArcade;
+
 	G_BuildTrackedSessionExportQuery(includeSessionDuel, includeSessionArcade, sessionQuery, sizeof(sessionQuery));
 	G_BuildTrackedEventExportQuery(includeEventDuel, includeEventArcade, eventQuery, sizeof(eventQuery));
 	G_BuildTrackedGeometryExportQuery(includeGeometryDuel, includeGeometryArcade, geometryQuery, sizeof(geometryQuery));
+	G_BuildTrackedSessionExportQuery(includeSessionDuel, qfalse, sessionFallbackQuery, sizeof(sessionFallbackQuery));
+	G_BuildTrackedEventExportQuery(includeEventDuel, qfalse, eventFallbackQuery, sizeof(eventFallbackQuery));
+	G_BuildTrackedGeometryExportQuery(includeGeometryDuel, qfalse, geometryFallbackQuery, sizeof(geometryFallbackQuery));
 	G_BuildTrackedExportSuffix(timestampedExport, exportSuffix, sizeof(exportSuffix));
 
 	Q_strncpyz(dbDir, effectiveDbPath, sizeof(dbDir));
@@ -8057,65 +8431,52 @@ void Svcmd_ExportDuelTrack_f(void)
 	pathSep = '/';
 #endif
 
+	//Never delete an existing CSV up front: G_ExportTrackedQueryCSV only truncates the file
+	//once its query has prepared, so a failed export leaves the previous good file in place.
 	Com_sprintf(exportFileName, sizeof(exportFileName), "sessions%s.csv", exportSuffix);
 	G_BuildTrackedExportPath(dbDir, pathSep, safePrefix, exportFileName, outPath, sizeof(outPath));
 	if (!wantSessionExport || !sessionQuery[0])
 		G_RemoveTrackedExportFile(outPath);
+	else if (G_ExportTrackedCSVWithFallback(db, sessionQuery, sessionFallbackQuery, "sessions", outPath, &rows))
+		trap->Print("Exported tracked sessions (%d rows): %s\n", rows, exportFileName);
 	else
-	{
-		if (!timestampedExport)
-			G_RemoveTrackedExportFile(outPath);
-		if (G_ExportTrackedQueryCSV(db, sessionQuery, outPath, &rows))
-			trap->Print("Exported tracked sessions (%d rows): %s\n", rows, exportFileName);
-	}
+		trap->Print("Duel tracking: sessions export failed, kept any previous %s.\n", exportFileName);
 
 	Com_sprintf(exportFileName, sizeof(exportFileName), "participants%s.csv", exportSuffix);
 	G_BuildTrackedExportPath(dbDir, pathSep, safePrefix, exportFileName, outPath, sizeof(outPath));
 	if (!wantParticipantExport)
 		G_RemoveTrackedExportFile(outPath);
+	else if (G_ExportTrackedQueryCSV(db, G_GetTrackedParticipantExportQuery(), outPath, &rows))
+		trap->Print("Exported tracked participants (%d rows): %s\n", rows, exportFileName);
 	else
-	{
-		if (!timestampedExport)
-			G_RemoveTrackedExportFile(outPath);
-		if (G_ExportTrackedQueryCSV(db, G_GetTrackedParticipantExportQuery(), outPath, &rows))
-			trap->Print("Exported tracked participants (%d rows): %s\n", rows, exportFileName);
-	}
+		trap->Print("Duel tracking: participants export failed, kept any previous %s.\n", exportFileName);
 
 	Com_sprintf(exportFileName, sizeof(exportFileName), "events%s.csv", exportSuffix);
 	G_BuildTrackedExportPath(dbDir, pathSep, safePrefix, exportFileName, outPath, sizeof(outPath));
 	if (!wantEventExport || !eventQuery[0])
 		G_RemoveTrackedExportFile(outPath);
+	else if (G_ExportTrackedCSVWithFallback(db, eventQuery, eventFallbackQuery, "events", outPath, &rows))
+		trap->Print("Exported tracked events (%d rows): %s\n", rows, exportFileName);
 	else
-	{
-		if (!timestampedExport)
-			G_RemoveTrackedExportFile(outPath);
-		if (G_ExportTrackedQueryCSV(db, eventQuery, outPath, &rows))
-			trap->Print("Exported tracked events (%d rows): %s\n", rows, exportFileName);
-	}
+		trap->Print("Duel tracking: events export failed, kept any previous %s.\n", exportFileName);
 
 	Com_sprintf(exportFileName, sizeof(exportFileName), "geometry%s.csv", exportSuffix);
 	G_BuildTrackedExportPath(dbDir, pathSep, safePrefix, exportFileName, outPath, sizeof(outPath));
 	if (!wantGeometryExport || !geometryQuery[0])
 		G_RemoveTrackedExportFile(outPath);
+	else if (G_ExportTrackedCSVWithFallback(db, geometryQuery, geometryFallbackQuery, "geometry", outPath, &rows))
+		trap->Print("Exported tracked geometry (%d rows): %s\n", rows, exportFileName);
 	else
-	{
-		if (!timestampedExport)
-			G_RemoveTrackedExportFile(outPath);
-		if (G_ExportTrackedQueryCSV(db, geometryQuery, outPath, &rows))
-			trap->Print("Exported tracked geometry (%d rows): %s\n", rows, exportFileName);
-	}
+		trap->Print("Duel tracking: geometry export failed, kept any previous %s.\n", exportFileName);
 
 	Com_sprintf(exportFileName, sizeof(exportFileName), "aggregate%s.csv", exportSuffix);
 	G_BuildTrackedExportPath(dbDir, pathSep, safePrefix, exportFileName, outPath, sizeof(outPath));
 	if (!wantAggregateExport)
 		G_RemoveTrackedExportFile(outPath);
+	else if (G_ExportTrackedQueryCSV(db, G_GetTrackedAggregateExportQuery(), outPath, &rows))
+		trap->Print("Exported tracked aggregate (%d rows): %s\n", rows, exportFileName);
 	else
-	{
-		if (!timestampedExport)
-			G_RemoveTrackedExportFile(outPath);
-		if (G_ExportTrackedQueryCSV(db, G_GetTrackedAggregateExportQuery(), outPath, &rows))
-			trap->Print("Exported tracked aggregate (%d rows): %s\n", rows, exportFileName);
-	}
+		trap->Print("Duel tracking: aggregate export failed, kept any previous %s.\n", exportFileName);
 
 	CALL_SQLITE(close(db));
 }
