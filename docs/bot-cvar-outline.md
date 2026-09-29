@@ -142,10 +142,10 @@ Notes:
 | `g_movementStyle` | `1` | Movement physics style (affects bot movement code paths). |
 
 Tracked duel data access:
-- Stored in `fs_homepath/fs_game/dueltrack.db` (fallback: `fs_game/dueltrack.db`); Elo and account data remain in `data.db`.
+- Stored in `fs_homepath/fs_game/dueltracks.db` (fallback: `fs_game/dueltracks.db`); Elo and account data remain in `data.db`.
 - Database paths are printed to the server console on map load. `exportDuelTrack` reports exported CSV filenames and row counts without printing their filesystem paths. If a database cannot be opened or created, the failure is printed with the sqlite error instead of failing silently.
-- Existing tracked rows in `data.db` are copied to `dueltrack.db` on startup and retained in the original file.
-- Use server console command `resetdueltrack` to clear duel tracking summaries, participants, events, geometry, and aggregates from both the dedicated tracking database and the legacy account database. The command reports the paths and number of rows cleared, and discards any in-progress duel tracking so those duels cannot repopulate the reset. It does not reset accounts, Elo duel history, or arcade tracking.
+- Existing tracked rows in `data.db` or `dueltrack.db` are not imported, so `dueltracks.db` starts clean.
+- Use server console command `resetdueltrack` to clear duel tracking summaries, participants, events, geometry, and aggregates from `dueltracks.db`. The command reports the path and number of rows cleared, and discards any in-progress duel tracking so those duels cannot repopulate the reset. It does not reset accounts, Elo duel history, arcade tracking, or legacy databases.
 - Use server console command `exportDuelTrack [prefix]` to export timestamped CSV files for:
   - `LocalDuelTrackSummary`
   - `LocalDuelTrackParticipant`
