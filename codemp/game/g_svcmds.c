@@ -1616,6 +1616,7 @@ void Svcmd_ClearIP_f( void );
 void Svcmd_DBInfo_f( void );
 void Svcmd_ExportDuelTrack_f(void);
 void Svcmd_ResetDuelTrack_f(void);
+void Svcmd_DuelTrackInfo_f(void);
 #if _ELORANKING
 #if 0
 void G_TestAddDuel( void );
@@ -1674,10 +1675,12 @@ svcmd_t svcmds[] = {
 	{ "clearIP",					Svcmd_ClearIP_f,					qfalse },
 	{ "DBInfo",						Svcmd_DBInfo_f,						qfalse },
 	{ "deleteAccount",				Svcmd_DeleteAccount_f,				qfalse },
+	{ "dueltrackinfo",				Svcmd_DuelTrackInfo_f,				qfalse },
 
 	{ "entityinfo",					Svcmd_EntityInfo_f,					qfalse },
 	{ "entitylist",					Svcmd_EntityList_f,					qfalse },
 	{ "exportDuelTrack",			Svcmd_ExportDuelTrack_f,			qfalse },
+	{ "exportDuelTracks",			Svcmd_ExportDuelTrack_f,			qfalse },
 	{ "flagAccount",				Svcmd_FlagAccount_f,				qfalse },
 	{ "forceteam",					Svcmd_ForceTeam_f,					qfalse },
 	{ "gametype",					Svcmd_ChangeGametype_f,				qfalse },
@@ -1705,6 +1708,7 @@ svcmd_t svcmds[] = {
 	{ "removeip",					Svcmd_RemoveIP_f,					qfalse },
 	{ "renameAccount",				Svcmd_RenameAccount_f,				qfalse },
 	{ "resetdueltrack",				Svcmd_ResetDuelTrack_f,				qfalse },
+	{ "resetdueltracks",			Svcmd_ResetDuelTrack_f,				qfalse },
 	{ "resetScores",				Svcmd_ResetScores_f,				qfalse },
 
 	{ "saberDisable",				Svcmd_ToggleSaberDisable_f,			qfalse },
