@@ -203,6 +203,9 @@ static qboolean NewBotAI_IsEnemySaberReturning(bot_state_t *bs);
 static qboolean NewBotAI_GetEnemySaberFlightThreat(bot_state_t *bs, float *forwardDistOut, float *saberSpeedOut, qboolean *isReturningOut);
 static qboolean NewBotAI_IsEnemySaberThreatImminent(bot_state_t *bs);
 static qboolean NewBotAI_IsIncomingSaberThrowLethal(bot_state_t *bs);
+static qboolean NewBotAI_IsLethalEnemySwingImminent(bot_state_t *bs);
+static qboolean NewBotAI_IsCertainDeathWindow(bot_state_t *bs);
+static void NewBotAI_FilterDefensiveRollInput(bot_state_t *bs, bot_input_t *bi);
 static qboolean NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bot_state_t *bs);
 static qboolean NewBotAI_ShouldJumpDrainVsSaberThrow(bot_state_t *bs);
 static qboolean NewBotAI_ShouldEmergencyDrainRollSaberThrow(bot_state_t *bs);
@@ -944,6 +947,8 @@ void BotUpdateInput(bot_state_t *bs, int time, int elapsed_time) {
 	{
 		bs->flipkickJumpHeld = qfalse;
 	}
+	//Defensive rolls are a last resort only - see NewBotAI_FilterDefensiveRollInput.
+	NewBotAI_FilterDefensiveRollInput(bs, &bi);
 	//respawn hack
 	if (bi.actionflags & ACTION_RESPAWN) {
 		if (bs->lastucmd.buttons & BUTTON_ATTACK) bi.actionflags &= ~(ACTION_RESPAWN|ACTION_ATTACK);
@@ -7402,6 +7407,63 @@ static qboolean NewBotAI_ShouldSuppressDrainlockSaberThrow(bot_state_t *bs)
 		NewBotAI_GetEnemyTotalHealth(bs) > 24) ? qtrue : qfalse;
 }
 
+//Force a completed saber throw costs us in practice: forcePowerNeeded is only the per-tick
+//drain (10 at level 3) and it is charged repeatedly for as long as the saber is out.
+#define NEWBOTAI_SABER_THROW_FORCE_BUDGET 40
+//Force we must still have banked after the throw to push/pull our way out of a drain lock.
+#define NEWBOTAI_DRAINLOCK_ESCAPE_RESERVE 30
+//Below this the enemy cannot open a drain lock on us in the first place.
+#define NEWBOTAI_DRAINLOCK_ENEMY_MIN_FORCE 25
+
+//The mirror of NewBotAI_ShouldSuppressDrainlockSaberThrow: would throwing right now hand
+//the *enemy* a drain lock on us? The duel tracks show this as the dominant way our bots get
+//drainlocked - they spend the throw's force budget, drop under the push/pull escape cost,
+//and then have nothing left when the drain starts. Veto the throw in that window.
+static qboolean NewBotAI_WouldThrowInviteDrainlock(bot_state_t *bs)
+{
+	int ourForce;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return qfalse;
+	}
+
+	//Only a drain-capable opponent inside drain range can punish the throw this way.
+	if (!(bs->currentEnemy->client->ps.fd.forcePowersKnown & (1 << FP_DRAIN)) &&
+		!(bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_DRAIN)))
+	{
+		return qfalse;
+	}
+
+	if (bs->frame_Enemy_Len > MAX_DRAIN_DISTANCE)
+	{
+		return qfalse;
+	}
+
+	//Absorb makes their drain harmless, so the throw is safe to spend.
+	if (bs->cur_ps.fd.forcePowersActive & (1 << FP_ABSORB))
+	{
+		return qfalse;
+	}
+
+	//Already being drained: throwing now is the exact mistake the tracks flag.
+	if (bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_DRAIN))
+	{
+		return qtrue;
+	}
+
+	if (bs->currentEnemy->client->ps.fd.forcePower < NEWBOTAI_DRAINLOCK_ENEMY_MIN_FORCE)
+	{
+		return qfalse;
+	}
+
+	//Otherwise veto only when the throw would leave us under the escape reserve.
+	ourForce = bs->cur_ps.fd.forcePower;
+
+	return ((ourForce - NEWBOTAI_SABER_THROW_FORCE_BUDGET) <
+		NEWBOTAI_DRAINLOCK_ESCAPE_RESERVE) ? qtrue : qfalse;
+}
+
 static int NewBotAI_GetTotalHealthDelta(bot_state_t *bs)
 {
 	int ourTotalHealth;
@@ -9477,6 +9539,13 @@ void NewBotAI_SaberThrowing(bot_state_t* bs)
 	}
 
 	if (NewBotAI_ShouldSuppressDrainlockSaberThrow(bs))
+	{
+		return;
+	}
+
+	//Stop extending the throw once continuing it would drop us under the drain-lock
+	//escape reserve: release alt-attack so the saber returns and the force stops bleeding.
+	if (NewBotAI_WouldThrowInviteDrainlock(bs))
 	{
 		return;
 	}
@@ -13879,6 +13948,118 @@ static qboolean NewBotAI_IsIncomingSaberThrowLethal(bot_state_t *bs)
 	return (ourTotalHealth <= expectedDamage) ? qtrue : qfalse;
 }
 
+//Base damage of a connecting enemy saber swing (SABER_HITDAMAGE in w_saber.c, before the
+//g_saberDamageScale multiplier that CheckSaberDamage applies).
+#define NEWBOTAI_SABER_SWING_BASE_DAMAGE 35
+//A swing only threatens us once the enemy blade can actually reach us.
+#define NEWBOTAI_SABER_SWING_LETHAL_RANGE 112.0f
+
+//Companion to NewBotAI_IsIncomingSaberThrowLethal for melee: the enemy is mid-swing, close
+//enough to connect this swing, and the hit would take our remaining health+armor pool to
+//zero.
+static qboolean NewBotAI_IsLethalEnemySwingImminent(bot_state_t *bs)
+{
+	int expectedDamage;
+	int ourTotalHealth;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return qfalse;
+	}
+
+	if (bs->currentEnemy->client->ps.weapon != WP_SABER ||
+		!BG_SaberInAttack(bs->currentEnemy->client->ps.saberMove))
+	{
+		return qfalse;
+	}
+
+	if (!bs->frame_Enemy_Vis || bs->frame_Enemy_Len > NEWBOTAI_SABER_SWING_LETHAL_RANGE)
+	{
+		return qfalse;
+	}
+
+	if (bs->cur_ps.fd.forcePowersActive & (1 << FP_PROTECT))
+	{
+		return qfalse;
+	}
+
+	expectedDamage = (int)(NEWBOTAI_SABER_SWING_BASE_DAMAGE * g_saberDamageScale.value);
+	if (expectedDamage <= 0)
+	{
+		return qfalse;
+	}
+
+	ourTotalHealth = g_entities[bs->client].health + bs->cur_ps.stats[STAT_ARMOR];
+
+	return (ourTotalHealth <= expectedDamage) ? qtrue : qfalse;
+}
+
+//The single "we are certainly going to die if we stand here" test. Defensive rolls are
+//gated on this: a roll gives up our block and our facing for the whole animation, so it is
+//only ever worth it when staying put is lethal.
+static qboolean NewBotAI_IsCertainDeathWindow(bot_state_t *bs)
+{
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return qfalse;
+	}
+
+	return (NewBotAI_IsIncomingSaberThrowLethal(bs) ||
+		NewBotAI_IsLethalEnemySwingImminent(bs)) ? qtrue : qfalse;
+}
+
+//Squared speed at which PM_CheckDuck lets a crouch turn into a roll. The engine uses
+//30000 when g_fixRoll is 1 and 40000 otherwise (see bg_pmove.c PM_TryRoll callers), so
+//gate on the lower of the two to catch every case.
+#define NEWBOTAI_ROLL_SPEED_SQ 30000.0f
+
+//Final input-stage gate for defensive rolls. A backward roll needs crouch held while the
+//bot is running backwards on the ground, and it costs us our block and our facing for the
+//entire animation - which is exactly how bots were dying to follow-up pressure. Strip the
+//crouch unless staying put is certainly lethal, so rolls only happen as a true last resort.
+//Sideways escape rolls (the drain roll) and non-combat crouching are untouched.
+static void NewBotAI_FilterDefensiveRollInput(bot_state_t *bs, bot_input_t *bi)
+{
+	float horizontalSpeedSq;
+
+	if (!bs || !bi || !g_newBotAI.integer)
+	{
+		return;
+	}
+
+	if (!(bi->actionflags & ACTION_CROUCH) || !(bi->actionflags & ACTION_MOVEBACK))
+	{
+		return;
+	}
+
+	if (!bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return;
+	}
+
+	//Only grounded, running-speed backward movement can roll.
+	if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE)
+	{
+		return;
+	}
+
+	horizontalSpeedSq = (bs->cur_ps.velocity[0] * bs->cur_ps.velocity[0]) +
+		(bs->cur_ps.velocity[1] * bs->cur_ps.velocity[1]);
+	if (g_fixRoll.integer <= 1 && horizontalSpeedSq < NEWBOTAI_ROLL_SPEED_SQ)
+	{
+		return;
+	}
+
+	if (NewBotAI_IsCertainDeathWindow(bs) ||
+		NewBotAI_ShouldEmergencyDrainRollSaberThrow(bs))
+	{
+		return;
+	}
+
+	//Survivable: keep the saber up and retreat on foot instead of rolling.
+	bi->actionflags &= ~ACTION_CROUCH;
+}
+
 static qboolean NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bot_state_t *bs)
 {
 	vec3_t a_fo;
@@ -15646,6 +15827,12 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 	//throw that is a very clear kill: otherwise keep the saber in hand and cash the
 	//force advantage in with drain taps and pullkicks instead of extending the throw.
 	if (NewBotAI_ShouldSuppressDrainlockSaberThrow(bs))
+	{
+		return 0;
+	}
+	//Don't hand the opponent a drain lock: if the throw's force budget would leave us
+	//without enough banked to push/pull free, keep the saber (and the force) in hand.
+	if (NewBotAI_WouldThrowInviteDrainlock(bs))
 	{
 		return 0;
 	}
