@@ -1155,9 +1155,6 @@ static int GetTeamPlayers(int team) {
 SetTeam
 =================
 */
- void G_AddDuel(char *winner, char *loser, int winnerLevel, int loserLevel, int start_time, int type, int winner_hp, int winner_shield);
-qboolean G_GetDuelParticipantName(gentity_t *ent, char *name, int nameSize);
-
 qboolean g_dontPenalizeTeam = qfalse;
 qboolean g_preventTeamBegin = qfalse;
 void SetTeam( gentity_t *ent, char *s, qboolean forcedToJoin ) {//JAPRO - Modified for proper amforceteam.  Why doesn't this accept TEAM_FREE and stuff and instead use char??
@@ -1615,26 +1612,11 @@ void SetTeam( gentity_t *ent, char *s, qboolean forcedToJoin ) {//JAPRO - Modifi
 			ent->client->pers.lastUserName[0] && duelAgainst && duelAgainst->client && duelAgainst->client->pers.lastUserName[0]) {
 			if (!(ent->client->sess.accountFlags & JAPRO_ACCOUNTFLAG_NODUEL) && !(duelAgainst->client->sess.accountFlags & JAPRO_ACCOUNTFLAG_NODUEL))
 			{
-				char duelAgainstUserinfo[MAX_INFO_STRING];
-				char entUserinfo[MAX_INFO_STRING];
-				int winnerLevel = 0;
-				int loserLevel = 0;
-
-				if (duelAgainst->r.svFlags & SVF_BOT)
-				{
-					trap->GetUserinfo(duelAgainst->s.number, duelAgainstUserinfo, sizeof(duelAgainstUserinfo));
-					winnerLevel = atoi(Info_ValueForKey(duelAgainstUserinfo, "skill"));
-				}
-				if (ent->r.svFlags & SVF_BOT)
-				{
-					trap->GetUserinfo(ent->s.number, entUserinfo, sizeof(entUserinfo));
-					loserLevel = atoi(Info_ValueForKey(entUserinfo, "skill"));
-				}
 				G_AddDuel(
 					duelAgainst->client->pers.lastUserName,
 					ent->client->pers.lastUserName,
-					winnerLevel,
-					loserLevel,
+					G_GetDuelBotSkillLevel(duelAgainst),
+					G_GetDuelBotSkillLevel(ent),
 					duelAgainst->client->pers.duelStartTime,
 					dueltypes[ent->client->ps.clientNum],
 					duelAgainst->client->ps.stats[STAT_HEALTH],
@@ -4577,10 +4559,12 @@ void Cmd_EngageDuel_f(gentity_t *ent, int dueltype)//JAPRO - Serverside - Fullfo
 				challenged->client->ps.forceHandExtendTime = level.time + 2000; //2 seconds of weaponlock at start of duel
 			}
 
-			G_GetDuelParticipantName(ent, entDuelName, sizeof(entDuelName));
-			G_GetDuelParticipantName(challenged, challengedDuelName, sizeof(challengedDuelName));
-			Q_strncpyz(ent->client->pers.lastUserName, entDuelName, sizeof(ent->client->pers.lastUserName));
-			Q_strncpyz(challenged->client->pers.lastUserName, challengedDuelName, sizeof(challenged->client->pers.lastUserName));
+			//Only overwrite the stored duel identity when we actually resolved one; a failed
+			//lookup used to blank lastUserName, which silently dropped the duel from the DB.
+			if (G_GetDuelParticipantName(ent, entDuelName, sizeof(entDuelName)) && entDuelName[0])
+				Q_strncpyz(ent->client->pers.lastUserName, entDuelName, sizeof(ent->client->pers.lastUserName));
+			if (G_GetDuelParticipantName(challenged, challengedDuelName, sizeof(challengedDuelName)) && challengedDuelName[0])
+				Q_strncpyz(challenged->client->pers.lastUserName, challengedDuelName, sizeof(challenged->client->pers.lastUserName));
 			ent->client->pers.duelStartTime = level.time;
 			challenged->client->pers.duelStartTime = level.time;
 			G_StartTrackedDuel(ent, challenged, dueltypes[ent->client->ps.clientNum]);

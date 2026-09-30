@@ -4886,7 +4886,6 @@ void G_ClearTeamVote( gentity_t *ent, int team ) {
 }
 
 void G_AddSimpleStat(gentity_t *self, gentity_t *other, int type);
-void G_AddDuel(char *winner, char *loser, int start_time, int type, int winner_hp, int winner_shield);
 
 void G_UpdatePlaytime(int null, char *username, int seconds );
 void ClientDisconnect( int clientNum ) {
@@ -4942,7 +4941,10 @@ void ClientDisconnect( int clientNum ) {
 			//Trying to dodge the duel, no no no
 			if (!(ent->client->sess.accountFlags & JAPRO_ACCOUNTFLAG_NODUEL) && !(duelAgainst->client->sess.accountFlags & JAPRO_ACCOUNTFLAG_NODUEL))
 			{
-				G_AddDuel(duelAgainst->client->pers.lastUserName, ent->client->pers.lastUserName, duelAgainst->client->pers.duelStartTime, dueltypes[ent->client->ps.clientNum], duelAgainst->client->ps.stats[STAT_HEALTH], duelAgainst->client->ps.stats[STAT_ARMOR]);
+				G_AddDuel(duelAgainst->client->pers.lastUserName, ent->client->pers.lastUserName,
+					G_GetDuelBotSkillLevel(duelAgainst), G_GetDuelBotSkillLevel(ent),
+					duelAgainst->client->pers.duelStartTime, dueltypes[ent->client->ps.clientNum],
+					duelAgainst->client->ps.stats[STAT_HEALTH], duelAgainst->client->ps.stats[STAT_ARMOR]);
 			}
 		}
 	}

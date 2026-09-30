@@ -19,6 +19,9 @@ static char LOCAL_DUELTRACK_DB_PATH[MAX_OSPATH];
 #define BOT_DUEL_RANKED_LIMIT_PER_LEVEL 5
 #define BOT_DUEL_LEVEL_MIN 1
 #define BOT_DUEL_LEVEL_MAX 10
+#define BOT_DUEL_SEED_ELO_MIN 800.0f
+#define BOT_DUEL_SEED_ELO_MAX 1100.0f
+#define BOT_DUEL_SEED_ELO_DEFAULT 1000.0f
 #define TRACKED_DUEL_MAX_EVENTS 128
 #define TRACKED_DUEL_TUTORIAL_MAX_MESSAGES 3
 #define TRACKED_DUEL_TUTORIAL_COOLDOWN_MS 7000
@@ -4208,12 +4211,12 @@ void G_AddPlayerLog(char *name, char *strIP, char *guid) {
 	//Somehow make this sorted..
 }
 
-static int G_GetDuelParticipantBotLevel(gentity_t *ent)
+int G_GetDuelBotSkillLevel(gentity_t *ent)
 {
 	char userinfo[MAX_INFO_STRING];
 	int level;
 
-	if (!g_eloRanking.integer || !g_newBotAI.integer || !ent || !ent->client || !(ent->r.svFlags & SVF_BOT))
+	if (!ent || !ent->client || !(ent->r.svFlags & SVF_BOT))
 		return 0;
 
 	trap->GetUserinfo(ent->s.number, userinfo, sizeof(userinfo));
@@ -4222,6 +4225,13 @@ static int G_GetDuelParticipantBotLevel(gentity_t *ent)
 		return 0;
 
 	return level;
+}
+
+static int G_GetDuelParticipantBotLevel(gentity_t *ent)
+{
+	//Bot identity must stay stable regardless of which AI/ranking cvars are toggled,
+	//otherwise the same bot is logged under different (or empty) names between duels.
+	return G_GetDuelBotSkillLevel(ent);
 }
 
 static qboolean G_GetDuelBotIdentityName(gentity_t *ent, int botLevel, char *name, int nameSize)
@@ -4301,6 +4311,26 @@ static int G_ParseBotLevelName(const char *name)
 	return level;
 }
 
+//Seed rating for an identity that has no rated duel history yet. Humans (and anything we
+//cannot resolve to a bot level) keep the historic 1000 starting point; bots are spread
+//linearly across BOT_DUEL_SEED_ELO_MIN..BOT_DUEL_SEED_ELO_MAX for levels 1..10, so a fresh
+//database starts with L1 at 800 and L10 at 1100 instead of every bot sharing 1000.
+float G_GetSeedEloForDuelName(const char *username)
+{
+	const int level = G_ParseBotLevelName(username);
+
+	if (level < BOT_DUEL_LEVEL_MIN || level > BOT_DUEL_LEVEL_MAX)
+		return BOT_DUEL_SEED_ELO_DEFAULT;
+
+	if (BOT_DUEL_LEVEL_MAX == BOT_DUEL_LEVEL_MIN)
+		return BOT_DUEL_SEED_ELO_MIN;
+
+	return BOT_DUEL_SEED_ELO_MIN +
+		((float)(level - BOT_DUEL_LEVEL_MIN) *
+		 (float)(BOT_DUEL_SEED_ELO_MAX - BOT_DUEL_SEED_ELO_MIN) /
+		 (float)(BOT_DUEL_LEVEL_MAX - BOT_DUEL_LEVEL_MIN));
+}
+
 qboolean G_GetDuelParticipantName(gentity_t *ent, char *name, int nameSize) {
 	int level;
 
@@ -4363,8 +4393,10 @@ float GetDuelElo( char *username, int type, int end_time, sqlite3 * db) {
     sqlite3_stmt * stmt;
 	int s;
 
-	sql = "SELECT winner_elo AS elo, end_time FROM LocalDuel where type = ? AND winner = ? AND end_time < ? "
-		"UNION ALL SELECT loser_elo AS elo, end_time FROM LocalDuel where type = ? AND loser = ? AND end_time < ? "
+	//Only consider rated rows: unranked bot-vs-bot duels are stored with elo -999, and
+	//picking one of those up would reset the participant back to the seed value.
+	sql = "SELECT winner_elo AS elo, end_time FROM LocalDuel where type = ? AND winner = ? AND end_time < ? AND winner_elo > -998 "
+		"UNION ALL SELECT loser_elo AS elo, end_time FROM LocalDuel where type = ? AND loser = ? AND end_time < ? AND loser_elo > -998 "
 		"ORDER BY end_time DESC LIMIT 1";
 	CALL_SQLITE (prepare_v2 (db, sql, strlen (sql) + 1, & stmt, NULL));
 	CALL_SQLITE (bind_int (stmt, 1, type));
@@ -4384,7 +4416,7 @@ float GetDuelElo( char *username, int type, int end_time, sqlite3 * db) {
 	}
 
 	if (elo == -999.0f) {//This needs to just be done to check if its null
-		elo = 1000; //Elo not found, give them initial value
+		elo = G_GetSeedEloForDuelName(username); //Elo not found, seed by bot level (humans get 1000)
 	}
 
 	CALL_SQLITE (finalize(stmt));
@@ -4730,16 +4762,56 @@ void SV_RebuildElo_f() {
 	Com_Printf("Duel ranks cleared in %i ms.\n", trap->Milliseconds() - time1);
 }
 
+//Re-seed every stored rating row for one bot level onto the level curve (see
+//G_GetSeedEloForDuelName). Matches both stored naming forms: the bare "botlvlN" identity
+//and the tagged "<name> [bot LN]" identity produced by G_GetDuelBotIdentityName.
+static int G_ReseedBotLevelElo(sqlite3 *db, int botLevel, float seedElo)
+{
+	char *sql;
+	sqlite3_stmt *stmt;
+	char levelName[16];
+	char levelTagged[32];
+	int s;
+	int rows = 0;
+	int pass;
+
+	if (!db || botLevel < BOT_DUEL_LEVEL_MIN || botLevel > BOT_DUEL_LEVEL_MAX)
+	{
+		return 0;
+	}
+
+	Com_sprintf(levelName, sizeof(levelName), "botlvl%i", botLevel);
+	Com_sprintf(levelTagged, sizeof(levelTagged), "%% [bot L%i]", botLevel);
+
+	for (pass = 0; pass < 2; pass++)
+	{
+		sql = pass ?
+			"UPDATE LocalDuel SET loser_elo = ? WHERE loser_elo > -998 AND (loser = ? OR loser LIKE ?)" :
+			"UPDATE LocalDuel SET winner_elo = ? WHERE winner_elo > -998 AND (winner = ? OR winner LIKE ?)";
+		CALL_SQLITE (prepare_v2 (db, sql, strlen (sql) + 1, & stmt, NULL));
+		CALL_SQLITE (bind_double (stmt, 1, seedElo));
+		CALL_SQLITE (bind_text (stmt, 2, levelName, -1, SQLITE_TRANSIENT));
+		CALL_SQLITE (bind_text (stmt, 3, levelTagged, -1, SQLITE_TRANSIENT));
+		s = sqlite3_step(stmt);
+		if (s != SQLITE_DONE) {
+			G_ErrorPrint("ERROR: SQL Update Failed (G_ReseedBotLevelElo)", s);
+		}
+		else {
+			rows += sqlite3_changes(db);
+		}
+		CALL_SQLITE (finalize(stmt));
+	}
+
+	return rows;
+}
+
 void SV_BotEloReset_f(void) {
 	char input[32];
 	char botName[16];
 	sqlite3 *db;
-	char *sql;
-	sqlite3_stmt *stmt;
 	int botLevel;
-	int s;
-	int winnerRows = 0;
-	int loserRows = 0;
+	int rows;
+	float seedElo;
 
 	if (trap->Argc() != 2) {
 		trap->Print("Usage: bot_eloreset <botlvl1-10|1-10>\n");
@@ -4764,35 +4836,36 @@ void SV_BotEloReset_f(void) {
 		return;
 	}
 
+	seedElo = G_GetSeedEloForDuelName(botName);
+
 	CALL_SQLITE (open (LOCAL_DB_PATH, & db));
-
-	sql = "UPDATE LocalDuel SET winner_elo = 1000 WHERE winner = ?";
-	CALL_SQLITE (prepare_v2 (db, sql, strlen (sql) + 1, & stmt, NULL));
-	CALL_SQLITE (bind_text (stmt, 1, botName, -1, SQLITE_TRANSIENT));
-	s = sqlite3_step(stmt);
-	if (s != SQLITE_DONE) {
-		G_ErrorPrint("ERROR: SQL Update Failed (SV_BotEloReset_f winner)", s);
-	}
-	else {
-		winnerRows = sqlite3_changes(db);
-	}
-	CALL_SQLITE (finalize(stmt));
-
-	sql = "UPDATE LocalDuel SET loser_elo = 1000 WHERE loser = ?";
-	CALL_SQLITE (prepare_v2 (db, sql, strlen (sql) + 1, & stmt, NULL));
-	CALL_SQLITE (bind_text (stmt, 1, botName, -1, SQLITE_TRANSIENT));
-	s = sqlite3_step(stmt);
-	if (s != SQLITE_DONE) {
-		G_ErrorPrint("ERROR: SQL Update Failed (SV_BotEloReset_f loser)", s);
-	}
-	else {
-		loserRows = sqlite3_changes(db);
-	}
-	CALL_SQLITE (finalize(stmt));
-
+	rows = G_ReseedBotLevelElo(db, botLevel, seedElo);
 	CALL_SQLITE (close(db));
 
-	trap->Print("bot_eloreset: reset %s ELO to 1000 in %i winner rows and %i loser rows.\n", botName, winnerRows, loserRows);
+	trap->Print("bot_eloreset: reset level %i bots to %.0f ELO across %i rating rows.\n",
+		botLevel, seedElo, rows);
+}
+
+//Re-seed every bot level at once onto the 800-1100 curve. Intended for use right after a
+//database wipe so the ladder starts from the intended spread instead of a flat 1000.
+void SV_BotEloSeed_f(void) {
+	sqlite3 *db;
+	int botLevel;
+	int totalRows = 0;
+
+	CALL_SQLITE (open (LOCAL_DB_PATH, & db));
+	for (botLevel = BOT_DUEL_LEVEL_MIN; botLevel <= BOT_DUEL_LEVEL_MAX; botLevel++)
+	{
+		const float seedElo = G_GetSeedEloForDuelName(va("botlvl%i", botLevel));
+		const int rows = G_ReseedBotLevelElo(db, botLevel, seedElo);
+
+		totalRows += rows;
+		trap->Print("bot_eloseed: level %i -> %.0f ELO (%i rating rows).\n", botLevel, seedElo, rows);
+	}
+	CALL_SQLITE (close(db));
+
+	trap->Print("bot_eloseed: re-seeded %i rating rows across levels %i-%i.\n",
+		totalRows, BOT_DUEL_LEVEL_MIN, BOT_DUEL_LEVEL_MAX);
 }
 
 int DuelTypeToInteger(char *style) {
@@ -4977,8 +5050,11 @@ void Cmd_DuelTop10_f(gentity_t *ent) {
 		//We dont need to select from loser since we know a users highscore will always be from a winning duel.  And we can ignore users who have never won a duel(?)
 		//How to get count?
 		//sql = "SELECT winner, winner_elo, 100, 100 FROM (SELECT winner, winner_elo, odds, end_time FROM LocalDuel WHERE type = ? ORDER BY end_time ASC) GROUP BY winner ORDER BY winner_elo DESC LIMIT 10";
-		sql = "WITH DuelRows AS (SELECT rowid AS duel_rowid, 1 AS duel_side, winner AS username, type, ROUND(winner_elo,0) AS elo, end_time FROM LocalDuel WHERE type = ? "
-				"UNION ALL SELECT rowid AS duel_rowid, 0 AS duel_side, loser AS username, type, ROUND(loser_elo,0) AS elo, end_time FROM LocalDuel WHERE type = ?), "
+		//Restrict the "latest rating" CTE to rated rows (elo > -998). Unranked bot-vs-bot
+		//duels are stored with elo -999, and if one of those was a participant's most recent
+		//row they would drop off the ladder entirely instead of keeping their real rating.
+		sql = "WITH DuelRows AS (SELECT rowid AS duel_rowid, 1 AS duel_side, winner AS username, type, ROUND(winner_elo,0) AS elo, end_time FROM LocalDuel WHERE type = ? AND winner_elo > -998 "
+				"UNION ALL SELECT rowid AS duel_rowid, 0 AS duel_side, loser AS username, type, ROUND(loser_elo,0) AS elo, end_time FROM LocalDuel WHERE type = ? AND loser_elo > -998), "
 				"LatestTimes AS (SELECT username, MAX(end_time) AS max_end_time FROM DuelRows GROUP BY username), "
 				"LatestRows AS (SELECT DuelRows.* FROM DuelRows INNER JOIN LatestTimes ON DuelRows.username = LatestTimes.username AND DuelRows.end_time = LatestTimes.max_end_time), "
 				"LatestRowIds AS (SELECT username, MAX(duel_rowid) AS max_duel_rowid FROM LatestRows GROUP BY username), "
@@ -5243,7 +5319,7 @@ void G_TestAddDuel() {
 
 	time1 = trap->Milliseconds();
 
-	G_AddDuel(winner, loser, level.time-1000, atoi(type), 420, 420);
+	G_AddDuel(winner, loser, 0, 0, level.time-1000, atoi(type), 420, 420);
 
 	Com_Printf("Adding duel elo, took %i ms\n", trap->Milliseconds() - time1);
 }
