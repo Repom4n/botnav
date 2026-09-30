@@ -48,6 +48,10 @@ static char LOCAL_DUELTRACK_DB_PATH[MAX_OSPATH];
 #define TRACKED_DUEL_SCORE_FORCED_ENTRY_NO_CONFIRM_BONUS 2
 #define TRACKED_DUEL_SCORE_LINEAR_FALLBACK_BASE 1
 #define TRACKED_SEQUENCE_TIMEOUT_MS 1500
+//Force regeneration ticks every frame, which previously produced one tracked event per tick
+//and dominated the exports. Accumulate regen and emit a single periodic resource sample
+//instead; total_force_regen accounting is unchanged.
+#define TRACKED_REGEN_SAMPLE_INTERVAL_MS 1000
 #define TRACKED_ATTACK_CHAIN_WINDOW_MS 1200
 #define TRACKED_COUNTER_WINDOW_MS 1200
 #define TRACKED_PUNISH_WINDOW_MS 900
@@ -202,6 +206,8 @@ typedef struct
 	int lastSaberInFlight;
 	int currentSequenceId;
 	int lastSequenceTime;
+	int lastRegenSampleTime;
+	int pendingRegenAmount;
 	int totalForceSpent;
 	int totalForceRegen;
 	int forceSpentByPower[DUEL_TRACK_POWER_COUNT];
@@ -215,6 +221,13 @@ typedef struct
 	int endingForce;
 	int endingHP;
 	int endingArmor;
+	//Resources captured the moment this participant died. The duel is only finalised after
+	//the respawn path has already restored HP/armor/force, so reading the live playerState in
+	//G_FinishTrackedDuel used to report a full force bar for every loser.
+	int deathForce;
+	int deathHP;
+	int deathArmor;
+	int hasDeathSnapshot;
 	int side;
 	int opponentSide;
 	int identityKind;
@@ -226,6 +239,9 @@ typedef struct
 	int overcommitEvents;
 	char identityKey[64];
 	char identityLabel[MAX_NETNAME];
+	//The ELO ladder identity ("<name> [bot LN]" / account name), stored alongside the
+	//tracking key so tracking rows and LocalDuel rating rows can be joined.
+	char eloKey[64];
 	char opponentKey[64];
 	char opponentLabel[MAX_NETNAME];
 	char openingTactic[32];
@@ -263,6 +279,8 @@ typedef struct
 	int lastSaberInFlight;
 	int currentSequenceId;
 	int lastSequenceTime;
+	int lastRegenSampleTime;
+	int pendingRegenAmount;
 	int totalForceSpent;
 	int totalForceRegen;
 	int totalDamageTaken;
@@ -666,7 +684,7 @@ static void G_EnsureLocalDuelTrackingSchema(sqlite3 *db)
 
 	sql = "CREATE TABLE IF NOT EXISTS LocalDuelTrackParticipant("
 		"id INTEGER PRIMARY KEY, summary_id INTEGER, participant_key VARCHAR(64), participant_label VARCHAR(36), "
-		"participant_kind UNSIGNED TINYINT, opponent_key VARCHAR(64), won UNSIGNED TINYINT, side UNSIGNED TINYINT, "
+		"participant_kind UNSIGNED TINYINT, elo_key VARCHAR(64) DEFAULT '', opponent_key VARCHAR(64), won UNSIGNED TINYINT, side UNSIGNED TINYINT, "
 		"opponent_side UNSIGNED TINYINT, matchup UNSIGNED TINYINT, total_force_spent UNSIGNED INTEGER, "
 		"total_force_regen UNSIGNED INTEGER, ending_force SMALLINT, ending_hp SMALLINT, ending_armor SMALLINT, "
 		"low_force_windows UNSIGNED SMALLINT, grip_cripple_events UNSIGNED SMALLINT, saber_throw_punishes UNSIGNED SMALLINT, "
@@ -744,6 +762,7 @@ static void G_EnsureLocalDuelTrackingSchema(sqlite3 *db)
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackSummary", "winner_opening", "VARCHAR(32) DEFAULT ''");
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackSummary", "loser_opening", "VARCHAR(32) DEFAULT ''");
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "participant_label", "VARCHAR(36) DEFAULT ''");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "elo_key", "VARCHAR(64) DEFAULT ''");
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "participant_kind", "UNSIGNED TINYINT DEFAULT 0");
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "opponent_side", "UNSIGNED TINYINT DEFAULT 0");
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "matchup", "UNSIGNED TINYINT DEFAULT 0");
@@ -2736,6 +2755,8 @@ static void G_InitTrackedDuelRuntimeForClient(gentity_t *ent, gentity_t *opponen
 	runtime->side = G_GetTrackedParticipantSide(ent);
 	runtime->opponentSide = G_GetTrackedParticipantSide(opponent);
 	G_GetDuelTrackingIdentity(ent, runtime->identityKey, sizeof(runtime->identityKey), runtime->identityLabel, sizeof(runtime->identityLabel), &runtime->identityKind);
+	if (!G_GetDuelParticipantName(ent, runtime->eloKey, sizeof(runtime->eloKey)))
+		runtime->eloKey[0] = '\0';
 	G_GetDuelTrackingIdentity(opponent, runtime->opponentKey, sizeof(runtime->opponentKey), runtime->opponentLabel, sizeof(runtime->opponentLabel), NULL);
 }
 
@@ -2772,52 +2793,53 @@ static qboolean G_InsertTrackedParticipant(sqlite3 *db, sqlite3_int64 summaryId,
 		return qfalse;
 
 	matchup = G_GetTrackedMatchup(runtime->side, runtime->opponentSide);
-	sql = "INSERT INTO LocalDuelTrackParticipant(summary_id, participant_key, participant_label, participant_kind, opponent_key, won, side, opponent_side, matchup, total_force_spent, total_force_regen, ending_force, ending_hp, ending_armor, low_force_windows, grip_cripple_events, saber_throw_punishes, knockdown_events, late_defense_spends, opening_tactic, primary_issue, spent_neutral, spent_advantage, spent_disadvantage, spent_panic, spent_finishing, force_push, force_pull, force_grip, force_drain, force_rage, force_absorb, force_protect, force_heal, force_speed, force_seeing, force_unknown) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+	sql = "INSERT INTO LocalDuelTrackParticipant(summary_id, participant_key, participant_label, participant_kind, elo_key, opponent_key, won, side, opponent_side, matchup, total_force_spent, total_force_regen, ending_force, ending_hp, ending_armor, low_force_windows, grip_cripple_events, saber_throw_punishes, knockdown_events, late_defense_spends, opening_tactic, primary_issue, spent_neutral, spent_advantage, spent_disadvantage, spent_panic, spent_finishing, force_push, force_pull, force_grip, force_drain, force_rage, force_absorb, force_protect, force_heal, force_speed, force_seeing, force_unknown) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
 	CALL_SQLITE(bind_int64(stmt, 1, summaryId));
 	CALL_SQLITE(bind_text(stmt, 2, runtime->identityKey, -1, SQLITE_STATIC));
 	CALL_SQLITE(bind_text(stmt, 3, runtime->identityLabel, -1, SQLITE_TRANSIENT));
 	CALL_SQLITE(bind_int(stmt, 4, runtime->identityKind));
-	CALL_SQLITE(bind_text(stmt, 5, runtime->opponentKey, -1, SQLITE_STATIC));
+	CALL_SQLITE(bind_text(stmt, 5, runtime->eloKey, -1, SQLITE_TRANSIENT));
+	CALL_SQLITE(bind_text(stmt, 6, runtime->opponentKey, -1, SQLITE_STATIC));
 	if (won < 0)
 	{
-		CALL_SQLITE(bind_null(stmt, 6));
+		CALL_SQLITE(bind_null(stmt, 7));
 	}
 	else
 	{
-		CALL_SQLITE(bind_int(stmt, 6, won ? 1 : 0));
+		CALL_SQLITE(bind_int(stmt, 7, won ? 1 : 0));
 	}
-	CALL_SQLITE(bind_int(stmt, 7, runtime->side));
-	CALL_SQLITE(bind_int(stmt, 8, runtime->opponentSide));
-	CALL_SQLITE(bind_int(stmt, 9, matchup));
-	CALL_SQLITE(bind_int(stmt, 10, runtime->totalForceSpent));
-	CALL_SQLITE(bind_int(stmt, 11, runtime->totalForceRegen));
-	CALL_SQLITE(bind_int(stmt, 12, runtime->endingForce));
-	CALL_SQLITE(bind_int(stmt, 13, runtime->endingHP));
-	CALL_SQLITE(bind_int(stmt, 14, runtime->endingArmor));
-	CALL_SQLITE(bind_int(stmt, 15, runtime->lowForceWindows));
-	CALL_SQLITE(bind_int(stmt, 16, runtime->gripCrippleEvents));
-	CALL_SQLITE(bind_int(stmt, 17, runtime->saberThrowPunishes));
-	CALL_SQLITE(bind_int(stmt, 18, runtime->knockdownEvents));
-	CALL_SQLITE(bind_int(stmt, 19, runtime->lateDefenseSpends));
-	CALL_SQLITE(bind_text(stmt, 20, runtime->openingTactic, -1, SQLITE_STATIC));
-	CALL_SQLITE(bind_text(stmt, 21, runtime->primaryIssue, -1, SQLITE_STATIC));
-	CALL_SQLITE(bind_int(stmt, 22, runtime->spentByState[DUEL_TRACK_STATE_NEUTRAL]));
-	CALL_SQLITE(bind_int(stmt, 23, runtime->spentByState[DUEL_TRACK_STATE_ADVANTAGE]));
-	CALL_SQLITE(bind_int(stmt, 24, runtime->spentByState[DUEL_TRACK_STATE_DISADVANTAGE]));
-	CALL_SQLITE(bind_int(stmt, 25, runtime->spentByState[DUEL_TRACK_STATE_PANIC]));
-	CALL_SQLITE(bind_int(stmt, 26, runtime->spentByState[DUEL_TRACK_STATE_FINISHING]));
-	CALL_SQLITE(bind_int(stmt, 27, runtime->forceSpentByPower[DUEL_TRACK_POWER_PUSH]));
-	CALL_SQLITE(bind_int(stmt, 28, runtime->forceSpentByPower[DUEL_TRACK_POWER_PULL]));
-	CALL_SQLITE(bind_int(stmt, 29, runtime->forceSpentByPower[DUEL_TRACK_POWER_GRIP]));
-	CALL_SQLITE(bind_int(stmt, 30, runtime->forceSpentByPower[DUEL_TRACK_POWER_DRAIN]));
-	CALL_SQLITE(bind_int(stmt, 31, runtime->forceSpentByPower[DUEL_TRACK_POWER_RAGE]));
-	CALL_SQLITE(bind_int(stmt, 32, runtime->forceSpentByPower[DUEL_TRACK_POWER_ABSORB]));
-	CALL_SQLITE(bind_int(stmt, 33, runtime->forceSpentByPower[DUEL_TRACK_POWER_PROTECT]));
-	CALL_SQLITE(bind_int(stmt, 34, runtime->forceSpentByPower[DUEL_TRACK_POWER_HEAL]));
-	CALL_SQLITE(bind_int(stmt, 35, runtime->forceSpentByPower[DUEL_TRACK_POWER_SPEED]));
-	CALL_SQLITE(bind_int(stmt, 36, runtime->forceSpentByPower[DUEL_TRACK_POWER_SEEING]));
-	CALL_SQLITE(bind_int(stmt, 37, runtime->forceSpentByPower[DUEL_TRACK_POWER_UNKNOWN]));
+	CALL_SQLITE(bind_int(stmt, 8, runtime->side));
+	CALL_SQLITE(bind_int(stmt, 9, runtime->opponentSide));
+	CALL_SQLITE(bind_int(stmt, 10, matchup));
+	CALL_SQLITE(bind_int(stmt, 11, runtime->totalForceSpent));
+	CALL_SQLITE(bind_int(stmt, 12, runtime->totalForceRegen));
+	CALL_SQLITE(bind_int(stmt, 13, runtime->endingForce));
+	CALL_SQLITE(bind_int(stmt, 14, runtime->endingHP));
+	CALL_SQLITE(bind_int(stmt, 15, runtime->endingArmor));
+	CALL_SQLITE(bind_int(stmt, 16, runtime->lowForceWindows));
+	CALL_SQLITE(bind_int(stmt, 17, runtime->gripCrippleEvents));
+	CALL_SQLITE(bind_int(stmt, 18, runtime->saberThrowPunishes));
+	CALL_SQLITE(bind_int(stmt, 19, runtime->knockdownEvents));
+	CALL_SQLITE(bind_int(stmt, 20, runtime->lateDefenseSpends));
+	CALL_SQLITE(bind_text(stmt, 21, runtime->openingTactic, -1, SQLITE_STATIC));
+	CALL_SQLITE(bind_text(stmt, 22, runtime->primaryIssue, -1, SQLITE_STATIC));
+	CALL_SQLITE(bind_int(stmt, 23, runtime->spentByState[DUEL_TRACK_STATE_NEUTRAL]));
+	CALL_SQLITE(bind_int(stmt, 24, runtime->spentByState[DUEL_TRACK_STATE_ADVANTAGE]));
+	CALL_SQLITE(bind_int(stmt, 25, runtime->spentByState[DUEL_TRACK_STATE_DISADVANTAGE]));
+	CALL_SQLITE(bind_int(stmt, 26, runtime->spentByState[DUEL_TRACK_STATE_PANIC]));
+	CALL_SQLITE(bind_int(stmt, 27, runtime->spentByState[DUEL_TRACK_STATE_FINISHING]));
+	CALL_SQLITE(bind_int(stmt, 28, runtime->forceSpentByPower[DUEL_TRACK_POWER_PUSH]));
+	CALL_SQLITE(bind_int(stmt, 29, runtime->forceSpentByPower[DUEL_TRACK_POWER_PULL]));
+	CALL_SQLITE(bind_int(stmt, 30, runtime->forceSpentByPower[DUEL_TRACK_POWER_GRIP]));
+	CALL_SQLITE(bind_int(stmt, 31, runtime->forceSpentByPower[DUEL_TRACK_POWER_DRAIN]));
+	CALL_SQLITE(bind_int(stmt, 32, runtime->forceSpentByPower[DUEL_TRACK_POWER_RAGE]));
+	CALL_SQLITE(bind_int(stmt, 33, runtime->forceSpentByPower[DUEL_TRACK_POWER_ABSORB]));
+	CALL_SQLITE(bind_int(stmt, 34, runtime->forceSpentByPower[DUEL_TRACK_POWER_PROTECT]));
+	CALL_SQLITE(bind_int(stmt, 35, runtime->forceSpentByPower[DUEL_TRACK_POWER_HEAL]));
+	CALL_SQLITE(bind_int(stmt, 36, runtime->forceSpentByPower[DUEL_TRACK_POWER_SPEED]));
+	CALL_SQLITE(bind_int(stmt, 37, runtime->forceSpentByPower[DUEL_TRACK_POWER_SEEING]));
+	CALL_SQLITE(bind_int(stmt, 38, runtime->forceSpentByPower[DUEL_TRACK_POWER_UNKNOWN]));
 	s = sqlite3_step(stmt);
 	if (s != SQLITE_DONE)
 	{
@@ -3252,7 +3274,13 @@ void G_UpdateTrackedDuelFrame(gentity_t *ent)
 	else if (forceDelta > 0)
 	{
 		runtime->totalForceRegen += forceDelta;
-		G_AddTrackedDuelEvent(runtime, DUEL_TRACK_EVENT_REGEN, level.time - runtime->duelStartTime, forceDelta, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, NULL, ent, opponent);
+		runtime->pendingRegenAmount += forceDelta;
+		if (level.time - runtime->lastRegenSampleTime >= TRACKED_REGEN_SAMPLE_INTERVAL_MS)
+		{
+			G_AddTrackedDuelEvent(runtime, DUEL_TRACK_EVENT_REGEN, level.time - runtime->duelStartTime, runtime->pendingRegenAmount, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, NULL, ent, opponent);
+			runtime->pendingRegenAmount = 0;
+			runtime->lastRegenSampleTime = level.time;
+		}
 		if (runtime->pendingResetRecovery &&
 			runtime->lastForce <= TRACKED_DUEL_LOW_FORCE_THRESHOLD &&
 			curForce > TRACKED_DUEL_LOW_FORCE_THRESHOLD)
@@ -3352,6 +3380,44 @@ void G_UpdateTrackedDuelFrame(gentity_t *ent)
 	runtime->lastOpponentHealthArmor = opponentHealthArmor;
 }
 
+//Prefer the snapshot taken at the moment of death over the live playerState, which by the
+//time a duel is finalised has already been reset by the respawn path.
+static void G_ApplyTrackedDuelEndingResources(tracked_duel_runtime_t *slot, gentity_t *ent)
+{
+	if (!slot || !ent || !ent->client)
+		return;
+
+	if (slot->hasDeathSnapshot)
+	{
+		slot->endingForce = slot->deathForce;
+		slot->endingHP = slot->deathHP;
+		slot->endingArmor = slot->deathArmor;
+		return;
+	}
+
+	slot->endingForce = ent->client->ps.fd.forcePower;
+	slot->endingHP = ent->health;
+	slot->endingArmor = ent->client->ps.stats[STAT_ARMOR];
+}
+
+//Called from player_die before any respawn bookkeeping runs.
+void G_TrackedDuelRecordDeath(gentity_t *self)
+{
+	tracked_duel_runtime_t *slot;
+
+	if (!self || !self->client || self->s.number < 0 || self->s.number >= MAX_CLIENTS)
+		return;
+
+	slot = &g_trackedDuels[self->s.number];
+	if (!slot->active)
+		return;
+
+	slot->deathForce = self->client->ps.fd.forcePower;
+	slot->deathHP = self->health;
+	slot->deathArmor = self->client->ps.stats[STAT_ARMOR];
+	slot->hasDeathSnapshot = 1;
+}
+
 void G_FinishTrackedDuel(gentity_t *winner, gentity_t *loser, int duelType, qboolean draw)
 {
 	tracked_duel_runtime_t winnerRuntime;
@@ -3371,12 +3437,8 @@ void G_FinishTrackedDuel(gentity_t *winner, gentity_t *loser, int duelType, qboo
 	if (winnerSlot->opponentClientNum != loser->s.number || loserSlot->opponentClientNum != winner->s.number)
 		return;
 
-	winnerSlot->endingForce = winner->client->ps.fd.forcePower;
-	winnerSlot->endingHP = winner->health;
-	winnerSlot->endingArmor = winner->client->ps.stats[STAT_ARMOR];
-	loserSlot->endingForce = loser->client->ps.fd.forcePower;
-	loserSlot->endingHP = loser->health;
-	loserSlot->endingArmor = loser->client->ps.stats[STAT_ARMOR];
+	G_ApplyTrackedDuelEndingResources(winnerSlot, winner);
+	G_ApplyTrackedDuelEndingResources(loserSlot, loser);
 	winnerLowForceFinish = (winnerSlot->endingForce <= TRACKED_DUEL_LOW_FORCE_THRESHOLD || winnerSlot->lowestForce <= TRACKED_DUEL_LOW_FORCE_THRESHOLD) ? qtrue : qfalse;
 	loserLowForceFinish = (loserSlot->endingForce <= TRACKED_DUEL_LOW_FORCE_THRESHOLD || loserSlot->lowestForce <= TRACKED_DUEL_LOW_FORCE_THRESHOLD) ? qtrue : qfalse;
 	loserSlot->didDieLowForce = draw ? 0 : (loserLowForceFinish ? 1 : 0);
@@ -3784,7 +3846,13 @@ void G_UpdateTrackedArcadeCombatFrame(gentity_t *ent)
 	else if (forceDelta > 0)
 	{
 		runtime->totalForceRegen += forceDelta;
-		G_AddTrackedArcadeEvent(runtime, DUEL_TRACK_EVENT_REGEN, level.time - runtime->startTime, forceDelta, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, NULL, ent, opponent);
+		runtime->pendingRegenAmount += forceDelta;
+		if (level.time - runtime->lastRegenSampleTime >= TRACKED_REGEN_SAMPLE_INTERVAL_MS)
+		{
+			G_AddTrackedArcadeEvent(runtime, DUEL_TRACK_EVENT_REGEN, level.time - runtime->startTime, runtime->pendingRegenAmount, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, NULL, ent, opponent);
+			runtime->pendingRegenAmount = 0;
+			runtime->lastRegenSampleTime = level.time;
+		}
 		if (runtime->lastForce <= TRACKED_DUEL_LOW_FORCE_THRESHOLD &&
 			curForce > TRACKED_DUEL_LOW_FORCE_THRESHOLD)
 		{
@@ -7837,8 +7905,8 @@ static void G_BuildTrackedSessionExportQuery(qboolean includeDuel, qboolean incl
 static const char *G_GetTrackedParticipantExportQuery(void)
 {
 	return
-		"SELECT 2 AS export_format_version, 'duel_participant' AS record_type, 'duel' AS source_context, id AS record_id, summary_id, "
-		"participant_key, participant_label, participant_kind, opponent_key, won, side, opponent_side, matchup, "
+		"SELECT 3 AS export_format_version, 'duel_participant' AS record_type, 'duel' AS source_context, id AS record_id, summary_id, "
+		"participant_key, participant_label, participant_kind, elo_key, opponent_key, won, side, opponent_side, matchup, "
 		"total_force_spent, total_force_regen, ending_force, ending_hp, ending_armor, "
 		"low_force_windows, grip_cripple_events, saber_throw_punishes, knockdown_events, late_defense_spends, "
 		"opening_tactic, primary_issue, spent_neutral, spent_advantage, spent_disadvantage, spent_panic, spent_finishing, "

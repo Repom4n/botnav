@@ -2292,6 +2292,9 @@ void player_die( gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int
 	if ( !attacker )
 		return;
 
+	//Snapshot duel resources before any respawn/reset bookkeeping runs.
+	G_TrackedDuelRecordDeath(self);
+
 	if (g_duelRespawn.integer && level.gametype == GT_FFA && self->client->ps.duelInProgress && !self->client->pers.noDuelTele && (meansOfDeath != MOD_SUICIDE) && (meansOfDeath != MOD_TEAM_CHANGE)) {
 		gentity_t *duelOpponent = NULL;
 		float respawnYaw = 0.0f;
