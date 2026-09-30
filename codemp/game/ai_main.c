@@ -202,6 +202,7 @@ static qboolean NewBotAI_IsCombatProgressStalled(bot_state_t *bs);
 static qboolean NewBotAI_IsEnemySaberReturning(bot_state_t *bs);
 static qboolean NewBotAI_GetEnemySaberFlightThreat(bot_state_t *bs, float *forwardDistOut, float *saberSpeedOut, qboolean *isReturningOut);
 static qboolean NewBotAI_IsEnemySaberThreatImminent(bot_state_t *bs);
+static qboolean NewBotAI_IsIncomingSaberThrowLethal(bot_state_t *bs);
 static qboolean NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bot_state_t *bs);
 static qboolean NewBotAI_ShouldJumpDrainVsSaberThrow(bot_state_t *bs);
 static qboolean NewBotAI_ShouldEmergencyDrainRollSaberThrow(bot_state_t *bs);
@@ -7261,7 +7262,11 @@ void NewBotAI_Getup(bot_state_t *bs)
 		bs->currentEnemy->client->ps.saberInFlight) ? qtrue : qfalse;
 	const qboolean enemyTooClose = (bs->currentEnemy && bs->currentEnemy->client &&
 		bs->frame_Enemy_Len < 250) ? qtrue : qfalse;
+	//A lethal inbound throw takes the getup push off the table entirely: the hand-extend
+	//drops our block for the whole animation, which is exactly how these getups were dying.
+	const qboolean lethalIncomingThrow = NewBotAI_IsIncomingSaberThrowLethal(bs);
 	const qboolean canPushGetup = (bs->currentEnemy && bs->currentEnemy->client &&
+		!lethalIncomingThrow &&
 		!(g_forcePowerDisable.integer & (1 << FP_PUSH)) &&
 		(bs->cur_ps.fd.forcePowersKnown & (1 << FP_PUSH)) &&
 		bs->cur_ps.fd.forcePower >= 20 &&
@@ -7341,7 +7346,7 @@ void NewBotAI_Getup(bot_state_t *bs)
 	}
 	else if (!useTheForce && jumpDrainThreat)
 	{
-		if (NewBotAI_ShouldUseSafePushWindowWhilePulled(bs))
+		if (!lethalIncomingThrow && NewBotAI_ShouldUseSafePushWindowWhilePulled(bs))
 		{
 			level.clients[bs->client].ps.fd.forcePowerSelected = FP_PUSH;
 			useTheForce = qtrue;
@@ -13829,6 +13834,51 @@ static qboolean NewBotAI_IsEnemySaberThreatImminent(bot_state_t *bs)
 		forwardDist <= (isReturning ? 18.0f : 28.0f)) ? qtrue : qfalse;
 }
 
+//Damage an enemy saber deals on the outbound pass and on the return pass (see
+//SABER_THROWN_HIT_DAMAGE / SABER_THROWN_RETURN_HIT_DAMAGE in w_saber.c).
+#define NEWBOTAI_SABER_THROW_HIT_DAMAGE 30
+#define NEWBOTAI_SABER_THROW_RETURN_DAMAGE 5
+
+//Shared lethality predicate: is the saber throw that is currently coming at us going to
+//kill us outright? Deliberately independent of whether drain (or any other power) happens
+//to be available, so it can veto hand-extend powers that would drop our block, and so
+//defensive rolls can be restricted to genuinely lethal windows.
+static qboolean NewBotAI_IsIncomingSaberThrowLethal(bot_state_t *bs)
+{
+	float forwardDist;
+	float saberSpeed;
+	qboolean isReturning;
+	int expectedDamage;
+	int ourTotalHealth;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return qfalse;
+	}
+
+	if (!bs->currentEnemy->client->ps.saberInFlight)
+	{
+		return qfalse;
+	}
+
+	if (!NewBotAI_GetEnemySaberFlightThreat(bs, &forwardDist, &saberSpeed, &isReturning))
+	{
+		return qfalse;
+	}
+
+	//Protect soaks the hit, so it is not lethal while it is up.
+	if (bs->cur_ps.fd.forcePowersActive & (1 << FP_PROTECT))
+	{
+		return qfalse;
+	}
+
+	expectedDamage = isReturning ?
+		NEWBOTAI_SABER_THROW_RETURN_DAMAGE : NEWBOTAI_SABER_THROW_HIT_DAMAGE;
+	ourTotalHealth = g_entities[bs->client].health + bs->cur_ps.stats[STAT_ARMOR];
+
+	return (ourTotalHealth <= expectedDamage) ? qtrue : qfalse;
+}
+
 static qboolean NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bot_state_t *bs)
 {
 	vec3_t a_fo;
@@ -14749,6 +14799,9 @@ int NewBotAI_GetPull(bot_state_t *bs) {
 		return 0;
 	if (stabilizeVsSaberThrow)
 		return 0;
+	//Same rule as push: never trade our block for a pull while a lethal throw is inbound.
+	if (NewBotAI_IsIncomingSaberThrowLethal(bs))
+		return 0;
 	if (bs->currentEnemy->client->ps.saberInFlight && !freePullkickWindow)
 		return 0;
 	if (NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bs) &&
@@ -14947,6 +15000,10 @@ int NewBotAI_GetPush(bot_state_t *bs) {
 		return 0;
 	if (NewBotAI_ShouldPlaySafeDrainVsSaberThrow(bs) &&
 		NewBotAI_IsEnemySaberThreatImminent(bs))
+		return 0;
+	//A throw that would kill us must never be answered with a hand-extend: spending push
+	//here drops our block for the whole animation. Keep the saber up and evade instead.
+	if (NewBotAI_IsIncomingSaberThrowLethal(bs))
 		return 0;
 
 	if (NewBotAI_GetAntiDarkPushBonus(
