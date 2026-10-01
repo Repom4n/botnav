@@ -149,6 +149,8 @@ static qboolean NewBotAI_IsForceGetupAnim(int anim);
 static qboolean NewBotAI_IsKnockdownRecoveryRoll(int anim);
 static qboolean NewBotAI_IsSaberSwingStartWindow(bot_state_t *bs);
 static qboolean NewBotAI_CanAttemptFlipkick(bot_state_t *bs);
+static qboolean NewBotAI_IsSaberOnlyDuel(bot_state_t *bs);
+static qboolean NewBotAI_CanUseForcePowerNow(bot_state_t *bs, forcePowers_t power);
 static qboolean NewBotAI_IsFlipkickSetupReady(bot_state_t *bs);
 qboolean BG_InRoll3(int anim);
 static void NewBotAI_RetreatStraight(bot_state_t *bs);
@@ -7478,6 +7480,22 @@ static int NewBotAI_GetTotalHealthDelta(bot_state_t *bs)
 	return ourTotalHealth - NewBotAI_GetEnemyTotalHealth(bs);
 }
 
+//Private saber-only duel (dueltype 0): the engine refuses every force power except saber
+//offense/defense/levitation, so the bot must fight with saber footwork alone.
+static qboolean NewBotAI_IsSaberOnlyDuel(bot_state_t *bs)
+{
+	return (bs->cur_ps.duelInProgress &&
+		dueltypes[bs->client] == 0 &&
+		bs->cur_ps.weapon == WP_SABER) ? qtrue : qfalse;
+}
+
+//Wraps the engine force-power gate so bot pickers never queue powers (including saber
+//throw) that BG_CanUseFPNow would refuse, e.g. in saber-only duels.
+static qboolean NewBotAI_CanUseForcePowerNow(bot_state_t *bs, forcePowers_t power)
+{
+	return BG_CanUseFPNow(level.gametype, &level.clients[bs->client].ps, level.time, power);
+}
+
 static qboolean NewBotAI_CanAttemptFlipkick(bot_state_t *bs)
 {
 	if (!g_flipKick.integer)
@@ -9530,6 +9548,11 @@ void NewBotAI_SaberThrowing(bot_state_t* bs)
 	if (bs->saberThrowStartTime <= 0)
 		bs->saberThrowStartTime = level.time;
 
+	if (!NewBotAI_CanUseForcePowerNow(bs, FP_SABERTHROW))
+	{
+		return;
+	}
+
 	if ((enemyHealth > 30 && enemyForce >= bs->cur_ps.fd.forcePower + 50) ||
 		(ourHealth < 60 && ourHealth < enemyHealth &&
 		 bs->saberThrowStartTime > 0 &&
@@ -10162,7 +10185,10 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 	int weapon;
 	const int totalHealthDelta = NewBotAI_GetTotalHealthDelta(bs);
 	const qboolean hasDroppedOwnSaber = NewBotAI_HasDroppedOwnSaber(bs);
-	const qboolean hasHealthDisadvantage = (totalHealthDelta < 0) ? qtrue : qfalse;
+	//Only stop starting swings once clearly behind; duel winners kept countering from small
+	//deficits, and higher skill tolerates a larger deficit before backing off.
+	const qboolean hasHealthDisadvantage = NewBotAI_ShouldSuppressSaberAttackForDeficit(
+		totalHealthDelta, (int)bs->settings.skill) ? qtrue : qfalse;
 	const qboolean suppressSaberAttack = (hasHealthDisadvantage && !hasDroppedOwnSaber) ? qtrue : qfalse;
 	// const float speed = NewBotAI_GetSpeedTowardsEnemy(bs);
 
@@ -10269,6 +10295,18 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 				}
 			}
 
+			//No fan chain running (e.g. bot_fanbias 0): still start a normal swing once the
+			//enemy is inside reach so attacking never depends on the fan.
+			if ((g_entities[bs->client].client->ps.saberMove == LS_NONE || g_entities[bs->client].client->ps.saberMove == LS_READY) &&
+				bs->fanPhase == FAN_PHASE_INACTIVE &&
+				NewBotAI_ShouldStartRedStanceSwing(bs->frame_Enemy_Len, NewBotAI_GetTimeToInRange(bs, 75, 300),
+					g_entities[bs->client].health))
+			{
+				if (!suppressSaberAttack)
+					trap->EA_Attack(bs->client);
+				return;
+			}
+
 		}
 #if 0
 		if (bs->cur_ps.fd.forceSide == FORCE_LIGHTSIDE) { //Yellow sweep
@@ -10312,6 +10350,16 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 				return;
 			}
 
+			//Red stance can fan too: alternating horizontal L2R/R2L swings driven by the
+			//same HOLD/DWELL chain as the yellow/staff path.
+			if (bs->fanPhase != FAN_PHASE_INACTIVE)
+			{
+				NewBotAI_ApplyHorizontalSwingMove(bs);
+				if (!suppressSaberAttack && bs->fanPhase == FAN_PHASE_HOLD)
+					trap->EA_Attack(bs->client);
+				return;
+			}
+
 			//Mid-swing/transition: hold attack so the red-style combo chains into the next
 			//swing instead of releasing through every swing tail (same fix as the lightside
 			//path above - the press has to still be down when weaponTime clears).
@@ -10328,17 +10376,22 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 				if (g_entities[bs->client].health > 70) {
 					if ((bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_DRAIN) || (bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB))) ||
 						((bs->cur_ps.fd.forcePower < 60) || ((bs->frame_Enemy_Len < 70) && (bs->currentEnemy->client->ps.origin[2] - bs->cur_ps.origin[2]) > 50))) {
-						//Red/strong style never fans - make sure a stale chain from a prior
-						//lightside window doesn't linger.
-						if (bs->fanPhase != FAN_PHASE_INACTIVE)
-						{
-							NewBotAI_ResetFanChain(bs);
-						}
 						if (!suppressSaberAttack)
 							trap->EA_Attack(bs->client);
 						return;
 					}
 				}
+			}
+
+			//Normal red-stance swing start once the enemy is within reach (or about to be);
+			//previously red only swung in the drain/absorb/low-force special cases.
+			if ((g_entities[bs->client].client->ps.saberMove == LS_NONE || g_entities[bs->client].client->ps.saberMove == LS_READY) &&
+				NewBotAI_ShouldStartRedStanceSwing(bs->frame_Enemy_Len, NewBotAI_GetTimeToInRange(bs, 75, 300),
+					g_entities[bs->client].health))
+			{
+				if (!suppressSaberAttack)
+					trap->EA_Attack(bs->client);
+				return;
 			}
 
 			/*
@@ -10584,7 +10637,9 @@ static qboolean NewBotAI_HasTimedFanEntryWindow(bot_state_t *bs)
 	{
 		return qfalse;
 	}
-	if (!bs->frame_Enemy_Vis || bs->frame_Enemy_Len < 72.0f || bs->frame_Enemy_Len > 224.0f)
+	//Human horizontal swings landed almost entirely inside 48-110u; entering the fan from
+	//further out just strafed in place without connecting.
+	if (!bs->frame_Enemy_Vis || !NewBotAI_IsFanEntrySpacing(bs->frame_Enemy_Len))
 	{
 		return qfalse;
 	}
@@ -10608,7 +10663,9 @@ static qboolean NewBotAI_HasTimedFanEntryWindow(bot_state_t *bs)
 		return qtrue;
 	}
 
-	return qfalse;
+	//Neutral spacing is a valid entry too: winners opened exchanges with horizontal swings
+	//without needing a prior advantage.
+	return qtrue;
 }
 
 enum
@@ -13353,6 +13410,13 @@ static float NewBotAI_GetFanBiasPercent(bot_state_t *bs)
 		return 0.0f;
 	}
 
+	if (NewBotAI_IsSaberOnlyDuel(bs))
+	{
+		//Saber-only duels have no force fallback, so fanning stays available at medium
+		//health and is scaled by the HP+armor difference instead of switched off.
+		return NewBotAI_ScaleSaberDuelFanBias(fanBias, NewBotAI_GetTotalHealthDelta(bs));
+	}
+
 	if (ourHealth < 55)
 	{
 		return 0.0f;
@@ -13435,11 +13499,6 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 		 NewBotAI_ShouldPreDefenseAgainstCollapse(bs)))
 	{
 		NewBotAI_ResetFanChain(bs);
-		return;
-	}
-
-	if (g_entities[bs->client].client->ps.fd.saberAnimLevel == SS_STRONG)
-	{
 		return;
 	}
 
@@ -13577,6 +13636,12 @@ static void NewBotAI_ApplyHorizontalSwingMove(bot_state_t *bs)
 	else
 	{
 		trap->EA_MoveLeft(bs->client);
+	}
+	//The swing-start frame stays pure strafe so the engine picks a horizontal L2R/R2L;
+	//once the swing is running, step forward like human winners did while it landed.
+	if (NewBotAI_FanHoldUsesForward(bs->fanSwingStarted, bs->frame_Enemy_Len))
+	{
+		trap->EA_MoveForward(bs->client);
 	}
 }
 
@@ -14848,6 +14913,13 @@ static void NewBotAI_ApplyRandomStrafeOverlay(bot_state_t *bs)
 		NewBotAI_ClearRandomStrafeOverlay(bs);
 		return;
 	}
+	if (NewBotAI_IsSaberOnlyDuel(bs))
+	{
+		//Saber-only duel footwork (NewBotAI_NF) owns strafe/forward timing so swing starts
+		//stay horizontal.
+		NewBotAI_ClearRandomStrafeOverlay(bs);
+		return;
+	}
 
 	if (bs->cur_ps.fd.forcePowersActive & (1 << FP_GRIP))
 	{
@@ -15799,6 +15871,10 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 	//Check if we should saberthrow I guess.
 	if (bs->cur_ps.weapon != WP_SABER || bs->frame_Enemy_Len >= 400 || bs->cur_ps.saberInFlight)
 		return 0;
+	//Saber-only duels (and other restricted modes) refuse the throw outright - pressing
+	//alt-attack there just wastes the frame instead of swinging.
+	if (!NewBotAI_CanUseForcePowerNow(bs, FP_SABERTHROW))
+		return 0;
 	if (!bs->frame_Enemy_Vis)
 		return 0;
 	//The enemy is already committed to a saber throw - keeping our own saber in hand
@@ -16190,6 +16266,7 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 
 	if (!firedImmediatePull &&
 		useTheForce &&
+		NewBotAI_CanUseForcePowerNow(bs, (forcePowers_t)level.clients[bs->client].ps.fd.forcePowerSelected) &&
 		bs->currentEnemy && bs->currentEnemy->client &&
 		bs->cur_ps.weaponstate != WEAPON_CHARGING_ALT &&
 		(level.framenum % 2) &&
@@ -16387,7 +16464,9 @@ void NewBotAI_GetLSForcepower(bot_state_t *bs)
 				useTheForce = qtrue;
 			}
 		}
-		if (useTheForce && (level.framenum % 2) && (!bs->currentEnemy->client->invulnerableTimer || (bs->currentEnemy->client->invulnerableTimer <= level.time)))
+		if (useTheForce && (level.framenum % 2) &&
+			NewBotAI_CanUseForcePowerNow(bs, (forcePowers_t)level.clients[bs->client].ps.fd.forcePowerSelected) &&
+			(!bs->currentEnemy->client->invulnerableTimer || (bs->currentEnemy->client->invulnerableTimer <= level.time)))
 			trap->EA_ForcePower(bs->client);
 		return;
 	}
@@ -16396,6 +16475,7 @@ void NewBotAI_GetLSForcepower(bot_state_t *bs)
 		//useTheForce = qfalse;
 
 	if (useTheForce && bs->cur_ps.weaponstate != WEAPON_CHARGING_ALT &&
+		NewBotAI_CanUseForcePowerNow(bs, (forcePowers_t)level.clients[bs->client].ps.fd.forcePowerSelected) &&
 		(level.framenum % 2) && (!bs->currentEnemy->client->invulnerableTimer || (bs->currentEnemy->client->invulnerableTimer <= level.time))) {
 		trap->EA_ForcePower(bs->client);
 		//Com_Printf("Using force\n");
@@ -16543,6 +16623,30 @@ void NewBotAI_LSvLS(bot_state_t *bs)
 	NewBotAI_GetAttack(bs);
 }
 
+static void NewBotAI_SaberDuelStrafe(bot_state_t *bs, int dir)
+{
+	if (dir < 0)
+		trap->EA_MoveLeft(bs->client);
+	else
+		trap->EA_MoveRight(bs->client);
+}
+
+//Saber-only swing footwork. When the fan roll (bot_fanbias) picked a horizontal swing, the
+//swing start (or the chain transition at the tail of a swing) uses pure strafe so the engine
+//picks an alternating L2R/R2L swing; otherwise the start steps in diagonally. While a swing
+//is running forward is added so the bot keeps closing like human winners did.
+static void NewBotAI_SaberDuelSwingFootwork(bot_state_t *bs, qboolean selfAttacking)
+{
+	const qboolean choosingNextMove = (!selfAttacking || bs->cur_ps.weaponTime <= 100) ? qtrue : qfalse;
+	const qboolean addForward = (!choosingNextMove || !bs->saberTacticHorizontal) ? qtrue : qfalse;
+
+	NewBotAI_SaberDuelStrafe(bs, bs->saberTacticStrafeDir);
+	if (addForward && bs->frame_Enemy_Len > NEWBOTAI_FAN_ENTRY_MIN_RANGE)
+	{
+		trap->EA_MoveForward(bs->client);
+	}
+}
+
 void NewBotAI_NF(bot_state_t *bs)
 {
 	newbotai_saber_tactic_context_t context;
@@ -16550,7 +16654,9 @@ void NewBotAI_NF(bot_state_t *bs)
 	const int ourTotalHealth = g_entities[bs->client].health + bs->cur_ps.stats[STAT_ARMOR];
 	const int enemyTotalHealth = bs->currentEnemy->health +
 		bs->currentEnemy->client->ps.stats[STAT_ARMOR];
-	const qboolean selfAttacking = BG_SaberInAttack(bs->cur_ps.saberMove);
+	const qboolean selfAttacking = (BG_SaberInAttack(bs->cur_ps.saberMove) ||
+		PM_SaberInStart(bs->cur_ps.saberMove) ||
+		PM_SaberInTransition(bs->cur_ps.saberMove)) ? qtrue : qfalse;
 	const qboolean enemyAttacking = BG_SaberInAttack(bs->currentEnemy->client->ps.saberMove);
 	const qboolean enemyVulnerable =
 		(BG_InKnockDown(bs->currentEnemy->client->ps.legsAnim) ||
@@ -16568,7 +16674,7 @@ void NewBotAI_NF(bot_state_t *bs)
 	//The learned footing policy is specific to private saber-only duels. Preserve useful
 	//generic no-force combat outside that mode instead of letting the classifier's HOLD
 	//sentinel make FFA/TFFA saber bots passive.
-	if (!bs->cur_ps.duelInProgress || dueltypes[bs->client] != 0)
+	if (!NewBotAI_IsSaberOnlyDuel(bs))
 	{
 		if (bs->frame_Enemy_Len > 128.0f)
 		{
@@ -16582,33 +16688,56 @@ void NewBotAI_NF(bot_state_t *bs)
 		return;
 	}
 
-	if (selfAttacking && bs->cur_ps.saberMove != bs->saberTacticLastMove)
+	if (!bs->saberTacticStrafeDir)
 	{
+		bs->saberTacticStrafeDir = Q_irand(0, 1) ? 1 : -1;
+	}
+	if (selfAttacking && BG_SaberInAttack(bs->cur_ps.saberMove) &&
+		bs->cur_ps.saberMove != bs->saberTacticLastMove)
+	{
+		//New swing in the chain: alternate the strafe so the next one comes back the other way.
 		bs->saberTacticChainLength++;
+		bs->saberTacticStrafeDir = -bs->saberTacticStrafeDir;
+		bs->saberTacticHorizontal = (Q_irand(1, 100) <= (int)NewBotAI_GetFanBiasPercent(bs)) ? 1 : 0;
 	}
 	bs->saberTacticLastMove = bs->cur_ps.saberMove;
 
-	if (bs->saberTacticUntil <= level.time || enemyVulnerable ||
-		(bs->lastHurtTime > level.time - 700 && bs->saberTacticAction != NEWBOTAI_SABER_TACTIC_RESET))
+	if (bs->saberTacticEnemyHealth > 0 && enemyTotalHealth < bs->saberTacticEnemyHealth)
 	{
-		memset(&context, 0, sizeof(context));
-		context.saberOnlyDuel = 1;
-		context.skill = (int)bs->settings.skill;
-		context.mistakeBias = (int)BotGetChanceBiasPercent(bot_mistakebias.value);
-		context.mistakeRoll = Q_irand(1, 100);
-		context.ourTotalHealth = ourTotalHealth;
-		context.enemyTotalHealth = enemyTotalHealth;
-		context.recentlyHurt = (bs->lastHurtTime > level.time - 700) ? 1 : 0;
-		context.enemyAttacking = enemyAttacking ? 1 : 0;
-		context.enemyVulnerable = enemyVulnerable ? 1 : 0;
-		context.selfAttacking = selfAttacking ? 1 : 0;
-		context.chainLength = bs->saberTacticChainLength;
-		context.enemyDistance = bs->frame_Enemy_Len;
-		bs->saberTacticAction = NewBotAI_SelectSaberTactic(context);
-		bs->saberTacticUntil = level.time + (selfAttacking ? 180 : 300);
+		bs->saberTacticLastHitTime = level.time;
+	}
+	bs->saberTacticEnemyHealth = enemyTotalHealth;
+
+	//The grade (how good the choice is) is rolled per short decision window so mistakes
+	//persist long enough to matter, but the tactic itself is re-evaluated every frame so a
+	//mid-swing bot reacts to hits and spacing immediately.
+	if (bs->saberTacticGradeUntil <= level.time)
+	{
+		bs->saberTacticGrade = NewBotAI_GetSaberChoiceGrade((int)bs->settings.skill,
+			(int)BotGetChanceBiasPercent(bot_mistakebias.value), Q_irand(1, 100));
+		bs->saberTacticGradeUntil = level.time + 300;
+		if (!selfAttacking)
+		{
+			//bot_fanbias weights how often the next swing start is a human-style horizontal fan.
+			bs->saberTacticHorizontal = (Q_irand(1, 100) <= (int)NewBotAI_GetFanBiasPercent(bs)) ? 1 : 0;
+		}
 	}
 
-	tactic = (newbotai_saber_tactic_t)bs->saberTacticAction;
+	memset(&context, 0, sizeof(context));
+	context.saberOnlyDuel = 1;
+	context.skill = (int)bs->settings.skill;
+	context.ourTotalHealth = ourTotalHealth;
+	context.enemyTotalHealth = enemyTotalHealth;
+	context.recentlyHurt = (bs->lastHurtTime > level.time - NEWBOTAI_SABER_COUNTER_WINDOW_MS) ? 1 : 0;
+	context.enemyAttacking = enemyAttacking ? 1 : 0;
+	context.enemyVulnerable = enemyVulnerable ? 1 : 0;
+	context.selfAttacking = selfAttacking ? 1 : 0;
+	context.chainLength = bs->saberTacticChainLength;
+	context.landedHit = (bs->saberTacticLastHitTime > level.time - 700) ? 1 : 0;
+	context.enemyDistance = bs->frame_Enemy_Len;
+	tactic = NewBotAI_ApplySaberChoiceGrade(context, NewBotAI_GetCorrectSaberTactic(context),
+		(newbotai_saber_grade_t)bs->saberTacticGrade);
+	bs->saberTacticAction = tactic;
 	bs->combatAction = BOT_COMBAT_ACTION_AGGRESSION;
 
 	if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE && !selfAttacking)
@@ -16619,55 +16748,61 @@ void NewBotAI_NF(bot_state_t *bs)
 	switch (tactic)
 	{
 	case NEWBOTAI_SABER_TACTIC_COUNTER:
-		trap->EA_MoveForward(bs->client);
-		if (level.framenum & 1)
-			trap->EA_MoveRight(bs->client);
-		else
-			trap->EA_MoveLeft(bs->client);
-		trap->EA_Attack(bs->client);
-		break;
 	case NEWBOTAI_SABER_TACTIC_CHAIN:
-		if (bs->frame_Enemy_Len < 48.0f)
-			trap->EA_MoveBack(bs->client);
-		else if (level.framenum & 1)
-			trap->EA_MoveRight(bs->client);
-		else
-			trap->EA_MoveLeft(bs->client);
-		trap->EA_Attack(bs->client);
-		break;
 	case NEWBOTAI_SABER_TACTIC_ATTACK:
-		if (bs->frame_Enemy_Len > 72.0f)
+		NewBotAI_SaberDuelSwingFootwork(bs, selfAttacking);
+		break;
+	case NEWBOTAI_SABER_TACTIC_STEP_IN:
+		if (NewBotAI_SaberTacticAllowsSwingStart(tactic, bs->frame_Enemy_Len) || selfAttacking)
+		{
+			NewBotAI_SaberDuelSwingFootwork(bs, selfAttacking);
+		}
+		else
+		{
 			trap->EA_MoveForward(bs->client);
-		trap->EA_Attack(bs->client);
+			NewBotAI_SaberDuelStrafe(bs, bs->saberTacticStrafeDir);
+		}
+		break;
+	case NEWBOTAI_SABER_TACTIC_REPOSITION:
+		bs->saberTacticChainLength = 0;
+		NewBotAI_SaberDuelStrafe(bs, bs->saberTacticStrafeDir);
+		if (bs->frame_Enemy_Len < 80.0f)
+			trap->EA_MoveBack(bs->client);
 		break;
 	case NEWBOTAI_SABER_TACTIC_RESET:
 		bs->combatAction = BOT_COMBAT_ACTION_RETREAT_DEFENSE;
 		bs->saberTacticChainLength = 0;
 		if (bs->frame_Enemy_Len < 176.0f)
-			NewBotAI_RetreatDiagonal(bs, (level.framenum & 1) ? qtrue : qfalse);
-		else if (level.framenum & 1)
-			trap->EA_MoveRight(bs->client);
+			NewBotAI_RetreatDiagonal(bs, (bs->saberTacticStrafeDir < 0) ? qtrue : qfalse);
 		else
-			trap->EA_MoveLeft(bs->client);
+			NewBotAI_SaberDuelStrafe(bs, bs->saberTacticStrafeDir);
 		break;
 	case NEWBOTAI_SABER_TACTIC_ADVANCE:
 		trap->EA_MoveForward(bs->client);
 		if (bs->frame_Enemy_Len < 192.0f)
-		{
-			if (level.framenum & 1)
-				trap->EA_MoveRight(bs->client);
-			else
-				trap->EA_MoveLeft(bs->client);
-		}
+			NewBotAI_SaberDuelStrafe(bs, bs->saberTacticStrafeDir);
 		break;
+	case NEWBOTAI_SABER_TACTIC_BACK_SWING:
+		trap->EA_MoveBack(bs->client);
+		break;
+	case NEWBOTAI_SABER_TACTIC_LONG_SWING:
+		trap->EA_MoveForward(bs->client);
+		break;
+	case NEWBOTAI_SABER_TACTIC_STAND_SWING:
 	case NEWBOTAI_SABER_TACTIC_HOLD:
 	default:
 		break;
 	}
 
-	if (!selfAttacking && tactic != NEWBOTAI_SABER_TACTIC_CHAIN &&
-		tactic != NEWBOTAI_SABER_TACTIC_ATTACK &&
-		tactic != NEWBOTAI_SABER_TACTIC_COUNTER)
+	//Hold attack through swing transitions so the engine links the chain; only start a new
+	//swing when the chosen tactic allows it from the current spacing.
+	if ((selfAttacking && NewBotAI_SaberTacticHoldsChain(tactic)) ||
+		(!selfAttacking && NewBotAI_SaberTacticAllowsSwingStart(tactic, bs->frame_Enemy_Len)))
+	{
+		trap->EA_Attack(bs->client);
+	}
+
+	if (!selfAttacking && !NewBotAI_SaberTacticHoldsChain(tactic))
 	{
 		bs->saberTacticChainLength = 0;
 	}
@@ -17928,7 +18063,8 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		return;
 	}
 
-	if ((g_forcePowerDisable.integer != 163837 && g_forcePowerDisable.integer != 163839) || (g_flipKick.integer) || (bs->cur_ps.weapon != WP_SABER)) {
+	if (!NewBotAI_IsSaberOnlyDuel(bs) &&
+		((g_forcePowerDisable.integer != 163837 && g_forcePowerDisable.integer != 163839) || (g_flipKick.integer) || (bs->cur_ps.weapon != WP_SABER))) {
 		if (bs->currentEnemy->client->ps.fd.forceSide == FORCE_LIGHTSIDE) { // They are LS.
 			if (bs->cur_ps.fd.forceSide == FORCE_LIGHTSIDE)
 				NewBotAI_LSvLS(bs);
@@ -17942,7 +18078,7 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 				NewBotAI_DSvDS(bs);
 		}
 	}
-	else {//Ruh roh, NF with no kick!
+	else {//Ruh roh, NF with no kick (or a private saber-only duel)!
 		NewBotAI_NF(bs);
 	}
 

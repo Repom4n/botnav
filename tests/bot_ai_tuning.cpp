@@ -251,56 +251,164 @@ BOOST_AUTO_TEST_CASE( saber_tactic_mistakes_scale_down_to_zero_at_level_ten )
 	BOOST_CHECK_EQUAL( NewBotAI_GetSaberTacticMistakeChance( 10, 100 ), 0 );
 }
 
-BOOST_AUTO_TEST_CASE( saber_tactic_advances_attacks_and_limits_unconfirmed_chains )
+static newbotai_saber_tactic_context_t MakeSaberDuelContext( float distance )
 {
 	newbotai_saber_tactic_context_t context = {};
 	context.saberOnlyDuel = 1;
 	context.skill = 10;
 	context.ourTotalHealth = 150;
 	context.enemyTotalHealth = 150;
-	context.enemyDistance = 180.0f;
-	BOOST_CHECK_EQUAL( NewBotAI_SelectSaberTactic( context ), NEWBOTAI_SABER_TACTIC_ADVANCE );
-
-	context.enemyDistance = 110.0f;
-	BOOST_CHECK_EQUAL( NewBotAI_SelectSaberTactic( context ), NEWBOTAI_SABER_TACTIC_ATTACK );
-
-	context.selfAttacking = 1;
-	context.chainLength = 4;
-	BOOST_CHECK_EQUAL( NewBotAI_SelectSaberTactic( context ), NEWBOTAI_SABER_TACTIC_CHAIN );
-	context.chainLength = 5;
-	BOOST_CHECK_EQUAL( NewBotAI_SelectSaberTactic( context ), NEWBOTAI_SABER_TACTIC_RESET );
+	context.enemyDistance = distance;
+	return context;
 }
 
-BOOST_AUTO_TEST_CASE( saber_tactic_counters_exposure_and_resets_after_damage )
+BOOST_AUTO_TEST_CASE( saber_tactic_ranges_match_winner_spacing )
 {
-	newbotai_saber_tactic_context_t context = {};
-	context.saberOnlyDuel = 1;
-	context.skill = 9;
-	context.ourTotalHealth = 150;
-	context.enemyTotalHealth = 150;
-	context.enemyDistance = 80.0f;
+	newbotai_saber_tactic_context_t context = MakeSaberDuelContext( 220.0f );
+	BOOST_CHECK_EQUAL( NewBotAI_SelectSaberTactic( context ), NEWBOTAI_SABER_TACTIC_ADVANCE );
+
+	context.enemyDistance = 140.0f;
+	BOOST_CHECK_EQUAL( NewBotAI_SelectSaberTactic( context ), NEWBOTAI_SABER_TACTIC_STEP_IN );
+
+	context.enemyDistance = 90.0f;
+	BOOST_CHECK_EQUAL( NewBotAI_SelectSaberTactic( context ), NEWBOTAI_SABER_TACTIC_ATTACK );
+
+	context = MakeSaberDuelContext( 0.0f );
+	BOOST_CHECK_EQUAL( NewBotAI_SelectSaberTactic( context ), NEWBOTAI_SABER_TACTIC_ATTACK );
+	context.saberOnlyDuel = 0;
+	BOOST_CHECK_EQUAL( NewBotAI_SelectSaberTactic( context ), NEWBOTAI_SABER_TACTIC_HOLD );
+}
+
+BOOST_AUTO_TEST_CASE( saber_tactic_swing_starts_are_limited_to_reach )
+{
+	BOOST_CHECK( NewBotAI_SaberTacticAllowsSwingStart( NEWBOTAI_SABER_TACTIC_STEP_IN, 120.0f ) );
+	BOOST_CHECK( !NewBotAI_SaberTacticAllowsSwingStart( NEWBOTAI_SABER_TACTIC_STEP_IN, 140.0f ) );
+	BOOST_CHECK( !NewBotAI_SaberTacticAllowsSwingStart( NEWBOTAI_SABER_TACTIC_ATTACK, 129.0f ) );
+	BOOST_CHECK( !NewBotAI_SaberTacticAllowsSwingStart( NEWBOTAI_SABER_TACTIC_ADVANCE, 60.0f ) );
+	BOOST_CHECK( !NewBotAI_SaberTacticAllowsSwingStart( NEWBOTAI_SABER_TACTIC_RESET, 60.0f ) );
+	BOOST_CHECK( NewBotAI_SaberTacticAllowsSwingStart( NEWBOTAI_SABER_TACTIC_LONG_SWING, 200.0f ) );
+	BOOST_CHECK( NewBotAI_SaberTacticHoldsChain( NEWBOTAI_SABER_TACTIC_CHAIN ) );
+	BOOST_CHECK( !NewBotAI_SaberTacticHoldsChain( NEWBOTAI_SABER_TACTIC_REPOSITION ) );
+}
+
+BOOST_AUTO_TEST_CASE( saber_tactic_continues_chain_after_landed_hit_without_cap )
+{
+	newbotai_saber_tactic_context_t context = MakeSaberDuelContext( 90.0f );
+	context.selfAttacking = 1;
+	context.landedHit = 1;
+	context.chainLength = 12;
+	BOOST_CHECK_EQUAL( NewBotAI_SelectSaberTactic( context ), NEWBOTAI_SABER_TACTIC_CHAIN );
+
+	context.selfAttacking = 0;
+	context.enemyDistance = 140.0f;
+	BOOST_CHECK_EQUAL( NewBotAI_SelectSaberTactic( context ), NEWBOTAI_SABER_TACTIC_STEP_IN );
+}
+
+BOOST_AUTO_TEST_CASE( saber_tactic_counters_when_hit_and_retreats_only_when_critical )
+{
+	newbotai_saber_tactic_context_t context = MakeSaberDuelContext( 80.0f );
 	context.enemyVulnerable = 1;
 	BOOST_CHECK_EQUAL( NewBotAI_SelectSaberTactic( context ), NEWBOTAI_SABER_TACTIC_COUNTER );
 
 	context.enemyVulnerable = 0;
 	context.recentlyHurt = 1;
+	context.ourTotalHealth = 60;
+	BOOST_CHECK_EQUAL( NewBotAI_SelectSaberTactic( context ), NEWBOTAI_SABER_TACTIC_COUNTER );
+
+	context.recentlyHurt = 0;
+	context.enemyAttacking = 1;
+	BOOST_CHECK_EQUAL( NewBotAI_SelectSaberTactic( context ), NEWBOTAI_SABER_TACTIC_COUNTER );
+
+	context.enemyDistance = 150.0f;
+	BOOST_CHECK_EQUAL( NewBotAI_SelectSaberTactic( context ), NEWBOTAI_SABER_TACTIC_STEP_IN );
+
+	context.enemyDistance = 80.0f;
+	context.recentlyHurt = 1;
+	context.ourTotalHealth = 25;
 	BOOST_CHECK_EQUAL( NewBotAI_SelectSaberTactic( context ), NEWBOTAI_SABER_TACTIC_RESET );
 }
 
-BOOST_AUTO_TEST_CASE( saber_tactic_mistake_bias_degrades_otherwise_correct_choices )
+BOOST_AUTO_TEST_CASE( saber_choice_grade_is_always_correct_at_level_ten )
 {
-	newbotai_saber_tactic_context_t context = {};
-	context.saberOnlyDuel = 1;
-	context.skill = 3;
-	context.mistakeBias = 100;
-	context.mistakeRoll = 1;
-	context.ourTotalHealth = 80;
-	context.enemyTotalHealth = 150;
-	context.enemyDistance = 100.0f;
-	BOOST_CHECK_EQUAL( NewBotAI_SelectSaberTactic( context ), NEWBOTAI_SABER_TACTIC_ATTACK );
+	for ( int roll = 1; roll <= 100; roll++ )
+	{
+		BOOST_CHECK_EQUAL( NewBotAI_GetSaberChoiceGrade( 10, 100, roll ), NEWBOTAI_SABER_GRADE_CORRECT );
+	}
+}
 
-	context.skill = 10;
-	BOOST_CHECK_EQUAL( NewBotAI_SelectSaberTactic( context ), NEWBOTAI_SABER_TACTIC_RESET );
+BOOST_AUTO_TEST_CASE( saber_choice_grade_tiers_scale_with_skill_and_bias )
+{
+	int lowErrors = 0, highErrors = 0, lowDeep = 0, highDeep = 0;
+
+	for ( int roll = 1; roll <= 100; roll++ )
+	{
+		const newbotai_saber_grade_t low = NewBotAI_GetSaberChoiceGrade( 2, 80, roll );
+		const newbotai_saber_grade_t high = NewBotAI_GetSaberChoiceGrade( 8, 80, roll );
+		lowErrors += ( low != NEWBOTAI_SABER_GRADE_CORRECT );
+		highErrors += ( high != NEWBOTAI_SABER_GRADE_CORRECT );
+		lowDeep += ( low == NEWBOTAI_SABER_GRADE_BAD || low == NEWBOTAI_SABER_GRADE_MISTAKE );
+		highDeep += ( high == NEWBOTAI_SABER_GRADE_BAD || high == NEWBOTAI_SABER_GRADE_MISTAKE );
+	}
+	BOOST_CHECK( lowErrors > highErrors );
+	BOOST_CHECK( lowDeep > highDeep );
+	BOOST_CHECK_EQUAL( NewBotAI_GetSaberChoiceGrade( 2, 80, 1 ), NEWBOTAI_SABER_GRADE_MISTAKE );
+	BOOST_CHECK( NewBotAI_GetSaberChoiceGrade( 5, 0, 100 ) == NEWBOTAI_SABER_GRADE_CORRECT );
+}
+
+BOOST_AUTO_TEST_CASE( saber_choice_grades_map_to_human_outcomes )
+{
+	newbotai_saber_tactic_context_t context = MakeSaberDuelContext( 90.0f );
+
+	context.chainLength = 3;
+	BOOST_CHECK_EQUAL( NewBotAI_ApplySaberChoiceGrade( context, NEWBOTAI_SABER_TACTIC_CHAIN, NEWBOTAI_SABER_GRADE_GOOD ),
+		NEWBOTAI_SABER_TACTIC_REPOSITION );
+	context.chainLength = 1;
+	BOOST_CHECK_EQUAL( NewBotAI_ApplySaberChoiceGrade( context, NEWBOTAI_SABER_TACTIC_CHAIN, NEWBOTAI_SABER_GRADE_GOOD ),
+		NEWBOTAI_SABER_TACTIC_CHAIN );
+	BOOST_CHECK_EQUAL( NewBotAI_ApplySaberChoiceGrade( context, NEWBOTAI_SABER_TACTIC_STEP_IN, NEWBOTAI_SABER_GRADE_MEDIOCRE ),
+		NEWBOTAI_SABER_TACTIC_STAND_SWING );
+	BOOST_CHECK_EQUAL( NewBotAI_ApplySaberChoiceGrade( context, NEWBOTAI_SABER_TACTIC_CHAIN, NEWBOTAI_SABER_GRADE_BAD ),
+		NEWBOTAI_SABER_TACTIC_RESET );
+	BOOST_CHECK_EQUAL( NewBotAI_ApplySaberChoiceGrade( context, NEWBOTAI_SABER_TACTIC_COUNTER, NEWBOTAI_SABER_GRADE_BAD ),
+		NEWBOTAI_SABER_TACTIC_HOLD );
+	BOOST_CHECK_EQUAL( NewBotAI_ApplySaberChoiceGrade( context, NEWBOTAI_SABER_TACTIC_ATTACK, NEWBOTAI_SABER_GRADE_MISTAKE ),
+		NEWBOTAI_SABER_TACTIC_BACK_SWING );
+	context.enemyDistance = 200.0f;
+	BOOST_CHECK_EQUAL( NewBotAI_ApplySaberChoiceGrade( context, NEWBOTAI_SABER_TACTIC_ADVANCE, NEWBOTAI_SABER_GRADE_MISTAKE ),
+		NEWBOTAI_SABER_TACTIC_LONG_SWING );
+	BOOST_CHECK_EQUAL( NewBotAI_ApplySaberChoiceGrade( context, NEWBOTAI_SABER_TACTIC_ADVANCE, NEWBOTAI_SABER_GRADE_CORRECT ),
+		NEWBOTAI_SABER_TACTIC_ADVANCE );
+}
+
+BOOST_AUTO_TEST_CASE( red_stance_swing_start_and_attack_suppression )
+{
+	BOOST_CHECK( NewBotAI_ShouldStartRedStanceSwing( 80.0f, 300, 100 ) );
+	BOOST_CHECK( NewBotAI_ShouldStartRedStanceSwing( 150.0f, 200, 100 ) );
+	BOOST_CHECK( !NewBotAI_ShouldStartRedStanceSwing( 150.0f, 300, 100 ) );
+	BOOST_CHECK( !NewBotAI_ShouldStartRedStanceSwing( 80.0f, 0, 20 ) );
+
+	BOOST_CHECK( !NewBotAI_ShouldSuppressSaberAttackForDeficit( -1, 1 ) );
+	BOOST_CHECK( NewBotAI_ShouldSuppressSaberAttackForDeficit( -30, 1 ) );
+	BOOST_CHECK( !NewBotAI_ShouldSuppressSaberAttackForDeficit( -30, 10 ) );
+	BOOST_CHECK( NewBotAI_ShouldSuppressSaberAttackForDeficit( -70, 10 ) );
+}
+
+BOOST_AUTO_TEST_CASE( fan_footwork_follows_human_spacing )
+{
+	BOOST_CHECK( !NewBotAI_IsFanEntrySpacing( 40.0f ) );
+	BOOST_CHECK( NewBotAI_IsFanEntrySpacing( 48.0f ) );
+	BOOST_CHECK( NewBotAI_IsFanEntrySpacing( 110.0f ) );
+	BOOST_CHECK( !NewBotAI_IsFanEntrySpacing( 160.0f ) );
+
+	BOOST_CHECK( !NewBotAI_FanHoldUsesForward( 0, 90.0f ) );
+	BOOST_CHECK( NewBotAI_FanHoldUsesForward( 1, 90.0f ) );
+	BOOST_CHECK( !NewBotAI_FanHoldUsesForward( 1, 40.0f ) );
+
+	BOOST_CHECK_EQUAL( NewBotAI_ScaleSaberDuelFanBias( 0.0f, 50 ), 0.0f );
+	BOOST_CHECK_CLOSE( NewBotAI_ScaleSaberDuelFanBias( 60.0f, 0 ), 60.0f, 0.001f );
+	BOOST_CHECK_CLOSE( NewBotAI_ScaleSaberDuelFanBias( 60.0f, -40 ), 36.0f, 0.001f );
+	BOOST_CHECK_CLOSE( NewBotAI_ScaleSaberDuelFanBias( 60.0f, -200 ), 21.0f, 0.001f );
+	BOOST_CHECK( NewBotAI_ScaleSaberDuelFanBias( 60.0f, -60 ) > 0.0f );
 }
 
 BOOST_AUTO_TEST_SUITE_END()
