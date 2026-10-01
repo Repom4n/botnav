@@ -400,6 +400,10 @@ typedef struct bot_state_s
 	int					lastSaberContactTargetNum; // enemy clientNum for lastSaberContactTime; fan-chain combo gate only accepts contact on currentEnemy
 	int					lastEnemyDurability; // previous think's tracked enemy HP+armor snapshot for saber-contact confirmation
 	int					lastEnemyDurabilityTargetNum; // enemy clientNum associated with lastEnemyDurability
+	int					saberTacticAction; // NEWBOTAI_SABER_TACTIC_* decision used in saber-only duels
+	int					saberTacticUntil; // level.time when the saber-only tactical decision may be reconsidered
+	int					saberTacticChainLength; // consecutive saber attack transitions in the current pressure sequence
+	int					saberTacticLastMove; // previous saberMove used to count pressure-chain transitions
 	int					drainRollDir; // -1 left, 0 back, 1 right; used by NewBotAI_DrainRollEscape
 	int					drainRollResetTime;
 	int					gripkickJerkUntil;
