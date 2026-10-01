@@ -1,4 +1,5 @@
 #include "g_local.h"
+#include "g_duel_identity.h"
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -2715,6 +2716,8 @@ static void G_InitTrackedDuelRuntimeForClient(gentity_t *ent, gentity_t *opponen
 	G_GetDuelTrackingIdentity(ent, runtime->identityKey, sizeof(runtime->identityKey), runtime->identityLabel, sizeof(runtime->identityLabel), &runtime->identityKind);
 	if (!G_GetDuelParticipantName(ent, runtime->eloKey, sizeof(runtime->eloKey)))
 		runtime->eloKey[0] = '\0';
+	if (!runtime->eloKey[0] && ent->client->ps.duelInProgress && G_IsGuestDuelKey(ent->client->pers.lastUserName))
+		Q_strncpyz(runtime->eloKey, ent->client->pers.lastUserName, sizeof(runtime->eloKey));
 	G_GetDuelTrackingIdentity(opponent, runtime->opponentKey, sizeof(runtime->opponentKey), runtime->opponentLabel, sizeof(runtime->opponentLabel), NULL);
 }
 
@@ -2727,15 +2730,38 @@ static duel_track_power_t G_InferTrackedPowerSpend(gentity_t *ent, tracked_duel_
 	if (!ent || !ent->client || !runtime)
 		return DUEL_TRACK_POWER_UNKNOWN;
 
-	mappedPower = G_MapForcePowerToTrackedPower(ent->client->ps.fd.forcePowerSelected);
-	if (mappedPower != DUEL_TRACK_POWER_UNKNOWN)
-		return mappedPower;
+	//Record the power actually used, not the selected one: players using direct binds
+	//(force_pull, force_drain, ...) rarely change forcePowerSelected, so the selection
+	//only identifies the spend as a last resort.
+	for (i = 0; i < NUM_FORCE_POWERS; i++)
+	{
+		const int bit = (1 << i);
+
+		if ((ent->client->ps.fd.forcePowersActive & bit) && !(runtime->lastPowersActive & bit))
+		{
+			mappedPower = G_MapForcePowerToTrackedPower(i);
+			if (mappedPower != DUEL_TRACK_POWER_UNKNOWN)
+				return mappedPower;
+		}
+	}
+
+	if (ent->client->ps.forceHandExtendTime > level.time)
+	{
+		if (ent->client->ps.forceHandExtend == HANDEXTEND_FORCEPULL)
+			return DUEL_TRACK_POWER_PULL;
+		if (ent->client->ps.forceHandExtend == HANDEXTEND_FORCEPUSH)
+			return DUEL_TRACK_POWER_PUSH;
+	}
 
 	for (i = 0; i < (int)(sizeof(sustainedPowers) / sizeof(sustainedPowers[0])); i++)
 	{
 		if (ent->client->ps.fd.forcePowersActive & (1 << sustainedPowers[i]))
 			return G_MapForcePowerToTrackedPower(sustainedPowers[i]);
 	}
+
+	mappedPower = G_MapForcePowerToTrackedPower(ent->client->ps.fd.forcePowerSelected);
+	if (mappedPower != DUEL_TRACK_POWER_UNKNOWN)
+		return mappedPower;
 
 	return G_MapForcePowerToTrackedPower(runtime->lastSelectedPower);
 }
@@ -4386,53 +4412,20 @@ static int G_GetDuelParticipantBotLevel(gentity_t *ent)
 static qboolean G_GetDuelBotIdentityName(gentity_t *ent, int botLevel, char *name, int nameSize)
 {
 	char userinfo[MAX_INFO_STRING];
-	char personality[MAX_QPATH];
-	char baseName[64];
-	const char *sourceName = NULL;
-	char *slash;
-	char *backslash;
-	char *dot;
+	const char *fallbackName = NULL;
 
 	if (!ent || !ent->client || !name || nameSize < 1)
 		return qfalse;
 
-	baseName[0] = '\0';
+	//Key bots by bot file + level (e.g. "mediumds [bot L5]") so one bot keeps one rating
+	//regardless of its in-game netname.
+	trap->GetUserinfo(ent->s.number, userinfo, sizeof(userinfo));
 	if (ent->client->pers.netname_nocolor[0])
-	{
-		Q_strncpyz(baseName, ent->client->pers.netname_nocolor, sizeof(baseName));
-	}
+		fallbackName = ent->client->pers.netname_nocolor;
 	else if (ent->client->pers.netname[0])
-	{
-		Q_strncpyz(baseName, ent->client->pers.netname, sizeof(baseName));
-	}
-	else
-	{
-		trap->GetUserinfo(ent->s.number, userinfo, sizeof(userinfo));
-		Q_strncpyz(personality, Info_ValueForKey(userinfo, "personality"), sizeof(personality));
-		sourceName = personality;
-		slash = strrchr(personality, '/');
-		backslash = strrchr(personality, '\\');
-		if (backslash && (!slash || backslash > slash))
-			slash = backslash;
-		if (slash)
-			sourceName = slash + 1;
-		if (sourceName && sourceName[0])
-		{
-			Q_strncpyz(baseName, sourceName, sizeof(baseName));
-			dot = strrchr(baseName, '.');
-			if (dot)
-				*dot = '\0';
-		}
-	}
+		fallbackName = ent->client->pers.netname;
 
-	if (!baseName[0])
-		return qfalse;
-
-	if (botLevel > 0)
-		Com_sprintf(name, nameSize, "%s [bot L%i]", baseName, botLevel);
-	else
-		Q_strncpyz(name, baseName, nameSize);
-	return qtrue;
+	return G_FormatBotDuelIdentity(Info_ValueForKey(userinfo, "personality"), fallbackName, botLevel, name, nameSize) ? qtrue : qfalse;
 }
 
 static int G_ParseBotLevelName(const char *name)
@@ -4504,6 +4497,33 @@ qboolean G_GetDuelParticipantName(gentity_t *ent, char *name, int nameSize) {
 	}
 
 	return G_GetDuelBotIdentityName(ent, level, name, nameSize);
+}
+
+//Resolves both ladder identities for a duel. Registered accounts and bots use their own key;
+//an unregistered human facing a bot is rated under their stable "iphash:" key so the bot's
+//results against guests count. Returns qtrue when both sides resolved (the duel is rated).
+qboolean G_GetRatedDuelParticipantNames(gentity_t *ent, gentity_t *opponent, char *entName, int entNameSize, char *opponentName, int opponentNameSize)
+{
+	qboolean entHasKey;
+	qboolean opponentHasKey;
+	const int entIsBot = (ent && (ent->r.svFlags & SVF_BOT)) ? 1 : 0;
+	const int opponentIsBot = (opponent && (opponent->r.svFlags & SVF_BOT)) ? 1 : 0;
+
+	entHasKey = G_GetDuelParticipantName(ent, entName, entNameSize);
+	opponentHasKey = G_GetDuelParticipantName(opponent, opponentName, opponentNameSize);
+
+	if (G_ShouldUseGuestDuelKey(entHasKey, entIsBot, opponentIsBot, opponentHasKey))
+	{
+		G_GetTrackingIPKey(ent, entName, entNameSize);
+		entHasKey = entName[0] ? qtrue : qfalse;
+	}
+	if (G_ShouldUseGuestDuelKey(opponentHasKey, opponentIsBot, entIsBot, entHasKey))
+	{
+		G_GetTrackingIPKey(opponent, opponentName, opponentNameSize);
+		opponentHasKey = opponentName[0] ? qtrue : qfalse;
+	}
+
+	return (entHasKey && opponentHasKey && entName[0] && opponentName[0]) ? qtrue : qfalse;
 }
 
 #if _ELORANKING	
@@ -5263,7 +5283,7 @@ void Cmd_DuelTop10_f(gentity_t *ent) {
 				"THEN 100-ROUND(100*(COALESCE(D2.win_ts, 0) + COALESCE(D3.loss_ts, 0))/"
 				"(COALESCE(D2.win_count, 0) + COALESCE(D3.loss_count, 0)), 0) ELSE 0 END AS TS, "
 				"COALESCE(D2.win_count, 0)+COALESCE(D3.loss_count, 0) AS count "
-				"FROM (SELECT username, type, elo FROM LatestChosen WHERE elo > -998 ORDER BY elo DESC) AS D1 "
+				"FROM (SELECT username, type, elo FROM LatestChosen WHERE elo > -998 AND username NOT LIKE 'iphash:%' ORDER BY elo DESC) AS D1 "
 				"LEFT JOIN (SELECT winner AS username2, COUNT(*) AS win_count, SUM(odds) AS win_ts FROM LocalDuel WHERE type = ? GROUP BY username2) AS D2 "
 				"ON D1.username = D2.username2 "
 				"LEFT JOIN (SELECT loser AS username3, COUNT(*) AS loss_count, SUM(1-odds) AS loss_ts FROM LocalDuel WHERE type = ? GROUP BY username3) AS D3 "
@@ -7995,10 +8015,14 @@ static const char *G_GetTrackedParticipantExportQuery(void)
 static const char *G_GetTrackedEventExportQuery(void)
 {
 	return
-		"SELECT 5 AS export_format_version, "
+		"SELECT 6 AS export_format_version, "
 		"CASE WHEN COALESCE(s.source_context, 'duel') = 'arcade' THEN 'arcade_event' ELSE 'duel_event' END AS record_type, "
 		"COALESCE(s.source_context, 'duel') AS source_context, e.id AS record_id, e.summary_id AS parent_id, "
-		"e.participant_key, e.participant_label, e.participant_kind, "
+		"e.participant_key, "
+		"COALESCE(NULLIF(e.participant_label, ''), (SELECT p.participant_label FROM LocalDuelTrackParticipant p "
+		"WHERE p.summary_id = e.summary_id AND p.participant_key = e.participant_key LIMIT 1), '') AS participant_label, "
+		"COALESCE(NULLIF(e.participant_kind, 0), (SELECT p.participant_kind FROM LocalDuelTrackParticipant p "
+		"WHERE p.summary_id = e.summary_id AND p.participant_key = e.participant_key LIMIT 1), 0) AS participant_kind, "
 		"e.opponent_key, e.opponent_label, e.opponent_kind, "
 		"e.rel_time, e.event_index, e.sequence_id, e.event_type, e.power, e.amount, e.state, e.range_bucket, "
 		"e.buttons, e.saber_move, e.enemy_saber_move, e.yaw_delta, "

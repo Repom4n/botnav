@@ -404,6 +404,13 @@ typedef struct bot_state_s
 	int					saberTacticUntil; // level.time when the saber-only tactical decision may be reconsidered
 	int					saberTacticChainLength; // consecutive saber attack transitions in the current pressure sequence
 	int					saberTacticLastMove; // previous saberMove used to count pressure-chain transitions
+	int					saberTacticGrade; // NEWBOTAI_SABER_GRADE_* rolled for the current decision window
+	int					saberTacticGradeUntil; // level.time when a new choice grade is rolled
+	int					saberTacticEnemyHealth; // enemy HP+armor last frame, to detect landed hits
+	int					saberTacticEnemyNum; // entity number the cached enemy health belongs to
+	int					saberTacticLastHitTime; // level.time we last damaged the enemy in a saber-only duel
+	int					saberTacticStrafeDir; // alternating lateral direction for horizontal swings (+1 right, -1 left)
+	int					saberTacticHorizontal; // bot_fanbias roll: next swing start uses pure strafe (horizontal fan swing)
 	int					drainRollDir; // -1 left, 0 back, 1 right; used by NewBotAI_DrainRollEscape
 	int					drainRollResetTime;
 	int					gripkickJerkUntil;

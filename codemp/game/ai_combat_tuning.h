@@ -17,8 +17,36 @@ typedef enum
 	NEWBOTAI_SABER_TACTIC_ATTACK,
 	NEWBOTAI_SABER_TACTIC_CHAIN,
 	NEWBOTAI_SABER_TACTIC_COUNTER,
-	NEWBOTAI_SABER_TACTIC_RESET
+	NEWBOTAI_SABER_TACTIC_RESET,
+	NEWBOTAI_SABER_TACTIC_STEP_IN,		// close from 96-160u, swing once inside reach
+	NEWBOTAI_SABER_TACTIC_REPOSITION,	// "good": controlled lateral reset without swinging
+	NEWBOTAI_SABER_TACTIC_STAND_SWING,	// "mediocre": swing in place without footwork
+	NEWBOTAI_SABER_TACTIC_BACK_SWING,	// "mistake": back away while swinging
+	NEWBOTAI_SABER_TACTIC_LONG_SWING	// "mistake": swing from outside reach (>150u)
 } newbotai_saber_tactic_t;
+
+// Outcome grades derived from human saber-only duels (dueltrack sessions 44-172):
+// correct = counter within ~600ms when hit / keep chaining after landing a hit / step in
+// while swinging; good = short controlled chain then reposition; mediocre = stand and
+// swing at 96-128u; bad = retreat after landing a hit or hold still when hit; mistake =
+// swing beyond 150u or back away while swinging.
+typedef enum
+{
+	NEWBOTAI_SABER_GRADE_CORRECT = 0,
+	NEWBOTAI_SABER_GRADE_GOOD,
+	NEWBOTAI_SABER_GRADE_MEDIOCRE,
+	NEWBOTAI_SABER_GRADE_BAD,
+	NEWBOTAI_SABER_GRADE_MISTAKE
+} newbotai_saber_grade_t;
+
+#define NEWBOTAI_SABER_ATTACK_RANGE 96.0f
+#define NEWBOTAI_SABER_STEP_IN_RANGE 160.0f
+#define NEWBOTAI_SABER_SWING_START_MAX_RANGE 128.0f
+#define NEWBOTAI_SABER_LONG_SWING_RANGE 150.0f
+#define NEWBOTAI_SABER_CRITICAL_TOTAL_HEALTH 30
+#define NEWBOTAI_SABER_COUNTER_WINDOW_MS 600
+#define NEWBOTAI_SABER_LANDED_HIT_WINDOW_MS 700
+#define NEWBOTAI_SABER_GOOD_CHAIN_LENGTH 2
 
 typedef struct
 {
@@ -28,11 +56,12 @@ typedef struct
 	int mistakeRoll;
 	int ourTotalHealth;
 	int enemyTotalHealth;
-	int recentlyHurt;
+	int recentlyHurt;	// we took damage within NEWBOTAI_SABER_COUNTER_WINDOW_MS
 	int enemyAttacking;
 	int enemyVulnerable;
 	int selfAttacking;
 	int chainLength;
+	int landedHit;		// we damaged the enemy within the last ~700ms
 	float enemyDistance;
 } newbotai_saber_tactic_context_t;
 
@@ -80,77 +109,227 @@ static inline int NewBotAI_GetSaberTacticMistakeChance(int skill, int mistakeBia
 	return chance > 95 ? 95 : chance;
 }
 
-static inline newbotai_saber_tactic_t NewBotAI_SelectSaberTactic(
+// Rolls how good the bot's next saber-duel choice is. Skill 10 (or a roll outside the
+// mistake band) is always CORRECT; inside the band, lower skill draws deeper errors.
+static inline newbotai_saber_grade_t NewBotAI_GetSaberChoiceGrade(int skill, int mistakeBias, int roll)
+{
+	const int chance = NewBotAI_GetSaberTacticMistakeChance(skill, mistakeBias);
+	int clampedSkill = skill;
+	int depth;
+
+	if (chance <= 0 || roll <= 0 || roll > chance)
+		return NEWBOTAI_SABER_GRADE_CORRECT;
+
+	if (clampedSkill < 1)
+		clampedSkill = 1;
+	else if (clampedSkill > 10)
+		clampedSkill = 10;
+
+	depth = (roll * 100) / chance + clampedSkill * 3;
+	if (depth <= 20)
+		return NEWBOTAI_SABER_GRADE_MISTAKE;
+	if (depth <= 40)
+		return NEWBOTAI_SABER_GRADE_BAD;
+	if (depth <= 70)
+		return NEWBOTAI_SABER_GRADE_MEDIOCRE;
+	return NEWBOTAI_SABER_GRADE_GOOD;
+}
+
+// Winner-derived choice for the current saber-only duel state.
+static inline newbotai_saber_tactic_t NewBotAI_GetCorrectSaberTactic(
 	newbotai_saber_tactic_context_t context)
 {
-	newbotai_saber_tactic_t tactic;
-	const int mistakeChance = NewBotAI_GetSaberTacticMistakeChance(
-		context.skill, context.mistakeBias);
-	const int madeMistake = context.mistakeRoll > 0 &&
-		context.mistakeRoll <= mistakeChance;
+	const float dist = context.enemyDistance;
+	const int inSwingReach = (dist <= NEWBOTAI_SABER_SWING_START_MAX_RANGE) ? 1 : 0;
 
 	if (!context.saberOnlyDuel)
 		return NEWBOTAI_SABER_TACTIC_HOLD;
 
-	if ((context.recentlyHurt && context.enemyDistance <= 160.0f) ||
-		context.ourTotalHealth + 35 <= context.enemyTotalHealth)
+	//Retreat only at critical health while losing the exchange.
+	if (!context.enemyVulnerable &&
+		context.ourTotalHealth <= NEWBOTAI_SABER_CRITICAL_TOTAL_HEALTH &&
+		context.enemyTotalHealth > context.ourTotalHealth &&
+		(context.recentlyHurt || context.enemyAttacking))
 	{
-		tactic = NEWBOTAI_SABER_TACTIC_RESET;
-	}
-	else if (context.enemyVulnerable)
-	{
-		tactic = NEWBOTAI_SABER_TACTIC_COUNTER;
-	}
-	else if (context.enemyAttacking && context.enemyDistance <= 160.0f)
-	{
-		tactic = (context.enemyDistance <= 96.0f && context.skill >= 7) ?
-			NEWBOTAI_SABER_TACTIC_COUNTER : NEWBOTAI_SABER_TACTIC_RESET;
-	}
-	else if (context.selfAttacking)
-	{
-		if (context.chainLength >= 5 && context.enemyTotalHealth > 45)
-			tactic = NEWBOTAI_SABER_TACTIC_RESET;
-		else if (context.enemyDistance <= 192.0f)
-			tactic = NEWBOTAI_SABER_TACTIC_CHAIN;
-		else
-			tactic = NEWBOTAI_SABER_TACTIC_ADVANCE;
-	}
-	else if (context.enemyDistance > 192.0f)
-	{
-		tactic = NEWBOTAI_SABER_TACTIC_ADVANCE;
-	}
-	else if (context.enemyDistance < 56.0f)
-	{
-		tactic = NEWBOTAI_SABER_TACTIC_RESET;
-	}
-	else if (context.enemyDistance <= 128.0f)
-	{
-		tactic = NEWBOTAI_SABER_TACTIC_ATTACK;
-	}
-	else
-	{
-		tactic = NEWBOTAI_SABER_TACTIC_ADVANCE;
+		return NEWBOTAI_SABER_TACTIC_RESET;
 	}
 
-	if (!madeMistake)
-		return tactic;
+	if (context.enemyVulnerable)
+		return inSwingReach ? NEWBOTAI_SABER_TACTIC_COUNTER : NEWBOTAI_SABER_TACTIC_ADVANCE;
 
-	switch (tactic)
+	//Countering right after being hit lands a return hit ~50% of the time versus ~18% for
+	//retreating, and retreating is not safer - so counter is the default.
+	if (context.recentlyHurt ||
+		(context.enemyAttacking && dist <= NEWBOTAI_SABER_STEP_IN_RANGE))
 	{
-	case NEWBOTAI_SABER_TACTIC_RESET:
-		return NEWBOTAI_SABER_TACTIC_ATTACK;
-	case NEWBOTAI_SABER_TACTIC_COUNTER:
-		return NEWBOTAI_SABER_TACTIC_RESET;
-	case NEWBOTAI_SABER_TACTIC_CHAIN:
-		return NEWBOTAI_SABER_TACTIC_RESET;
-	case NEWBOTAI_SABER_TACTIC_ATTACK:
+		return inSwingReach ? NEWBOTAI_SABER_TACTIC_COUNTER : NEWBOTAI_SABER_TACTIC_STEP_IN;
+	}
+
+	//Continuing after a landed hit doubles the follow-up hit rate; no fixed chain cap.
+	if (context.selfAttacking || context.landedHit)
+	{
+		if (inSwingReach)
+			return NEWBOTAI_SABER_TACTIC_CHAIN;
+		return (dist <= NEWBOTAI_SABER_STEP_IN_RANGE) ?
+			NEWBOTAI_SABER_TACTIC_STEP_IN : NEWBOTAI_SABER_TACTIC_ADVANCE;
+	}
+
+	if (dist > NEWBOTAI_SABER_STEP_IN_RANGE)
 		return NEWBOTAI_SABER_TACTIC_ADVANCE;
-	case NEWBOTAI_SABER_TACTIC_ADVANCE:
-		return (context.enemyDistance > 256.0f) ?
-			NEWBOTAI_SABER_TACTIC_ATTACK : NEWBOTAI_SABER_TACTIC_HOLD;
+	if (dist > NEWBOTAI_SABER_ATTACK_RANGE)
+		return NEWBOTAI_SABER_TACTIC_STEP_IN;
+	return NEWBOTAI_SABER_TACTIC_ATTACK;
+}
+
+static inline newbotai_saber_tactic_t NewBotAI_ApplySaberChoiceGrade(
+	newbotai_saber_tactic_context_t context, newbotai_saber_tactic_t tactic,
+	newbotai_saber_grade_t grade)
+{
+	const float dist = context.enemyDistance;
+
+	switch (grade)
+	{
+	case NEWBOTAI_SABER_GRADE_GOOD:
+		if (tactic == NEWBOTAI_SABER_TACTIC_CHAIN &&
+			context.chainLength >= NEWBOTAI_SABER_GOOD_CHAIN_LENGTH)
+		{
+			return NEWBOTAI_SABER_TACTIC_REPOSITION;
+		}
+		return tactic;
+	case NEWBOTAI_SABER_GRADE_MEDIOCRE:
+		switch (tactic)
+		{
+		case NEWBOTAI_SABER_TACTIC_COUNTER:
+		case NEWBOTAI_SABER_TACTIC_CHAIN:
+		case NEWBOTAI_SABER_TACTIC_ATTACK:
+		case NEWBOTAI_SABER_TACTIC_STEP_IN:
+			return (dist <= NEWBOTAI_SABER_SWING_START_MAX_RANGE) ?
+				NEWBOTAI_SABER_TACTIC_STAND_SWING : NEWBOTAI_SABER_TACTIC_HOLD;
+		default:
+			return tactic;
+		}
+	case NEWBOTAI_SABER_GRADE_BAD:
+		return (tactic == NEWBOTAI_SABER_TACTIC_CHAIN) ?
+			NEWBOTAI_SABER_TACTIC_RESET : NEWBOTAI_SABER_TACTIC_HOLD;
+	case NEWBOTAI_SABER_GRADE_MISTAKE:
+		return (dist > NEWBOTAI_SABER_LONG_SWING_RANGE) ?
+			NEWBOTAI_SABER_TACTIC_LONG_SWING : NEWBOTAI_SABER_TACTIC_BACK_SWING;
+	case NEWBOTAI_SABER_GRADE_CORRECT:
 	default:
 		return tactic;
 	}
+}
+
+static inline newbotai_saber_tactic_t NewBotAI_SelectSaberTactic(
+	newbotai_saber_tactic_context_t context)
+{
+	if (!context.saberOnlyDuel)
+		return NEWBOTAI_SABER_TACTIC_HOLD;
+
+	return NewBotAI_ApplySaberChoiceGrade(context,
+		NewBotAI_GetCorrectSaberTactic(context),
+		NewBotAI_GetSaberChoiceGrade(context.skill, context.mistakeBias, context.mistakeRoll));
+}
+
+// Saber-only footwork: tactics that may start a new swing this frame. Swing starts are
+// limited to NEWBOTAI_SABER_SWING_START_MAX_RANGE except for the LONG_SWING mistake.
+static inline int NewBotAI_SaberTacticAllowsSwingStart(newbotai_saber_tactic_t tactic, float enemyDistance)
+{
+	switch (tactic)
+	{
+	case NEWBOTAI_SABER_TACTIC_LONG_SWING:
+		return 1;
+	case NEWBOTAI_SABER_TACTIC_ATTACK:
+	case NEWBOTAI_SABER_TACTIC_CHAIN:
+	case NEWBOTAI_SABER_TACTIC_COUNTER:
+	case NEWBOTAI_SABER_TACTIC_STEP_IN:
+	case NEWBOTAI_SABER_TACTIC_STAND_SWING:
+	case NEWBOTAI_SABER_TACTIC_BACK_SWING:
+		return (enemyDistance <= NEWBOTAI_SABER_SWING_START_MAX_RANGE) ? 1 : 0;
+	default:
+		return 0;
+	}
+}
+
+// Tactics that keep attack held through swing transitions so chains link.
+static inline int NewBotAI_SaberTacticHoldsChain(newbotai_saber_tactic_t tactic)
+{
+	return (tactic == NEWBOTAI_SABER_TACTIC_ATTACK ||
+		tactic == NEWBOTAI_SABER_TACTIC_CHAIN ||
+		tactic == NEWBOTAI_SABER_TACTIC_COUNTER ||
+		tactic == NEWBOTAI_SABER_TACTIC_STEP_IN ||
+		tactic == NEWBOTAI_SABER_TACTIC_STAND_SWING ||
+		tactic == NEWBOTAI_SABER_TACTIC_BACK_SWING ||
+		tactic == NEWBOTAI_SABER_TACTIC_LONG_SWING) ? 1 : 0;
+}
+
+// Health deficit (HP+armor) a bot tolerates before it stops starting saber attacks in
+// force duels. Higher skill keeps countering from further behind, matching duel winners.
+static inline int NewBotAI_GetSaberAttackSuppressDeficit(int skill)
+{
+	int clampedSkill = skill;
+
+	if (clampedSkill < 1)
+		clampedSkill = 1;
+	else if (clampedSkill > 10)
+		clampedSkill = 10;
+	return 15 + clampedSkill * 5;
+}
+
+static inline int NewBotAI_ShouldSuppressSaberAttackForDeficit(int totalHealthDelta, int skill)
+{
+	return (totalHealthDelta < -NewBotAI_GetSaberAttackSuppressDeficit(skill)) ? 1 : 0;
+}
+
+// Red/strong stance may start a normal swing once the enemy is within reach or about to be.
+static inline int NewBotAI_ShouldStartRedStanceSwing(float enemyDistance, int timeToInRangeMs, int ourHealth)
+{
+	if (ourHealth <= 25)
+		return 0;
+	return (enemyDistance < NEWBOTAI_SABER_ATTACK_RANGE || timeToInRangeMs < 300) ? 1 : 0;
+}
+
+// Fan entry spacing used by human horizontal swings (L2R/R2L landed mostly under 110u).
+#define NEWBOTAI_FAN_ENTRY_MIN_RANGE 48.0f
+#define NEWBOTAI_FAN_ENTRY_MAX_RANGE 110.0f
+
+static inline int NewBotAI_IsFanEntrySpacing(float enemyDistance)
+{
+	return (enemyDistance >= NEWBOTAI_FAN_ENTRY_MIN_RANGE &&
+		enemyDistance <= NEWBOTAI_FAN_ENTRY_MAX_RANGE) ? 1 : 0;
+}
+
+// Saber-only duels scale fan bias by the HP+armor difference instead of zeroing it at
+// medium health.
+static inline float NewBotAI_ScaleSaberDuelFanBias(float fanBias, int healthDelta)
+{
+	float scale = 1.0f + (float)healthDelta / 100.0f;
+
+	if (fanBias <= 0.0f)
+		return 0.0f;
+	if (scale < 0.35f)
+		scale = 0.35f;
+	else if (scale > 1.25f)
+		scale = 1.25f;
+	fanBias *= scale;
+	return (fanBias > 100.0f) ? 100.0f : fanBias;
+}
+
+// Fan HOLD footwork: the engine picks a horizontal L2R/R2L swing only from pure strafe input,
+// so the swing-start frame strafes alone; once the swing is running, forward is added so the
+// bot closes like human winners did while their horizontal swings landed.
+static inline int NewBotAI_FanHoldUsesForward(int swingStarted, float enemyDistance)
+{
+	return (swingStarted && enemyDistance > NEWBOTAI_FAN_ENTRY_MIN_RANGE) ? 1 : 0;
+}
+
+//Saber-duel routing: private saber-only duels always use the saber-duel (NF) path, the same
+//as a no-force/no-flipkick server holding a saber, regardless of g_forcePowerDisable/g_flipKick.
+static inline int NewBotAI_UsesSaberDuelPath(int saberOnlyDuel, int forcePowerDisable, int flipKick, int holdingSaber)
+{
+	if (saberOnlyDuel)
+		return 1;
+	return ((forcePowerDisable == 163837 || forcePowerDisable == 163839) && !flipKick && holdingSaber) ? 1 : 0;
 }
 
 static inline int NewBotAI_AdjustPTKWeightForArmor(int weight, int enemyArmor, int forceLead)

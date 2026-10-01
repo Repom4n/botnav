@@ -4407,9 +4407,9 @@ void Cmd_EngageDuel_f(gentity_t *ent, int dueltype)//JAPRO - Serverside - Fullfo
 		{
 			char entDuelName[sizeof(ent->client->pers.lastUserName)] = {0};
 			char challengedDuelName[sizeof(challenged->client->pers.lastUserName)] = {0};
-			const qboolean duelIsRanked = g_eloRanking.integer &&
-				G_GetDuelParticipantName(ent, entDuelName, sizeof(entDuelName)) &&
-				G_GetDuelParticipantName(challenged, challengedDuelName, sizeof(challengedDuelName));
+			const qboolean duelHasRatedNames = G_GetRatedDuelParticipantNames(ent, challenged,
+				entDuelName, sizeof(entDuelName), challengedDuelName, sizeof(challengedDuelName));
+			const qboolean duelIsRanked = (g_eloRanking.integer && duelHasRatedNames) ? qtrue : qfalse;
 
 			ent->client->ps.duelInProgress = qtrue;
 			challenged->client->ps.duelInProgress = qtrue;
@@ -4559,12 +4559,19 @@ void Cmd_EngageDuel_f(gentity_t *ent, int dueltype)//JAPRO - Serverside - Fullfo
 				challenged->client->ps.forceHandExtendTime = level.time + 2000; //2 seconds of weaponlock at start of duel
 			}
 
-			//Only overwrite the stored duel identity when we actually resolved one; a failed
-			//lookup used to blank lastUserName, which silently dropped the duel from the DB.
-			if (G_GetDuelParticipantName(ent, entDuelName, sizeof(entDuelName)) && entDuelName[0])
+			//Store this duel's ladder identities. Both sides resolve (account, bot file + level,
+			//or a guest's iphash key against a bot) or neither is stored, so a stale key from an
+			//earlier duel can't rate a duel that should be unranked.
+			if (duelHasRatedNames)
+			{
 				Q_strncpyz(ent->client->pers.lastUserName, entDuelName, sizeof(ent->client->pers.lastUserName));
-			if (G_GetDuelParticipantName(challenged, challengedDuelName, sizeof(challengedDuelName)) && challengedDuelName[0])
 				Q_strncpyz(challenged->client->pers.lastUserName, challengedDuelName, sizeof(challenged->client->pers.lastUserName));
+			}
+			else
+			{
+				ent->client->pers.lastUserName[0] = '\0';
+				challenged->client->pers.lastUserName[0] = '\0';
+			}
 			ent->client->pers.duelStartTime = level.time;
 			challenged->client->pers.duelStartTime = level.time;
 			G_StartTrackedDuel(ent, challenged, dueltypes[ent->client->ps.clientNum]);
