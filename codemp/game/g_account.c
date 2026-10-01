@@ -175,6 +175,8 @@ typedef struct
 	char note[32];
 	char swingSide[12];
 	char preSwingStrafe[12];
+	char movementIntent[12];
+	short radialSpeed;
 	short yawSweep;
 	unsigned short attackElapsedMs;
 	short throwYawOffset;
@@ -713,6 +715,7 @@ static void G_EnsureLocalDuelTrackingSchema(sqlite3 *db)
 		"enemy_hp SMALLINT DEFAULT 0, enemy_armor SMALLINT DEFAULT 0, enemy_force SMALLINT DEFAULT 0, "
 		"sequence_label VARCHAR(32) DEFAULT '', quality VARCHAR(16) DEFAULT '', "
 		"swing_side VARCHAR(12) DEFAULT '', pre_swing_strafe VARCHAR(12) DEFAULT '', "
+		"movement_intent VARCHAR(12) DEFAULT '', radial_speed SMALLINT DEFAULT 0, "
 		"yaw_sweep SMALLINT DEFAULT 0, attack_elapsed_ms UNSIGNED SMALLINT DEFAULT 0, "
 		"throw_yaw_offset SMALLINT DEFAULT 0)";
 	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
@@ -821,6 +824,8 @@ static void G_EnsureLocalDuelTrackingSchema(sqlite3 *db)
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "note", "VARCHAR(32) DEFAULT ''");
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "swing_side", "VARCHAR(12) DEFAULT ''");
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "pre_swing_strafe", "VARCHAR(12) DEFAULT ''");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "movement_intent", "VARCHAR(12) DEFAULT ''");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "radial_speed", "SMALLINT DEFAULT 0");
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "yaw_sweep", "SMALLINT DEFAULT 0");
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "attack_elapsed_ms", "UNSIGNED SMALLINT DEFAULT 0");
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "throw_yaw_offset", "SMALLINT DEFAULT 0");
@@ -1501,6 +1506,43 @@ static short G_GetTrackedAttackSweepValue(int swingSide, int attackElapsedMs)
 	return (short)(swingSide * sweepMagnitude);
 }
 
+static void G_FillTrackedMovementContext(tracked_duel_event_t *event,
+	const gentity_t *self, const gentity_t *enemy)
+{
+	vec3_t towardEnemy;
+	vec3_t relativeVelocity;
+	vec3_t horizontalVelocity;
+	float distance;
+	float radialSpeed;
+	float horizontalSpeed;
+	const char *intent = "still";
+
+	if (!event || !self || !self->client || !enemy || !enemy->client)
+		return;
+
+	VectorSubtract(enemy->client->ps.origin, self->client->ps.origin, towardEnemy);
+	towardEnemy[2] = 0.0f;
+	distance = VectorNormalize(towardEnemy);
+	if (distance <= 1.0f)
+		return;
+
+	VectorSubtract(self->client->ps.velocity, enemy->client->ps.velocity, relativeVelocity);
+	relativeVelocity[2] = 0.0f;
+	radialSpeed = DotProduct(relativeVelocity, towardEnemy);
+	event->radialSpeed = (short)Com_Clampi(-32768, 32767, (int)radialSpeed);
+
+	VectorCopy(self->client->ps.velocity, horizontalVelocity);
+	horizontalVelocity[2] = 0.0f;
+	horizontalSpeed = VectorLength(horizontalVelocity);
+	if (radialSpeed >= 40.0f)
+		intent = "advance";
+	else if (radialSpeed <= -40.0f)
+		intent = "retreat";
+	else if (horizontalSpeed >= 40.0f)
+		intent = "lateral";
+	Q_strncpyz(event->movementIntent, intent, sizeof(event->movementIntent));
+}
+
 static qboolean G_IsTrackedSaberThrowRelease(gentity_t *ent)
 {
 	if (!ent || !ent->client)
@@ -1541,6 +1583,7 @@ static void G_FillTrackedEventCoachingContext(tracked_duel_event_t *event, int e
 
 	Q_strncpyz(event->swingSide, G_GetTrackedSwingSideName(swingSide), sizeof(event->swingSide));
 	Q_strncpyz(event->preSwingStrafe, G_GetTrackedStrafeDirName(strafeDir), sizeof(event->preSwingStrafe));
+	G_FillTrackedMovementContext(event, self, enemy);
 
 	attackContextSwingSide = attackContextFresh ? lastAttackSwingSide : swingSide;
 	if (!attackContextSwingSide)
@@ -2780,7 +2823,7 @@ static qboolean G_InsertTrackedEvents(sqlite3 *db, sqlite3_int64 summaryId, trac
 	if (!runtime || runtime->eventCount <= 0)
 		return qtrue;
 
-	sql = "INSERT INTO LocalDuelTrackEvent(summary_id, participant_key, opponent_key, rel_time, event_index, event_type, power, amount, state, range_bucket, sequence_id, buttons, saber_move, enemy_saber_move, yaw_delta, opponent_label, opponent_kind, self_hp, self_armor, self_force, enemy_hp, enemy_armor, enemy_force, sequence_label, quality, note, swing_side, pre_swing_strafe, yaw_sweep, attack_elapsed_ms, throw_yaw_offset, participant_label, participant_kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+	sql = "INSERT INTO LocalDuelTrackEvent(summary_id, participant_key, opponent_key, rel_time, event_index, event_type, power, amount, state, range_bucket, sequence_id, buttons, saber_move, enemy_saber_move, yaw_delta, opponent_label, opponent_kind, self_hp, self_armor, self_force, enemy_hp, enemy_armor, enemy_force, sequence_label, quality, note, swing_side, pre_swing_strafe, movement_intent, radial_speed, yaw_sweep, attack_elapsed_ms, throw_yaw_offset, participant_label, participant_kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 	s = sqlite3_prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL);
 	if (s != SQLITE_OK || !stmt)
 	{
@@ -2854,11 +2897,13 @@ static qboolean G_InsertTrackedEvents(sqlite3 *db, sqlite3_int64 summaryId, trac
 		CALL_SQLITE(bind_text(stmt, 26, event->note, -1, SQLITE_TRANSIENT));
 		CALL_SQLITE(bind_text(stmt, 27, event->swingSide, -1, SQLITE_TRANSIENT));
 		CALL_SQLITE(bind_text(stmt, 28, event->preSwingStrafe, -1, SQLITE_TRANSIENT));
-		CALL_SQLITE(bind_int(stmt, 29, event->yawSweep));
-		CALL_SQLITE(bind_int(stmt, 30, event->attackElapsedMs));
-		CALL_SQLITE(bind_int(stmt, 31, event->throwYawOffset));
-		CALL_SQLITE(bind_text(stmt, 32, runtime->identityLabel, -1, SQLITE_TRANSIENT));
-		CALL_SQLITE(bind_int(stmt, 33, runtime->identityKind));
+		CALL_SQLITE(bind_text(stmt, 29, event->movementIntent, -1, SQLITE_TRANSIENT));
+		CALL_SQLITE(bind_int(stmt, 30, event->radialSpeed));
+		CALL_SQLITE(bind_int(stmt, 31, event->yawSweep));
+		CALL_SQLITE(bind_int(stmt, 32, event->attackElapsedMs));
+		CALL_SQLITE(bind_int(stmt, 33, event->throwYawOffset));
+		CALL_SQLITE(bind_text(stmt, 34, runtime->identityLabel, -1, SQLITE_TRANSIENT));
+		CALL_SQLITE(bind_int(stmt, 35, runtime->identityKind));
 		s = sqlite3_step(stmt);
 		if (s != SQLITE_DONE)
 		{
@@ -3066,6 +3111,65 @@ static void G_PersistTrackedDuel(tracked_duel_runtime_t *winnerRuntime, tracked_
 			"ERROR: SQL Rollback Failed (LocalDuelTrack persist)", s);
 
 	CALL_SQLITE(close(db));
+}
+
+static void G_ClassifyTrackedAttackOutcomes(tracked_duel_runtime_t *runtime, qboolean won)
+{
+	int i;
+
+	if (!runtime)
+		return;
+
+	for (i = 0; i < runtime->eventCount; i++)
+	{
+		tracked_duel_event_t *attack = &runtime->events[i];
+		int j;
+		int damageDealt = 0;
+		int damageTaken = 0;
+		int enemyLowest = attack->enemyHealth + attack->enemyArmor;
+		const char *quality = "mediocre";
+
+		if ((attack->eventType != DUEL_TRACK_EVENT_ATTACK_START &&
+			 attack->eventType != DUEL_TRACK_EVENT_ATTACK_CHAIN) ||
+			attack->sequenceId == 0)
+		{
+			continue;
+		}
+
+		for (j = 0; j < runtime->eventCount; j++)
+		{
+			const tracked_duel_event_t *event = &runtime->events[j];
+			const int enemyPool = event->enemyHealth + event->enemyArmor;
+
+			if (event->sequenceId != attack->sequenceId)
+				continue;
+			if (event->eventType == DUEL_TRACK_EVENT_COUNTER_SUCCESS ||
+				event->eventType == DUEL_TRACK_EVENT_PUNISH_SUCCESS ||
+				event->eventType == DUEL_TRACK_EVENT_SABER_RETURN_PUNISH)
+			{
+				damageDealt += event->amount;
+			}
+			else if (event->eventType == DUEL_TRACK_EVENT_DAMAGE)
+			{
+				damageTaken += event->amount;
+			}
+			if (enemyPool < enemyLowest)
+				enemyLowest = enemyPool;
+		}
+
+		if (enemyLowest <= 0 || damageDealt >= 60)
+			quality = "correct";
+		else if (damageDealt >= 20 && damageDealt >= damageTaken)
+			quality = "good";
+		else if (damageTaken >= 60 && damageTaken > damageDealt)
+			quality = "mistake";
+		else if (damageTaken >= 20 && damageTaken > damageDealt)
+			quality = "bad";
+		else if (won && damageDealt > 0)
+			quality = "good";
+
+		Q_strncpyz(attack->quality, quality, sizeof(attack->quality));
+	}
 }
 
 void G_StartTrackedDuel(gentity_t *first, gentity_t *second, int duelType)
@@ -3361,6 +3465,8 @@ void G_FinishTrackedDuel(gentity_t *winner, gentity_t *loser, int duelType, qboo
 	loserSlot->didDieLowForce = draw ? 0 : (loserLowForceFinish ? 1 : 0);
 	G_SetTrackedPrimaryIssue(winnerSlot, winnerLowForceFinish);
 	G_SetTrackedPrimaryIssue(loserSlot, loserLowForceFinish);
+	G_ClassifyTrackedAttackOutcomes(winnerSlot, draw ? qfalse : qtrue);
+	G_ClassifyTrackedAttackOutcomes(loserSlot, qfalse);
 
 	memcpy(&winnerRuntime, winnerSlot, sizeof(winnerRuntime));
 	memcpy(&loserRuntime, loserSlot, sizeof(loserRuntime));
@@ -3430,7 +3536,7 @@ static qboolean G_InsertTrackedArcadeEvents(sqlite3 *db, sqlite3_int64 summaryId
 			}
 		}
 	}
-	sql = "INSERT INTO LocalDuelTrackEvent(summary_id, participant_key, participant_label, participant_kind, opponent_key, opponent_label, opponent_kind, rel_time, event_index, sequence_id, event_type, power, amount, state, range_bucket, buttons, saber_move, enemy_saber_move, yaw_delta, self_hp, self_armor, self_force, enemy_hp, enemy_armor, enemy_force, sequence_label, quality, note, swing_side, pre_swing_strafe, yaw_sweep, attack_elapsed_ms, throw_yaw_offset) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+	sql = "INSERT INTO LocalDuelTrackEvent(summary_id, participant_key, participant_label, participant_kind, opponent_key, opponent_label, opponent_kind, rel_time, event_index, sequence_id, event_type, power, amount, state, range_bucket, buttons, saber_move, enemy_saber_move, yaw_delta, self_hp, self_armor, self_force, enemy_hp, enemy_armor, enemy_force, sequence_label, quality, note, swing_side, pre_swing_strafe, movement_intent, radial_speed, yaw_sweep, attack_elapsed_ms, throw_yaw_offset) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 	s = sqlite3_prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL);
 	if (s != SQLITE_OK || !stmt)
 	{
@@ -3495,9 +3601,11 @@ static qboolean G_InsertTrackedArcadeEvents(sqlite3 *db, sqlite3_int64 summaryId
 		CALL_SQLITE(bind_text(stmt, 28, event->note, -1, SQLITE_TRANSIENT));
 		CALL_SQLITE(bind_text(stmt, 29, event->swingSide, -1, SQLITE_TRANSIENT));
 		CALL_SQLITE(bind_text(stmt, 30, event->preSwingStrafe, -1, SQLITE_TRANSIENT));
-		CALL_SQLITE(bind_int(stmt, 31, event->yawSweep));
-		CALL_SQLITE(bind_int(stmt, 32, event->attackElapsedMs));
-		CALL_SQLITE(bind_int(stmt, 33, event->throwYawOffset));
+		CALL_SQLITE(bind_text(stmt, 31, event->movementIntent, -1, SQLITE_TRANSIENT));
+		CALL_SQLITE(bind_int(stmt, 32, event->radialSpeed));
+		CALL_SQLITE(bind_int(stmt, 33, event->yawSweep));
+		CALL_SQLITE(bind_int(stmt, 34, event->attackElapsedMs));
+		CALL_SQLITE(bind_int(stmt, 35, event->throwYawOffset));
 		s = sqlite3_step(stmt);
 		if (s != SQLITE_DONE)
 		{
@@ -7822,6 +7930,7 @@ static const char *const g_trackedDuelEventColumns[] = {
 	"range_bucket", "buttons", "saber_move", "enemy_saber_move", "yaw_delta",
 	"self_hp", "self_armor", "self_force", "enemy_hp", "enemy_armor", "enemy_force",
 	"sequence_label", "quality", "note", "swing_side", "pre_swing_strafe",
+	"movement_intent", "radial_speed",
 	"yaw_sweep", "attack_elapsed_ms", "throw_yaw_offset",
 	"participant_label", "participant_kind"
 };
@@ -7882,7 +7991,7 @@ static const char *G_GetTrackedParticipantExportQuery(void)
 static const char *G_GetTrackedEventExportQuery(void)
 {
 	return
-		"SELECT 4 AS export_format_version, "
+		"SELECT 5 AS export_format_version, "
 		"CASE WHEN COALESCE(s.source_context, 'duel') = 'arcade' THEN 'arcade_event' ELSE 'duel_event' END AS record_type, "
 		"COALESCE(s.source_context, 'duel') AS source_context, e.id AS record_id, e.summary_id AS parent_id, "
 		"e.participant_key, e.participant_label, e.participant_kind, "
@@ -7890,7 +7999,8 @@ static const char *G_GetTrackedEventExportQuery(void)
 		"e.rel_time, e.event_index, e.sequence_id, e.event_type, e.power, e.amount, e.state, e.range_bucket, "
 		"e.buttons, e.saber_move, e.enemy_saber_move, e.yaw_delta, "
 		"e.self_hp, e.self_armor, e.self_force, e.enemy_hp, e.enemy_armor, e.enemy_force, e.sequence_label, e.quality, e.note, "
-		"e.swing_side, e.pre_swing_strafe, e.yaw_sweep, e.attack_elapsed_ms, e.throw_yaw_offset "
+		"e.swing_side, e.pre_swing_strafe, e.movement_intent, e.radial_speed, "
+		"e.yaw_sweep, e.attack_elapsed_ms, e.throw_yaw_offset "
 		"FROM LocalDuelTrackEvent e "
 		"LEFT JOIN LocalDuelTrackSummary s ON s.id = e.summary_id";
 }

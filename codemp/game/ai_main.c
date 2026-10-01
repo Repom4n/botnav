@@ -16545,138 +16545,115 @@ void NewBotAI_LSvLS(bot_state_t *bs)
 
 void NewBotAI_NF(bot_state_t *bs)
 {
-	// qboolean swing = qfalse;
-	const float speed = NewBotAI_GetSpeedTowardsEnemy(bs);
+	newbotai_saber_tactic_context_t context;
+	newbotai_saber_tactic_t tactic;
+	const int ourTotalHealth = g_entities[bs->client].health + bs->cur_ps.stats[STAT_ARMOR];
+	const int enemyTotalHealth = bs->currentEnemy->health +
+		bs->currentEnemy->client->ps.stats[STAT_ARMOR];
+	const qboolean selfAttacking = BG_SaberInAttack(bs->cur_ps.saberMove);
+	const qboolean enemyAttacking = BG_SaberInAttack(bs->currentEnemy->client->ps.saberMove);
+	const qboolean enemyVulnerable =
+		(BG_InKnockDown(bs->currentEnemy->client->ps.legsAnim) ||
+		 bs->currentEnemy->client->ps.forceHandExtend == HANDEXTEND_KNOCKDOWN ||
+		 bs->currentEnemy->client->ps.saberInFlight) ? qtrue : qfalse;
 
 	NewBotAI_GetAim(bs);
 
-	if (bs->cur_ps.forceHandExtend == HANDEXTEND_KNOCKDOWN) {
+	if (bs->cur_ps.forceHandExtend == HANDEXTEND_KNOCKDOWN)
+	{
 		NewBotAI_Getup(bs);
 		return;
 	}
 
-	g_entities[bs->client].client->ps.fd.saberAnimLevel = SS_STRONG;
-	//if ((g_entities[bs->client].client->ps.saberMove == LS_A_L2R) || (g_entities[bs->client].client->ps.saberMove == LS_A_TL2BR) || (g_entities[bs->client].client->ps.saberMove == LS_R_L2R))
-		//horiz = qtrue;
-
-	/*
-	if (g_entities[bs->client].client->ps.saberMove > 1)
-		swing = qtrue;
-	*/
-
-	if (bs->frame_Enemy_Len >= 325) {
-		trap->EA_MoveForward(bs->client); 
-	}
-	else if (bs->frame_Enemy_Len <= 200) {//Closerange
-		if (g_entities[bs->client].client->ps.saberMove > 1) {
-			if (bs->origin[2] < bs->currentEnemy->client->ps.origin[2]) {
-				trap->EA_Jump(bs->client);
-				//level.clients[bs->client].ps.fd.forcePowerSelected = FP_LEVITATION;
-				//trap_EA_ForcePower(bs->client);
-			}
-			else if (g_entities[bs->client].client->ps.groundEntityNum == ENTITYNUM_NONE) {
-				trap->EA_Crouch(bs->client); 
-			}
-			else if (bs->currentEnemy->client->ps.legsAnim == BOTH_CROUCH1IDLE || bs->currentEnemy->client->ps.legsAnim == BOTH_CROUCH1WALK || 
-				bs->currentEnemy->client->ps.legsAnim == BOTH_CROUCH1WALKBACK || bs->currentEnemy->client->ps.legsAnim == BOTH_MEDITATE) {	
-				trap->EA_Crouch(bs->client); 
-			}
-			trap->EA_MoveForward(bs->client); 
-		}
-		else if ((g_tweakSaber.integer & ST_EASYBACKSLASH) && (bs->frame_Enemy_Len < 128) && (g_backslashDamageScale.value >= 5 || (g_backslashDamageScale.value >= 3 && (g_tweakSaber.integer & ST_SPINBACKSLASH)))) {
-			//Do a backslash 
-			//bs->ideal_viewangles[YAW] += 180;
-			if (BS_GroundDistance(bs) < 20 && NewBotAI_CanBackflip(bs))
-				trap->EA_Jump(bs->client); 
-			else
-				trap->EA_Crouch(bs->client); 
-			if (NewBotAI_CanBackflip(bs))
-				trap->EA_MoveBack(bs->client); 
-			if (g_entities[bs->client].client->ps.legsAnim != BOTH_ROLL_F)
-				trap->EA_Attack(bs->client);
-		}	
-		else {
-			trap->EA_MoveRight(bs->client); 
-			/*if (bs->currentEnemy->client->ps.saberMove > 1) {
-
-				if (g_entities[bs->client].client->ps.saberMove >= LS_PARRY_UP && g_entities[bs->client].client->ps.saberMove <= LS_PARRY_LL)
-					trap_EA_Attack(bs->client);
-				else {
-					trap_EA_MoveBack(bs->client); 
-					trap_EA_Jump(bs->client);
-				}
-			}
-			else*/
-			if (g_entities[bs->client].client->ps.legsAnim != BOTH_ROLL_F)
-				trap->EA_Attack(bs->client);
-		}
-	}
-	else if ((speed >= 125) && ((bs->frame_Enemy_Len / speed) > 0.7f)) {//Midrange
-		if ((sqrt(bs->cur_ps.velocity[0] * bs->cur_ps.velocity[0] +  bs->cur_ps.velocity[1] * bs->cur_ps.velocity[1])) > 240.0f) {
-			if (NewBotAI_CanBackflip(bs))
-				trap->EA_Jump(bs->client);
-			if (BS_GroundDistance(bs) > 20 && g_entities[bs->client].client->ps.saberMove <= 1) {
-				trap->EA_Crouch(bs->client); 
-				if (NewBotAI_CanBackflip(bs))
-					trap->EA_MoveBack(bs->client); 
-				trap->EA_MoveRight(bs->client); 
-				trap->EA_Attack(bs->client);
-			}
-		}
-		trap->EA_MoveForward(bs->client); 
-	}
-	else {
-		trap->EA_MoveForward(bs->client); 
-	}
-	
-#if 0
-	if (swing && bs->frame_Enemy_Len < 200 && g_entities[bs->client].client->ps.saberMove != 13) //fuck trying to aim backslash like this
+	if (selfAttacking && bs->cur_ps.saberMove != bs->saberTacticLastMove)
 	{
-		vec3_t saberEnd, saberAngs;
-		VectorCopy(g_entities[bs->client].client->saber[0].blade[0].trail.tip, saberEnd); //Vector of the tip of the saber 
-		VectorSubtract(saberEnd, bs->origin, saberEnd);//This might be backwards, but its the vector of saber tip relative to us
-		
-		vectoangles(saberEnd, saberAngs); //Turn saber tip into angles
-
-		saberAngs[YAW] -= 150;
-
-		saberAngs[PITCH] += 25;//who knows!
-
-		saberAngs[YAW] = AngleSubtract(saberAngs[YAW], bs->viewangles[YAW]);
-		saberAngs[PITCH] = AngleSubtract(saberAngs[PITCH], bs->viewangles[PITCH]);
-
-		bs->ideal_viewangles[YAW] -= saberAngs[YAW]; //Offset our ideal angles by this to keep saber tip always pointed at enemy?
-		bs->ideal_viewangles[PITCH] -= saberAngs[PITCH] * 0.5;
-		
-		/*
-		//Poke time!
-		if (level.time - bs->chickenWussCalculationTime > 500) {//i hope this isnt being used for anything else
-			bs->chickenWussCalculationTime = level.time;
-			if (bs->aimOffsetAmtYaw > 0) {
-				bs->aimOffsetAmtYaw = -20;
-			}
-			else {
-				bs->aimOffsetAmtYaw = 20;
-			}
-		}
-		*/
-
-		//bs->ideal_viewangles[YAW] += bs->aimOffsetAmtYaw;
-		
-
-		//if (swing)
-			//bs->ideal_viewangles[PITCH] += (Q_flrand(-1.0f, 1.0f) * 12);
+		bs->saberTacticChainLength++;
 	}
-#endif
+	bs->saberTacticLastMove = bs->cur_ps.saberMove;
 
-	//1 - Get moves and movement
-	//2 - Get aim (offset?) //self->client->saber[saberNum].blade[bladeNum].trail.tip
-	//3 - get poke offset6
-	//Run for hp if low?
+	if (bs->saberTacticUntil <= level.time || enemyVulnerable ||
+		(bs->lastHurtTime > level.time - 700 && bs->saberTacticAction != NEWBOTAI_SABER_TACTIC_RESET))
+	{
+		memset(&context, 0, sizeof(context));
+		context.saberOnlyDuel = (bs->cur_ps.duelInProgress && dueltypes[bs->client] == 0) ? 1 : 0;
+		context.skill = (int)bs->settings.skill;
+		context.mistakeBias = (int)BotGetChanceBiasPercent(bot_mistakebias.value);
+		context.mistakeRoll = Q_irand(1, 100);
+		context.ourTotalHealth = ourTotalHealth;
+		context.enemyTotalHealth = enemyTotalHealth;
+		context.recentlyHurt = (bs->lastHurtTime > level.time - 700) ? 1 : 0;
+		context.enemyAttacking = enemyAttacking ? 1 : 0;
+		context.enemyVulnerable = enemyVulnerable ? 1 : 0;
+		context.selfAttacking = selfAttacking ? 1 : 0;
+		context.chainLength = bs->saberTacticChainLength;
+		context.enemyDistance = bs->frame_Enemy_Len;
+		bs->saberTacticAction = NewBotAI_SelectSaberTactic(context);
+		bs->saberTacticUntil = level.time + (selfAttacking ? 180 : 300);
+	}
 
-	//NewBotAI_GetNFActions(bs);
-	//NewBotAI_GetMovement(bs);
-	//NewBotAI_GetAttack(bs);
+	tactic = (newbotai_saber_tactic_t)bs->saberTacticAction;
+	bs->combatAction = BOT_COMBAT_ACTION_AGGRESSION;
+
+	if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE && !selfAttacking)
+	{
+		return;
+	}
+
+	switch (tactic)
+	{
+	case NEWBOTAI_SABER_TACTIC_COUNTER:
+		trap->EA_MoveForward(bs->client);
+		if (level.framenum & 1)
+			trap->EA_MoveRight(bs->client);
+		else
+			trap->EA_MoveLeft(bs->client);
+		trap->EA_Attack(bs->client);
+		break;
+	case NEWBOTAI_SABER_TACTIC_CHAIN:
+		if (bs->frame_Enemy_Len < 48.0f)
+			trap->EA_MoveBack(bs->client);
+		else if (level.framenum & 1)
+			trap->EA_MoveRight(bs->client);
+		else
+			trap->EA_MoveLeft(bs->client);
+		trap->EA_Attack(bs->client);
+		break;
+	case NEWBOTAI_SABER_TACTIC_ATTACK:
+		if (bs->frame_Enemy_Len > 72.0f)
+			trap->EA_MoveForward(bs->client);
+		trap->EA_Attack(bs->client);
+		break;
+	case NEWBOTAI_SABER_TACTIC_RESET:
+		bs->combatAction = BOT_COMBAT_ACTION_RETREAT_DEFENSE;
+		bs->saberTacticChainLength = 0;
+		if (bs->frame_Enemy_Len < 176.0f)
+			NewBotAI_RetreatDiagonal(bs, (level.framenum & 1) ? qtrue : qfalse);
+		else if (level.framenum & 1)
+			trap->EA_MoveRight(bs->client);
+		else
+			trap->EA_MoveLeft(bs->client);
+		break;
+	case NEWBOTAI_SABER_TACTIC_ADVANCE:
+		trap->EA_MoveForward(bs->client);
+		if (bs->frame_Enemy_Len < 192.0f)
+		{
+			if (level.framenum & 1)
+				trap->EA_MoveRight(bs->client);
+			else
+				trap->EA_MoveLeft(bs->client);
+		}
+		break;
+	case NEWBOTAI_SABER_TACTIC_HOLD:
+	default:
+		break;
+	}
+
+	if (!selfAttacking && tactic != NEWBOTAI_SABER_TACTIC_CHAIN &&
+		tactic != NEWBOTAI_SABER_TACTIC_ATTACK &&
+		tactic != NEWBOTAI_SABER_TACTIC_COUNTER)
+	{
+		bs->saberTacticChainLength = 0;
+	}
 }
 
 void G_Kill(gentity_t *ent);

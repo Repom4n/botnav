@@ -10,6 +10,32 @@ typedef enum
 	NEWBOTAI_DRAINLOCK_FORCE_DRAIN
 } newbotai_drainlock_force_choice_t;
 
+typedef enum
+{
+	NEWBOTAI_SABER_TACTIC_HOLD = 0,
+	NEWBOTAI_SABER_TACTIC_ADVANCE,
+	NEWBOTAI_SABER_TACTIC_ATTACK,
+	NEWBOTAI_SABER_TACTIC_CHAIN,
+	NEWBOTAI_SABER_TACTIC_COUNTER,
+	NEWBOTAI_SABER_TACTIC_RESET
+} newbotai_saber_tactic_t;
+
+typedef struct
+{
+	int saberOnlyDuel;
+	int skill;
+	int mistakeBias;
+	int mistakeRoll;
+	int ourTotalHealth;
+	int enemyTotalHealth;
+	int recentlyHurt;
+	int enemyAttacking;
+	int enemyVulnerable;
+	int selfAttacking;
+	int chainLength;
+	float enemyDistance;
+} newbotai_saber_tactic_context_t;
+
 typedef struct
 {
 	int minWeight;
@@ -30,6 +56,101 @@ enum
 static inline int NewBotAI_GetEffectiveMoveInput(int cmdMove, int forcedMove)
 {
 	return forcedMove ? forcedMove : cmdMove;
+}
+
+static inline int NewBotAI_GetSaberTacticMistakeChance(int skill, int mistakeBias)
+{
+	int clampedSkill = skill;
+	int clampedBias = mistakeBias;
+	int chance;
+
+	if (clampedSkill < 1)
+		clampedSkill = 1;
+	else if (clampedSkill > 10)
+		clampedSkill = 10;
+	if (clampedBias < 0)
+		clampedBias = 0;
+	else if (clampedBias > 100)
+		clampedBias = 100;
+	if (clampedSkill >= 10)
+		return 0;
+
+	chance = (10 - clampedSkill) * 3;
+	chance += (clampedBias * (140 - clampedSkill * 8)) / 100;
+	return chance > 95 ? 95 : chance;
+}
+
+static inline newbotai_saber_tactic_t NewBotAI_SelectSaberTactic(
+	newbotai_saber_tactic_context_t context)
+{
+	newbotai_saber_tactic_t tactic;
+	const int mistakeChance = NewBotAI_GetSaberTacticMistakeChance(
+		context.skill, context.mistakeBias);
+	const int madeMistake = context.mistakeRoll > 0 &&
+		context.mistakeRoll <= mistakeChance;
+
+	if (!context.saberOnlyDuel)
+		return NEWBOTAI_SABER_TACTIC_HOLD;
+
+	if ((context.recentlyHurt && context.enemyDistance <= 160.0f) ||
+		context.ourTotalHealth + 35 <= context.enemyTotalHealth)
+	{
+		tactic = NEWBOTAI_SABER_TACTIC_RESET;
+	}
+	else if (context.enemyVulnerable)
+	{
+		tactic = NEWBOTAI_SABER_TACTIC_COUNTER;
+	}
+	else if (context.enemyAttacking && context.enemyDistance <= 160.0f)
+	{
+		tactic = (context.enemyDistance <= 96.0f && context.skill >= 7) ?
+			NEWBOTAI_SABER_TACTIC_COUNTER : NEWBOTAI_SABER_TACTIC_RESET;
+	}
+	else if (context.selfAttacking)
+	{
+		if (context.chainLength >= 5 && context.enemyTotalHealth > 45)
+			tactic = NEWBOTAI_SABER_TACTIC_RESET;
+		else if (context.enemyDistance <= 192.0f)
+			tactic = NEWBOTAI_SABER_TACTIC_CHAIN;
+		else
+			tactic = NEWBOTAI_SABER_TACTIC_ADVANCE;
+	}
+	else if (context.enemyDistance > 192.0f)
+	{
+		tactic = NEWBOTAI_SABER_TACTIC_ADVANCE;
+	}
+	else if (context.enemyDistance < 56.0f)
+	{
+		tactic = NEWBOTAI_SABER_TACTIC_RESET;
+	}
+	else if (context.enemyDistance <= 128.0f)
+	{
+		tactic = NEWBOTAI_SABER_TACTIC_ATTACK;
+	}
+	else
+	{
+		tactic = NEWBOTAI_SABER_TACTIC_ADVANCE;
+	}
+
+	if (!madeMistake)
+		return tactic;
+
+	switch (tactic)
+	{
+	case NEWBOTAI_SABER_TACTIC_RESET:
+		return NEWBOTAI_SABER_TACTIC_ATTACK;
+	case NEWBOTAI_SABER_TACTIC_COUNTER:
+		return NEWBOTAI_SABER_TACTIC_RESET;
+	case NEWBOTAI_SABER_TACTIC_CHAIN:
+		return NEWBOTAI_SABER_TACTIC_RESET;
+	case NEWBOTAI_SABER_TACTIC_ATTACK:
+		return NEWBOTAI_SABER_TACTIC_ADVANCE;
+	case NEWBOTAI_SABER_TACTIC_ADVANCE:
+		return (context.enemyDistance > 256.0f) ?
+			NEWBOTAI_SABER_TACTIC_ATTACK : NEWBOTAI_SABER_TACTIC_HOLD;
+	default:
+		return tactic;
+	}
 }
 
 static inline int NewBotAI_AdjustPTKWeightForArmor(int weight, int enemyArmor, int forceLead)

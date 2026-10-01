@@ -244,6 +244,65 @@ BOOST_AUTO_TEST_CASE( fan_wobble_offsets_match_phase_and_axis_amplitudes )
 	BOOST_CHECK( yawOffset < 0.0f );
 }
 
+BOOST_AUTO_TEST_CASE( saber_tactic_mistakes_scale_down_to_zero_at_level_ten )
+{
+	BOOST_CHECK( NewBotAI_GetSaberTacticMistakeChance( 2, 70 ) >
+		NewBotAI_GetSaberTacticMistakeChance( 8, 70 ) );
+	BOOST_CHECK_EQUAL( NewBotAI_GetSaberTacticMistakeChance( 10, 100 ), 0 );
+}
+
+BOOST_AUTO_TEST_CASE( saber_tactic_advances_attacks_and_limits_unconfirmed_chains )
+{
+	newbotai_saber_tactic_context_t context = {};
+	context.saberOnlyDuel = 1;
+	context.skill = 10;
+	context.ourTotalHealth = 150;
+	context.enemyTotalHealth = 150;
+	context.enemyDistance = 180.0f;
+	BOOST_CHECK_EQUAL( NewBotAI_SelectSaberTactic( context ), NEWBOTAI_SABER_TACTIC_ADVANCE );
+
+	context.enemyDistance = 110.0f;
+	BOOST_CHECK_EQUAL( NewBotAI_SelectSaberTactic( context ), NEWBOTAI_SABER_TACTIC_ATTACK );
+
+	context.selfAttacking = 1;
+	context.chainLength = 4;
+	BOOST_CHECK_EQUAL( NewBotAI_SelectSaberTactic( context ), NEWBOTAI_SABER_TACTIC_CHAIN );
+	context.chainLength = 5;
+	BOOST_CHECK_EQUAL( NewBotAI_SelectSaberTactic( context ), NEWBOTAI_SABER_TACTIC_RESET );
+}
+
+BOOST_AUTO_TEST_CASE( saber_tactic_counters_exposure_and_resets_after_damage )
+{
+	newbotai_saber_tactic_context_t context = {};
+	context.saberOnlyDuel = 1;
+	context.skill = 9;
+	context.ourTotalHealth = 150;
+	context.enemyTotalHealth = 150;
+	context.enemyDistance = 80.0f;
+	context.enemyVulnerable = 1;
+	BOOST_CHECK_EQUAL( NewBotAI_SelectSaberTactic( context ), NEWBOTAI_SABER_TACTIC_COUNTER );
+
+	context.enemyVulnerable = 0;
+	context.recentlyHurt = 1;
+	BOOST_CHECK_EQUAL( NewBotAI_SelectSaberTactic( context ), NEWBOTAI_SABER_TACTIC_RESET );
+}
+
+BOOST_AUTO_TEST_CASE( saber_tactic_mistake_bias_degrades_otherwise_correct_choices )
+{
+	newbotai_saber_tactic_context_t context = {};
+	context.saberOnlyDuel = 1;
+	context.skill = 3;
+	context.mistakeBias = 100;
+	context.mistakeRoll = 1;
+	context.ourTotalHealth = 80;
+	context.enemyTotalHealth = 150;
+	context.enemyDistance = 100.0f;
+	BOOST_CHECK_EQUAL( NewBotAI_SelectSaberTactic( context ), NEWBOTAI_SABER_TACTIC_ATTACK );
+
+	context.skill = 10;
+	BOOST_CHECK_EQUAL( NewBotAI_SelectSaberTactic( context ), NEWBOTAI_SABER_TACTIC_RESET );
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 BOOST_AUTO_TEST_SUITE_END()
