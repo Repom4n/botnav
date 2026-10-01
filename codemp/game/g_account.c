@@ -19,6 +19,11 @@ static char LOCAL_DUELTRACK_DB_PATH[MAX_OSPATH];
 #define BOT_DUEL_RANKED_LIMIT_PER_LEVEL 5
 #define BOT_DUEL_LEVEL_MIN 1
 #define BOT_DUEL_LEVEL_MAX 10
+#define BOT_DUEL_SEED_ELO_MIN 800.0f
+#define BOT_DUEL_SEED_ELO_MAX 1100.0f
+#define BOT_DUEL_SEED_ELO_DEFAULT 1000.0f
+//Duel "type" used for arcade rows, matching the arcade leaderboard type in G_AddDuel.
+#define TRACKED_ARCADE_DUEL_TYPE 21
 #define TRACKED_DUEL_MAX_EVENTS 128
 #define TRACKED_DUEL_TUTORIAL_MAX_MESSAGES 3
 #define TRACKED_DUEL_TUTORIAL_COOLDOWN_MS 7000
@@ -45,6 +50,10 @@ static char LOCAL_DUELTRACK_DB_PATH[MAX_OSPATH];
 #define TRACKED_DUEL_SCORE_FORCED_ENTRY_NO_CONFIRM_BONUS 2
 #define TRACKED_DUEL_SCORE_LINEAR_FALLBACK_BASE 1
 #define TRACKED_SEQUENCE_TIMEOUT_MS 1500
+//Force regeneration ticks every frame, which previously produced one tracked event per tick
+//and dominated the exports. Accumulate regen and emit a single periodic resource sample
+//instead; total_force_regen accounting is unchanged.
+#define TRACKED_REGEN_SAMPLE_INTERVAL_MS 1000
 #define TRACKED_ATTACK_CHAIN_WINDOW_MS 1200
 #define TRACKED_COUNTER_WINDOW_MS 1200
 #define TRACKED_PUNISH_WINDOW_MS 900
@@ -199,6 +208,8 @@ typedef struct
 	int lastSaberInFlight;
 	int currentSequenceId;
 	int lastSequenceTime;
+	int lastRegenSampleTime;
+	int pendingRegenAmount;
 	int totalForceSpent;
 	int totalForceRegen;
 	int forceSpentByPower[DUEL_TRACK_POWER_COUNT];
@@ -212,6 +223,13 @@ typedef struct
 	int endingForce;
 	int endingHP;
 	int endingArmor;
+	//Resources captured the moment this participant died. The duel is only finalised after
+	//the respawn path has already restored HP/armor/force, so reading the live playerState in
+	//G_FinishTrackedDuel used to report a full force bar for every loser.
+	int deathForce;
+	int deathHP;
+	int deathArmor;
+	int hasDeathSnapshot;
 	int side;
 	int opponentSide;
 	int identityKind;
@@ -223,6 +241,9 @@ typedef struct
 	int overcommitEvents;
 	char identityKey[64];
 	char identityLabel[MAX_NETNAME];
+	//The ELO ladder identity ("<name> [bot LN]" / account name), stored alongside the
+	//tracking key so tracking rows and LocalDuel rating rows can be joined.
+	char eloKey[64];
 	char opponentKey[64];
 	char opponentLabel[MAX_NETNAME];
 	char openingTactic[32];
@@ -260,6 +281,8 @@ typedef struct
 	int lastSaberInFlight;
 	int currentSequenceId;
 	int lastSequenceTime;
+	int lastRegenSampleTime;
+	int pendingRegenAmount;
 	int totalForceSpent;
 	int totalForceRegen;
 	int totalDamageTaken;
@@ -421,10 +444,7 @@ static qboolean G_IsAllowedTrackedTableName(const char *tableName)
 		"LocalDuelTrackParticipant",
 		"LocalDuelTrackEvent",
 		"LocalDuelTrackGeometry",
-		"LocalDuelTrackAggregate",
-		"LocalArcadeTrackSession",
-		"LocalArcadeTrackEvent",
-		"LocalArcadeTrackGeometry"
+		"LocalDuelTrackAggregate"
 	};
 	int i;
 
@@ -663,7 +683,7 @@ static void G_EnsureLocalDuelTrackingSchema(sqlite3 *db)
 
 	sql = "CREATE TABLE IF NOT EXISTS LocalDuelTrackParticipant("
 		"id INTEGER PRIMARY KEY, summary_id INTEGER, participant_key VARCHAR(64), participant_label VARCHAR(36), "
-		"participant_kind UNSIGNED TINYINT, opponent_key VARCHAR(64), won UNSIGNED TINYINT, side UNSIGNED TINYINT, "
+		"participant_kind UNSIGNED TINYINT, elo_key VARCHAR(64) DEFAULT '', opponent_key VARCHAR(64), won UNSIGNED TINYINT, side UNSIGNED TINYINT, "
 		"opponent_side UNSIGNED TINYINT, matchup UNSIGNED TINYINT, total_force_spent UNSIGNED INTEGER, "
 		"total_force_regen UNSIGNED INTEGER, ending_force SMALLINT, ending_hp SMALLINT, ending_armor SMALLINT, "
 		"low_force_windows UNSIGNED SMALLINT, grip_cripple_events UNSIGNED SMALLINT, saber_throw_punishes UNSIGNED SMALLINT, "
@@ -741,6 +761,7 @@ static void G_EnsureLocalDuelTrackingSchema(sqlite3 *db)
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackSummary", "winner_opening", "VARCHAR(32) DEFAULT ''");
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackSummary", "loser_opening", "VARCHAR(32) DEFAULT ''");
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "participant_label", "VARCHAR(36) DEFAULT ''");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "elo_key", "VARCHAR(64) DEFAULT ''");
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "participant_kind", "UNSIGNED TINYINT DEFAULT 0");
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "opponent_side", "UNSIGNED TINYINT DEFAULT 0");
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "matchup", "UNSIGNED TINYINT DEFAULT 0");
@@ -804,89 +825,19 @@ static void G_EnsureLocalDuelTrackingSchema(sqlite3 *db)
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "attack_elapsed_ms", "UNSIGNED SMALLINT DEFAULT 0");
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "throw_yaw_offset", "SMALLINT DEFAULT 0");
 
-	sql = "CREATE TABLE IF NOT EXISTS LocalArcadeTrackSession("
-		"id INTEGER PRIMARY KEY, source_context VARCHAR(16), start_time UNSIGNED INTEGER, end_time UNSIGNED INTEGER, "
-		"duration UNSIGNED INTEGER, mapname VARCHAR(64), participant_key VARCHAR(64), participant_label VARCHAR(36), "
-		"participant_kind UNSIGNED TINYINT, result VARCHAR(24), arcade_level UNSIGNED SMALLINT, total_kills UNSIGNED SMALLINT, "
-		"total_force_spent UNSIGNED INTEGER, total_force_regen UNSIGNED INTEGER, total_damage_taken UNSIGNED INTEGER, "
-		"total_damage_dealt UNSIGNED INTEGER, low_force_windows UNSIGNED SMALLINT, knockdown_events UNSIGNED SMALLINT, "
-		"counter_successes UNSIGNED SMALLINT, punish_successes UNSIGNED SMALLINT, reset_successes UNSIGNED SMALLINT, "
-		"saber_return_punishes UNSIGNED SMALLINT)";
-	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
-	s = sqlite3_step(stmt);
-	if (s != SQLITE_DONE)
-	{
-		G_ErrorPrint("ERROR: SQL Create Failed (LocalArcadeTrackSession)", s);
-		G_TrackedDBError("CREATE TABLE LocalArcadeTrackSession", db, s);
-	}
-	CALL_SQLITE(finalize(stmt));
-	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackSession", "source_context", "VARCHAR(16) DEFAULT 'arcade'");
-	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackSession", "result", "VARCHAR(24) DEFAULT ''");
-	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackSession", "arcade_level", "UNSIGNED SMALLINT DEFAULT 0");
-	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackSession", "total_kills", "UNSIGNED SMALLINT DEFAULT 0");
-	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackSession", "total_force_spent", "UNSIGNED INTEGER DEFAULT 0");
-	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackSession", "total_force_regen", "UNSIGNED INTEGER DEFAULT 0");
-	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackSession", "total_damage_taken", "UNSIGNED INTEGER DEFAULT 0");
-	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackSession", "total_damage_dealt", "UNSIGNED INTEGER DEFAULT 0");
-	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackSession", "low_force_windows", "UNSIGNED SMALLINT DEFAULT 0");
-	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackSession", "knockdown_events", "UNSIGNED SMALLINT DEFAULT 0");
-	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackSession", "counter_successes", "UNSIGNED SMALLINT DEFAULT 0");
-	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackSession", "punish_successes", "UNSIGNED SMALLINT DEFAULT 0");
-	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackSession", "reset_successes", "UNSIGNED SMALLINT DEFAULT 0");
-	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackSession", "saber_return_punishes", "UNSIGNED SMALLINT DEFAULT 0");
+	//Arcade sessions share this table family. source_context on the summary separates the two,
+	//while the columns below carry the arcade-only fields that used to live in LocalArcadeTrack*.
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackSummary", "result", "VARCHAR(24) DEFAULT ''");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackSummary", "arcade_level", "UNSIGNED SMALLINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "total_kills", "UNSIGNED SMALLINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "total_damage_taken", "UNSIGNED INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "total_damage_dealt", "UNSIGNED INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "counter_successes", "UNSIGNED SMALLINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "punish_successes", "UNSIGNED SMALLINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackParticipant", "reset_successes", "UNSIGNED SMALLINT DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "participant_label", "VARCHAR(36) DEFAULT ''");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackEvent", "participant_kind", "UNSIGNED TINYINT DEFAULT 0");
 
-	sql = "CREATE TABLE IF NOT EXISTS LocalArcadeTrackEvent("
-		"id INTEGER PRIMARY KEY, session_id INTEGER, participant_key VARCHAR(64), participant_label VARCHAR(36), "
-		"participant_kind UNSIGNED TINYINT, opponent_key VARCHAR(64), opponent_label VARCHAR(36), opponent_kind UNSIGNED TINYINT, "
-		"rel_time UNSIGNED INTEGER, event_index UNSIGNED SMALLINT, sequence_id UNSIGNED SMALLINT, event_type VARCHAR(24), "
-		"power UNSIGNED TINYINT, amount SMALLINT, state UNSIGNED TINYINT, range_bucket UNSIGNED TINYINT, "
-		"buttons UNSIGNED SMALLINT, saber_move INTEGER, enemy_saber_move INTEGER, yaw_delta SMALLINT, "
-		"self_hp SMALLINT, self_armor SMALLINT, self_force SMALLINT, enemy_hp SMALLINT, enemy_armor SMALLINT, enemy_force SMALLINT, "
-		"sequence_label VARCHAR(32), quality VARCHAR(16), note VARCHAR(32) DEFAULT '', "
-		"swing_side VARCHAR(12) DEFAULT '', pre_swing_strafe VARCHAR(12) DEFAULT '', "
-		"yaw_sweep SMALLINT DEFAULT 0, attack_elapsed_ms UNSIGNED SMALLINT DEFAULT 0, "
-		"throw_yaw_offset SMALLINT DEFAULT 0)";
-	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
-	s = sqlite3_step(stmt);
-	if (s != SQLITE_DONE)
-	{
-		G_ErrorPrint("ERROR: SQL Create Failed (LocalArcadeTrackEvent)", s);
-		G_TrackedDBError("CREATE TABLE LocalArcadeTrackEvent", db, s);
-	}
-	CALL_SQLITE(finalize(stmt));
-	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "session_id", "INTEGER DEFAULT 0");
-	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "participant_key", "VARCHAR(64) DEFAULT ''");
-	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "participant_label", "VARCHAR(36) DEFAULT ''");
-	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "participant_kind", "UNSIGNED TINYINT DEFAULT 0");
-	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "opponent_key", "VARCHAR(64) DEFAULT ''");
-	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "opponent_label", "VARCHAR(36) DEFAULT ''");
-	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "opponent_kind", "UNSIGNED TINYINT DEFAULT 0");
-	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "rel_time", "UNSIGNED INTEGER DEFAULT 0");
-	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "event_index", "UNSIGNED SMALLINT DEFAULT 0");
-	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "sequence_id", "UNSIGNED SMALLINT DEFAULT 0");
-	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "event_type", "VARCHAR(24) DEFAULT ''");
-	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "power", "UNSIGNED TINYINT DEFAULT 0");
-	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "amount", "SMALLINT DEFAULT 0");
-	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "state", "UNSIGNED TINYINT DEFAULT 0");
-	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "range_bucket", "UNSIGNED TINYINT DEFAULT 0");
-	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "buttons", "UNSIGNED SMALLINT DEFAULT 0");
-	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "saber_move", "INTEGER DEFAULT 0");
-	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "enemy_saber_move", "INTEGER DEFAULT 0");
-	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "yaw_delta", "SMALLINT DEFAULT 0");
-	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "self_hp", "SMALLINT DEFAULT 0");
-	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "self_armor", "SMALLINT DEFAULT 0");
-	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "self_force", "SMALLINT DEFAULT 0");
-	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "enemy_hp", "SMALLINT DEFAULT 0");
-	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "enemy_armor", "SMALLINT DEFAULT 0");
-	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "enemy_force", "SMALLINT DEFAULT 0");
-	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "sequence_label", "VARCHAR(32) DEFAULT ''");
-	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "quality", "VARCHAR(16) DEFAULT ''");
-	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "note", "VARCHAR(32) DEFAULT ''");
-	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "swing_side", "VARCHAR(12) DEFAULT ''");
-	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "pre_swing_strafe", "VARCHAR(12) DEFAULT ''");
-	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "yaw_sweep", "SMALLINT DEFAULT 0");
-	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "attack_elapsed_ms", "UNSIGNED SMALLINT DEFAULT 0");
-	G_EnsureTrackedTableColumn(db, "LocalArcadeTrackEvent", "throw_yaw_offset", "SMALLINT DEFAULT 0");
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackAggregate", "duels", "UNSIGNED INTEGER DEFAULT 0");
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackAggregate", "participant_kind", "UNSIGNED TINYINT DEFAULT 0");
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackAggregate", "side", "UNSIGNED TINYINT DEFAULT 0");
@@ -910,20 +861,6 @@ static void G_EnsureLocalDuelTrackingSchema(sqlite3 *db)
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackAggregate", "force_seeing", "UNSIGNED INTEGER DEFAULT 0");
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackAggregate", "force_unknown", "UNSIGNED INTEGER DEFAULT 0");
 
-	sql = "CREATE TABLE IF NOT EXISTS LocalArcadeTrackGeometry("
-		"id INTEGER PRIMARY KEY, session_id INTEGER, participant_key VARCHAR(64), opponent_key VARCHAR(64), "
-		"rel_time UNSIGNED INTEGER, event_index UNSIGNED SMALLINT, "
-		"self_x REAL, self_y REAL, self_z REAL, enemy_x REAL, enemy_y REAL, enemy_z REAL, "
-		"self_vx REAL, self_vy REAL, self_vz REAL, enemy_vx REAL, enemy_vy REAL, enemy_vz REAL, "
-		"self_yaw REAL, enemy_yaw REAL)";
-	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
-	s = sqlite3_step(stmt);
-	if (s != SQLITE_DONE)
-	{
-		G_ErrorPrint("ERROR: SQL Create Failed (LocalArcadeTrackGeometry)", s);
-		G_TrackedDBError("CREATE TABLE LocalArcadeTrackGeometry", db, s);
-	}
-	CALL_SQLITE(finalize(stmt));
 	g_duelTrackingSchemaReady = qtrue;
 	Q_strncpyz(g_duelTrackingSchemaPath, LOCAL_DUELTRACK_DB_PATH, sizeof(g_duelTrackingSchemaPath));
 }
@@ -2733,6 +2670,8 @@ static void G_InitTrackedDuelRuntimeForClient(gentity_t *ent, gentity_t *opponen
 	runtime->side = G_GetTrackedParticipantSide(ent);
 	runtime->opponentSide = G_GetTrackedParticipantSide(opponent);
 	G_GetDuelTrackingIdentity(ent, runtime->identityKey, sizeof(runtime->identityKey), runtime->identityLabel, sizeof(runtime->identityLabel), &runtime->identityKind);
+	if (!G_GetDuelParticipantName(ent, runtime->eloKey, sizeof(runtime->eloKey)))
+		runtime->eloKey[0] = '\0';
 	G_GetDuelTrackingIdentity(opponent, runtime->opponentKey, sizeof(runtime->opponentKey), runtime->opponentLabel, sizeof(runtime->opponentLabel), NULL);
 }
 
@@ -2769,52 +2708,53 @@ static qboolean G_InsertTrackedParticipant(sqlite3 *db, sqlite3_int64 summaryId,
 		return qfalse;
 
 	matchup = G_GetTrackedMatchup(runtime->side, runtime->opponentSide);
-	sql = "INSERT INTO LocalDuelTrackParticipant(summary_id, participant_key, participant_label, participant_kind, opponent_key, won, side, opponent_side, matchup, total_force_spent, total_force_regen, ending_force, ending_hp, ending_armor, low_force_windows, grip_cripple_events, saber_throw_punishes, knockdown_events, late_defense_spends, opening_tactic, primary_issue, spent_neutral, spent_advantage, spent_disadvantage, spent_panic, spent_finishing, force_push, force_pull, force_grip, force_drain, force_rage, force_absorb, force_protect, force_heal, force_speed, force_seeing, force_unknown) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+	sql = "INSERT INTO LocalDuelTrackParticipant(summary_id, participant_key, participant_label, participant_kind, elo_key, opponent_key, won, side, opponent_side, matchup, total_force_spent, total_force_regen, ending_force, ending_hp, ending_armor, low_force_windows, grip_cripple_events, saber_throw_punishes, knockdown_events, late_defense_spends, opening_tactic, primary_issue, spent_neutral, spent_advantage, spent_disadvantage, spent_panic, spent_finishing, force_push, force_pull, force_grip, force_drain, force_rage, force_absorb, force_protect, force_heal, force_speed, force_seeing, force_unknown) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
 	CALL_SQLITE(bind_int64(stmt, 1, summaryId));
 	CALL_SQLITE(bind_text(stmt, 2, runtime->identityKey, -1, SQLITE_STATIC));
 	CALL_SQLITE(bind_text(stmt, 3, runtime->identityLabel, -1, SQLITE_TRANSIENT));
 	CALL_SQLITE(bind_int(stmt, 4, runtime->identityKind));
-	CALL_SQLITE(bind_text(stmt, 5, runtime->opponentKey, -1, SQLITE_STATIC));
+	CALL_SQLITE(bind_text(stmt, 5, runtime->eloKey, -1, SQLITE_TRANSIENT));
+	CALL_SQLITE(bind_text(stmt, 6, runtime->opponentKey, -1, SQLITE_STATIC));
 	if (won < 0)
 	{
-		CALL_SQLITE(bind_null(stmt, 6));
+		CALL_SQLITE(bind_null(stmt, 7));
 	}
 	else
 	{
-		CALL_SQLITE(bind_int(stmt, 6, won ? 1 : 0));
+		CALL_SQLITE(bind_int(stmt, 7, won ? 1 : 0));
 	}
-	CALL_SQLITE(bind_int(stmt, 7, runtime->side));
-	CALL_SQLITE(bind_int(stmt, 8, runtime->opponentSide));
-	CALL_SQLITE(bind_int(stmt, 9, matchup));
-	CALL_SQLITE(bind_int(stmt, 10, runtime->totalForceSpent));
-	CALL_SQLITE(bind_int(stmt, 11, runtime->totalForceRegen));
-	CALL_SQLITE(bind_int(stmt, 12, runtime->endingForce));
-	CALL_SQLITE(bind_int(stmt, 13, runtime->endingHP));
-	CALL_SQLITE(bind_int(stmt, 14, runtime->endingArmor));
-	CALL_SQLITE(bind_int(stmt, 15, runtime->lowForceWindows));
-	CALL_SQLITE(bind_int(stmt, 16, runtime->gripCrippleEvents));
-	CALL_SQLITE(bind_int(stmt, 17, runtime->saberThrowPunishes));
-	CALL_SQLITE(bind_int(stmt, 18, runtime->knockdownEvents));
-	CALL_SQLITE(bind_int(stmt, 19, runtime->lateDefenseSpends));
-	CALL_SQLITE(bind_text(stmt, 20, runtime->openingTactic, -1, SQLITE_STATIC));
-	CALL_SQLITE(bind_text(stmt, 21, runtime->primaryIssue, -1, SQLITE_STATIC));
-	CALL_SQLITE(bind_int(stmt, 22, runtime->spentByState[DUEL_TRACK_STATE_NEUTRAL]));
-	CALL_SQLITE(bind_int(stmt, 23, runtime->spentByState[DUEL_TRACK_STATE_ADVANTAGE]));
-	CALL_SQLITE(bind_int(stmt, 24, runtime->spentByState[DUEL_TRACK_STATE_DISADVANTAGE]));
-	CALL_SQLITE(bind_int(stmt, 25, runtime->spentByState[DUEL_TRACK_STATE_PANIC]));
-	CALL_SQLITE(bind_int(stmt, 26, runtime->spentByState[DUEL_TRACK_STATE_FINISHING]));
-	CALL_SQLITE(bind_int(stmt, 27, runtime->forceSpentByPower[DUEL_TRACK_POWER_PUSH]));
-	CALL_SQLITE(bind_int(stmt, 28, runtime->forceSpentByPower[DUEL_TRACK_POWER_PULL]));
-	CALL_SQLITE(bind_int(stmt, 29, runtime->forceSpentByPower[DUEL_TRACK_POWER_GRIP]));
-	CALL_SQLITE(bind_int(stmt, 30, runtime->forceSpentByPower[DUEL_TRACK_POWER_DRAIN]));
-	CALL_SQLITE(bind_int(stmt, 31, runtime->forceSpentByPower[DUEL_TRACK_POWER_RAGE]));
-	CALL_SQLITE(bind_int(stmt, 32, runtime->forceSpentByPower[DUEL_TRACK_POWER_ABSORB]));
-	CALL_SQLITE(bind_int(stmt, 33, runtime->forceSpentByPower[DUEL_TRACK_POWER_PROTECT]));
-	CALL_SQLITE(bind_int(stmt, 34, runtime->forceSpentByPower[DUEL_TRACK_POWER_HEAL]));
-	CALL_SQLITE(bind_int(stmt, 35, runtime->forceSpentByPower[DUEL_TRACK_POWER_SPEED]));
-	CALL_SQLITE(bind_int(stmt, 36, runtime->forceSpentByPower[DUEL_TRACK_POWER_SEEING]));
-	CALL_SQLITE(bind_int(stmt, 37, runtime->forceSpentByPower[DUEL_TRACK_POWER_UNKNOWN]));
+	CALL_SQLITE(bind_int(stmt, 8, runtime->side));
+	CALL_SQLITE(bind_int(stmt, 9, runtime->opponentSide));
+	CALL_SQLITE(bind_int(stmt, 10, matchup));
+	CALL_SQLITE(bind_int(stmt, 11, runtime->totalForceSpent));
+	CALL_SQLITE(bind_int(stmt, 12, runtime->totalForceRegen));
+	CALL_SQLITE(bind_int(stmt, 13, runtime->endingForce));
+	CALL_SQLITE(bind_int(stmt, 14, runtime->endingHP));
+	CALL_SQLITE(bind_int(stmt, 15, runtime->endingArmor));
+	CALL_SQLITE(bind_int(stmt, 16, runtime->lowForceWindows));
+	CALL_SQLITE(bind_int(stmt, 17, runtime->gripCrippleEvents));
+	CALL_SQLITE(bind_int(stmt, 18, runtime->saberThrowPunishes));
+	CALL_SQLITE(bind_int(stmt, 19, runtime->knockdownEvents));
+	CALL_SQLITE(bind_int(stmt, 20, runtime->lateDefenseSpends));
+	CALL_SQLITE(bind_text(stmt, 21, runtime->openingTactic, -1, SQLITE_STATIC));
+	CALL_SQLITE(bind_text(stmt, 22, runtime->primaryIssue, -1, SQLITE_STATIC));
+	CALL_SQLITE(bind_int(stmt, 23, runtime->spentByState[DUEL_TRACK_STATE_NEUTRAL]));
+	CALL_SQLITE(bind_int(stmt, 24, runtime->spentByState[DUEL_TRACK_STATE_ADVANTAGE]));
+	CALL_SQLITE(bind_int(stmt, 25, runtime->spentByState[DUEL_TRACK_STATE_DISADVANTAGE]));
+	CALL_SQLITE(bind_int(stmt, 26, runtime->spentByState[DUEL_TRACK_STATE_PANIC]));
+	CALL_SQLITE(bind_int(stmt, 27, runtime->spentByState[DUEL_TRACK_STATE_FINISHING]));
+	CALL_SQLITE(bind_int(stmt, 28, runtime->forceSpentByPower[DUEL_TRACK_POWER_PUSH]));
+	CALL_SQLITE(bind_int(stmt, 29, runtime->forceSpentByPower[DUEL_TRACK_POWER_PULL]));
+	CALL_SQLITE(bind_int(stmt, 30, runtime->forceSpentByPower[DUEL_TRACK_POWER_GRIP]));
+	CALL_SQLITE(bind_int(stmt, 31, runtime->forceSpentByPower[DUEL_TRACK_POWER_DRAIN]));
+	CALL_SQLITE(bind_int(stmt, 32, runtime->forceSpentByPower[DUEL_TRACK_POWER_RAGE]));
+	CALL_SQLITE(bind_int(stmt, 33, runtime->forceSpentByPower[DUEL_TRACK_POWER_ABSORB]));
+	CALL_SQLITE(bind_int(stmt, 34, runtime->forceSpentByPower[DUEL_TRACK_POWER_PROTECT]));
+	CALL_SQLITE(bind_int(stmt, 35, runtime->forceSpentByPower[DUEL_TRACK_POWER_HEAL]));
+	CALL_SQLITE(bind_int(stmt, 36, runtime->forceSpentByPower[DUEL_TRACK_POWER_SPEED]));
+	CALL_SQLITE(bind_int(stmt, 37, runtime->forceSpentByPower[DUEL_TRACK_POWER_SEEING]));
+	CALL_SQLITE(bind_int(stmt, 38, runtime->forceSpentByPower[DUEL_TRACK_POWER_UNKNOWN]));
 	s = sqlite3_step(stmt);
 	if (s != SQLITE_DONE)
 	{
@@ -2840,7 +2780,7 @@ static qboolean G_InsertTrackedEvents(sqlite3 *db, sqlite3_int64 summaryId, trac
 	if (!runtime || runtime->eventCount <= 0)
 		return qtrue;
 
-	sql = "INSERT INTO LocalDuelTrackEvent(summary_id, participant_key, opponent_key, rel_time, event_index, event_type, power, amount, state, range_bucket, sequence_id, buttons, saber_move, enemy_saber_move, yaw_delta, opponent_label, opponent_kind, self_hp, self_armor, self_force, enemy_hp, enemy_armor, enemy_force, sequence_label, quality, note, swing_side, pre_swing_strafe, yaw_sweep, attack_elapsed_ms, throw_yaw_offset) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+	sql = "INSERT INTO LocalDuelTrackEvent(summary_id, participant_key, opponent_key, rel_time, event_index, event_type, power, amount, state, range_bucket, sequence_id, buttons, saber_move, enemy_saber_move, yaw_delta, opponent_label, opponent_kind, self_hp, self_armor, self_force, enemy_hp, enemy_armor, enemy_force, sequence_label, quality, note, swing_side, pre_swing_strafe, yaw_sweep, attack_elapsed_ms, throw_yaw_offset, participant_label, participant_kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 	s = sqlite3_prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL);
 	if (s != SQLITE_OK || !stmt)
 	{
@@ -2917,6 +2857,8 @@ static qboolean G_InsertTrackedEvents(sqlite3 *db, sqlite3_int64 summaryId, trac
 		CALL_SQLITE(bind_int(stmt, 29, event->yawSweep));
 		CALL_SQLITE(bind_int(stmt, 30, event->attackElapsedMs));
 		CALL_SQLITE(bind_int(stmt, 31, event->throwYawOffset));
+		CALL_SQLITE(bind_text(stmt, 32, runtime->identityLabel, -1, SQLITE_TRANSIENT));
+		CALL_SQLITE(bind_int(stmt, 33, runtime->identityKind));
 		s = sqlite3_step(stmt);
 		if (s != SQLITE_DONE)
 		{
@@ -3249,7 +3191,13 @@ void G_UpdateTrackedDuelFrame(gentity_t *ent)
 	else if (forceDelta > 0)
 	{
 		runtime->totalForceRegen += forceDelta;
-		G_AddTrackedDuelEvent(runtime, DUEL_TRACK_EVENT_REGEN, level.time - runtime->duelStartTime, forceDelta, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, NULL, ent, opponent);
+		runtime->pendingRegenAmount += forceDelta;
+		if (level.time - runtime->lastRegenSampleTime >= TRACKED_REGEN_SAMPLE_INTERVAL_MS)
+		{
+			G_AddTrackedDuelEvent(runtime, DUEL_TRACK_EVENT_REGEN, level.time - runtime->duelStartTime, runtime->pendingRegenAmount, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, NULL, ent, opponent);
+			runtime->pendingRegenAmount = 0;
+			runtime->lastRegenSampleTime = level.time;
+		}
 		if (runtime->pendingResetRecovery &&
 			runtime->lastForce <= TRACKED_DUEL_LOW_FORCE_THRESHOLD &&
 			curForce > TRACKED_DUEL_LOW_FORCE_THRESHOLD)
@@ -3349,6 +3297,44 @@ void G_UpdateTrackedDuelFrame(gentity_t *ent)
 	runtime->lastOpponentHealthArmor = opponentHealthArmor;
 }
 
+//Prefer the snapshot taken at the moment of death over the live playerState, which by the
+//time a duel is finalised has already been reset by the respawn path.
+static void G_ApplyTrackedDuelEndingResources(tracked_duel_runtime_t *slot, gentity_t *ent)
+{
+	if (!slot || !ent || !ent->client)
+		return;
+
+	if (slot->hasDeathSnapshot)
+	{
+		slot->endingForce = slot->deathForce;
+		slot->endingHP = slot->deathHP;
+		slot->endingArmor = slot->deathArmor;
+		return;
+	}
+
+	slot->endingForce = ent->client->ps.fd.forcePower;
+	slot->endingHP = ent->health;
+	slot->endingArmor = ent->client->ps.stats[STAT_ARMOR];
+}
+
+//Called from player_die before any respawn bookkeeping runs.
+void G_TrackedDuelRecordDeath(gentity_t *self)
+{
+	tracked_duel_runtime_t *slot;
+
+	if (!self || !self->client || self->s.number < 0 || self->s.number >= MAX_CLIENTS)
+		return;
+
+	slot = &g_trackedDuels[self->s.number];
+	if (!slot->active)
+		return;
+
+	slot->deathForce = self->client->ps.fd.forcePower;
+	slot->deathHP = self->health;
+	slot->deathArmor = self->client->ps.stats[STAT_ARMOR];
+	slot->hasDeathSnapshot = 1;
+}
+
 void G_FinishTrackedDuel(gentity_t *winner, gentity_t *loser, int duelType, qboolean draw)
 {
 	tracked_duel_runtime_t winnerRuntime;
@@ -3368,12 +3354,8 @@ void G_FinishTrackedDuel(gentity_t *winner, gentity_t *loser, int duelType, qboo
 	if (winnerSlot->opponentClientNum != loser->s.number || loserSlot->opponentClientNum != winner->s.number)
 		return;
 
-	winnerSlot->endingForce = winner->client->ps.fd.forcePower;
-	winnerSlot->endingHP = winner->health;
-	winnerSlot->endingArmor = winner->client->ps.stats[STAT_ARMOR];
-	loserSlot->endingForce = loser->client->ps.fd.forcePower;
-	loserSlot->endingHP = loser->health;
-	loserSlot->endingArmor = loser->client->ps.stats[STAT_ARMOR];
+	G_ApplyTrackedDuelEndingResources(winnerSlot, winner);
+	G_ApplyTrackedDuelEndingResources(loserSlot, loser);
 	winnerLowForceFinish = (winnerSlot->endingForce <= TRACKED_DUEL_LOW_FORCE_THRESHOLD || winnerSlot->lowestForce <= TRACKED_DUEL_LOW_FORCE_THRESHOLD) ? qtrue : qfalse;
 	loserLowForceFinish = (loserSlot->endingForce <= TRACKED_DUEL_LOW_FORCE_THRESHOLD || loserSlot->lowestForce <= TRACKED_DUEL_LOW_FORCE_THRESHOLD) ? qtrue : qfalse;
 	loserSlot->didDieLowForce = draw ? 0 : (loserLowForceFinish ? 1 : 0);
@@ -3422,7 +3404,7 @@ void G_ClearTrackedDuelIfMismatched(gentity_t *ent, gentity_t *opponent)
 		G_ClearTrackedDuelRuntime(opponent->s.number);
 }
 
-static qboolean G_InsertTrackedArcadeEvents(sqlite3 *db, sqlite3_int64 sessionId, tracked_arcade_runtime_t *runtime)
+static qboolean G_InsertTrackedArcadeEvents(sqlite3 *db, sqlite3_int64 summaryId, tracked_arcade_runtime_t *runtime)
 {
 	sqlite3_stmt *stmt = NULL;
 	sqlite3_stmt *geomStmt = NULL;
@@ -3448,24 +3430,24 @@ static qboolean G_InsertTrackedArcadeEvents(sqlite3 *db, sqlite3_int64 sessionId
 			}
 		}
 	}
-	sql = "INSERT INTO LocalArcadeTrackEvent(session_id, participant_key, participant_label, participant_kind, opponent_key, opponent_label, opponent_kind, rel_time, event_index, sequence_id, event_type, power, amount, state, range_bucket, buttons, saber_move, enemy_saber_move, yaw_delta, self_hp, self_armor, self_force, enemy_hp, enemy_armor, enemy_force, sequence_label, quality, note, swing_side, pre_swing_strafe, yaw_sweep, attack_elapsed_ms, throw_yaw_offset) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+	sql = "INSERT INTO LocalDuelTrackEvent(summary_id, participant_key, participant_label, participant_kind, opponent_key, opponent_label, opponent_kind, rel_time, event_index, sequence_id, event_type, power, amount, state, range_bucket, buttons, saber_move, enemy_saber_move, yaw_delta, self_hp, self_armor, self_force, enemy_hp, enemy_armor, enemy_force, sequence_label, quality, note, swing_side, pre_swing_strafe, yaw_sweep, attack_elapsed_ms, throw_yaw_offset) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 	s = sqlite3_prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL);
 	if (s != SQLITE_OK || !stmt)
 	{
-		G_ErrorPrint("ERROR: SQL Prepare Failed (LocalArcadeTrackEvent)", s);
-		G_TrackedDBError("prepare LocalArcadeTrackEvent", db, s);
+		G_ErrorPrint("ERROR: SQL Prepare Failed (LocalDuelTrackEvent)", s);
+		G_TrackedDBError("prepare LocalDuelTrackEvent", db, s);
 		if (stmt)
 			CALL_SQLITE(finalize(stmt));
 		return qfalse;
 	}
 	if (captureGeometry && hasAnyGeometry)
 	{
-		sql = "INSERT INTO LocalArcadeTrackGeometry(session_id, participant_key, opponent_key, rel_time, event_index, self_x, self_y, self_z, enemy_x, enemy_y, enemy_z, self_vx, self_vy, self_vz, enemy_vx, enemy_vy, enemy_vz, self_yaw, enemy_yaw) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+		sql = "INSERT INTO LocalDuelTrackGeometry(summary_id, participant_key, opponent_key, rel_time, event_index, self_x, self_y, self_z, enemy_x, enemy_y, enemy_z, self_vx, self_vy, self_vz, enemy_vx, enemy_vy, enemy_vz, self_yaw, enemy_yaw) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 		s = sqlite3_prepare_v2(db, sql, strlen(sql) + 1, &geomStmt, NULL);
 		if (s != SQLITE_OK || !geomStmt)
 		{
-			G_ErrorPrint("ERROR: SQL Prepare Failed (LocalArcadeTrackGeometry)", s);
-			G_TrackedDBError("prepare LocalArcadeTrackGeometry", db, s);
+			G_ErrorPrint("ERROR: SQL Prepare Failed (LocalDuelTrackGeometry)", s);
+			G_TrackedDBError("prepare LocalDuelTrackGeometry", db, s);
 			if (stmt)
 			{
 				sqlite3_finalize(stmt);
@@ -3483,7 +3465,7 @@ static qboolean G_InsertTrackedArcadeEvents(sqlite3 *db, sqlite3_int64 sessionId
 	for (i = 0; i < runtime->eventCount; i++)
 	{
 		tracked_duel_event_t *event = &runtime->events[i];
-		CALL_SQLITE(bind_int64(stmt, 1, sessionId));
+		CALL_SQLITE(bind_int64(stmt, 1, summaryId));
 		CALL_SQLITE(bind_text(stmt, 2, runtime->identityKey, -1, SQLITE_STATIC));
 		CALL_SQLITE(bind_text(stmt, 3, runtime->identityLabel, -1, SQLITE_STATIC));
 		CALL_SQLITE(bind_int(stmt, 4, runtime->identityKind));
@@ -3521,8 +3503,8 @@ static qboolean G_InsertTrackedArcadeEvents(sqlite3 *db, sqlite3_int64 sessionId
 		{
 			if (s != SQLITE_BUSY && s != SQLITE_LOCKED)
 			{
-				G_ErrorPrint("ERROR: SQL Insert Failed (LocalArcadeTrackEvent)", s);
-				G_TrackedDBError("insert LocalArcadeTrackEvent", db, s);
+				G_ErrorPrint("ERROR: SQL Insert Failed (LocalDuelTrackEvent)", s);
+				G_TrackedDBError("insert LocalDuelTrackEvent", db, s);
 			}
 			insertFailed = qtrue;
 			break;
@@ -3532,7 +3514,7 @@ static qboolean G_InsertTrackedArcadeEvents(sqlite3 *db, sqlite3_int64 sessionId
 
 		if (captureGeometry && hasAnyGeometry && event->hasGeometry)
 		{
-			CALL_SQLITE(bind_int64(geomStmt, 1, sessionId));
+			CALL_SQLITE(bind_int64(geomStmt, 1, summaryId));
 			CALL_SQLITE(bind_text(geomStmt, 2, runtime->identityKey, -1, SQLITE_STATIC));
 			CALL_SQLITE(bind_text(geomStmt, 3, event->opponentKey, -1, SQLITE_STATIC));
 			CALL_SQLITE(bind_int(geomStmt, 4, event->relTime));
@@ -3556,8 +3538,8 @@ static qboolean G_InsertTrackedArcadeEvents(sqlite3 *db, sqlite3_int64 sessionId
 			{
 				if (s != SQLITE_BUSY && s != SQLITE_LOCKED)
 				{
-					G_ErrorPrint("ERROR: SQL Insert Failed (LocalArcadeTrackGeometry)", s);
-					G_TrackedDBError("insert LocalArcadeTrackGeometry", db, s);
+					G_ErrorPrint("ERROR: SQL Insert Failed (LocalDuelTrackGeometry)", s);
+					G_TrackedDBError("insert LocalDuelTrackGeometry", db, s);
 				}
 				insertFailed = qtrue;
 				break;
@@ -3573,6 +3555,54 @@ static qboolean G_InsertTrackedArcadeEvents(sqlite3 *db, sqlite3_int64 sessionId
 	return insertFailed ? qfalse : qtrue;
 }
 
+//Arcade runs share the duel tracking table family. The summary row carries source_context
+//'arcade' plus the run result/level, and the participant row carries the per-run counters that
+//used to live in LocalArcadeTrackSession.
+static qboolean G_InsertTrackedArcadeParticipant(sqlite3 *db, sqlite3_int64 summaryId, tracked_arcade_runtime_t *runtime, int won)
+{
+	sqlite3_stmt *stmt = NULL;
+	char *sql;
+	int s;
+
+	sql = "INSERT INTO LocalDuelTrackParticipant(summary_id, participant_key, participant_label, participant_kind, elo_key, opponent_key, won, side, opponent_side, matchup, total_force_spent, total_force_regen, ending_force, ending_hp, ending_armor, low_force_windows, saber_throw_punishes, knockdown_events, total_kills, total_damage_taken, total_damage_dealt, counter_successes, punish_successes, reset_successes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
+	CALL_SQLITE(bind_int64(stmt, 1, summaryId));
+	CALL_SQLITE(bind_text(stmt, 2, runtime->identityKey, -1, SQLITE_STATIC));
+	CALL_SQLITE(bind_text(stmt, 3, runtime->identityLabel, -1, SQLITE_STATIC));
+	CALL_SQLITE(bind_int(stmt, 4, runtime->identityKind));
+	CALL_SQLITE(bind_text(stmt, 5, runtime->identityKey, -1, SQLITE_STATIC));
+	CALL_SQLITE(bind_text(stmt, 6, "", -1, SQLITE_STATIC));
+	CALL_SQLITE(bind_int(stmt, 7, won ? 1 : 0));
+	CALL_SQLITE(bind_int(stmt, 8, 0));
+	CALL_SQLITE(bind_int(stmt, 9, 0));
+	CALL_SQLITE(bind_int(stmt, 10, 0));
+	CALL_SQLITE(bind_int(stmt, 11, runtime->totalForceSpent));
+	CALL_SQLITE(bind_int(stmt, 12, runtime->totalForceRegen));
+	CALL_SQLITE(bind_int(stmt, 13, runtime->endingForce));
+	CALL_SQLITE(bind_int(stmt, 14, runtime->endingHP));
+	CALL_SQLITE(bind_int(stmt, 15, runtime->endingArmor));
+	CALL_SQLITE(bind_int(stmt, 16, runtime->lowForceWindows));
+	CALL_SQLITE(bind_int(stmt, 17, runtime->saberReturnPunishes));
+	CALL_SQLITE(bind_int(stmt, 18, runtime->knockdownEvents));
+	CALL_SQLITE(bind_int(stmt, 19, runtime->killCount));
+	CALL_SQLITE(bind_int(stmt, 20, runtime->totalDamageTaken));
+	CALL_SQLITE(bind_int(stmt, 21, runtime->totalDamageDealt));
+	CALL_SQLITE(bind_int(stmt, 22, runtime->counterSuccessEvents));
+	CALL_SQLITE(bind_int(stmt, 23, runtime->punishSuccessEvents));
+	CALL_SQLITE(bind_int(stmt, 24, runtime->resetSuccessEvents));
+	s = sqlite3_step(stmt);
+	if (s != SQLITE_DONE)
+	{
+		if (s != SQLITE_BUSY && s != SQLITE_LOCKED)
+		{
+			G_ErrorPrint("ERROR: SQL Insert Failed (LocalDuelTrackParticipant/arcade)", s);
+			G_TrackedDBError("insert LocalDuelTrackParticipant (arcade)", db, s);
+		}
+	}
+	CALL_SQLITE(finalize(stmt));
+	return (s == SQLITE_DONE) ? qtrue : qfalse;
+}
+
 static void G_PersistTrackedArcadeCombat(tracked_arcade_runtime_t *runtime, const char *result, int arcadeLevel)
 {
 	sqlite3 *db;
@@ -3580,7 +3610,9 @@ static void G_PersistTrackedArcadeCombat(tracked_arcade_runtime_t *runtime, cons
 	char *sql;
 	qboolean persistOk = qfalse;
 	int s;
-	sqlite3_int64 sessionId;
+	int won;
+	const char *resultName = (result && result[0]) ? result : "finished";
+	sqlite3_int64 summaryId;
 	time_t rawtime;
 	int endTimestamp;
 	int startTimestamp;
@@ -3589,6 +3621,8 @@ static void G_PersistTrackedArcadeCombat(tracked_arcade_runtime_t *runtime, cons
 
 	if (!runtime)
 		return;
+
+	won = (!Q_stricmp(resultName, "arcade_complete") || !Q_stricmp(resultName, "level_clear")) ? 1 : 0;
 
 	time(&rawtime);
 	endTimestamp = (int)rawtime;
@@ -3599,42 +3633,42 @@ static void G_PersistTrackedArcadeCombat(tracked_arcade_runtime_t *runtime, cons
 	G_EnsureLocalDuelTrackingSchema(db);
 	CALL_SQLITE(exec(db, "BEGIN TRANSACTION", NULL, NULL, NULL));
 
-	sql = "INSERT INTO LocalArcadeTrackSession(source_context, start_time, end_time, duration, mapname, participant_key, participant_label, participant_kind, result, arcade_level, total_kills, total_force_spent, total_force_regen, total_damage_taken, total_damage_dealt, low_force_windows, knockdown_events, counter_successes, punish_successes, reset_successes, saber_return_punishes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+	sql = "INSERT INTO LocalDuelTrackSummary(source_context, start_time, end_time, duration, type, mapname, winner_key, winner_label, winner_kind, winner_side, loser_key, loser_label, loser_kind, loser_side, draw, winner_opening, loser_opening, result, arcade_level) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
 	CALL_SQLITE(bind_text(stmt, 1, "arcade", -1, SQLITE_STATIC));
 	CALL_SQLITE(bind_int(stmt, 2, startTimestamp));
 	CALL_SQLITE(bind_int(stmt, 3, endTimestamp));
 	CALL_SQLITE(bind_int(stmt, 4, durationSeconds));
-	CALL_SQLITE(bind_text(stmt, 5, level.rawmapname, -1, SQLITE_STATIC));
-	CALL_SQLITE(bind_text(stmt, 6, runtime->identityKey, -1, SQLITE_STATIC));
-	CALL_SQLITE(bind_text(stmt, 7, runtime->identityLabel, -1, SQLITE_STATIC));
-	CALL_SQLITE(bind_int(stmt, 8, runtime->identityKind));
-	CALL_SQLITE(bind_text(stmt, 9, result ? result : "finished", -1, SQLITE_STATIC));
-	CALL_SQLITE(bind_int(stmt, 10, arcadeLevel));
-	CALL_SQLITE(bind_int(stmt, 11, runtime->killCount));
-	CALL_SQLITE(bind_int(stmt, 12, runtime->totalForceSpent));
-	CALL_SQLITE(bind_int(stmt, 13, runtime->totalForceRegen));
-	CALL_SQLITE(bind_int(stmt, 14, runtime->totalDamageTaken));
-	CALL_SQLITE(bind_int(stmt, 15, runtime->totalDamageDealt));
-	CALL_SQLITE(bind_int(stmt, 16, runtime->lowForceWindows));
-	CALL_SQLITE(bind_int(stmt, 17, runtime->knockdownEvents));
-	CALL_SQLITE(bind_int(stmt, 18, runtime->counterSuccessEvents));
-	CALL_SQLITE(bind_int(stmt, 19, runtime->punishSuccessEvents));
-	CALL_SQLITE(bind_int(stmt, 20, runtime->resetSuccessEvents));
-	CALL_SQLITE(bind_int(stmt, 21, runtime->saberReturnPunishes));
+	CALL_SQLITE(bind_int(stmt, 5, TRACKED_ARCADE_DUEL_TYPE));
+	CALL_SQLITE(bind_text(stmt, 6, level.rawmapname, -1, SQLITE_STATIC));
+	CALL_SQLITE(bind_text(stmt, 7, won ? runtime->identityKey : "", -1, SQLITE_STATIC));
+	CALL_SQLITE(bind_text(stmt, 8, won ? runtime->identityLabel : "", -1, SQLITE_STATIC));
+	CALL_SQLITE(bind_int(stmt, 9, won ? runtime->identityKind : 0));
+	CALL_SQLITE(bind_int(stmt, 10, 0));
+	CALL_SQLITE(bind_text(stmt, 11, won ? "" : runtime->identityKey, -1, SQLITE_STATIC));
+	CALL_SQLITE(bind_text(stmt, 12, won ? "" : runtime->identityLabel, -1, SQLITE_STATIC));
+	CALL_SQLITE(bind_int(stmt, 13, won ? 0 : runtime->identityKind));
+	CALL_SQLITE(bind_int(stmt, 14, 0));
+	CALL_SQLITE(bind_int(stmt, 15, 0));
+	CALL_SQLITE(bind_text(stmt, 16, "", -1, SQLITE_STATIC));
+	CALL_SQLITE(bind_text(stmt, 17, "", -1, SQLITE_STATIC));
+	CALL_SQLITE(bind_text(stmt, 18, resultName, -1, SQLITE_TRANSIENT));
+	CALL_SQLITE(bind_int(stmt, 19, arcadeLevel));
 	s = sqlite3_step(stmt);
 	if (s != SQLITE_DONE)
 	{
 		if (s != SQLITE_BUSY && s != SQLITE_LOCKED)
 		{
-			G_ErrorPrint("ERROR: SQL Insert Failed (LocalArcadeTrackSession)", s);
-			G_TrackedDBError("insert LocalArcadeTrackSession", db, s);
+			G_ErrorPrint("ERROR: SQL Insert Failed (LocalDuelTrackSummary/arcade)", s);
+			G_TrackedDBError("insert LocalDuelTrackSummary (arcade)", db, s);
 		}
 	}
 	CALL_SQLITE(finalize(stmt));
-	sessionId = sqlite3_last_insert_rowid(db);
+	summaryId = sqlite3_last_insert_rowid(db);
 
-	persistOk = (s == SQLITE_DONE) ? G_InsertTrackedArcadeEvents(db, sessionId, runtime) : qfalse;
+	persistOk = (s == SQLITE_DONE) ? G_InsertTrackedArcadeParticipant(db, summaryId, runtime, won) : qfalse;
+	if (persistOk)
+		persistOk = G_InsertTrackedArcadeEvents(db, summaryId, runtime);
 	if (persistOk)
 	{
 		CALL_SQLITE(exec(db, "COMMIT", NULL, NULL, NULL));
@@ -3781,7 +3815,13 @@ void G_UpdateTrackedArcadeCombatFrame(gentity_t *ent)
 	else if (forceDelta > 0)
 	{
 		runtime->totalForceRegen += forceDelta;
-		G_AddTrackedArcadeEvent(runtime, DUEL_TRACK_EVENT_REGEN, level.time - runtime->startTime, forceDelta, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, NULL, ent, opponent);
+		runtime->pendingRegenAmount += forceDelta;
+		if (level.time - runtime->lastRegenSampleTime >= TRACKED_REGEN_SAMPLE_INTERVAL_MS)
+		{
+			G_AddTrackedArcadeEvent(runtime, DUEL_TRACK_EVENT_REGEN, level.time - runtime->startTime, runtime->pendingRegenAmount, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, NULL, ent, opponent);
+			runtime->pendingRegenAmount = 0;
+			runtime->lastRegenSampleTime = level.time;
+		}
 		if (runtime->lastForce <= TRACKED_DUEL_LOW_FORCE_THRESHOLD &&
 			curForce > TRACKED_DUEL_LOW_FORCE_THRESHOLD)
 		{
@@ -4208,12 +4248,12 @@ void G_AddPlayerLog(char *name, char *strIP, char *guid) {
 	//Somehow make this sorted..
 }
 
-static int G_GetDuelParticipantBotLevel(gentity_t *ent)
+int G_GetDuelBotSkillLevel(gentity_t *ent)
 {
 	char userinfo[MAX_INFO_STRING];
 	int level;
 
-	if (!g_eloRanking.integer || !g_newBotAI.integer || !ent || !ent->client || !(ent->r.svFlags & SVF_BOT))
+	if (!ent || !ent->client || !(ent->r.svFlags & SVF_BOT))
 		return 0;
 
 	trap->GetUserinfo(ent->s.number, userinfo, sizeof(userinfo));
@@ -4222,6 +4262,13 @@ static int G_GetDuelParticipantBotLevel(gentity_t *ent)
 		return 0;
 
 	return level;
+}
+
+static int G_GetDuelParticipantBotLevel(gentity_t *ent)
+{
+	//Bot identity must stay stable regardless of which AI/ranking cvars are toggled,
+	//otherwise the same bot is logged under different (or empty) names between duels.
+	return G_GetDuelBotSkillLevel(ent);
 }
 
 static qboolean G_GetDuelBotIdentityName(gentity_t *ent, int botLevel, char *name, int nameSize)
@@ -4301,6 +4348,26 @@ static int G_ParseBotLevelName(const char *name)
 	return level;
 }
 
+//Seed rating for an identity that has no rated duel history yet. Humans (and anything we
+//cannot resolve to a bot level) keep the historic 1000 starting point; bots are spread
+//linearly across BOT_DUEL_SEED_ELO_MIN..BOT_DUEL_SEED_ELO_MAX for levels 1..10, so a fresh
+//database starts with L1 at 800 and L10 at 1100 instead of every bot sharing 1000.
+float G_GetSeedEloForDuelName(const char *username)
+{
+	const int level = G_ParseBotLevelName(username);
+
+	if (level < BOT_DUEL_LEVEL_MIN || level > BOT_DUEL_LEVEL_MAX)
+		return BOT_DUEL_SEED_ELO_DEFAULT;
+
+	if (BOT_DUEL_LEVEL_MAX == BOT_DUEL_LEVEL_MIN)
+		return BOT_DUEL_SEED_ELO_MIN;
+
+	return BOT_DUEL_SEED_ELO_MIN +
+		((float)(level - BOT_DUEL_LEVEL_MIN) *
+		 (float)(BOT_DUEL_SEED_ELO_MAX - BOT_DUEL_SEED_ELO_MIN) /
+		 (float)(BOT_DUEL_LEVEL_MAX - BOT_DUEL_LEVEL_MIN));
+}
+
 qboolean G_GetDuelParticipantName(gentity_t *ent, char *name, int nameSize) {
 	int level;
 
@@ -4363,8 +4430,10 @@ float GetDuelElo( char *username, int type, int end_time, sqlite3 * db) {
     sqlite3_stmt * stmt;
 	int s;
 
-	sql = "SELECT winner_elo AS elo, end_time FROM LocalDuel where type = ? AND winner = ? AND end_time < ? "
-		"UNION ALL SELECT loser_elo AS elo, end_time FROM LocalDuel where type = ? AND loser = ? AND end_time < ? "
+	//Only consider rated rows: unranked bot-vs-bot duels are stored with elo -999, and
+	//picking one of those up would reset the participant back to the seed value.
+	sql = "SELECT winner_elo AS elo, end_time FROM LocalDuel where type = ? AND winner = ? AND end_time < ? AND winner_elo > -998 "
+		"UNION ALL SELECT loser_elo AS elo, end_time FROM LocalDuel where type = ? AND loser = ? AND end_time < ? AND loser_elo > -998 "
 		"ORDER BY end_time DESC LIMIT 1";
 	CALL_SQLITE (prepare_v2 (db, sql, strlen (sql) + 1, & stmt, NULL));
 	CALL_SQLITE (bind_int (stmt, 1, type));
@@ -4384,7 +4453,7 @@ float GetDuelElo( char *username, int type, int end_time, sqlite3 * db) {
 	}
 
 	if (elo == -999.0f) {//This needs to just be done to check if its null
-		elo = 1000; //Elo not found, give them initial value
+		elo = G_GetSeedEloForDuelName(username); //Elo not found, seed by bot level (humans get 1000)
 	}
 
 	CALL_SQLITE (finalize(stmt));
@@ -4730,16 +4799,56 @@ void SV_RebuildElo_f() {
 	Com_Printf("Duel ranks cleared in %i ms.\n", trap->Milliseconds() - time1);
 }
 
+//Re-seed every stored rating row for one bot level onto the level curve (see
+//G_GetSeedEloForDuelName). Matches both stored naming forms: the bare "botlvlN" identity
+//and the tagged "<name> [bot LN]" identity produced by G_GetDuelBotIdentityName.
+static int G_ReseedBotLevelElo(sqlite3 *db, int botLevel, float seedElo)
+{
+	char *sql;
+	sqlite3_stmt *stmt;
+	char levelName[16];
+	char levelTagged[32];
+	int s;
+	int rows = 0;
+	int pass;
+
+	if (!db || botLevel < BOT_DUEL_LEVEL_MIN || botLevel > BOT_DUEL_LEVEL_MAX)
+	{
+		return 0;
+	}
+
+	Com_sprintf(levelName, sizeof(levelName), "botlvl%i", botLevel);
+	Com_sprintf(levelTagged, sizeof(levelTagged), "%% [bot L%i]", botLevel);
+
+	for (pass = 0; pass < 2; pass++)
+	{
+		sql = pass ?
+			"UPDATE LocalDuel SET loser_elo = ? WHERE loser_elo > -998 AND (loser = ? OR loser LIKE ?)" :
+			"UPDATE LocalDuel SET winner_elo = ? WHERE winner_elo > -998 AND (winner = ? OR winner LIKE ?)";
+		CALL_SQLITE (prepare_v2 (db, sql, strlen (sql) + 1, & stmt, NULL));
+		CALL_SQLITE (bind_double (stmt, 1, seedElo));
+		CALL_SQLITE (bind_text (stmt, 2, levelName, -1, SQLITE_TRANSIENT));
+		CALL_SQLITE (bind_text (stmt, 3, levelTagged, -1, SQLITE_TRANSIENT));
+		s = sqlite3_step(stmt);
+		if (s != SQLITE_DONE) {
+			G_ErrorPrint("ERROR: SQL Update Failed (G_ReseedBotLevelElo)", s);
+		}
+		else {
+			rows += sqlite3_changes(db);
+		}
+		CALL_SQLITE (finalize(stmt));
+	}
+
+	return rows;
+}
+
 void SV_BotEloReset_f(void) {
 	char input[32];
 	char botName[16];
 	sqlite3 *db;
-	char *sql;
-	sqlite3_stmt *stmt;
 	int botLevel;
-	int s;
-	int winnerRows = 0;
-	int loserRows = 0;
+	int rows;
+	float seedElo;
 
 	if (trap->Argc() != 2) {
 		trap->Print("Usage: bot_eloreset <botlvl1-10|1-10>\n");
@@ -4764,35 +4873,84 @@ void SV_BotEloReset_f(void) {
 		return;
 	}
 
+	seedElo = G_GetSeedEloForDuelName(botName);
+
 	CALL_SQLITE (open (LOCAL_DB_PATH, & db));
-
-	sql = "UPDATE LocalDuel SET winner_elo = 1000 WHERE winner = ?";
-	CALL_SQLITE (prepare_v2 (db, sql, strlen (sql) + 1, & stmt, NULL));
-	CALL_SQLITE (bind_text (stmt, 1, botName, -1, SQLITE_TRANSIENT));
-	s = sqlite3_step(stmt);
-	if (s != SQLITE_DONE) {
-		G_ErrorPrint("ERROR: SQL Update Failed (SV_BotEloReset_f winner)", s);
-	}
-	else {
-		winnerRows = sqlite3_changes(db);
-	}
-	CALL_SQLITE (finalize(stmt));
-
-	sql = "UPDATE LocalDuel SET loser_elo = 1000 WHERE loser = ?";
-	CALL_SQLITE (prepare_v2 (db, sql, strlen (sql) + 1, & stmt, NULL));
-	CALL_SQLITE (bind_text (stmt, 1, botName, -1, SQLITE_TRANSIENT));
-	s = sqlite3_step(stmt);
-	if (s != SQLITE_DONE) {
-		G_ErrorPrint("ERROR: SQL Update Failed (SV_BotEloReset_f loser)", s);
-	}
-	else {
-		loserRows = sqlite3_changes(db);
-	}
-	CALL_SQLITE (finalize(stmt));
-
+	rows = G_ReseedBotLevelElo(db, botLevel, seedElo);
 	CALL_SQLITE (close(db));
 
-	trap->Print("bot_eloreset: reset %s ELO to 1000 in %i winner rows and %i loser rows.\n", botName, winnerRows, loserRows);
+	trap->Print("bot_eloreset: reset level %i bots to %.0f ELO across %i rating rows.\n",
+		botLevel, seedElo, rows);
+}
+
+//Count stored rating rows for one bot level. Used to leave bots that have already earned a
+//rating alone - see SV_BotEloSeed_f.
+static int G_CountBotLevelRatedRows(sqlite3 *db, int botLevel)
+{
+	char *sql;
+	sqlite3_stmt *stmt;
+	char levelName[16];
+	char levelTagged[32];
+	int s;
+	int count = 0;
+
+	if (!db || botLevel < BOT_DUEL_LEVEL_MIN || botLevel > BOT_DUEL_LEVEL_MAX)
+	{
+		return 0;
+	}
+
+	Com_sprintf(levelName, sizeof(levelName), "botlvl%i", botLevel);
+	Com_sprintf(levelTagged, sizeof(levelTagged), "%% [bot L%i]", botLevel);
+
+	sql = "SELECT (SELECT COUNT(*) FROM LocalDuel WHERE winner_elo > -998 AND (winner = ?1 OR winner LIKE ?2)) + "
+		"(SELECT COUNT(*) FROM LocalDuel WHERE loser_elo > -998 AND (loser = ?1 OR loser LIKE ?2))";
+	CALL_SQLITE (prepare_v2 (db, sql, strlen (sql) + 1, & stmt, NULL));
+	CALL_SQLITE (bind_text (stmt, 1, levelName, -1, SQLITE_TRANSIENT));
+	CALL_SQLITE (bind_text (stmt, 2, levelTagged, -1, SQLITE_TRANSIENT));
+
+	s = sqlite3_step(stmt);
+	if (s == SQLITE_ROW) {
+		count = sqlite3_column_int(stmt, 0);
+	}
+	else if (s != SQLITE_DONE) {
+		G_ErrorPrint("ERROR: SQL Select Failed (G_CountBotLevelRatedRows)", s);
+	}
+
+	CALL_SQLITE (finalize(stmt));
+	return count;
+}
+
+//Seed bot levels onto the 800-1100 curve. Intended for use right after a database wipe, so
+//it deliberately leaves any level that already has rated history untouched - progression a
+//bot has already earned is never discarded here. Use bot_eloreset <level> to force one.
+void SV_BotEloSeed_f(void) {
+	sqlite3 *db;
+	int botLevel;
+	int totalRows = 0;
+	int skippedLevels = 0;
+
+	CALL_SQLITE (open (LOCAL_DB_PATH, & db));
+	for (botLevel = BOT_DUEL_LEVEL_MIN; botLevel <= BOT_DUEL_LEVEL_MAX; botLevel++)
+	{
+		const float seedElo = G_GetSeedEloForDuelName(va("botlvl%i", botLevel));
+		const int existingRows = G_CountBotLevelRatedRows(db, botLevel);
+		int rows;
+
+		if (existingRows > 0)
+		{
+			skippedLevels++;
+			trap->Print("bot_eloseed: level %i kept (%i existing rating rows).\n", botLevel, existingRows);
+			continue;
+		}
+
+		rows = G_ReseedBotLevelElo(db, botLevel, seedElo);
+		totalRows += rows;
+		trap->Print("bot_eloseed: level %i -> %.0f ELO (%i rating rows).\n", botLevel, seedElo, rows);
+	}
+	CALL_SQLITE (close(db));
+
+	trap->Print("bot_eloseed: seeded %i rating rows across levels %i-%i (%i level(s) kept their existing ELO).\n",
+		totalRows, BOT_DUEL_LEVEL_MIN, BOT_DUEL_LEVEL_MAX, skippedLevels);
 }
 
 int DuelTypeToInteger(char *style) {
@@ -4977,8 +5135,11 @@ void Cmd_DuelTop10_f(gentity_t *ent) {
 		//We dont need to select from loser since we know a users highscore will always be from a winning duel.  And we can ignore users who have never won a duel(?)
 		//How to get count?
 		//sql = "SELECT winner, winner_elo, 100, 100 FROM (SELECT winner, winner_elo, odds, end_time FROM LocalDuel WHERE type = ? ORDER BY end_time ASC) GROUP BY winner ORDER BY winner_elo DESC LIMIT 10";
-		sql = "WITH DuelRows AS (SELECT rowid AS duel_rowid, 1 AS duel_side, winner AS username, type, ROUND(winner_elo,0) AS elo, end_time FROM LocalDuel WHERE type = ? "
-				"UNION ALL SELECT rowid AS duel_rowid, 0 AS duel_side, loser AS username, type, ROUND(loser_elo,0) AS elo, end_time FROM LocalDuel WHERE type = ?), "
+		//Restrict the "latest rating" CTE to rated rows (elo > -998). Unranked bot-vs-bot
+		//duels are stored with elo -999, and if one of those was a participant's most recent
+		//row they would drop off the ladder entirely instead of keeping their real rating.
+		sql = "WITH DuelRows AS (SELECT rowid AS duel_rowid, 1 AS duel_side, winner AS username, type, ROUND(winner_elo,0) AS elo, end_time FROM LocalDuel WHERE type = ? AND winner_elo > -998 "
+				"UNION ALL SELECT rowid AS duel_rowid, 0 AS duel_side, loser AS username, type, ROUND(loser_elo,0) AS elo, end_time FROM LocalDuel WHERE type = ? AND loser_elo > -998), "
 				"LatestTimes AS (SELECT username, MAX(end_time) AS max_end_time FROM DuelRows GROUP BY username), "
 				"LatestRows AS (SELECT DuelRows.* FROM DuelRows INNER JOIN LatestTimes ON DuelRows.username = LatestTimes.username AND DuelRows.end_time = LatestTimes.max_end_time), "
 				"LatestRowIds AS (SELECT username, MAX(duel_rowid) AS max_duel_rowid FROM LatestRows GROUP BY username), "
@@ -5243,7 +5404,7 @@ void G_TestAddDuel() {
 
 	time1 = trap->Milliseconds();
 
-	G_AddDuel(winner, loser, level.time-1000, atoi(type), 420, 420);
+	G_AddDuel(winner, loser, 0, 0, level.time-1000, atoi(type), 420, 420);
 
 	Com_Printf("Adding duel elo, took %i ms\n", trap->Milliseconds() - time1);
 }
@@ -7648,35 +7809,11 @@ static qboolean G_TrackedTableHasAllColumns(sqlite3 *db, const char *tableName,
 	return qtrue;
 }
 
-//A single missing column used to break the whole UNION ALL statement, silently wiping the
-//export file. Retry with the duel-only branch so duel rows still get written.
-static qboolean G_ExportTrackedCSVWithFallback(sqlite3 *db, const char *primarySql,
-	const char *fallbackSql, const char *label, const char *outputPath, int *rowsWritten)
-{
-	if (G_ExportTrackedQueryCSV(db, primarySql, outputPath, rowsWritten))
-		return qtrue;
-
-	if (!fallbackSql || !fallbackSql[0] || !primarySql || !strcmp(primarySql, fallbackSql))
-		return qfalse;
-
-	trap->Print("Duel tracking: %s export falling back to duel-only rows, arcade rows skipped.\n",
-		label ? label : "combined");
-	return G_ExportTrackedQueryCSV(db, fallbackSql, outputPath, rowsWritten);
-}
-
 static const char *const g_trackedDuelSummaryColumns[] = {
 	"source_context", "start_time", "end_time", "duration", "mapname", "type",
 	"winner_key", "winner_label", "winner_kind", "winner_side",
 	"loser_key", "loser_label", "loser_kind", "loser_side",
-	"draw", "winner_opening", "loser_opening"
-};
-
-static const char *const g_trackedArcadeSessionColumns[] = {
-	"source_context", "start_time", "end_time", "duration", "mapname",
-	"participant_key", "participant_label", "participant_kind", "result", "arcade_level",
-	"total_kills", "total_force_spent", "total_force_regen", "total_damage_taken",
-	"total_damage_dealt", "low_force_windows", "knockdown_events", "counter_successes",
-	"punish_successes", "reset_successes", "saber_return_punishes"
+	"draw", "winner_opening", "loser_opening", "result", "arcade_level"
 };
 
 static const char *const g_trackedDuelEventColumns[] = {
@@ -7685,17 +7822,8 @@ static const char *const g_trackedDuelEventColumns[] = {
 	"range_bucket", "buttons", "saber_move", "enemy_saber_move", "yaw_delta",
 	"self_hp", "self_armor", "self_force", "enemy_hp", "enemy_armor", "enemy_force",
 	"sequence_label", "quality", "note", "swing_side", "pre_swing_strafe",
-	"yaw_sweep", "attack_elapsed_ms", "throw_yaw_offset"
-};
-
-static const char *const g_trackedArcadeEventColumns[] = {
-	"session_id", "participant_key", "participant_label", "participant_kind",
-	"opponent_key", "opponent_label", "opponent_kind",
-	"rel_time", "event_index", "sequence_id", "event_type", "power", "amount", "state",
-	"range_bucket", "buttons", "saber_move", "enemy_saber_move", "yaw_delta",
-	"self_hp", "self_armor", "self_force", "enemy_hp", "enemy_armor", "enemy_force",
-	"sequence_label", "quality", "note", "swing_side", "pre_swing_strafe",
-	"yaw_sweep", "attack_elapsed_ms", "throw_yaw_offset"
+	"yaw_sweep", "attack_elapsed_ms", "throw_yaw_offset",
+	"participant_label", "participant_kind"
 };
 
 static const char *const g_trackedDuelGeometryColumns[] = {
@@ -7705,132 +7833,79 @@ static const char *const g_trackedDuelGeometryColumns[] = {
 	"self_yaw", "enemy_yaw"
 };
 
-static const char *const g_trackedArcadeGeometryColumns[] = {
-	"session_id", "participant_key", "opponent_key", "rel_time", "event_index",
-	"self_x", "self_y", "self_z", "enemy_x", "enemy_y", "enemy_z",
-	"self_vx", "self_vy", "self_vz", "enemy_vx", "enemy_vy", "enemy_vz",
-	"self_yaw", "enemy_yaw"
-};
-
-static void G_BuildTrackedSessionExportQuery(qboolean includeDuel, qboolean includeArcade,
-	char *out, int outSize)
+/*
+ * Duel and arcade records now share one table family, with LocalDuelTrackSummary.source_context
+ * separating them, so each export is a single SELECT instead of a duel/arcade UNION. The session
+ * export writes, in order: export_format_version, record_type, source_context, record_id,
+ * start/end/duration/map/type/result/arcade_level, participant identity, duel winner+loser
+ * identity, draw/openings, and the aggregated tracked combat counters.
+ */
+static const char *G_GetTrackedSessionExportQuery(void)
 {
-	const char *duelSelect =
-		"SELECT 2 AS export_format_version, 'duel_summary' AS record_type, source_context, id AS record_id, "
-		"start_time, end_time, duration, mapname, type, '' AS result, 0 AS arcade_level, "
-		"'' AS participant_key, '' AS participant_label, 0 AS participant_kind, "
-		"winner_key, winner_label, winner_kind, winner_side, "
-		"loser_key, loser_label, loser_kind, loser_side, draw, "
-		"winner_opening, loser_opening, "
-		"0 AS total_kills, 0 AS total_force_spent, 0 AS total_force_regen, "
-		"0 AS total_damage_taken, 0 AS total_damage_dealt, 0 AS low_force_windows, "
-		"0 AS knockdown_events, 0 AS counter_successes, 0 AS punish_successes, "
-		"0 AS reset_successes, 0 AS saber_return_punishes "
-		"FROM LocalDuelTrackSummary";
-	const char *arcadeSelect =
-		"SELECT 2 AS export_format_version, 'arcade_session' AS record_type, source_context, id AS record_id, "
-		"start_time, end_time, duration, mapname, 21 AS type, result, arcade_level, "
-		"participant_key, participant_label, participant_kind, "
-		"'' AS winner_key, '' AS winner_label, 0 AS winner_kind, 0 AS winner_side, "
-		"'' AS loser_key, '' AS loser_label, 0 AS loser_kind, 0 AS loser_side, 0 AS draw, "
-		"'' AS winner_opening, '' AS loser_opening, "
-		"total_kills, total_force_spent, total_force_regen, total_damage_taken, total_damage_dealt, low_force_windows, "
-		"knockdown_events, counter_successes, punish_successes, reset_successes, saber_return_punishes "
-		"FROM LocalArcadeTrackSession";
-
-	if (!out || outSize < 1)
-		return;
-
-	/*
-	 * Keep the duel and arcade SELECT branches column-compatible. The combined
-	 * sessions export writes, in order: export_format_version, record_type,
-	 * source_context, record_id, start/end/duration/map/type/result/
-	 * arcade_level, participant identity, duel winner+loser identity,
-	 * draw/openings, and the aggregated tracked combat counters. Any future
-	 * schema changes here must preserve that layout across both UNION branches.
-	 */
-	out[0] = '\0';
-	if (includeDuel)
-		Q_strcat(out, outSize, duelSelect);
-	if (includeDuel && includeArcade)
-		Q_strcat(out, outSize, " UNION ALL ");
-	if (includeArcade)
-		Q_strcat(out, outSize, arcadeSelect);
+	return
+		"SELECT 3 AS export_format_version, "
+		"CASE WHEN s.source_context = 'arcade' THEN 'arcade_session' ELSE 'duel_summary' END AS record_type, "
+		"s.source_context, s.id AS record_id, "
+		"s.start_time, s.end_time, s.duration, s.mapname, s.type, s.result, s.arcade_level, "
+		"COALESCE(p.participant_key, '') AS participant_key, COALESCE(p.participant_label, '') AS participant_label, "
+		"COALESCE(p.participant_kind, 0) AS participant_kind, "
+		"s.winner_key, s.winner_label, s.winner_kind, s.winner_side, "
+		"s.loser_key, s.loser_label, s.loser_kind, s.loser_side, s.draw, "
+		"s.winner_opening, s.loser_opening, "
+		"COALESCE(p.total_kills, 0) AS total_kills, COALESCE(p.total_force_spent, 0) AS total_force_spent, "
+		"COALESCE(p.total_force_regen, 0) AS total_force_regen, COALESCE(p.total_damage_taken, 0) AS total_damage_taken, "
+		"COALESCE(p.total_damage_dealt, 0) AS total_damage_dealt, COALESCE(p.low_force_windows, 0) AS low_force_windows, "
+		"COALESCE(p.knockdown_events, 0) AS knockdown_events, COALESCE(p.counter_successes, 0) AS counter_successes, "
+		"COALESCE(p.punish_successes, 0) AS punish_successes, COALESCE(p.reset_successes, 0) AS reset_successes, "
+		"COALESCE(p.saber_throw_punishes, 0) AS saber_throw_punishes "
+		"FROM LocalDuelTrackSummary s "
+		"LEFT JOIN LocalDuelTrackParticipant p ON p.summary_id = s.id AND s.source_context = 'arcade'";
 }
 
 static const char *G_GetTrackedParticipantExportQuery(void)
 {
 	return
-		"SELECT 2 AS export_format_version, 'duel_participant' AS record_type, 'duel' AS source_context, id AS record_id, summary_id, "
-		"participant_key, participant_label, participant_kind, opponent_key, won, side, opponent_side, matchup, "
-		"total_force_spent, total_force_regen, ending_force, ending_hp, ending_armor, "
-		"low_force_windows, grip_cripple_events, saber_throw_punishes, knockdown_events, late_defense_spends, "
-		"opening_tactic, primary_issue, spent_neutral, spent_advantage, spent_disadvantage, spent_panic, spent_finishing, "
-		"force_push, force_pull, force_grip, force_drain, force_rage, force_absorb, force_protect, force_heal, "
-		"force_speed, force_seeing, force_unknown "
-		"FROM LocalDuelTrackParticipant";
+		"SELECT 4 AS export_format_version, 'duel_participant' AS record_type, "
+		"COALESCE(s.source_context, 'duel') AS source_context, p.id AS record_id, p.summary_id, "
+		"p.participant_key, p.participant_label, p.participant_kind, p.elo_key, p.opponent_key, p.won, p.side, p.opponent_side, p.matchup, "
+		"p.total_force_spent, p.total_force_regen, p.ending_force, p.ending_hp, p.ending_armor, "
+		"p.low_force_windows, p.grip_cripple_events, p.saber_throw_punishes, p.knockdown_events, p.late_defense_spends, "
+		"p.opening_tactic, p.primary_issue, p.spent_neutral, p.spent_advantage, p.spent_disadvantage, p.spent_panic, p.spent_finishing, "
+		"p.force_push, p.force_pull, p.force_grip, p.force_drain, p.force_rage, p.force_absorb, p.force_protect, p.force_heal, "
+		"p.force_speed, p.force_seeing, p.force_unknown, "
+		"p.total_kills, p.total_damage_taken, p.total_damage_dealt, "
+		"p.counter_successes, p.punish_successes, p.reset_successes "
+		"FROM LocalDuelTrackParticipant p "
+		"LEFT JOIN LocalDuelTrackSummary s ON s.id = p.summary_id";
 }
 
-static void G_BuildTrackedEventExportQuery(qboolean includeDuel, qboolean includeArcade,
-	char *out, int outSize)
+static const char *G_GetTrackedEventExportQuery(void)
 {
-	const char *duelSelect =
-		"SELECT 3 AS export_format_version, 'duel_event' AS record_type, 'duel' AS source_context, id AS record_id, summary_id AS parent_id, "
-		"participant_key, '' AS participant_label, 0 AS participant_kind, "
-		"opponent_key, opponent_label, opponent_kind, "
-		"rel_time, event_index, sequence_id, event_type, power, amount, state, range_bucket, "
-		"buttons, saber_move, enemy_saber_move, yaw_delta, "
-		"self_hp, self_armor, self_force, enemy_hp, enemy_armor, enemy_force, sequence_label, quality, note, "
-		"swing_side, pre_swing_strafe, yaw_sweep, attack_elapsed_ms, throw_yaw_offset "
-		"FROM LocalDuelTrackEvent";
-	const char *arcadeSelect =
-		"SELECT 3 AS export_format_version, 'arcade_event' AS record_type, 'arcade' AS source_context, id AS record_id, session_id AS parent_id, "
-		"participant_key, participant_label, participant_kind, "
-		"opponent_key, opponent_label, opponent_kind, "
-		"rel_time, event_index, sequence_id, event_type, power, amount, state, range_bucket, "
-		"buttons, saber_move, enemy_saber_move, yaw_delta, "
-		"self_hp, self_armor, self_force, enemy_hp, enemy_armor, enemy_force, sequence_label, quality, note, "
-		"swing_side, pre_swing_strafe, yaw_sweep, attack_elapsed_ms, throw_yaw_offset "
-		"FROM LocalArcadeTrackEvent";
-
-	if (!out || outSize < 1)
-		return;
-
-	out[0] = '\0';
-	if (includeDuel)
-		Q_strcat(out, outSize, duelSelect);
-	if (includeDuel && includeArcade)
-		Q_strcat(out, outSize, " UNION ALL ");
-	if (includeArcade)
-		Q_strcat(out, outSize, arcadeSelect);
+	return
+		"SELECT 4 AS export_format_version, "
+		"CASE WHEN COALESCE(s.source_context, 'duel') = 'arcade' THEN 'arcade_event' ELSE 'duel_event' END AS record_type, "
+		"COALESCE(s.source_context, 'duel') AS source_context, e.id AS record_id, e.summary_id AS parent_id, "
+		"e.participant_key, e.participant_label, e.participant_kind, "
+		"e.opponent_key, e.opponent_label, e.opponent_kind, "
+		"e.rel_time, e.event_index, e.sequence_id, e.event_type, e.power, e.amount, e.state, e.range_bucket, "
+		"e.buttons, e.saber_move, e.enemy_saber_move, e.yaw_delta, "
+		"e.self_hp, e.self_armor, e.self_force, e.enemy_hp, e.enemy_armor, e.enemy_force, e.sequence_label, e.quality, e.note, "
+		"e.swing_side, e.pre_swing_strafe, e.yaw_sweep, e.attack_elapsed_ms, e.throw_yaw_offset "
+		"FROM LocalDuelTrackEvent e "
+		"LEFT JOIN LocalDuelTrackSummary s ON s.id = e.summary_id";
 }
 
-static void G_BuildTrackedGeometryExportQuery(qboolean includeDuel, qboolean includeArcade,
-	char *out, int outSize)
+static const char *G_GetTrackedGeometryExportQuery(void)
 {
-	const char *duelSelect =
-		"SELECT 2 AS export_format_version, 'duel_geometry' AS record_type, 'duel' AS source_context, id AS record_id, summary_id AS parent_id, "
-		"participant_key, opponent_key, rel_time, event_index, "
-		"self_x, self_y, self_z, enemy_x, enemy_y, enemy_z, "
-		"self_vx, self_vy, self_vz, enemy_vx, enemy_vy, enemy_vz, self_yaw, enemy_yaw "
-		"FROM LocalDuelTrackGeometry";
-	const char *arcadeSelect =
-		"SELECT 2 AS export_format_version, 'arcade_geometry' AS record_type, 'arcade' AS source_context, id AS record_id, session_id AS parent_id, "
-		"participant_key, opponent_key, rel_time, event_index, "
-		"self_x, self_y, self_z, enemy_x, enemy_y, enemy_z, "
-		"self_vx, self_vy, self_vz, enemy_vx, enemy_vy, enemy_vz, self_yaw, enemy_yaw "
-		"FROM LocalArcadeTrackGeometry";
-
-	if (!out || outSize < 1)
-		return;
-
-	out[0] = '\0';
-	if (includeDuel)
-		Q_strcat(out, outSize, duelSelect);
-	if (includeDuel && includeArcade)
-		Q_strcat(out, outSize, " UNION ALL ");
-	if (includeArcade)
-		Q_strcat(out, outSize, arcadeSelect);
+	return
+		"SELECT 3 AS export_format_version, "
+		"CASE WHEN COALESCE(s.source_context, 'duel') = 'arcade' THEN 'arcade_geometry' ELSE 'duel_geometry' END AS record_type, "
+		"COALESCE(s.source_context, 'duel') AS source_context, g.id AS record_id, g.summary_id AS parent_id, "
+		"g.participant_key, g.opponent_key, g.rel_time, g.event_index, "
+		"g.self_x, g.self_y, g.self_z, g.enemy_x, g.enemy_y, g.enemy_z, "
+		"g.self_vx, g.self_vy, g.self_vz, g.enemy_vx, g.enemy_vy, g.enemy_vz, g.self_yaw, g.enemy_yaw "
+		"FROM LocalDuelTrackGeometry g "
+		"LEFT JOIN LocalDuelTrackSummary s ON s.id = g.summary_id";
 }
 
 static const char *G_GetTrackedAggregateExportQuery(void)
@@ -8239,40 +8314,17 @@ void Svcmd_ExportDuelTrack_f(void)
 	int i;
 	int rows;
 	char pathSep;
-	qboolean hadDuelSummary;
-	qboolean hadDuelParticipant;
-	qboolean hadDuelEvent;
-	qboolean hadDuelGeometry;
-	qboolean hadDuelAggregate;
-	qboolean hadArcadeSession;
-	qboolean hadArcadeEvent;
-	qboolean hadArcadeGeometry;
 	qboolean preHadDuelSummary;
 	qboolean preHadDuelParticipant;
 	qboolean preHadDuelEvent;
 	qboolean preHadDuelGeometry;
 	qboolean preHadDuelAggregate;
-	qboolean preHadArcadeSession;
-	qboolean preHadArcadeEvent;
-	qboolean preHadArcadeGeometry;
 	qboolean hadAnyTrackedTables;
 	qboolean wantSessionExport;
 	qboolean wantParticipantExport;
 	qboolean wantEventExport;
 	qboolean wantGeometryExport;
 	qboolean wantAggregateExport;
-	qboolean includeSessionDuel;
-	qboolean includeSessionArcade;
-	qboolean includeEventDuel;
-	qboolean includeEventArcade;
-	qboolean includeGeometryDuel;
-	qboolean includeGeometryArcade;
-	char sessionQuery[4096];
-	char eventQuery[3072];
-	char geometryQuery[3072];
-	char sessionFallbackQuery[4096];
-	char eventFallbackQuery[3072];
-	char geometryFallbackQuery[3072];
 	char exportSuffix[32];
 	char exportFileName[64];
 	qboolean timestampedExport;
@@ -8330,90 +8382,42 @@ void Svcmd_ExportDuelTrack_f(void)
 	preHadDuelEvent = G_DoesTrackedDuelTableExist(db, "LocalDuelTrackEvent");
 	preHadDuelGeometry = G_DoesTrackedDuelTableExist(db, "LocalDuelTrackGeometry");
 	preHadDuelAggregate = G_DoesTrackedDuelTableExist(db, "LocalDuelTrackAggregate");
-	preHadArcadeSession = G_DoesTrackedDuelTableExist(db, "LocalArcadeTrackSession");
-	preHadArcadeEvent = G_DoesTrackedDuelTableExist(db, "LocalArcadeTrackEvent");
-	preHadArcadeGeometry = G_DoesTrackedDuelTableExist(db, "LocalArcadeTrackGeometry");
 	G_EnsureLocalDuelTrackingSchema(db);
-	hadDuelSummary = G_DoesTrackedDuelTableExist(db, "LocalDuelTrackSummary");
-	hadDuelParticipant = G_DoesTrackedDuelTableExist(db, "LocalDuelTrackParticipant");
-	hadDuelEvent = G_DoesTrackedDuelTableExist(db, "LocalDuelTrackEvent");
-	hadDuelGeometry = G_DoesTrackedDuelTableExist(db, "LocalDuelTrackGeometry");
-	hadDuelAggregate = G_DoesTrackedDuelTableExist(db, "LocalDuelTrackAggregate");
-	hadArcadeSession = G_DoesTrackedDuelTableExist(db, "LocalArcadeTrackSession");
-	hadArcadeEvent = G_DoesTrackedDuelTableExist(db, "LocalArcadeTrackEvent");
-	hadArcadeGeometry = G_DoesTrackedDuelTableExist(db, "LocalArcadeTrackGeometry");
 	hadAnyTrackedTables = preHadDuelSummary || preHadDuelParticipant || preHadDuelEvent ||
-		preHadDuelGeometry || preHadDuelAggregate || preHadArcadeSession ||
-		preHadArcadeEvent || preHadArcadeGeometry;
+		preHadDuelGeometry || preHadDuelAggregate;
 	if (hadAnyTrackedTables)
 	{
-		includeSessionDuel = preHadDuelSummary;
-		includeSessionArcade = preHadArcadeSession;
-		includeEventDuel = preHadDuelEvent;
-		includeEventArcade = preHadArcadeEvent;
-		includeGeometryDuel = preHadDuelGeometry;
-		includeGeometryArcade = preHadArcadeGeometry;
-		wantSessionExport = includeSessionDuel || includeSessionArcade;
+		wantSessionExport = preHadDuelSummary;
 		wantParticipantExport = preHadDuelParticipant;
-		wantEventExport = includeEventDuel || includeEventArcade;
-		wantGeometryExport = includeGeometryDuel || includeGeometryArcade;
+		wantEventExport = preHadDuelEvent;
+		wantGeometryExport = preHadDuelGeometry;
 		wantAggregateExport = preHadDuelAggregate;
 	}
 	else
 	{
-		includeSessionDuel = hadDuelSummary;
-		includeSessionArcade = hadArcadeSession;
-		includeEventDuel = hadDuelEvent;
-		includeEventArcade = hadArcadeEvent;
-		includeGeometryDuel = hadDuelGeometry;
-		includeGeometryArcade = hadArcadeGeometry;
-		wantSessionExport = includeSessionDuel || includeSessionArcade;
-		wantParticipantExport = hadDuelParticipant;
-		wantEventExport = includeEventDuel || includeEventArcade;
-		wantGeometryExport = includeGeometryDuel || includeGeometryArcade;
-		wantAggregateExport = hadDuelAggregate;
+		wantSessionExport = G_DoesTrackedDuelTableExist(db, "LocalDuelTrackSummary");
+		wantParticipantExport = G_DoesTrackedDuelTableExist(db, "LocalDuelTrackParticipant");
+		wantEventExport = G_DoesTrackedDuelTableExist(db, "LocalDuelTrackEvent");
+		wantGeometryExport = G_DoesTrackedDuelTableExist(db, "LocalDuelTrackGeometry");
+		wantAggregateExport = G_DoesTrackedDuelTableExist(db, "LocalDuelTrackAggregate");
 	}
 
-	if (includeSessionDuel && !G_TrackedTableHasAllColumns(db, "LocalDuelTrackSummary",
+	if (wantSessionExport && !G_TrackedTableHasAllColumns(db, "LocalDuelTrackSummary",
 		g_trackedDuelSummaryColumns, ARRAY_LEN(g_trackedDuelSummaryColumns)))
 	{
-		includeSessionDuel = qfalse;
+		wantSessionExport = qfalse;
 	}
-	if (includeSessionArcade && !G_TrackedTableHasAllColumns(db, "LocalArcadeTrackSession",
-		g_trackedArcadeSessionColumns, ARRAY_LEN(g_trackedArcadeSessionColumns)))
-	{
-		includeSessionArcade = qfalse;
-	}
-	if (includeEventDuel && !G_TrackedTableHasAllColumns(db, "LocalDuelTrackEvent",
+	if (wantEventExport && !G_TrackedTableHasAllColumns(db, "LocalDuelTrackEvent",
 		g_trackedDuelEventColumns, ARRAY_LEN(g_trackedDuelEventColumns)))
 	{
-		includeEventDuel = qfalse;
+		wantEventExport = qfalse;
 	}
-	if (includeEventArcade && !G_TrackedTableHasAllColumns(db, "LocalArcadeTrackEvent",
-		g_trackedArcadeEventColumns, ARRAY_LEN(g_trackedArcadeEventColumns)))
-	{
-		includeEventArcade = qfalse;
-	}
-	if (includeGeometryDuel && !G_TrackedTableHasAllColumns(db, "LocalDuelTrackGeometry",
+	if (wantGeometryExport && !G_TrackedTableHasAllColumns(db, "LocalDuelTrackGeometry",
 		g_trackedDuelGeometryColumns, ARRAY_LEN(g_trackedDuelGeometryColumns)))
 	{
-		includeGeometryDuel = qfalse;
+		wantGeometryExport = qfalse;
 	}
-	if (includeGeometryArcade && !G_TrackedTableHasAllColumns(db, "LocalArcadeTrackGeometry",
-		g_trackedArcadeGeometryColumns, ARRAY_LEN(g_trackedArcadeGeometryColumns)))
-	{
-		includeGeometryArcade = qfalse;
-	}
-	wantSessionExport = includeSessionDuel || includeSessionArcade;
-	wantEventExport = includeEventDuel || includeEventArcade;
-	wantGeometryExport = includeGeometryDuel || includeGeometryArcade;
 
-	G_BuildTrackedSessionExportQuery(includeSessionDuel, includeSessionArcade, sessionQuery, sizeof(sessionQuery));
-	G_BuildTrackedEventExportQuery(includeEventDuel, includeEventArcade, eventQuery, sizeof(eventQuery));
-	G_BuildTrackedGeometryExportQuery(includeGeometryDuel, includeGeometryArcade, geometryQuery, sizeof(geometryQuery));
-	G_BuildTrackedSessionExportQuery(includeSessionDuel, qfalse, sessionFallbackQuery, sizeof(sessionFallbackQuery));
-	G_BuildTrackedEventExportQuery(includeEventDuel, qfalse, eventFallbackQuery, sizeof(eventFallbackQuery));
-	G_BuildTrackedGeometryExportQuery(includeGeometryDuel, qfalse, geometryFallbackQuery, sizeof(geometryFallbackQuery));
 	G_BuildTrackedExportSuffix(timestampedExport, exportSuffix, sizeof(exportSuffix));
 
 	Q_strncpyz(dbDir, effectiveDbPath, sizeof(dbDir));
@@ -8435,9 +8439,9 @@ void Svcmd_ExportDuelTrack_f(void)
 	//once its query has prepared, so a failed export leaves the previous good file in place.
 	Com_sprintf(exportFileName, sizeof(exportFileName), "sessions%s.csv", exportSuffix);
 	G_BuildTrackedExportPath(dbDir, pathSep, safePrefix, exportFileName, outPath, sizeof(outPath));
-	if (!wantSessionExport || !sessionQuery[0])
+	if (!wantSessionExport)
 		G_RemoveTrackedExportFile(outPath);
-	else if (G_ExportTrackedCSVWithFallback(db, sessionQuery, sessionFallbackQuery, "sessions", outPath, &rows))
+	else if (G_ExportTrackedQueryCSV(db, G_GetTrackedSessionExportQuery(), outPath, &rows))
 		trap->Print("Exported tracked sessions (%d rows): %s\n", rows, exportFileName);
 	else
 		trap->Print("Duel tracking: sessions export failed, kept any previous %s.\n", exportFileName);
@@ -8453,18 +8457,18 @@ void Svcmd_ExportDuelTrack_f(void)
 
 	Com_sprintf(exportFileName, sizeof(exportFileName), "events%s.csv", exportSuffix);
 	G_BuildTrackedExportPath(dbDir, pathSep, safePrefix, exportFileName, outPath, sizeof(outPath));
-	if (!wantEventExport || !eventQuery[0])
+	if (!wantEventExport)
 		G_RemoveTrackedExportFile(outPath);
-	else if (G_ExportTrackedCSVWithFallback(db, eventQuery, eventFallbackQuery, "events", outPath, &rows))
+	else if (G_ExportTrackedQueryCSV(db, G_GetTrackedEventExportQuery(), outPath, &rows))
 		trap->Print("Exported tracked events (%d rows): %s\n", rows, exportFileName);
 	else
 		trap->Print("Duel tracking: events export failed, kept any previous %s.\n", exportFileName);
 
 	Com_sprintf(exportFileName, sizeof(exportFileName), "geometry%s.csv", exportSuffix);
 	G_BuildTrackedExportPath(dbDir, pathSep, safePrefix, exportFileName, outPath, sizeof(outPath));
-	if (!wantGeometryExport || !geometryQuery[0])
+	if (!wantGeometryExport)
 		G_RemoveTrackedExportFile(outPath);
-	else if (G_ExportTrackedCSVWithFallback(db, geometryQuery, geometryFallbackQuery, "geometry", outPath, &rows))
+	else if (G_ExportTrackedQueryCSV(db, G_GetTrackedGeometryExportQuery(), outPath, &rows))
 		trap->Print("Exported tracked geometry (%d rows): %s\n", rows, exportFileName);
 	else
 		trap->Print("Duel tracking: geometry export failed, kept any previous %s.\n", exportFileName);

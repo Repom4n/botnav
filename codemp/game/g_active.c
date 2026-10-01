@@ -3364,7 +3364,6 @@ void TryTargettingLaser( gentity_t *ent ) {
 	G_TestLine(start, trace.endpos, 0x00ff00, 250); //check trace.fraction? ehh trace.startsolid or whatever?
 }
 
-void G_AddDuel(char *winner, char *loser, int start_time, int type, int winner_hp, int winner_shield);
 void GiveClientWeapons(gclient_t *client);
 /*
 ==============
@@ -4530,7 +4529,10 @@ void ClientThink_real( gentity_t *ent ) {
 					if (duelAgainst->client && ent->client->pers.lastUserName[0] && duelAgainst->client->pers.lastUserName[0]) {//loda
 						if (!(ent->client->sess.accountFlags & JAPRO_ACCOUNTFLAG_NODUEL) && !(duelAgainst->client->sess.accountFlags & JAPRO_ACCOUNTFLAG_NODUEL))
 						{
-							G_AddDuel(ent->client->pers.lastUserName, duelAgainst->client->pers.lastUserName, ent->client->pers.duelStartTime, dueltypes[ent->client->ps.clientNum], ent->client->ps.stats[STAT_HEALTH], ent->client->ps.stats[STAT_ARMOR]);
+							G_AddDuel(ent->client->pers.lastUserName, duelAgainst->client->pers.lastUserName,
+								G_GetDuelBotSkillLevel(ent), G_GetDuelBotSkillLevel(duelAgainst),
+								ent->client->pers.duelStartTime, dueltypes[ent->client->ps.clientNum],
+								ent->client->ps.stats[STAT_HEALTH], ent->client->ps.stats[STAT_ARMOR]);
 						}
 					}
 					ent->client->ps.stats[STAT_HEALTH] = ent->health = ent->client->ps.stats[STAT_MAX_HEALTH];

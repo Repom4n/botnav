@@ -1622,6 +1622,7 @@ void Svcmd_DuelTrackInfo_f(void);
 void G_TestAddDuel( void );
 #endif
 void SV_BotEloReset_f( void );
+void SV_BotEloSeed_f( void );
 void SV_RebuildElo_f( void );
 #endif
 #if 1//NEWRACERANKING
@@ -1662,6 +1663,7 @@ svcmd_t svcmds[] = {
 
 #if _ELORANKING
 	{ "bot_eloreset",				SV_BotEloReset_f,					qfalse },
+	{ "bot_eloseed",				SV_BotEloSeed_f,					qfalse },
 #endif
 	{ "botlist",					Svcmd_BotList_f,					qfalse },
 
