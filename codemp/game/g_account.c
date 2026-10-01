@@ -3156,6 +3156,10 @@ static void G_ClassifyTrackedAttackOutcomes(tracked_duel_runtime_t *runtime, qbo
 			if (enemyPool < enemyLowest)
 				enemyLowest = enemyPool;
 		}
+		if ((attack->enemyHealth + attack->enemyArmor) - enemyLowest > damageDealt)
+		{
+			damageDealt = (attack->enemyHealth + attack->enemyArmor) - enemyLowest;
+		}
 
 		if (enemyLowest <= 0 || damageDealt >= 60)
 			quality = "correct";

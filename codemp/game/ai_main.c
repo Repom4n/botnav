@@ -16565,6 +16565,23 @@ void NewBotAI_NF(bot_state_t *bs)
 		return;
 	}
 
+	//The learned footing policy is specific to private saber-only duels. Preserve useful
+	//generic no-force combat outside that mode instead of letting the classifier's HOLD
+	//sentinel make FFA/TFFA saber bots passive.
+	if (!bs->cur_ps.duelInProgress || dueltypes[bs->client] != 0)
+	{
+		if (bs->frame_Enemy_Len > 128.0f)
+		{
+			trap->EA_MoveForward(bs->client);
+		}
+		else if (bs->cur_ps.groundEntityNum != ENTITYNUM_NONE)
+		{
+			trap->EA_MoveRight(bs->client);
+			trap->EA_Attack(bs->client);
+		}
+		return;
+	}
+
 	if (selfAttacking && bs->cur_ps.saberMove != bs->saberTacticLastMove)
 	{
 		bs->saberTacticChainLength++;
@@ -16575,7 +16592,7 @@ void NewBotAI_NF(bot_state_t *bs)
 		(bs->lastHurtTime > level.time - 700 && bs->saberTacticAction != NEWBOTAI_SABER_TACTIC_RESET))
 	{
 		memset(&context, 0, sizeof(context));
-		context.saberOnlyDuel = (bs->cur_ps.duelInProgress && dueltypes[bs->client] == 0) ? 1 : 0;
+		context.saberOnlyDuel = 1;
 		context.skill = (int)bs->settings.skill;
 		context.mistakeBias = (int)BotGetChanceBiasPercent(bot_mistakebias.value);
 		context.mistakeRoll = Q_irand(1, 100);
