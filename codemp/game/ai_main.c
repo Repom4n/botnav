@@ -16702,6 +16702,13 @@ void NewBotAI_NF(bot_state_t *bs)
 	}
 	bs->saberTacticLastMove = bs->cur_ps.saberMove;
 
+	//Only compare against a cached total for the same opponent; a stale value from a previous
+	//enemy or duel would otherwise register as a landed hit on the first frame.
+	if (bs->saberTacticEnemyNum != bs->currentEnemy->s.number)
+	{
+		bs->saberTacticEnemyNum = bs->currentEnemy->s.number;
+		bs->saberTacticEnemyHealth = 0;
+	}
 	if (bs->saberTacticEnemyHealth > 0 && enemyTotalHealth < bs->saberTacticEnemyHealth)
 	{
 		bs->saberTacticLastHitTime = level.time;
@@ -16733,7 +16740,7 @@ void NewBotAI_NF(bot_state_t *bs)
 	context.enemyVulnerable = enemyVulnerable ? 1 : 0;
 	context.selfAttacking = selfAttacking ? 1 : 0;
 	context.chainLength = bs->saberTacticChainLength;
-	context.landedHit = (bs->saberTacticLastHitTime > level.time - 700) ? 1 : 0;
+	context.landedHit = (bs->saberTacticLastHitTime > level.time - NEWBOTAI_SABER_LANDED_HIT_WINDOW_MS) ? 1 : 0;
 	context.enemyDistance = bs->frame_Enemy_Len;
 	tactic = NewBotAI_ApplySaberChoiceGrade(context, NewBotAI_GetCorrectSaberTactic(context),
 		(newbotai_saber_grade_t)bs->saberTacticGrade);
@@ -18063,8 +18070,8 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 		return;
 	}
 
-	if (!NewBotAI_IsSaberOnlyDuel(bs) &&
-		((g_forcePowerDisable.integer != 163837 && g_forcePowerDisable.integer != 163839) || (g_flipKick.integer) || (bs->cur_ps.weapon != WP_SABER))) {
+	if (!NewBotAI_UsesSaberDuelPath(NewBotAI_IsSaberOnlyDuel(bs), g_forcePowerDisable.integer, g_flipKick.integer,
+		bs->cur_ps.weapon == WP_SABER)) {
 		if (bs->currentEnemy->client->ps.fd.forceSide == FORCE_LIGHTSIDE) { // They are LS.
 			if (bs->cur_ps.fd.forceSide == FORCE_LIGHTSIDE)
 				NewBotAI_LSvLS(bs);
@@ -18080,6 +18087,11 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	}
 	else {//Ruh roh, NF with no kick (or a private saber-only duel)!
 		NewBotAI_NF(bs);
+		if (NewBotAI_IsSaberOnlyDuel(bs))
+		{
+			//Saber throw is refused in saber-only duels, so never queue alt-attack there.
+			bs->doAltAttack = 0;
+		}
 	}
 
 	NewBotAI_ApplyRandomStrafeOverlay(bs);

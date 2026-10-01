@@ -45,6 +45,7 @@ typedef enum
 #define NEWBOTAI_SABER_LONG_SWING_RANGE 150.0f
 #define NEWBOTAI_SABER_CRITICAL_TOTAL_HEALTH 30
 #define NEWBOTAI_SABER_COUNTER_WINDOW_MS 600
+#define NEWBOTAI_SABER_LANDED_HIT_WINDOW_MS 700
 #define NEWBOTAI_SABER_GOOD_CHAIN_LENGTH 2
 
 typedef struct
@@ -320,6 +321,15 @@ static inline float NewBotAI_ScaleSaberDuelFanBias(float fanBias, int healthDelt
 static inline int NewBotAI_FanHoldUsesForward(int swingStarted, float enemyDistance)
 {
 	return (swingStarted && enemyDistance > NEWBOTAI_FAN_ENTRY_MIN_RANGE) ? 1 : 0;
+}
+
+//Saber-duel routing: private saber-only duels always use the saber-duel (NF) path, the same
+//as a no-force/no-flipkick server holding a saber, regardless of g_forcePowerDisable/g_flipKick.
+static inline int NewBotAI_UsesSaberDuelPath(int saberOnlyDuel, int forcePowerDisable, int flipKick, int holdingSaber)
+{
+	if (saberOnlyDuel)
+		return 1;
+	return ((forcePowerDisable == 163837 || forcePowerDisable == 163839) && !flipKick && holdingSaber) ? 1 : 0;
 }
 
 static inline int NewBotAI_AdjustPTKWeightForArmor(int weight, int enemyArmor, int forceLead)

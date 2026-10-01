@@ -407,6 +407,7 @@ typedef struct bot_state_s
 	int					saberTacticGrade; // NEWBOTAI_SABER_GRADE_* rolled for the current decision window
 	int					saberTacticGradeUntil; // level.time when a new choice grade is rolled
 	int					saberTacticEnemyHealth; // enemy HP+armor last frame, to detect landed hits
+	int					saberTacticEnemyNum; // entity number the cached enemy health belongs to
 	int					saberTacticLastHitTime; // level.time we last damaged the enemy in a saber-only duel
 	int					saberTacticStrafeDir; // alternating lateral direction for horizontal swings (+1 right, -1 left)
 	int					saberTacticHorizontal; // bot_fanbias roll: next swing start uses pure strafe (horizontal fan swing)

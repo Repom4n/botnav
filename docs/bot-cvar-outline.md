@@ -51,7 +51,7 @@ These are all percentage-based (0-100) chance weights that gate specific behavio
 |------|---------|-------------|
 | `bot_saberthrowbias` | `0` | Chance weight for saber throw decisions. Higher = more throws. Feeds into `NewBotAI_GetSaberthrow()`. |
 | `bot_gripkickbias` | `0` | Chance weight for grip-kick combo initiation. Feeds into `NewBotAI_GetGrip()`. |
-| `bot_fanbias` | `0` | Chance weight for fan-chain attack patterns (horizontal swing chains). Used in `NewBotAI_PrepareHorizontalSwingStart()`. |
+| `bot_fanbias` | `0` | Chance weight for fan-chain attack patterns (horizontal swing chains). Used in `NewBotAI_PrepareHorizontalSwingStart()`. Fan entry opens at 48-110u in neutral spacing (not only with an advantage), the hold phase strafes and steps forward once the swing starts, and red stance fans with alternating horizontal swings. In saber-only duels the bias is scaled by the health difference instead of dropping to zero, and it weights how often each swing start is horizontal. Bots still start swings when it is `0`. |
 | `bot_fan_debug` | `0` | Print selected fan package, direction, range, HP, and FP when a bot commits to a fan-pressure entry. |
 | `bot_fanhold` | `220` | How long (ms) each fan gate holds exclusive left/right strafe plus attack to start the current horizontal swing. |
 | `bot_firstfandwell` | `250` | Special dwell (ms) used only between the first and second swings of a fan chain. |
@@ -66,7 +66,7 @@ These are all percentage-based (0-100) chance weights that gate specific behavio
 | `bot_antidrainbias` | `0` | Weight bonus for attacking drain-users. When enemy can drain and is low HP, bots prioritize killing them. Feeds `NewBotAI_GetAntiDrainWeight()`. |
 | `bot_lightningbias` | `0` | Chance weight for using lightning. Applies to bots that know lightning and pass the normal range/visibility/resource checks. |
 | `bot_lightningdistance` | `400` | Minimum range for lightning usage. Bot must be at least this far from the enemy. |
-| `bot_mistakebias` | `0` | Chance weight (0-100) for imperfect combat decisions. Grip escapes retain their per-session delays, missed pulls, push fumbles, and occasional total failure. In saber-only duels it also makes lower-skill bots enter too early, miss counters, break productive chains, or retreat late. Skill contributes a small baseline imperfection below level 10; level 10 remains unaffected even at maximum bias. |
+| `bot_mistakebias` | `0` | Chance weight (0-100) for imperfect combat decisions. Grip escapes retain their per-session delays, missed pulls, push fumbles, and occasional total failure. In saber-only duels it grades each saber choice from the human duel data: correct (counter within ~600ms when hit, continue the chain after a hit, step in while swinging), good (short chain then reposition), mediocre (stand and swing at 96-128u), bad (retreat after landing a hit, hold still when hit), mistake (swing beyond 150u, back away while swinging). Lower skill and higher bias draw the worse grades more often. Skill contributes a small baseline imperfection below level 10; level 10 always picks the correct option even at maximum bias. |
 
 ## PTK (Pull-Throw-Kick) System
 

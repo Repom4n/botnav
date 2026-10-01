@@ -262,6 +262,17 @@ static newbotai_saber_tactic_context_t MakeSaberDuelContext( float distance )
 	return context;
 }
 
+BOOST_AUTO_TEST_CASE( saber_duels_always_use_saber_duel_path )
+{
+	BOOST_CHECK( NewBotAI_UsesSaberDuelPath( 1, 0, 1, 1 ) );
+	BOOST_CHECK( NewBotAI_UsesSaberDuelPath( 1, 0, 0, 1 ) );
+	BOOST_CHECK( NewBotAI_UsesSaberDuelPath( 0, 163837, 0, 1 ) );
+	BOOST_CHECK( NewBotAI_UsesSaberDuelPath( 0, 163839, 0, 1 ) );
+	BOOST_CHECK( !NewBotAI_UsesSaberDuelPath( 0, 163837, 1, 1 ) );
+	BOOST_CHECK( !NewBotAI_UsesSaberDuelPath( 0, 163837, 0, 0 ) );
+	BOOST_CHECK( !NewBotAI_UsesSaberDuelPath( 0, 0, 0, 1 ) );
+}
+
 BOOST_AUTO_TEST_CASE( saber_tactic_ranges_match_winner_spacing )
 {
 	newbotai_saber_tactic_context_t context = MakeSaberDuelContext( 220.0f );

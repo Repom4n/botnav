@@ -860,7 +860,7 @@ typedef struct clientPersistant_s {
 
 	char		guid[33];
 	char		userName[16];
-	char		lastUserName[16];//To stop duel stats abuse
+	char		lastUserName[32];//To stop duel stats abuse (fits "<botfile> [bot L10]" ladder keys)
 	int			duelStartTime;
 	qboolean	backwardsRocket;
 	qboolean	noFollow;
@@ -1931,6 +1931,7 @@ qboolean G_AddArcadeScore(const char *username, const char *mapname, int score, 
 qboolean G_GetArcadeTopScore(const char *mapname, int *scoreOut, char *usernameOut, int usernameOutSize, qboolean *queryFailedOut);
 void G_AddDuel(char *winner, char *loser, int winnerLevel, int loserLevel, int start_time, int type, int winner_hp, int winner_shield);
 qboolean G_GetDuelParticipantName(gentity_t *ent, char *name, int nameSize);
+qboolean G_GetRatedDuelParticipantNames(gentity_t *ent, gentity_t *opponent, char *entName, int entNameSize, char *opponentName, int opponentNameSize);
 int G_GetDuelBotSkillLevel(gentity_t *ent);
 float G_GetSeedEloForDuelName(const char *username);
 int G_ArcadeCountIngameHumans(void);
