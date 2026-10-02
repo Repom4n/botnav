@@ -159,8 +159,10 @@ static float NewBotAI_GetSelfFacingErrorToEnemy(bot_state_t *bs);
 static void NewBotAI_SaberDuelIndecisionFallback(bot_state_t *bs, qboolean horizontalSwingStart);
 static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs);
 static void NewBotAI_ApplyHorizontalSwingMove(bot_state_t *bs);
+static qboolean NewBotAI_FanHoldMayStartSwing(bot_state_t *bs);
 static void NewBotAI_ResetFanChain(bot_state_t *bs);
-static void NewBotAI_ApplyFanDwellYaw(bot_state_t *bs);
+static void NewBotAI_ApplyFanDwellYaw(bot_state_t *bs, qboolean aimRewritten);
+static float NewBotAI_GetEnemyDistance2D(bot_state_t *bs);
 static qboolean NewBotAI_HasValidCurrentEnemy(bot_state_t *bs);
 static qboolean NewBotAI_CanInitiateFlipkickUnderFanPressure(bot_state_t *bs);
 
@@ -6965,7 +6967,55 @@ static void NewBotAI_ApplyHumanSwingAimOffset(bot_state_t *bs)
 	NewBotAI_ApplyRelativeAimPointOffset(bs, -((float)sweepDir) * sideOffsetUnits, 0.0f);
 }
 
-static void NewBotAI_ApplyFanDwellYaw(bot_state_t *bs)
+// Swing-tracking yaw sweep: during a horizontal swing turn with the blade across the target
+// (L2R turns right, R2L left), 100-160 degrees per ~300ms swing at high skill like the human
+// fan chains, crossing the target mid-swing when hits land. Must run right after the aim was
+// rewritten from the enemy position because the offset is absolute. Returns qtrue if applied.
+static qboolean NewBotAI_ApplySwingSweepYaw(bot_state_t *bs)
+{
+	const int move = bs ? bs->cur_ps.saberMove : LS_NONE;
+	int sweepDir;
+	float dist2D;
+	float halfArc;
+	float offset;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+		return qfalse;
+	if (bs->cur_ps.weapon != WP_SABER || bs->cur_ps.saberInFlight)
+	{
+		bs->fanSweepMove = 0;
+		return qfalse;
+	}
+	sweepDir = NewBotAI_GetHorizontalSwingSweepDir(move);
+	if (!sweepDir || !BG_SaberInAttack(move))
+	{
+		bs->fanSweepMove = 0;
+		return qfalse;
+	}
+	if (move != bs->fanSweepMove)
+	{
+		bs->fanSweepMove = move;
+		bs->fanSweepStartTime = level.time;
+	}
+
+	dist2D = NewBotAI_GetEnemyDistance2D(bs);
+	if (dist2D > 220.0f)
+		return qfalse;
+
+	halfArc = NewBotAI_GetFanSweepHalfArc(bs->settings.skill,
+		BotGetChanceBiasPercent(bot_fanbias.value), dist2D);
+	if (bs->fanPhase == FAN_PHASE_INACTIVE)
+	{
+		//Single horizontal swings outside a fan chain sweep less.
+		halfArc *= 0.6f;
+	}
+	offset = NewBotAI_GetFanSweepOffset(halfArc, sweepDir,
+		level.time - bs->fanSweepStartTime, NEWBOTAI_FAN_SWEEP_SWING_MS);
+	bs->goalAngles[YAW] = AngleNormalize360(bs->goalAngles[YAW] + offset);
+	return qtrue;
+}
+
+static void NewBotAI_ApplyFanDwellYaw(bot_state_t *bs, qboolean aimRewritten)
 {
 	float dwellElapsedMs;
 	float dwellDurationMs;
@@ -6977,6 +7027,13 @@ static void NewBotAI_ApplyFanDwellYaw(bot_state_t *bs)
 	{
 		return;
 	}
+	if (aimRewritten)
+	{
+		//goalAngles was rebuilt from the enemy position this frame, so the previous offset
+		//is no longer part of it; apply the full offset rather than the delta.
+		bs->fanDwellYawOffset = 0.0f;
+	}
+
 	if (bs->fanPhase != FAN_PHASE_DWELL || !bs->fanAttackDir)
 	{
 		if (bs->fanDwellYawOffset != 0.0f)
@@ -7042,6 +7099,7 @@ void NewBotAI_GetAim(bot_state_t *bs)
 	int closestSaber = 0, saberDistance = 9999999, dist, saberOwner;
 	vec3_t saberDiff;
 	gentity_t *saber;
+	qboolean aimRewritten = qfalse;
 
 	bs->hitSpotted = qfalse;
 	if (bs->runningLikeASissy) {
@@ -7125,12 +7183,13 @@ void NewBotAI_GetAim(bot_state_t *bs)
 			NewBotAI_AdjustSaberThrowLead(bs);
 			NewBotAI_AdjustCloseRangeSaberThrowRoute(bs);
 		}
-		else
+		else if (!NewBotAI_ApplySwingSweepYaw(bs))
 		{
 			NewBotAI_ApplyHumanSwingAimOffset(bs);
 		}
+		aimRewritten = qtrue;
 	}
-	NewBotAI_ApplyFanDwellYaw(bs);
+	NewBotAI_ApplyFanDwellYaw(bs, aimRewritten);
 	NewBotAI_ApplyFanAttackWobble(bs);
 	VectorCopy(bs->goalAngles, bs->ideal_viewangles);
 }
@@ -10292,7 +10351,8 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 			if (bs->fanPhase != FAN_PHASE_INACTIVE)
 			{
 				NewBotAI_ApplyHorizontalSwingMove(bs);
-				if (!suppressSaberAttack && bs->fanPhase == FAN_PHASE_HOLD)
+				if (!suppressSaberAttack && bs->fanPhase == FAN_PHASE_HOLD &&
+					NewBotAI_FanHoldMayStartSwing(bs))
 					trap->EA_Attack(bs->client);
 				return;
 			}
@@ -10388,7 +10448,8 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 			if (bs->fanPhase != FAN_PHASE_INACTIVE)
 			{
 				NewBotAI_ApplyHorizontalSwingMove(bs);
-				if (!suppressSaberAttack && bs->fanPhase == FAN_PHASE_HOLD)
+				if (!suppressSaberAttack && bs->fanPhase == FAN_PHASE_HOLD &&
+					NewBotAI_FanHoldMayStartSwing(bs))
 					trap->EA_Attack(bs->client);
 				return;
 			}
@@ -13377,10 +13438,63 @@ static qboolean NewBotAI_IsSaberSwingStartWindow(bot_state_t *bs)
 
 // Fan-chain phases (see NewBotAI_PrepareHorizontalSwingStart): HOLD owns exclusive
 // left/right strafe plus attack long enough to start the horizontal swing, then DWELL
-// frees movement before the next alternating hold. The chain ends after a flat 3 second
-// cap or when the bot drops below 70 HP.
-#define NEWBOTAI_FAN_CHAIN_MAX_MS 3000
+// frees movement before the next alternating hold. Skill 7+ skips DWELL and links the next
+// swing on the frame the current one ends. The chain ends after 3 seconds unless it is
+// still landing hits (NewBotAI_FanChainMayContinue), or when the bot drops below 70 HP.
 #define NEWBOTAI_FAN_CHAIN_MIN_HEALTH 70
+#define NEWBOTAI_FAN_LINK_LEAD_MS 60
+
+// Predicted 2D footing for a swing that would start this frame (see NewBotAI_GetSwingFooting).
+static newbotai_swing_footing_t NewBotAI_GetCurrentSwingFooting(bot_state_t *bs, qboolean linkedSwing)
+{
+	vec3_t diff;
+	float range, predicted, radial;
+	float relVx, relVy;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return NEWBOTAI_SWING_FOOTING_HOLD;
+	}
+
+	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->cur_ps.origin, diff);
+	diff[2] = 0.0f;
+	range = VectorLength(diff);
+	relVx = bs->currentEnemy->client->ps.velocity[0] - bs->cur_ps.velocity[0];
+	relVy = bs->currentEnemy->client->ps.velocity[1] - bs->cur_ps.velocity[1];
+	predicted = NewBotAI_PredictRange2D(diff[0], diff[1], relVx, relVy, NEWBOTAI_SWING_PEAK_LEAD_MS);
+	radial = 0.0f;
+	if (range > 1.0f)
+	{
+		//Positive when the gap is shrinking.
+		radial = -((relVx * diff[0] + relVy * diff[1]) / range);
+	}
+
+	return NewBotAI_GetSwingFooting(range, predicted, radial, linkedSwing ? 1 : 0,
+		(bs->cur_ps.fd.saberAnimLevel == SS_STAFF) ? 1 : 0);
+}
+
+static float NewBotAI_GetEnemyDistance2D(bot_state_t *bs)
+{
+	vec3_t diff;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return 0.0f;
+	}
+	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->cur_ps.origin, diff);
+	diff[2] = 0.0f;
+	return VectorLength(diff);
+}
+
+static int NewBotAI_GetMsSinceSaberContactOnEnemy(bot_state_t *bs)
+{
+	if (!bs || !bs->currentEnemy || bs->lastSaberContactTime <= 0 ||
+		bs->lastSaberContactTargetNum != bs->currentEnemy->s.number)
+	{
+		return -1;
+	}
+	return level.time - bs->lastSaberContactTime;
+}
 
 static void NewBotAI_ResetFanChain(bot_state_t *bs)
 {
@@ -13395,6 +13509,7 @@ static void NewBotAI_ResetFanChain(bot_state_t *bs)
 	bs->fanSwingStarted = 0;
 	bs->fanDwellYawOffset = 0.0f;
 	bs->fanWobbleStartTime = 0;
+	bs->fanLinkMove = 0;
 }
 
 static int NewBotAI_GetFanPackage(bot_state_t *bs)
@@ -13513,8 +13628,12 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 {
 	const float fanBias = NewBotAI_GetFanBiasPercent(bs);
 	const int holdMs = Com_Clampi(10, 3000, bot_fanhold.integer);
-	const int firstDwellMs = Com_Clampi(10, 3000, bot_firstfandwell.integer);
-	const int dwellMs = Com_Clampi(10, 3000, bot_fandwell.integer);
+	//Human fan chains link with no dwell; the configured dwell now shrinks with skill and
+	//fan bias and is zero at skill 7+.
+	const int firstDwellMs = NewBotAI_GetFanDwellMs(Com_Clampi(10, 3000, bot_firstfandwell.integer),
+		bs->settings.skill, fanBias);
+	const int dwellMs = NewBotAI_GetFanDwellMs(Com_Clampi(10, 3000, bot_fandwell.integer),
+		bs->settings.skill, fanBias);
 
 	if (bs->saberTechniqueCandidate)
 	{
@@ -13550,7 +13669,8 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 	}
 
 	if (bs->fanPhase != FAN_PHASE_INACTIVE &&
-		level.time - bs->fanChainStartTime > NEWBOTAI_FAN_CHAIN_MAX_MS)
+		!NewBotAI_FanChainMayContinue(level.time - bs->fanChainStartTime,
+			NewBotAI_GetMsSinceSaberContactOnEnemy(bs)))
 	{
 		NewBotAI_ResetFanChain(bs);
 		return;
@@ -13560,25 +13680,50 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 	{
 	case FAN_PHASE_HOLD:
 	{
+		const int currentMove = bs->cur_ps.saberMove;
 		const qboolean inHorizontalSwingWindow =
-			(BG_SaberInAttack(bs->cur_ps.saberMove) ||
-			bs->cur_ps.saberMove == LS_A_L2R ||
-			bs->cur_ps.saberMove == LS_A_R2L) ? qtrue : qfalse;
+			(BG_SaberInAttack(currentMove) ||
+			currentMove == LS_A_L2R ||
+			currentMove == LS_A_R2L) ? qtrue : qfalse;
+		const int nextDwellMs = (bs->fanSwingCount <= 0) ? firstDwellMs : dwellMs;
+		qboolean linkNow;
 
-		if (inHorizontalSwingWindow)
+		//A swing only counts as "started" for this HOLD once it is a new move - not the
+		//tail of the swing we already linked out of.
+		if (inHorizontalSwingWindow && currentMove != bs->fanLinkMove)
 		{
 			bs->fanSwingStarted = 1;
+			bs->fanLinkMove = 0;
 		}
-		if (bs->fanSwingStarted && !inHorizontalSwingWindow)
+		else if (!inHorizontalSwingWindow)
 		{
-			const int completedSwingCount = bs->fanSwingCount;
-			const int nextDwellMs = (completedSwingCount <= 0) ? firstDwellMs : dwellMs;
+			bs->fanLinkMove = 0;
+		}
+		//The engine picks the next chained move from the movement held as the current
+		//swing runs out, so a no-dwell link flips the strafe on the last frame of the swing.
+		linkNow = (nextDwellMs <= 0 && bs->fanSwingStarted && inHorizontalSwingWindow &&
+			bs->cur_ps.weaponTime > 0 && bs->cur_ps.weaponTime <= NEWBOTAI_FAN_LINK_LEAD_MS) ? qtrue : qfalse;
 
-			bs->fanSwingCount = completedSwingCount + 1;
+		if (bs->fanSwingStarted && (!inHorizontalSwingWindow || linkNow))
+		{
+			bs->fanSwingCount++;
 			bs->fanSwingStarted = 0;
-			bs->fanPhase = FAN_PHASE_DWELL;
-			bs->fanPhaseStartTime = level.time;
-			bs->fanAttackTime = level.time + nextDwellMs;
+			if (nextDwellMs <= 0)
+			{
+				//Link on the swing-change frame: flip the strafe together with the swing
+				//while attack stays held, like the L2R/R2L chains in sessions 34-48.
+				bs->fanAttackDir = -bs->fanAttackDir;
+				bs->fanPhase = FAN_PHASE_HOLD;
+				bs->fanPhaseStartTime = level.time;
+				bs->fanAttackTime = level.time + holdMs;
+				bs->fanLinkMove = inHorizontalSwingWindow ? currentMove : 0;
+			}
+			else
+			{
+				bs->fanPhase = FAN_PHASE_DWELL;
+				bs->fanPhaseStartTime = level.time;
+				bs->fanAttackTime = level.time + nextDwellMs;
+			}
 		}
 		else if (bs->fanSwingStarted)
 		{
@@ -13587,9 +13732,26 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 				NewBotAI_ResetFanChain(bs);
 			}
 		}
-		else if (bs->fanAttackTime <= level.time)
+		else
 		{
-			NewBotAI_ResetFanChain(bs);
+			const newbotai_swing_footing_t footing =
+				NewBotAI_GetCurrentSwingFooting(bs, (bs->fanSwingCount > 0) ? qtrue : qfalse);
+
+			if (footing == NEWBOTAI_SWING_FOOTING_HOLD)
+			{
+				//Never fan while backing off from 100u+ - those swings never landed.
+				NewBotAI_ResetFanChain(bs);
+			}
+			else if (footing == NEWBOTAI_SWING_FOOTING_STEP_IN &&
+				level.time < bs->fanPhaseStartTime + holdMs + 600)
+			{
+				//Step in first; the swing starts once the predicted peak range is in reach.
+				bs->fanAttackTime = level.time + 50;
+			}
+			else if (bs->fanAttackTime <= level.time)
+			{
+				NewBotAI_ResetFanChain(bs);
+			}
 		}
 		break;
 	}
@@ -13679,10 +13841,22 @@ static void NewBotAI_ApplyHorizontalSwingMove(bot_state_t *bs)
 	}
 	//The swing-start frame stays pure strafe so the engine picks a horizontal L2R/R2L;
 	//once the swing is running, step forward like human winners did while it landed.
-	if (NewBotAI_FanHoldUsesForward(bs->fanSwingStarted, bs->frame_Enemy_Len))
+	//Before the swing starts, close the gap until the predicted peak range is in reach.
+	if (NewBotAI_FanHoldUsesForward(bs->fanSwingStarted, NewBotAI_GetEnemyDistance2D(bs)) ||
+		(!bs->fanSwingStarted && !NewBotAI_FanHoldMayStartSwing(bs)))
 	{
 		trap->EA_MoveForward(bs->client);
 	}
+}
+
+static qboolean NewBotAI_FanHoldMayStartSwing(bot_state_t *bs)
+{
+	if (bs->fanSwingStarted || BG_SaberInAttack(bs->cur_ps.saberMove))
+	{
+		return qtrue;
+	}
+	return (NewBotAI_GetCurrentSwingFooting(bs, (bs->fanSwingCount > 0) ? qtrue : qfalse) ==
+		NEWBOTAI_SWING_FOOTING_START) ? qtrue : qfalse;
 }
 
 
