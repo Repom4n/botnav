@@ -33,6 +33,13 @@ static inline int G_DuelCaptureCanRankOutcomes(const duel_capture_storage_t *sto
 	return !storage->dropped && !storage->criticalDropped;
 }
 
+static inline void G_DuelCaptureSuppressSequenceRanking(const duel_capture_storage_t *storage,
+	char *goodSequence, char *badSequence)
+{
+	if (!G_DuelCaptureCanRankOutcomes(storage))
+		goodSequence[0] = badSequence[0] = '\0';
+}
+
 /* Keep the first record and newest quarter intact. Fill the remaining half-buffer
  * budget with evenly spaced records, highest priority first, in original order. */
 static inline int G_DuelCaptureCompact(void *records, int count, size_t stride,
@@ -199,6 +206,12 @@ static inline const char *G_DuelCaptureOutcomeQuality(const duel_capture_outcome
 	if (outcome->dealt >= 20)
 		return "good";
 	return "mediocre";
+}
+
+static inline const char *G_DuelCaptureRankedOutcomeQuality(const duel_capture_storage_t *storage,
+	const duel_capture_outcome_t *outcome)
+{
+	return G_DuelCaptureCanRankOutcomes(storage) ? G_DuelCaptureOutcomeQuality(outcome) : "unknown";
 }
 
 static inline int G_DuelCaptureDamageAmount(int oldHealth, int newHealth, int armorLost)

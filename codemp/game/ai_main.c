@@ -1089,6 +1089,7 @@ int BotAI(int client, float thinktime) {
 #endif
 	bs->saberTechniqueCandidate = qfalse;
 	bs->saberTechniqueOwnsInputs = qfalse;
+	bs->saberTechniqueClearQueuedAttack = qfalse;
 	if (g_newBotAI.integer)
 		NewBotAI(bs, thinktime);
 	else
@@ -16669,7 +16670,8 @@ static qboolean NewBotAI_CanControlSaber(bot_state_t *bs)
 	bot_input_t queued;
 	const qboolean engineBusy = (g_entities[bs->client].health <= 0 || ps->pm_type != PM_NORMAL ||
 		ps->forceHandExtend != HANDEXTEND_NONE || BG_InKnockDown(ps->legsAnim) ||
-		BG_InRoll(ps, ps->legsAnim) || BG_SaberInSpecial(ps->saberMove) ||
+		BG_InRoll(ps, ps->legsAnim) || BG_InSpecialJump(ps->legsAnim) ||
+		BG_SaberInSpecialAttack(ps->torsoAnim) || BG_SaberInSpecial(ps->saberMove) ||
 		ps->saberInFlight || !NewBotAI_SaberPrimaryBladeAvailable(ps->saberHolstered) ||
 		ps->saberLockTime > level.time ||
 		ps->m_iVehicleNum || bs->escapeYawOverrideUntil > level.time ||
@@ -16696,14 +16698,15 @@ static qboolean NewBotAI_CanControlSaber(bot_state_t *bs)
 
 // Trace the whole body and several landing probes, not just the backward ray.
 // This ordinary, briefly pressed jump never charges levitation or wallruns.
-static qboolean NewBotAI_SaberSafeFootwork(bot_state_t *bs, int forwardMove, int rightMove, qboolean jump)
+static qboolean NewBotAI_SaberSafeFootwork(bot_state_t *bs, const vec3_t origin, float yaw,
+	int forwardMove, int rightMove, qboolean jump)
 {
 	vec3_t angles, forward, right, direction, end, probe, mins, maxs;
 	trace_t trace, floorTrace;
 	int i;
-	float floorProbeZ = bs->origin[2] + 16.0f;
+	float floorProbeZ = origin[2] + 16.0f;
 
-	VectorSet(angles, 0, bs->viewangles[YAW], 0);
+	VectorSet(angles, 0, yaw, 0);
 	AngleVectors(angles, forward, right, NULL);
 	VectorScale(forward, (float)forwardMove, direction);
 	VectorMA(direction, (float)rightMove, right, direction);
@@ -16711,26 +16714,26 @@ static qboolean NewBotAI_SaberSafeFootwork(bot_state_t *bs, int forwardMove, int
 		return qtrue;
 	VectorCopy(g_entities[bs->client].r.mins, mins);
 	VectorCopy(g_entities[bs->client].r.maxs, maxs);
-	if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE)
+	if (g_entities[bs->client].client->ps.groundEntityNum == ENTITYNUM_NONE)
 	{
-		VectorCopy(bs->origin, end);
+		VectorCopy(origin, end);
 		end[2] -= 512.0f;
-		JP_Trace(&floorTrace, bs->origin, NULL, NULL, end, bs->client,
+		JP_Trace(&floorTrace, origin, NULL, NULL, end, bs->client,
 			MASK_PLAYERSOLID | CONTENTS_LAVA | CONTENTS_SLIME, qfalse, 0, 0);
 		if (floorTrace.startsolid || floorTrace.allsolid || floorTrace.fraction == 1.0f ||
 			(floorTrace.contents & (CONTENTS_LAVA | CONTENTS_SLIME)))
 			return qfalse;
 		floorProbeZ = floorTrace.endpos[2] + 40.0f;
 	}
-	VectorMA(bs->origin, jump ? 180.0f : 72.0f, direction, end);
-	JP_Trace(&trace, bs->origin, mins, maxs, end, bs->client, MASK_PLAYERSOLID, qfalse, 0, 0);
+	VectorMA(origin, jump ? 180.0f : 72.0f, direction, end);
+	JP_Trace(&trace, origin, mins, maxs, end, bs->client, MASK_PLAYERSOLID, qfalse, 0, 0);
 	if (trace.startsolid || trace.allsolid || trace.fraction < 1.0f)
 		return qfalse;
 	if (jump)
 	{
-		VectorCopy(bs->origin, probe);
+		VectorCopy(origin, probe);
 		probe[2] += 64.0f;
-		JP_Trace(&trace, bs->origin, mins, maxs, probe, bs->client, MASK_PLAYERSOLID, qfalse, 0, 0);
+		JP_Trace(&trace, origin, mins, maxs, probe, bs->client, MASK_PLAYERSOLID, qfalse, 0, 0);
 		if (trace.startsolid || trace.allsolid || trace.fraction < 1.0f)
 			return qfalse;
 		end[2] += 64.0f;
@@ -16740,7 +16743,7 @@ static qboolean NewBotAI_SaberSafeFootwork(bot_state_t *bs, int forwardMove, int
 	}
 	for (i = 1; i <= 3; i++)
 	{
-		VectorMA(bs->origin, (jump ? 180.0f : 72.0f) * i / 3.0f, direction, probe);
+		VectorMA(origin, (jump ? 180.0f : 72.0f) * i / 3.0f, direction, probe);
 		probe[2] = floorProbeZ;
 		VectorCopy(probe, end);
 		end[2] -= 80.0f;
@@ -16897,7 +16900,8 @@ static void NewBotAI_RunSaberTechniques(bot_state_t *bs)
 	}
 	attackLegal = !context.selfBlocked && (ps->weaponTime <= 0 || context.selfAttacking) &&
 		!(ps->saberMove >= LS_R_TL2BR && ps->saberMove <= LS_R_T2B) && ps->fd.forceJumpCharge == 0 &&
-		!(ps->pm_flags & PMF_JUMP_HELD) && ps->velocity[2] <= 0 &&
+		!(ps->pm_flags & PMF_JUMP_HELD) &&
+		NewBotAI_SaberOrdinaryAttackSafe(ps->pm_flags & PMF_DUCKED, ps->velocity[2] > 0, 0) &&
 		!NewBotAI_IsJumpAttackSuppressionWindowActive(level.time,
 			bs->jumpAttackGateTime, NEWBOTAI_JUMP_ATTACK_GATE_MS);
 	bs->saberTechniqueCommand = NewBotAI_PlanSaberCommand(context, tactic,
@@ -16905,6 +16909,19 @@ static void NewBotAI_RunSaberTechniques(bot_state_t *bs)
 		bs->saberTacticStrafeDir, ps->groundEntityNum != ENTITYNUM_NONE,
 		!NewBotAI_SaberCanApplyPressure(phase, basicAttack, ps->weaponTime),
 		attackLegal, escapePhase);
+	if (bs->saberTechniqueCommand.attack &&
+		!NewBotAI_SaberCanApplyPressure(phase, basicAttack, ps->weaponTime))
+	{
+		if (PM_SaberInStart(ps->saberMove))
+			NewBotAI_SaberPreparationInputs(ps->saberMove - LS_S_TL2BR,
+				&bs->saberTechniqueCommand.forward, &bs->saberTechniqueCommand.right);
+		else if (PM_SaberInTransition(ps->saberMove))
+			NewBotAI_SaberPreparationInputs(saberMoveData[ps->saberMove].chain_attack - LS_A_TL2BR,
+				&bs->saberTechniqueCommand.forward, &bs->saberTechniqueCommand.right);
+		NewBotAI_SaberNoStrafeFallback(NewBotAI_IsDuelStrafeSuppressed(bs),
+			PM_SaberInStart(ps->saberMove) || PM_SaberInTransition(ps->saberMove),
+			&bs->saberTechniqueCommand.forward, &bs->saberTechniqueCommand.right);
+	}
 	NewBotAI_SaberSuppressStrafe(&bs->saberTechniqueCommand, NewBotAI_IsDuelStrafeSuppressed(bs));
 	if (escapePhase < 0 && bs->saberTechniqueCommand.forward < 0 &&
 		NewBotAI_SaberCanEscapeJump(ps->groundEntityNum != ENTITYNUM_NONE,
@@ -16913,7 +16930,7 @@ static void NewBotAI_RunSaberTechniques(bot_state_t *bs)
 			!NewBotAI_TouchingWallNotEnemy(bs), ps->fd.forceJumpCharge == 0 &&
 			ps->fd.forcePower >= 10 && !(ps->fd.forcePowersActive & ((1 << FP_SPEED) | (1 << FP_LEVITATION))) &&
 			ps->velocity[0] * ps->velocity[0] + ps->velocity[1] * ps->velocity[1] <= 160000.0f,
-			NewBotAI_SaberSafeFootwork(bs,
+			NewBotAI_SaberSafeFootwork(bs, ps->origin, bs->viewangles[YAW],
 				bs->saberTechniqueCommand.forward, bs->saberTechniqueCommand.right, qtrue),
 			bs->saberTechniqueJumpCooldown <= level.time))
 	{
@@ -16922,7 +16939,7 @@ static void NewBotAI_RunSaberTechniques(bot_state_t *bs)
 		bs->jumpAttackGateTime = level.time;
 	}
 	bs->saberTechniqueCommand.jump = bs->saberTechniqueJumpTime > level.time;
-	if (!bs->saberTechniqueCommand.jump && !NewBotAI_SaberSafeFootwork(bs,
+	if (!bs->saberTechniqueCommand.jump && !NewBotAI_SaberSafeFootwork(bs, ps->origin, bs->viewangles[YAW],
 		bs->saberTechniqueCommand.forward, bs->saberTechniqueCommand.right, qfalse))
 	{
 		bs->saberTechniqueCommand.forward = 0;
@@ -16950,17 +16967,30 @@ static void NewBotAI_ApplySaberTechniqueInput(bot_state_t *bs, bot_input_t *bi, 
 	int selectedForward, selectedRight;
 	int selecting;
 	float offset;
+	newbotai_saber_final_context_t finalContext;
 
+	if (bs->saberTechniqueClearQueuedAttack)
+		bi->actionflags = NewBotAI_SaberOwnedActionFlags(bi->actionflags, ACTION_ATTACK, 0);
 	if (!bs->saberTechniqueOwnsInputs || !g_newBotAI.integer || bi->weapon != WP_SABER)
 	{
+		if (bs->saberTechniqueOwnsInputs)
+		{
+			bi->actionflags = NewBotAI_SaberOwnedActionFlags(bi->actionflags, ACTION_ATTACK, 0);
+			bs->saberTechniqueClearQueuedAttack = qtrue;
+			bs->saberTechniqueOwnsInputs = qfalse;
+			bs->doAttack = 0;
+		}
 		bs->saberTechniqueYawTime = 0;
 		bs->saberTechniqueAnimDuration = 0;
 		return;
 	}
 	if (!NewBotAI_CanControlSaber(bs))
 	{
-		// Our commands only exist at this boundary. Leave the new force/navigation
-		// owner's queued movement and view untouched.
+		// EA_Attack may still contain our last think's request. Remove that request
+		// until EA_ResetInput, but preserve the new owner's movement/force/view.
+		bi->actionflags = NewBotAI_SaberOwnedActionFlags(bi->actionflags, ACTION_ATTACK, 0);
+		bs->saberTechniqueClearQueuedAttack = qtrue;
+		bs->doAttack = 0;
 		memset(&bs->saberTechniqueCommand, 0, sizeof(bs->saberTechniqueCommand));
 		bs->saberTechniqueJumpTime = 0;
 		bs->saberTechniqueYawTime = 0;
@@ -16976,32 +17006,35 @@ static void NewBotAI_ApplySaberTechniqueInput(bot_state_t *bs, bot_input_t *bi, 
 		ps->saberMove >= LS_A_TL2BR && ps->saberMove <= LS_A_T2B, ps->weaponTime);
 	NewBotAI_SaberSelectionInputs((newbotai_saber_family_t)bs->saberTechniqueFamily,
 		bs->saberTacticChainLength, bs->saberTacticStrafeDir, &selectedForward, &selectedRight);
+	if (PM_SaberInStart(ps->saberMove))
+		NewBotAI_SaberPreparationInputs(ps->saberMove - LS_S_TL2BR, &selectedForward, &selectedRight);
+	else if (PM_SaberInTransition(ps->saberMove))
+		NewBotAI_SaberPreparationInputs(saberMoveData[ps->saberMove].chain_attack - LS_A_TL2BR,
+			&selectedForward, &selectedRight);
+	else if (selecting)
+		NewBotAI_SaberNoStrafeFallback(NewBotAI_IsDuelStrafeSuppressed(bs), 0,
+			&selectedForward, &selectedRight);
 	command = bs->saberTechniqueCommand;
 	command.jump = bs->saberTechniqueJumpTime > time && ps->groundEntityNum != ENTITYNUM_NONE;
-	if (command.jump || ps->groundEntityNum == ENTITYNUM_NONE || ps->saberBlocked != BLOCKED_NONE ||
+	finalContext.attackSafe = !(command.jump || ps->groundEntityNum == ENTITYNUM_NONE ||
+		ps->saberBlocked != BLOCKED_NONE ||
 		(ps->pm_flags & PMF_JUMP_HELD) || ps->fd.forceJumpCharge > 0 ||
 		ps->saberInFlight || !NewBotAI_SaberPrimaryBladeAvailable(ps->saberHolstered) ||
-		NewBotAI_IsJumpAttackSuppressionWindowActive(time, bs->jumpAttackGateTime, NEWBOTAI_JUMP_ATTACK_GATE_MS))
-		command.attack = 0;
-	if (command.attack && (command.forward || command.right))
-	{
-		// Refresh at command frequency: AI think cadence must not carry forward
-		// pressure across the engine's next movement-based selection boundary.
-		if (selecting)
-		{
-			command.right = selectedRight;
-			command.forward = selectedForward;
-		}
-		else
-		{
-			command.right = bs->saberTacticStrafeDir;
-			command.forward = bs->saberTacticAction == NEWBOTAI_SABER_TACTIC_STAND_SWING ? 0 :
-				bs->saberTacticAction == NEWBOTAI_SABER_TACTIC_BACK_SWING ? -1 :
-				bs->frame_Enemy_Len > 48.0f ? 1 : 0;
-		}
-	}
-	NewBotAI_SaberSuppressStrafe(&command, NewBotAI_IsDuelStrafeSuppressed(bs));
-	NewBotAI_SaberGuardSelection(&command, selecting, selectedForward, selectedRight);
+		NewBotAI_IsJumpAttackSuppressionWindowActive(time, bs->jumpAttackGateTime, NEWBOTAI_JUMP_ATTACK_GATE_MS)) &&
+		NewBotAI_SaberOrdinaryAttackSafe(ps->pm_flags & PMF_DUCKED, ps->velocity[2] > 0,
+		selecting && selectedForward > 0 && !selectedRight &&
+		ps->fd.saberAnimLevel == SS_STRONG && (g_tweakSaber.integer & ST_JK2RDFA) &&
+		ps->saberMove >= LS_A_TL2BR && ps->saberMove <= LS_A_T2B);
+	finalContext.selecting = selecting;
+	finalContext.selectedForward = selectedForward;
+	finalContext.selectedRight = selectedRight;
+	finalContext.pressureForward = bs->saberTacticAction == NEWBOTAI_SABER_TACTIC_STAND_SWING ? 0 :
+		bs->saberTacticAction == NEWBOTAI_SABER_TACTIC_BACK_SWING ? -1 :
+		bs->frame_Enemy_Len > 48.0f ? 1 : 0;
+	finalContext.pressureRight = bs->saberTacticStrafeDir;
+	finalContext.strafeSuppressed = NewBotAI_IsDuelStrafeSuppressed(bs);
+	// Refresh at command frequency, not just at the slower AI decision boundary.
+	command = NewBotAI_FinalizeSaberCommand(command, finalContext);
 	if (((command.attack && (command.right || bs->saberTechniqueYawTime)) ||
 		(bs->saberTechniqueYawTime && ps->saberMove >= LS_R_TL2BR && ps->saberMove <= LS_R_T2B)) &&
 		ps->groundEntityNum != ENTITYNUM_NONE &&
@@ -17030,6 +17063,11 @@ static void NewBotAI_ApplySaberTechniqueInput(bot_state_t *bs, bot_input_t *bi, 
 	}
 	else
 		bs->saberTechniqueYawTime = 0;
+	// The final phase, side and yaw may differ from the last AI think's plan.
+	// Trace that exact live command before translating it to action flags.
+	NewBotAI_SaberApplyMovementSafety(&command,
+		NewBotAI_SaberSafeFootwork(bs, ps->origin, bi->viewangles[YAW],
+			command.forward, command.right, command.jump));
 	if (command.forward > 0) plannedFlags |= ACTION_MOVEFORWARD;
 	if (command.forward < 0) plannedFlags |= ACTION_MOVEBACK;
 	if (command.right > 0) plannedFlags |= ACTION_MOVERIGHT;

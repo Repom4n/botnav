@@ -3351,7 +3351,7 @@ static void G_ClassifyTrackedAttackOutcomes(tracked_duel_event_t *events, int ev
 		}
 		if (!G_DuelCaptureCanRankOutcomes(capture))
 		{
-			Q_strncpyz(attack->quality, "unknown", sizeof(attack->quality));
+			Q_strncpyz(attack->quality, G_DuelCaptureRankedOutcomeQuality(capture, &outcome), sizeof(attack->quality));
 			continue;
 		}
 
@@ -3389,7 +3389,7 @@ static void G_ClassifyTrackedAttackOutcomes(tracked_duel_event_t *events, int ev
 			G_DuelCaptureHasIndexGap(events[endIndex - 1].eventIndex, events[endIndex].eventIndex)) ||
 			(endIndex == eventCount && events[eventCount - 1].eventIndex != capture->total)))
 			incomplete = qtrue;
-		Q_strncpyz(attack->quality, incomplete ? "unknown" : G_DuelCaptureOutcomeQuality(&outcome), sizeof(attack->quality));
+		Q_strncpyz(attack->quality, incomplete ? "unknown" : G_DuelCaptureRankedOutcomeQuality(capture, &outcome), sizeof(attack->quality));
 	}
 }
 
@@ -3930,10 +3930,10 @@ void G_FinishTrackedDuel(gentity_t *winner, gentity_t *loser, int duelType, qboo
 	G_SetTrackedPrimaryIssue(loserSlot, loserLowForceFinish);
 	G_ClassifyTrackedAttackOutcomes(winnerSlot->events, winnerSlot->eventCount, &winnerSlot->capture);
 	G_ClassifyTrackedAttackOutcomes(loserSlot->events, loserSlot->eventCount, &loserSlot->capture);
-	if (!G_DuelCaptureCanRankOutcomes(&winnerSlot->capture))
-		winnerSlot->lastBadSequenceLabel[0] = winnerSlot->lastGoodSequenceLabel[0] = '\0';
-	if (!G_DuelCaptureCanRankOutcomes(&loserSlot->capture))
-		loserSlot->lastBadSequenceLabel[0] = loserSlot->lastGoodSequenceLabel[0] = '\0';
+	G_DuelCaptureSuppressSequenceRanking(&winnerSlot->capture,
+		winnerSlot->lastGoodSequenceLabel, winnerSlot->lastBadSequenceLabel);
+	G_DuelCaptureSuppressSequenceRanking(&loserSlot->capture,
+		loserSlot->lastGoodSequenceLabel, loserSlot->lastBadSequenceLabel);
 
 	G_DuelCaptureMoveRuntime(&winnerRuntime, winnerSlot, sizeof(winnerRuntime));
 	G_DuelCaptureMoveRuntime(&loserRuntime, loserSlot, sizeof(loserRuntime));

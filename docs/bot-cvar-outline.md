@@ -70,6 +70,8 @@ Chance weights are clamped to 0-100 by `BotGetChanceBiasPercent()`. Legacy attac
 
 The human-technique controller owns saber movement, primary inputs and technique yaw while eligible. Horizontal selection holds lateral-only input through starts and transitions; forward pressure resumes during the accepted active swing. Next-swing direction follows the accepted engine move, including engine-imposed responses, rather than flipping on an attack-button request. Yaw preparation, active sweep and recovery follow animation progress instead of legacy dwell timers. Legacy fan hold/dwell/yaw/wobble controls and `bot_fan_debug` still describe the legacy fan path; they do not schedule the new controller's attacks. Random strafe overlays do not overwrite its selected footwork. Legal force actions, knockdown recovery, navigation, and saber retrieval can temporarily take priority.
 
+During the temporary duel no-strafe gate, free selection boundaries deliberately fall back to an ordinary vertical attack rather than withholding all attacks. A committed start/transition keeps its actual selection; unsafe or suppressed movement must not silently select a different swing. Movement safety is rechecked against the live position and final yaw before emitting technique inputs.
+
 ## PTK (Pull-Throw-Kick) System
 
 | Cvar | Default | Description |
@@ -210,13 +212,19 @@ g_newBotAI (master switch)
   |     +-- Consumed by:
   |           +-- bot_saberthrowbias --> saber throw weight
   |           +-- bot_gripkickbias --> grip initiation weight
-  |           +-- bot_fanbias + bot_fanhold + bot_firstfandwell + bot_fandwell + bot_fanyawspeed --> fan-chain patterns
+  |           +-- Legacy fan hold/dwell/yaw controls --> legacy fan-chain patterns only
   |           +-- bot_drainbias --> drain hold duration
   |           +-- bot_antidrainbias --> anti-drain priority
   |           +-- bot_lightningbias + bot_lightningdistance --> lightning
   |           +-- bot_ptk_aggressionbias + bot_ptk_fpdifference + bot_ptk_hpdifference --> PTK
   |           +-- Retreat thresholds (health/distance)
   |           +-- Saber throw defense break (pull vs push)
+  |
+  +-- Shared Saber Techniques
+  |     +-- bot_fanbias --> coordinated horizontal family weight (not attack permission)
+  |     +-- bot_mistakebias + skill --> contextual timing/positioning choices
+  |     +-- Accepted animation + final input ownership --> selection, pressure and bounded yaw
+  |     +-- Live movement safety + engine/force/navigation priority --> legal inputs
   |
   +-- Aim & Response
   |     +-- bot_aimspeed

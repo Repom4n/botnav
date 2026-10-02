@@ -156,6 +156,39 @@ BOOST_AUTO_TEST_CASE(any_record_loss_disables_outcome_and_sequence_ranking)
 	BOOST_CHECK(G_DuelCaptureCanRankOutcomes(&storage));
 }
 
+BOOST_AUTO_TEST_CASE(long_capture_keeps_aggregates_and_tail_but_never_coaches_from_lost_damage)
+{
+	duel_capture_storage_t storage = {};
+	capture_test_record *records = NULL;
+	int count = 0, totalDamageDealt = 0;
+	duel_capture_outcome_t favorable = { 60, 0, 1 };
+	char goodSequence[32] = "clean_counter";
+	char badSequence[32] = "forced_entry";
+	BOOST_CHECK_EQUAL(G_DuelCaptureRankedOutcomeQuality(&storage, &favorable), "correct");
+	G_DuelCaptureSuppressSequenceRanking(&storage, goodSequence, badSequence);
+	BOOST_CHECK_EQUAL(goodSequence, "clean_counter");
+	BOOST_CHECK_EQUAL(badSequence, "forced_entry");
+	for (int i = 1; i <= 20000; ++i)
+	{
+		records = static_cast<capture_test_record *>(G_DuelCaptureReserve(records, &count,
+			sizeof(*records), &storage, 8192, CaptureTestPriority));
+		BOOST_REQUIRE(records);
+		records[count++] = { ++storage.total, i * 10, 2 };
+		totalDamageDealt += 3;
+	}
+	BOOST_CHECK_EQUAL(totalDamageDealt, 60000);
+	BOOST_CHECK_EQUAL(storage.total, storage.dropped + count);
+	BOOST_CHECK_EQUAL(storage.dropped, storage.criticalDropped);
+	BOOST_CHECK(storage.criticalDropped > 0);
+	BOOST_CHECK_EQUAL(records[count - 1].index, 20000);
+	BOOST_CHECK_EQUAL(records[count - 1].time, 200000);
+	BOOST_CHECK_EQUAL(G_DuelCaptureRankedOutcomeQuality(&storage, &favorable), "unknown");
+	G_DuelCaptureSuppressSequenceRanking(&storage, goodSequence, badSequence);
+	BOOST_CHECK_EQUAL(goodSequence, "");
+	BOOST_CHECK_EQUAL(badSequence, "");
+	free(records);
+}
+
 BOOST_AUTO_TEST_CASE(finishing_transfers_ownership_without_freeing_events_before_persistence)
 {
 	struct test_runtime

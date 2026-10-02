@@ -648,6 +648,10 @@ BOOST_AUTO_TEST_CASE( saber_command_ownership_replaces_conflicts_and_preserves_f
 		movement | attack | altAttack, 4 | attack ), force | use | 4 | attack );
 	BOOST_CHECK_EQUAL( NewBotAI_SaberOwnedActionFlags( movement | attack | force | use,
 		movement | attack | altAttack, 0 ), force | use );
+	// Losing ownership removes only our queued primary attack, not a legal
+	// force/navigation owner's movement, alternate attack, force or use command.
+	BOOST_CHECK_EQUAL( NewBotAI_SaberOwnedActionFlags( movement | attack | altAttack | force | use,
+		attack, 0 ), movement | altAttack | force | use );
 	BOOST_CHECK_EQUAL( NewBotAI_SaberDuelActionFlags( altAttack | attack | force, altAttack, 1 ), attack | force );
 	BOOST_CHECK_EQUAL( NewBotAI_SaberDuelActionFlags( altAttack | force, altAttack, 0 ), altAttack | force );
 	BOOST_CHECK( NewBotAI_SaberCanOwnInputs( 1, 1, 0, 0, 0 ) );
@@ -674,6 +678,170 @@ BOOST_AUTO_TEST_CASE( saber_command_ownership_replaces_conflicts_and_preserves_f
 	command.forward = 1;
 	NewBotAI_SaberGuardSelection( &command, 0, 0, -1 );
 	BOOST_CHECK_EQUAL( command.forward, 1 );
+}
+
+BOOST_AUTO_TEST_CASE( saber_no_strafe_gate_keeps_deliberate_basic_fallback_without_changing_committed_start )
+{
+	for ( int family : { NEWBOTAI_SABER_BASIC, NEWBOTAI_SABER_HORIZONTAL, NEWBOTAI_SABER_DIAGONAL_VERTICAL } )
+	{
+		int forward, right;
+		NewBotAI_SaberSelectionInputs((newbotai_saber_family_t)family, 0, -1, &forward, &right);
+		NewBotAI_SaberNoStrafeFallback( 1, 0, &forward, &right );
+		BOOST_CHECK_EQUAL( forward, 1 );
+		BOOST_CHECK_EQUAL( right, 0 );
+		newbotai_saber_command_t command = { forward, right, 0, 1 };
+		NewBotAI_SaberGuardSelection( &command, 1, forward, right );
+		BOOST_CHECK_EQUAL( command.attack, 1 );
+	}
+	int forward = 0, right = 1;
+	NewBotAI_SaberNoStrafeFallback( 1, 1, &forward, &right );
+	BOOST_CHECK_EQUAL( forward, 0 );
+	BOOST_CHECK_EQUAL( right, 1 );
+	// The engine's committed start/transition takes precedence over a requested
+	// family stage, without counting it as an accepted attack.
+	BOOST_CHECK( NewBotAI_SaberPreparationInputs( 6, &forward, &right ) );
+	BOOST_CHECK_EQUAL( forward, 1 );
+	BOOST_CHECK_EQUAL( right, 0 );
+	BOOST_CHECK( NewBotAI_SaberPreparationInputs( 1, &forward, &right ) );
+	BOOST_CHECK_EQUAL( forward, 0 );
+	BOOST_CHECK_EQUAL( right, 1 );
+	BOOST_CHECK( NewBotAI_SaberPreparationInputs( 4, &forward, &right ) );
+	BOOST_CHECK_EQUAL( forward, 0 );
+	BOOST_CHECK_EQUAL( right, -1 );
+	BOOST_CHECK( !NewBotAI_SaberPreparationInputs( 7, &forward, &right ) );
+	BOOST_CHECK( !NewBotAI_SaberPreparationInputs( -1, &forward, &right ) );
+	BOOST_CHECK( !NewBotAI_SaberMoveAccepted( 6, 5, 0 ) );
+	BOOST_CHECK( NewBotAI_SaberOrdinaryAttackSafe( 0, 0, 0 ) );
+	BOOST_CHECK( !NewBotAI_SaberOrdinaryAttackSafe( 1, 0, 0 ) );
+	BOOST_CHECK( !NewBotAI_SaberOrdinaryAttackSafe( 0, 1, 0 ) );
+	BOOST_CHECK( !NewBotAI_SaberOrdinaryAttackSafe( 0, 0, 1 ) );
+}
+
+BOOST_AUTO_TEST_CASE( saber_final_command_boundary_replaces_stale_pressure_through_engine_phases )
+{
+	newbotai_saber_final_context_t finalContext = { 1, 0, 1, 1, 1, 0, 1 };
+	newbotai_saber_command_t queued = { 1, -1, 0, 1 };
+	for ( int remaining : { 1500, 800, 99 } )
+	{
+		const newbotai_saber_yaw_phase_t phase = NewBotAI_SaberYawPhase( 0, 1, remaining, 1500 );
+		finalContext.selecting = !NewBotAI_SaberCanApplyPressure( phase, 0, remaining );
+		BOOST_REQUIRE( NewBotAI_SaberPreparationInputs( 1,
+			&finalContext.selectedForward, &finalContext.selectedRight ) );
+		const newbotai_saber_command_t command = NewBotAI_FinalizeSaberCommand( queued, finalContext );
+		BOOST_CHECK_EQUAL( command.forward, 0 );
+		BOOST_CHECK_EQUAL( command.right, 1 );
+		BOOST_CHECK_EQUAL( command.attack, 1 );
+		BOOST_CHECK( !NewBotAI_SaberMoveAccepted( 63, 1, 0 ) );
+	}
+	// The actual L2R acceptance, not its requested direction or start timer, advances us.
+	BOOST_REQUIRE( NewBotAI_SaberMoveAccepted( 5, 63, 1 ) );
+	const int actual = NewBotAI_SaberHorizontalDirection( 5, 5, 8 );
+	const int next = NewBotAI_SaberNextHorizontalDirection( actual, 1 );
+	finalContext.pressureRight = next;
+	finalContext.selecting = !NewBotAI_SaberCanApplyPressure(
+		NewBotAI_SaberYawPhase( 1, 0, 600, 1200 ), 1, 600 );
+	newbotai_saber_command_t active = NewBotAI_FinalizeSaberCommand( queued, finalContext );
+	BOOST_CHECK_EQUAL( active.forward, 1 );
+	BOOST_CHECK_EQUAL( active.right, -1 );
+	BOOST_CHECK_EQUAL( active.attack, 1 );
+	float offset = NEWBOTAI_SABER_SWEEP_DEGREES;
+	const float targetOffset = NewBotAI_SaberYawOffset( NEWBOTAI_SABER_YAW_ACTIVE,
+		0.5f, actual, next, 1 );
+	const float nextOffset = NewBotAI_SaberStepYawOffset( offset, targetOffset, 16 );
+	BOOST_CHECK_LE( fabs(nextOffset - offset), NEWBOTAI_SABER_SWEEP_RATE * 0.016f + 0.001f );
+	BOOST_CHECK_CLOSE( NewBotAI_SaberApplyYawOffset( 355.0f, nextOffset ),
+		NewBotAI_SaberApplyYawOffset( 350.0f, nextOffset ) + 5.0f, 0.001f );
+	finalContext.selecting = !NewBotAI_SaberCanApplyPressure(
+		NewBotAI_SaberYawPhase( 1, 0, 0, 1200 ), 1, 0 );
+	NewBotAI_SaberSelectionInputs( NEWBOTAI_SABER_HORIZONTAL, 1, next,
+		&finalContext.selectedForward, &finalContext.selectedRight );
+	const newbotai_saber_command_t boundary = NewBotAI_FinalizeSaberCommand( active, finalContext );
+	BOOST_CHECK_EQUAL( boundary.forward, 0 );
+	BOOST_CHECK_EQUAL( boundary.right, -1 );
+	BOOST_CHECK_EQUAL( boundary.attack, 1 );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberYawOffset( NEWBOTAI_SABER_YAW_NEXT, 1.0f, actual, next, 1 ),
+		-NEWBOTAI_SABER_SWEEP_DEGREES );
+	BOOST_REQUIRE( NewBotAI_SaberPreparationInputs( 4,
+		&finalContext.selectedForward, &finalContext.selectedRight ) );
+	const newbotai_saber_command_t transition = NewBotAI_FinalizeSaberCommand( active, finalContext );
+	BOOST_CHECK_EQUAL( transition.forward, 0 );
+	BOOST_CHECK_EQUAL( transition.right, -1 );
+	BOOST_CHECK( !NewBotAI_SaberMoveAccepted( 80, 5, 0 ) );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberYawOffset( NEWBOTAI_SABER_YAW_RECOVER, 1.0f, actual, next, 1 ), 0.0f );
+}
+
+BOOST_AUTO_TEST_CASE( saber_final_command_boundary_preserves_mix_and_gated_fallback_but_not_unsafe_attacks )
+{
+	newbotai_saber_final_context_t finalContext = { 1, 0, 1, 1, -1, 0, 1 };
+	for ( int family : { NEWBOTAI_SABER_BASIC, NEWBOTAI_SABER_DIAGONAL_VERTICAL } )
+		for ( int stage = 0; stage < 3; stage++ )
+		{
+			NewBotAI_SaberSelectionInputs((newbotai_saber_family_t)family, stage, -1,
+				&finalContext.selectedForward, &finalContext.selectedRight );
+			const newbotai_saber_command_t command = NewBotAI_FinalizeSaberCommand(
+				{ 1, 1, 0, 1 }, finalContext );
+			BOOST_CHECK_EQUAL( command.forward, finalContext.selectedForward );
+			BOOST_CHECK_EQUAL( command.right, finalContext.selectedRight );
+			BOOST_CHECK_EQUAL( command.attack, 1 );
+		}
+	finalContext.selectedForward = 0;
+	finalContext.selectedRight = 1;
+	finalContext.strafeSuppressed = 1;
+	NewBotAI_SaberNoStrafeFallback( 1, 0,
+		&finalContext.selectedForward, &finalContext.selectedRight );
+	const newbotai_saber_command_t fallback = NewBotAI_FinalizeSaberCommand( { 0, 1, 0, 1 }, finalContext );
+	BOOST_CHECK_EQUAL( fallback.forward, 1 );
+	BOOST_CHECK_EQUAL( fallback.right, 0 );
+	BOOST_CHECK_EQUAL( fallback.attack, 1 );
+	finalContext.attackSafe = 0; // jump/knockdown/duck/rising/DFA guard at the live boundary
+	const newbotai_saber_command_t unsafe = NewBotAI_FinalizeSaberCommand( fallback, finalContext );
+	BOOST_CHECK_EQUAL( unsafe.attack, 0 );
+	finalContext.attackSafe = 1;
+	const newbotai_saber_command_t vetoed = NewBotAI_FinalizeSaberCommand( { 0, 0, 0, 1 }, finalContext );
+	BOOST_CHECK_EQUAL( vetoed.attack, 0 ); // a collision veto is not a fallback permission
+	const int primary = 16, force = 64, use = 128, movement = 1 | 2 | 4 | 8;
+	BOOST_CHECK_EQUAL( NewBotAI_SaberOwnedActionFlags( primary | force | use | movement,
+		primary | movement, unsafe.attack ? primary : 0 ), force | use );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberOwnedActionFlags( primary | force | use | movement,
+		primary, 0 ), force | use | movement );
+}
+
+BOOST_AUTO_TEST_CASE( saber_final_live_movement_veto_runs_after_pressure_refresh_and_preserves_safe_escape )
+{
+	newbotai_saber_final_context_t finalContext = { 0, 0, 1, 1, -1, 0, 1 };
+	// The think-time lateral plan was safe; the final active phase adds forward
+	// pressure and flips side. A live trace of that new command can veto it.
+	newbotai_saber_command_t command = NewBotAI_FinalizeSaberCommand( { 0, 1, 0, 1 }, finalContext );
+	BOOST_CHECK_EQUAL( command.forward, 1 );
+	BOOST_CHECK_EQUAL( command.right, -1 );
+	NewBotAI_SaberApplyMovementSafety( &command, 0 );
+	BOOST_CHECK_EQUAL( command.forward, 0 );
+	BOOST_CHECK_EQUAL( command.right, 0 );
+	BOOST_CHECK_EQUAL( command.attack, 0 );
+	BOOST_CHECK_EQUAL( command.jump, 0 );
+	// No fallback attack may be selected from the now-stationary input.
+	const int attack = 16, movement = 1 | 2 | 4 | 8, force = 64;
+	BOOST_CHECK_EQUAL( NewBotAI_SaberOwnedActionFlags( attack | movement | force,
+		attack | movement, command.attack ? attack : 0 ), force );
+	for ( int side : { -1, 1 } )
+	{
+		command = { -1, side, 1, 0 };
+		NewBotAI_SaberApplyMovementSafety( &command, 1 );
+		BOOST_CHECK_EQUAL( command.forward, -1 );
+		BOOST_CHECK_EQUAL( command.right, side );
+		BOOST_CHECK_EQUAL( command.jump, 1 );
+		NewBotAI_SaberApplyMovementSafety( &command, 0 );
+		BOOST_CHECK_EQUAL( command.forward, 0 );
+		BOOST_CHECK_EQUAL( command.right, 0 );
+		BOOST_CHECK_EQUAL( command.jump, 0 );
+		BOOST_CHECK_EQUAL( command.attack, 0 );
+	}
+	// Deliberate vertical fallback survives only a safe final path, never a veto.
+	command = { 1, 0, 0, 1 };
+	NewBotAI_SaberApplyMovementSafety( &command, 1 );
+	BOOST_CHECK_EQUAL( command.attack, 1 );
+	NewBotAI_SaberApplyMovementSafety( &command, 0 );
+	BOOST_CHECK_EQUAL( command.attack, 0 );
 }
 
 BOOST_AUTO_TEST_CASE( saber_airborne_footwork_and_bounded_escape_have_deliberate_reentry )

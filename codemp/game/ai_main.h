@@ -427,6 +427,7 @@ typedef struct bot_state_s
 	int					saberTechniqueJumpCooldown;
 	qboolean			saberTechniqueCandidate;
 	qboolean			saberTechniqueOwnsInputs;
+	qboolean			saberTechniqueClearQueuedAttack; // cleared with the next EA_ResetInput batch
 	newbotai_saber_command_t saberTechniqueCommand;
 	int					drainRollDir; // -1 left, 0 back, 1 right; used by NewBotAI_DrainRollEscape
 	int					drainRollResetTime;
