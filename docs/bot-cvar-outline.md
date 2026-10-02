@@ -144,8 +144,9 @@ Notes:
 Tracked duel data access:
 - Stored in `fs_homepath/fs_game/dueltracks.db` (fallback: `fs_game/dueltracks.db`); Elo and account data remain in `data.db`.
 - Database paths are printed to the server console on map load. `exportDuelTrack` reports exported CSV filenames and row counts without printing their filesystem paths. If a database cannot be opened or created, the failure is printed with the sqlite error instead of failing silently.
-- Existing tracked rows in `data.db` or `dueltrack.db` are not imported, so `dueltracks.db` starts clean.
-- Use server console command `resetdueltrack` to clear duel tracking summaries, participants, events, geometry, and aggregates from `dueltracks.db`. The command reports the path and number of rows cleared, and discards any in-progress duel tracking so those duels cannot repopulate the reset. It does not reset accounts, Elo duel history, arcade tracking, or legacy databases.
+- Tracked rows from older builds (`dueltrack.db`, or `data.db` for the oldest builds, including the old `LocalArcadeTrack*` arcade tables) are not imported automatically. On map load the server prints how many legacy sessions it found. Run server console command `importDuelTrack` once to merge them into `dueltracks.db`: legacy files are only read, duels already present are skipped, aggregates are added only when every legacy duel was new, and each source is imported at most once (until `resetdueltrack` is run).
+- Duel Elo for bots is one rating per bot level: `botlvl1` ... `botlvl10`, shared by every bot played at that level. Older per-bot keys (`<bot> [bot LN]`) in `data.db` are folded into `botlvlN` on map load.
+- Use server console command `resetdueltrack` to clear duel tracking summaries, participants, events, geometry, and aggregates from `dueltracks.db`. The command reports the path and number of rows cleared, and discards any in-progress duel tracking so those duels cannot repopulate the reset. It also forgets which legacy sources were imported, so `importDuelTrack` can bring them back. It does not reset accounts, Elo duel history, or legacy databases.
 - Use server console command `exportDuelTrack [prefix]` to export timestamped CSV files for:
   - `LocalDuelTrackSummary`
   - `LocalDuelTrackParticipant`

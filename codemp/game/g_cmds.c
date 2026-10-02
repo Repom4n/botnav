@@ -4559,7 +4559,7 @@ void Cmd_EngageDuel_f(gentity_t *ent, int dueltype)//JAPRO - Serverside - Fullfo
 				challenged->client->ps.forceHandExtendTime = level.time + 2000; //2 seconds of weaponlock at start of duel
 			}
 
-			//Store this duel's ladder identities. Both sides resolve (account, bot file + level,
+			//Store this duel's ladder identities. Both sides resolve (account, "botlvlN" bot level,
 			//or a guest's iphash key against a bot) or neither is stored, so a stale key from an
 			//earlier duel can't rate a duel that should be unranked.
 			if (duelHasRatedNames)

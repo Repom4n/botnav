@@ -8,9 +8,12 @@
 
 #define G_DUEL_GUEST_KEY_PREFIX "iphash:"
 
-//Builds the ladder key for a bot. The bot file (e.g. "botfiles/mediumds.jkb" -> "mediumds")
-//is preferred over the netname so one bot keeps one rating no matter what it is called in
-//game; the netname is only used when no bot file is known. Returns 1 when a key was written.
+#define G_DUEL_BOT_LEVEL_KEY_PREFIX "botlvl"
+
+//Builds the ladder key for a bot. Rated bots share one rating per skill level ("botlvl5"),
+//so every bot played at level 5 earns ELO for that level and the ladder shows one entry per
+//level. The bot file (e.g. "botfiles/mediumds.jkb" -> "mediumds") or netname is only used
+//when no level is known. Returns 1 when a key was written.
 static inline int G_FormatBotDuelIdentity(const char *botFile, const char *fallbackName, int botLevel, char *out, size_t outSize)
 {
 	char baseName[64];
@@ -23,6 +26,12 @@ static inline int G_FormatBotDuelIdentity(const char *botFile, const char *fallb
 		return 0;
 	out[0] = '\0';
 	baseName[0] = '\0';
+
+	if (botLevel > 0)
+	{
+		snprintf(out, outSize, "%s%i", G_DUEL_BOT_LEVEL_KEY_PREFIX, botLevel);
+		return 1;
+	}
 
 	if (botFile && botFile[0])
 	{
@@ -43,10 +52,7 @@ static inline int G_FormatBotDuelIdentity(const char *botFile, const char *fallb
 	if (!baseName[0])
 		return 0;
 
-	if (botLevel > 0)
-		snprintf(out, outSize, "%s [bot L%i]", baseName, botLevel);
-	else
-		snprintf(out, outSize, "%s", baseName);
+	snprintf(out, outSize, "%s", baseName);
 	return 1;
 }
 

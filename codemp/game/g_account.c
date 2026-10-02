@@ -244,7 +244,7 @@ typedef struct
 	int overcommitEvents;
 	char identityKey[64];
 	char identityLabel[MAX_NETNAME];
-	//The ELO ladder identity ("<name> [bot LN]" / account name), stored alongside the
+	//The ELO ladder identity ("botlvlN" / account name), stored alongside the
 	//tracking key so tracking rows and LocalDuel rating rows can be joined.
 	char eloKey[64];
 	char opponentKey[64];
@@ -4417,8 +4417,8 @@ static qboolean G_GetDuelBotIdentityName(gentity_t *ent, int botLevel, char *nam
 	if (!ent || !ent->client || !name || nameSize < 1)
 		return qfalse;
 
-	//Key bots by bot file + level (e.g. "mediumds [bot L5]") so one bot keeps one rating
-	//regardless of its in-game netname.
+	//Rated bots share one rating per skill level ("botlvl5"), whatever bot file or netname
+	//they use, so the ladder holds one entry per level.
 	trap->GetUserinfo(ent->s.number, userinfo, sizeof(userinfo));
 	if (ent->client->pers.netname_nocolor[0])
 		fallbackName = ent->client->pers.netname_nocolor;
@@ -4524,6 +4524,75 @@ qboolean G_GetRatedDuelParticipantNames(gentity_t *ent, gentity_t *opponent, cha
 	}
 
 	return (entHasKey && opponentHasKey && entName[0] && opponentName[0]) ? qtrue : qfalse;
+}
+
+//Earlier builds rated each bot separately per level ("Kyle [bot L5]", "mediumds [bot L5]"),
+//which filled /top with one redundant entry per bot. Fold those rows into the per-level
+//"botlvlN" identity so each level keeps a single rating. Idempotent: once folded nothing matches.
+static void G_FoldBotLadderKeysToLevels(sqlite3 *db)
+{
+	sqlite3_stmt *stmt = NULL;
+	char levelName[16];
+	char levelTagged[32];
+	int botLevel;
+	int pass;
+	int s;
+	int folded = 0;
+
+	if (!db)
+		return;
+
+	if (sqlite3_exec(db, "BEGIN TRANSACTION", NULL, NULL, NULL) != SQLITE_OK)
+	{
+		G_ErrorPrint("ERROR: SQL Begin Failed (G_FoldBotLadderKeysToLevels)", sqlite3_errcode(db));
+		return;
+	}
+
+	for (botLevel = BOT_DUEL_LEVEL_MIN; botLevel <= BOT_DUEL_LEVEL_MAX; botLevel++)
+	{
+		Com_sprintf(levelName, sizeof(levelName), "botlvl%i", botLevel);
+		Com_sprintf(levelTagged, sizeof(levelTagged), "%% [bot L%i]", botLevel);
+
+		for (pass = 0; pass < 2; pass++)
+		{
+			const char *sql = pass ?
+				"UPDATE LocalDuel SET loser = ? WHERE loser LIKE ?" :
+				"UPDATE LocalDuel SET winner = ? WHERE winner LIKE ?";
+
+			s = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+			if (s != SQLITE_OK || !stmt)
+			{
+				G_ErrorPrint("ERROR: SQL Prepare Failed (G_FoldBotLadderKeysToLevels)", s);
+				if (stmt)
+					sqlite3_finalize(stmt);
+				sqlite3_exec(db, "ROLLBACK", NULL, NULL, NULL);
+				return;
+			}
+			sqlite3_bind_text(stmt, 1, levelName, -1, SQLITE_TRANSIENT);
+			sqlite3_bind_text(stmt, 2, levelTagged, -1, SQLITE_TRANSIENT);
+			s = sqlite3_step(stmt);
+			sqlite3_finalize(stmt);
+			stmt = NULL;
+			if (s != SQLITE_DONE)
+			{
+				G_ErrorPrint("ERROR: SQL Update Failed (G_FoldBotLadderKeysToLevels)", s);
+				sqlite3_exec(db, "ROLLBACK", NULL, NULL, NULL);
+				return;
+			}
+			folded += sqlite3_changes(db);
+		}
+	}
+
+	if (sqlite3_exec(db, "COMMIT", NULL, NULL, NULL) != SQLITE_OK)
+	{
+		G_ErrorPrint("ERROR: SQL Commit Failed (G_FoldBotLadderKeysToLevels)", sqlite3_errcode(db));
+		sqlite3_exec(db, "ROLLBACK", NULL, NULL, NULL);
+		return;
+	}
+
+	if (folded > 0)
+		trap->Print("Duel ELO: folded %i per-bot rating rows into per-level botlvl1-%i ratings.\n",
+			folded, BOT_DUEL_LEVEL_MAX);
 }
 
 #if _ELORANKING	
@@ -8418,6 +8487,628 @@ void Svcmd_DuelTrackInfo_f(void)
 	CALL_SQLITE(close(db));
 }
 
+//---------------------------------------------------------------------------------------
+// Legacy duel tracking import
+//
+// Older builds kept duel tracking in dueltrack.db (and before that in data.db), with arcade
+// runs in separate LocalArcadeTrack* tables. dueltracks.db starts clean, so importDuelTrack
+// merges those rows back in. The legacy files are only read, never changed, and each source
+// is recorded in LocalDuelTrackImport so it can't be imported twice (resetdueltrack clears it).
+//---------------------------------------------------------------------------------------
+
+#define TRACKED_IMPORT_LEGACY_FILE	"dueltrack.db"
+#define TRACKED_IMPORT_COLUMNS_SIZE	4096
+
+static qboolean G_TrackedImportExec(sqlite3 *db, const char *sql, const char *context)
+{
+	const int s = sqlite3_exec(db, sql, NULL, NULL, NULL);
+
+	if (s != SQLITE_OK)
+	{
+		G_TrackedDBError(context, db, s);
+		return qfalse;
+	}
+	return qtrue;
+}
+
+static void G_EnsureTrackedImportTable(sqlite3 *db)
+{
+	G_TrackedImportExec(db, "CREATE TABLE IF NOT EXISTS LocalDuelTrackImport("
+		"source VARCHAR(260) PRIMARY KEY, imported_at UNSIGNED INTEGER, sessions UNSIGNED INTEGER)",
+		"CREATE TABLE LocalDuelTrackImport");
+}
+
+static qboolean G_IsTrackedImportDone(sqlite3 *db, const char *source)
+{
+	sqlite3_stmt *stmt = NULL;
+	qboolean done = qfalse;
+
+	if (!G_DoesTrackedDuelTableExist(db, "LocalDuelTrackImport"))
+		return qfalse;
+	if (sqlite3_prepare_v2(db, "SELECT 1 FROM main.LocalDuelTrackImport WHERE source = ? LIMIT 1", -1, &stmt, NULL) != SQLITE_OK || !stmt)
+	{
+		if (stmt)
+			sqlite3_finalize(stmt);
+		return qfalse;
+	}
+	sqlite3_bind_text(stmt, 1, source, -1, SQLITE_TRANSIENT);
+	done = (sqlite3_step(stmt) == SQLITE_ROW) ? qtrue : qfalse;
+	sqlite3_finalize(stmt);
+	return done;
+}
+
+static qboolean G_TrackedImportIsIdentifier(const char *name)
+{
+	if (!name || !name[0])
+		return qfalse;
+	for (; *name; name++)
+	{
+		if (!isalnum((unsigned char)*name) && *name != '_')
+			return qfalse;
+	}
+	return qtrue;
+}
+
+static qboolean G_TrackedSchemaHasTable(sqlite3 *db, const char *schema, const char *tableName)
+{
+	sqlite3_stmt *stmt = NULL;
+	qboolean exists = qfalse;
+	char sql[128];
+
+	Com_sprintf(sql, sizeof(sql), "SELECT 1 FROM %s.sqlite_master WHERE type='table' AND name=? LIMIT 1", schema);
+	if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK || !stmt)
+	{
+		if (stmt)
+			sqlite3_finalize(stmt);
+		return qfalse;
+	}
+	sqlite3_bind_text(stmt, 1, tableName, -1, SQLITE_TRANSIENT);
+	exists = (sqlite3_step(stmt) == SQLITE_ROW) ? qtrue : qfalse;
+	sqlite3_finalize(stmt);
+	return exists;
+}
+
+static qboolean G_TrackedSchemaHasColumn(sqlite3 *db, const char *schema, const char *tableName, const char *columnName)
+{
+	sqlite3_stmt *stmt = NULL;
+	qboolean found = qfalse;
+	char sql[160];
+	int s;
+
+	Com_sprintf(sql, sizeof(sql), "PRAGMA %s.table_info(%s)", schema, tableName);
+	if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK || !stmt)
+	{
+		if (stmt)
+			sqlite3_finalize(stmt);
+		return qfalse;
+	}
+	while ((s = sqlite3_step(stmt)) == SQLITE_ROW)
+	{
+		const unsigned char *name = sqlite3_column_text(stmt, 1);
+		if (name && !Q_stricmp((const char *)name, columnName))
+		{
+			found = qtrue;
+			break;
+		}
+	}
+	sqlite3_finalize(stmt);
+	return found;
+}
+
+static qboolean G_TrackedImportIsExcluded(const char *name, const char *const *excluded, int excludedCount)
+{
+	int i;
+
+	for (i = 0; i < excludedCount; i++)
+	{
+		if (!Q_stricmp(name, excluded[i]))
+			return qtrue;
+	}
+	return qfalse;
+}
+
+//Builds "a, b, c" (and "l.a, l.b, l.c" for the select side) from the columns the legacy and
+//current tables share, so rows written by any older schema version import cleanly.
+static int G_BuildTrackedImportColumns(sqlite3 *db, const char *legacyTable, const char *mainTable,
+	const char *const *excluded, int excludedCount, char *insertCols, char *selectCols, int size)
+{
+	sqlite3_stmt *stmt = NULL;
+	char sql[160];
+	int count = 0;
+	int s;
+
+	insertCols[0] = '\0';
+	selectCols[0] = '\0';
+	Com_sprintf(sql, sizeof(sql), "PRAGMA legacy.table_info(%s)", legacyTable);
+	if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK || !stmt)
+	{
+		if (stmt)
+			sqlite3_finalize(stmt);
+		return 0;
+	}
+	while ((s = sqlite3_step(stmt)) == SQLITE_ROW)
+	{
+		const char *name = (const char *)sqlite3_column_text(stmt, 1);
+
+		if (!G_TrackedImportIsIdentifier(name) || G_TrackedImportIsExcluded(name, excluded, excludedCount))
+			continue;
+		if (!G_TrackedSchemaHasColumn(db, "main", mainTable, name))
+			continue;
+		if ((int)(strlen(selectCols) + strlen(name) + 8) >= size)
+			break;
+		Q_strcat(insertCols, size, va("%s%s", count ? ", " : "", name));
+		Q_strcat(selectCols, size, va("%sl.%s", count ? ", " : "", name));
+		count++;
+	}
+	sqlite3_finalize(stmt);
+	return count;
+}
+
+static int G_TrackedImportScalar(sqlite3 *db, const char *sql)
+{
+	sqlite3_stmt *stmt = NULL;
+	int value = 0;
+
+	if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK || !stmt)
+	{
+		if (stmt)
+			sqlite3_finalize(stmt);
+		return 0;
+	}
+	if (sqlite3_step(stmt) == SQLITE_ROW)
+		value = sqlite3_column_int(stmt, 0);
+	sqlite3_finalize(stmt);
+	return value;
+}
+
+//Copies child rows (participants/events/geometry) whose parent was imported, re-pointing
+//them at the new summary ids through temp.dt_import_map.
+static qboolean G_ImportTrackedChildRows(sqlite3 *db, const char *legacyTable, const char *legacyParentCol,
+	const char *mainTable, int *rowsOut)
+{
+	static const char *const excluded[] = { "id", "summary_id", "session_id" };
+	char *insertCols;
+	char *selectCols;
+	char *sql;
+	qboolean ok;
+
+	if (rowsOut)
+		*rowsOut = 0;
+	if (!G_TrackedSchemaHasTable(db, "legacy", legacyTable) ||
+		!G_TrackedSchemaHasColumn(db, "legacy", legacyTable, legacyParentCol))
+		return qtrue;
+
+	insertCols = (char *)malloc(TRACKED_IMPORT_COLUMNS_SIZE);
+	selectCols = (char *)malloc(TRACKED_IMPORT_COLUMNS_SIZE);
+	sql = (char *)malloc(TRACKED_IMPORT_COLUMNS_SIZE * 3);
+	if (!insertCols || !selectCols || !sql)
+	{
+		free(insertCols);
+		free(selectCols);
+		free(sql);
+		return qfalse;
+	}
+
+	G_BuildTrackedImportColumns(db, legacyTable, mainTable, excluded, ARRAY_LEN(excluded),
+		insertCols, selectCols, TRACKED_IMPORT_COLUMNS_SIZE);
+	Com_sprintf(sql, TRACKED_IMPORT_COLUMNS_SIZE * 3,
+		"INSERT INTO main.%s(summary_id%s%s) SELECT m.new_id%s%s FROM legacy.%s l "
+		"JOIN temp.dt_import_map m ON m.old_id = l.%s ORDER BY l.rowid",
+		mainTable, insertCols[0] ? ", " : "", insertCols, selectCols[0] ? ", " : "", selectCols,
+		legacyTable, legacyParentCol);
+	ok = G_TrackedImportExec(db, sql, va("import %s into %s", legacyTable, mainTable));
+	if (ok && rowsOut)
+		*rowsOut = sqlite3_changes(db);
+
+	free(insertCols);
+	free(selectCols);
+	free(sql);
+	return ok;
+}
+
+//Adds legacy per-identity aggregate counters onto matching rows and inserts the rest.
+static qboolean G_ImportTrackedAggregate(sqlite3 *db)
+{
+	static const char *const keys[] = { "participant_key", "participant_kind", "side", "matchup" };
+	char *insertCols;
+	char *selectCols;
+	char *sql;
+	char match[512];
+	qboolean ok = qtrue;
+	int i;
+
+	if (!G_TrackedSchemaHasTable(db, "legacy", "LocalDuelTrackAggregate"))
+		return qtrue;
+	for (i = 0; i < (int)ARRAY_LEN(keys); i++)
+	{
+		if (!G_TrackedSchemaHasColumn(db, "legacy", "LocalDuelTrackAggregate", keys[i]))
+		{
+			trap->Print("importDuelTrack: legacy aggregate table is missing \"%s\", aggregates not imported.\n", keys[i]);
+			return qtrue;
+		}
+	}
+
+	insertCols = (char *)malloc(TRACKED_IMPORT_COLUMNS_SIZE);
+	selectCols = (char *)malloc(TRACKED_IMPORT_COLUMNS_SIZE);
+	sql = (char *)malloc(TRACKED_IMPORT_COLUMNS_SIZE * 4);
+	if (!insertCols || !selectCols || !sql)
+	{
+		free(insertCols);
+		free(selectCols);
+		free(sql);
+		return qfalse;
+	}
+
+	match[0] = '\0';
+	for (i = 0; i < (int)ARRAY_LEN(keys); i++)
+		Q_strcat(match, sizeof(match), va("%sl.%s IS main.LocalDuelTrackAggregate.%s", i ? " AND " : "", keys[i], keys[i]));
+
+	//Counter columns: everything shared except the key columns.
+	if (G_BuildTrackedImportColumns(db, "LocalDuelTrackAggregate", "LocalDuelTrackAggregate", keys, ARRAY_LEN(keys),
+		insertCols, selectCols, TRACKED_IMPORT_COLUMNS_SIZE) > 0)
+	{
+		char *setList = (char *)malloc(TRACKED_IMPORT_COLUMNS_SIZE * 3);
+		char *cursor;
+		char *token;
+
+		if (!setList)
+			ok = qfalse;
+		else
+		{
+			char columnsCopy[TRACKED_IMPORT_COLUMNS_SIZE];
+
+			setList[0] = '\0';
+			Q_strncpyz(columnsCopy, insertCols, sizeof(columnsCopy));
+			for (cursor = columnsCopy; cursor && *cursor; )
+			{
+				token = cursor;
+				cursor = strstr(cursor, ", ");
+				if (cursor)
+				{
+					*cursor = '\0';
+					cursor += 2;
+				}
+				Q_strcat(setList, TRACKED_IMPORT_COLUMNS_SIZE * 3,
+					va("%s%s = COALESCE(%s, 0) + COALESCE((SELECT l.%s FROM legacy.LocalDuelTrackAggregate l WHERE %s), 0)",
+						setList[0] ? ", " : "", token, token, token, match));
+			}
+			Com_sprintf(sql, TRACKED_IMPORT_COLUMNS_SIZE * 4,
+				"UPDATE main.LocalDuelTrackAggregate SET %s WHERE EXISTS (SELECT 1 FROM legacy.LocalDuelTrackAggregate l WHERE %s)",
+				setList, match);
+			ok = G_TrackedImportExec(db, sql, "merge legacy LocalDuelTrackAggregate");
+			free(setList);
+		}
+	}
+
+	if (ok)
+	{
+		static const char *const excludedNone[] = { "rowid" };
+
+		G_BuildTrackedImportColumns(db, "LocalDuelTrackAggregate", "LocalDuelTrackAggregate", excludedNone, ARRAY_LEN(excludedNone),
+			insertCols, selectCols, TRACKED_IMPORT_COLUMNS_SIZE);
+		Com_sprintf(sql, TRACKED_IMPORT_COLUMNS_SIZE * 4,
+			"INSERT INTO main.LocalDuelTrackAggregate(%s) SELECT %s FROM legacy.LocalDuelTrackAggregate l "
+			"WHERE NOT EXISTS (SELECT 1 FROM main.LocalDuelTrackAggregate WHERE %s)",
+			insertCols, selectCols, match);
+		ok = G_TrackedImportExec(db, sql, "insert legacy LocalDuelTrackAggregate");
+	}
+
+	free(insertCols);
+	free(selectCols);
+	free(sql);
+	return ok;
+}
+
+static qboolean G_ImportLegacyDuelSummaries(sqlite3 *db, int *sessionsOut, int *duplicatesOut)
+{
+	static const char *const excluded[] = { "id" };
+	char insertCols[TRACKED_IMPORT_COLUMNS_SIZE];
+	char selectCols[TRACKED_IMPORT_COLUMNS_SIZE];
+	char sql[TRACKED_IMPORT_COLUMNS_SIZE * 3];
+	int legacyTotal;
+
+	*sessionsOut = 0;
+	*duplicatesOut = 0;
+	if (!G_TrackedSchemaHasTable(db, "legacy", "LocalDuelTrackSummary"))
+		return qtrue;
+
+	legacyTotal = G_TrackedImportScalar(db, "SELECT COUNT(*) FROM legacy.LocalDuelTrackSummary");
+	//Skip summaries already present (same times, map and both identities), e.g. rows that a
+	//previous build had copied from data.db into dueltrack.db.
+	if (!G_TrackedImportExec(db,
+		"INSERT INTO temp.dt_import_map(old_id, new_id) "
+		"SELECT l.id, l.id + (SELECT COALESCE(MAX(id), 0) FROM main.LocalDuelTrackSummary) "
+		"FROM legacy.LocalDuelTrackSummary l WHERE NOT EXISTS (SELECT 1 FROM main.LocalDuelTrackSummary m "
+		"WHERE m.start_time IS l.start_time AND m.end_time IS l.end_time AND m.mapname IS l.mapname "
+		"AND m.winner_key IS l.winner_key AND m.loser_key IS l.loser_key)",
+		"map legacy LocalDuelTrackSummary ids"))
+		return qfalse;
+	*sessionsOut = G_TrackedImportScalar(db, "SELECT COUNT(*) FROM temp.dt_import_map");
+	*duplicatesOut = legacyTotal - *sessionsOut;
+
+	G_BuildTrackedImportColumns(db, "LocalDuelTrackSummary", "LocalDuelTrackSummary", excluded, ARRAY_LEN(excluded),
+		insertCols, selectCols, sizeof(insertCols));
+	Com_sprintf(sql, sizeof(sql),
+		"INSERT INTO main.LocalDuelTrackSummary(id%s%s) SELECT m.new_id%s%s FROM legacy.LocalDuelTrackSummary l "
+		"JOIN temp.dt_import_map m ON m.old_id = l.id ORDER BY l.id",
+		insertCols[0] ? ", " : "", insertCols, selectCols[0] ? ", " : "", selectCols);
+	return G_TrackedImportExec(db, sql, "import legacy LocalDuelTrackSummary");
+}
+
+static const char *const g_trackedLegacyArcadeSessionColumns[] = {
+	"id", "start_time", "end_time", "duration", "mapname", "participant_key", "participant_label",
+	"participant_kind", "result", "arcade_level", "total_kills", "total_force_spent", "total_force_regen",
+	"total_damage_taken", "total_damage_dealt", "low_force_windows", "knockdown_events",
+	"counter_successes", "punish_successes", "reset_successes", "saber_return_punishes"
+};
+
+//Arcade runs used to live in LocalArcadeTrackSession/Event/Geometry; map them onto the shared
+//duel table family the same way G_PersistTrackedArcadeCombat writes new runs.
+static qboolean G_ImportLegacyArcadeSessions(sqlite3 *db, int *sessionsOut, int *duplicatesOut)
+{
+	char sql[2048];
+	int legacyTotal;
+	int i;
+
+	*sessionsOut = 0;
+	*duplicatesOut = 0;
+	if (!G_TrackedSchemaHasTable(db, "legacy", "LocalArcadeTrackSession"))
+		return qtrue;
+	for (i = 0; i < (int)ARRAY_LEN(g_trackedLegacyArcadeSessionColumns); i++)
+	{
+		if (!G_TrackedSchemaHasColumn(db, "legacy", "LocalArcadeTrackSession", g_trackedLegacyArcadeSessionColumns[i]))
+		{
+			trap->Print("importDuelTrack: legacy arcade sessions are missing \"%s\", arcade runs not imported.\n",
+				g_trackedLegacyArcadeSessionColumns[i]);
+			return qtrue;
+		}
+	}
+
+	if (!G_TrackedImportExec(db, "DELETE FROM temp.dt_import_map", "clear import id map"))
+		return qfalse;
+	legacyTotal = G_TrackedImportScalar(db, "SELECT COUNT(*) FROM legacy.LocalArcadeTrackSession");
+	if (!G_TrackedImportExec(db,
+		"INSERT INTO temp.dt_import_map(old_id, new_id) "
+		"SELECT l.id, l.id + (SELECT COALESCE(MAX(id), 0) FROM main.LocalDuelTrackSummary) "
+		"FROM legacy.LocalArcadeTrackSession l WHERE NOT EXISTS (SELECT 1 FROM main.LocalDuelTrackSummary m "
+		"WHERE m.source_context = 'arcade' AND m.start_time IS l.start_time AND m.end_time IS l.end_time "
+		"AND m.mapname IS l.mapname AND (m.winner_key IS l.participant_key OR m.loser_key IS l.participant_key))",
+		"map legacy LocalArcadeTrackSession ids"))
+		return qfalse;
+	*sessionsOut = G_TrackedImportScalar(db, "SELECT COUNT(*) FROM temp.dt_import_map");
+	*duplicatesOut = legacyTotal - *sessionsOut;
+
+#define TRACKED_IMPORT_ARCADE_WON "(LOWER(COALESCE(l.result, '')) IN ('arcade_complete', 'level_clear'))"
+	Com_sprintf(sql, sizeof(sql),
+		"INSERT INTO main.LocalDuelTrackSummary(id, source_context, start_time, end_time, duration, type, mapname, "
+		"winner_key, winner_label, winner_kind, winner_side, loser_key, loser_label, loser_kind, loser_side, draw, "
+		"winner_opening, loser_opening, result, arcade_level) "
+		"SELECT m.new_id, 'arcade', l.start_time, l.end_time, l.duration, %i, l.mapname, "
+		"CASE WHEN " TRACKED_IMPORT_ARCADE_WON " THEN l.participant_key ELSE '' END, "
+		"CASE WHEN " TRACKED_IMPORT_ARCADE_WON " THEN l.participant_label ELSE '' END, "
+		"CASE WHEN " TRACKED_IMPORT_ARCADE_WON " THEN l.participant_kind ELSE 0 END, 0, "
+		"CASE WHEN " TRACKED_IMPORT_ARCADE_WON " THEN '' ELSE l.participant_key END, "
+		"CASE WHEN " TRACKED_IMPORT_ARCADE_WON " THEN '' ELSE l.participant_label END, "
+		"CASE WHEN " TRACKED_IMPORT_ARCADE_WON " THEN 0 ELSE l.participant_kind END, 0, 0, '', '', "
+		"COALESCE(NULLIF(l.result, ''), 'finished'), l.arcade_level "
+		"FROM legacy.LocalArcadeTrackSession l JOIN temp.dt_import_map m ON m.old_id = l.id ORDER BY l.id",
+		TRACKED_ARCADE_DUEL_TYPE);
+	if (!G_TrackedImportExec(db, sql, "import legacy LocalArcadeTrackSession"))
+		return qfalse;
+
+	if (!G_TrackedImportExec(db,
+		"INSERT INTO main.LocalDuelTrackParticipant(summary_id, participant_key, participant_label, participant_kind, "
+		"elo_key, opponent_key, won, side, opponent_side, matchup, total_force_spent, total_force_regen, ending_force, "
+		"ending_hp, ending_armor, low_force_windows, saber_throw_punishes, knockdown_events, total_kills, "
+		"total_damage_taken, total_damage_dealt, counter_successes, punish_successes, reset_successes) "
+		"SELECT m.new_id, l.participant_key, l.participant_label, l.participant_kind, l.participant_key, '', "
+		"CASE WHEN " TRACKED_IMPORT_ARCADE_WON " THEN 1 ELSE 0 END, 0, 0, 0, l.total_force_spent, l.total_force_regen, "
+		"0, 0, 0, l.low_force_windows, l.saber_return_punishes, l.knockdown_events, l.total_kills, "
+		"l.total_damage_taken, l.total_damage_dealt, l.counter_successes, l.punish_successes, l.reset_successes "
+		"FROM legacy.LocalArcadeTrackSession l JOIN temp.dt_import_map m ON m.old_id = l.id ORDER BY l.id",
+		"import legacy arcade participants"))
+		return qfalse;
+#undef TRACKED_IMPORT_ARCADE_WON
+
+	return G_ImportTrackedChildRows(db, "LocalArcadeTrackEvent", "session_id", "LocalDuelTrackEvent", NULL) &&
+		G_ImportTrackedChildRows(db, "LocalArcadeTrackGeometry", "session_id", "LocalDuelTrackGeometry", NULL);
+}
+
+static int G_CountLegacyTrackedSessions(const char *path)
+{
+	sqlite3 *ldb = NULL;
+	int count = 0;
+
+	if (!path || !path[0])
+		return 0;
+	//Read-only open: never creates a missing legacy file.
+	if (sqlite3_open_v2(path, &ldb, SQLITE_OPEN_READONLY, NULL) != SQLITE_OK)
+	{
+		if (ldb)
+			sqlite3_close(ldb);
+		return 0;
+	}
+	if (G_TrackedSchemaHasTable(ldb, "main", "LocalDuelTrackSummary"))
+		count += G_TrackedImportScalar(ldb, "SELECT COUNT(*) FROM LocalDuelTrackSummary");
+	if (G_TrackedSchemaHasTable(ldb, "main", "LocalArcadeTrackSession"))
+		count += G_TrackedImportScalar(ldb, "SELECT COUNT(*) FROM LocalArcadeTrackSession");
+	sqlite3_close(ldb);
+	return count;
+}
+
+//Legacy sources, newest first: dueltrack.db next to dueltracks.db, then the account data.db.
+static int G_GetLegacyTrackedSources(const char *trackDbPath, char sources[2][MAX_OSPATH])
+{
+	char *slash;
+	char *backslash;
+	int count = 0;
+
+	if (trackDbPath && trackDbPath[0])
+	{
+		Q_strncpyz(sources[count], trackDbPath, MAX_OSPATH);
+		slash = strrchr(sources[count], '/');
+		backslash = strrchr(sources[count], '\\');
+		if (backslash && (!slash || backslash > slash))
+			slash = backslash;
+		if (slash)
+		{
+			slash[1] = '\0';
+			Q_strcat(sources[count], MAX_OSPATH, TRACKED_IMPORT_LEGACY_FILE);
+		}
+		else
+			Q_strncpyz(sources[count], TRACKED_IMPORT_LEGACY_FILE, MAX_OSPATH);
+		if (Q_stricmp(sources[count], trackDbPath))
+			count++;
+	}
+	if (LOCAL_DB_PATH[0] && (!trackDbPath || Q_stricmp(LOCAL_DB_PATH, trackDbPath)))
+		Q_strncpyz(sources[count++], LOCAL_DB_PATH, MAX_OSPATH);
+	return count;
+}
+
+static qboolean G_ImportLegacyTrackedSource(sqlite3 *db, const char *path)
+{
+	sqlite3_stmt *stmt = NULL;
+	int duelSessions = 0, duelDuplicates = 0;
+	int arcadeSessions = 0, arcadeDuplicates = 0;
+	int participants = 0, events = 0, geometry = 0;
+	qboolean ok = qtrue;
+	int s;
+
+	if (!G_CountLegacyTrackedSessions(path))
+		return qtrue;
+	if (G_IsTrackedImportDone(db, path))
+	{
+		trap->Print("importDuelTrack: \"%s\" was already imported, skipping.\n", path);
+		return qtrue;
+	}
+
+	s = sqlite3_prepare_v2(db, "ATTACH DATABASE ? AS legacy", -1, &stmt, NULL);
+	if (s == SQLITE_OK && stmt)
+	{
+		sqlite3_bind_text(stmt, 1, path, -1, SQLITE_TRANSIENT);
+		s = sqlite3_step(stmt);
+	}
+	if (stmt)
+		sqlite3_finalize(stmt);
+	if (s != SQLITE_DONE)
+	{
+		G_TrackedDBError(va("attach legacy duel tracking database \"%s\"", path), db, s);
+		return qfalse;
+	}
+
+	ok = G_TrackedImportExec(db, "BEGIN TRANSACTION", "begin importDuelTrack transaction");
+	if (ok)
+	{
+		ok = G_TrackedImportExec(db, "DROP TABLE IF EXISTS temp.dt_import_map", "drop import id map") &&
+			G_TrackedImportExec(db, "CREATE TEMP TABLE dt_import_map(old_id INTEGER PRIMARY KEY, new_id INTEGER)", "create import id map") &&
+			G_ImportLegacyDuelSummaries(db, &duelSessions, &duelDuplicates) &&
+			G_ImportTrackedChildRows(db, "LocalDuelTrackParticipant", "summary_id", "LocalDuelTrackParticipant", &participants) &&
+			G_ImportTrackedChildRows(db, "LocalDuelTrackEvent", "summary_id", "LocalDuelTrackEvent", &events) &&
+			G_ImportTrackedChildRows(db, "LocalDuelTrackGeometry", "summary_id", "LocalDuelTrackGeometry", &geometry);
+
+		//Aggregates can't be de-duplicated row by row, so only merge them when every legacy
+		//duel was new; otherwise their counters would be added twice.
+		if (ok && duelSessions > 0 && duelDuplicates == 0)
+			ok = G_ImportTrackedAggregate(db);
+		else if (ok && duelDuplicates > 0)
+			trap->Print("importDuelTrack: %i duels in \"%s\" were already present; aggregates from it were not merged.\n",
+				duelDuplicates, path);
+
+		if (ok)
+			ok = G_ImportLegacyArcadeSessions(db, &arcadeSessions, &arcadeDuplicates);
+
+		if (ok)
+		{
+			stmt = NULL;
+			s = sqlite3_prepare_v2(db, "INSERT OR REPLACE INTO main.LocalDuelTrackImport(source, imported_at, sessions) VALUES (?, ?, ?)", -1, &stmt, NULL);
+			if (s == SQLITE_OK && stmt)
+			{
+				sqlite3_bind_text(stmt, 1, path, -1, SQLITE_TRANSIENT);
+				sqlite3_bind_int64(stmt, 2, (sqlite3_int64)time(NULL));
+				sqlite3_bind_int(stmt, 3, duelSessions + arcadeSessions);
+				s = sqlite3_step(stmt);
+			}
+			if (stmt)
+				sqlite3_finalize(stmt);
+			if (s != SQLITE_DONE)
+			{
+				G_TrackedDBError("record importDuelTrack source", db, s);
+				ok = qfalse;
+			}
+		}
+
+		if (ok)
+			ok = G_TrackedImportExec(db, "COMMIT", "commit importDuelTrack transaction");
+		if (!ok)
+			sqlite3_exec(db, "ROLLBACK", NULL, NULL, NULL);
+	}
+
+	sqlite3_exec(db, "DROP TABLE IF EXISTS temp.dt_import_map", NULL, NULL, NULL);
+	sqlite3_exec(db, "DETACH DATABASE legacy", NULL, NULL, NULL);
+
+	if (ok)
+		trap->Print("importDuelTrack: imported %i duels (%i participants, %i events, %i geometry rows) and %i arcade runs from \"%s\"%s.\n",
+			duelSessions, participants, events, geometry, arcadeSessions, path,
+			(duelDuplicates + arcadeDuplicates) ? va(", skipped %i already present", duelDuplicates + arcadeDuplicates) : "");
+	else
+		trap->Print("importDuelTrack: import from \"%s\" failed and was rolled back; nothing was changed.\n", path);
+	return ok;
+}
+
+//Startup hint so a server that upgraded from a dueltrack.db build knows its history is still there.
+static void G_ReportLegacyTrackedData(sqlite3 *db, const char *trackDbPath)
+{
+	char sources[2][MAX_OSPATH];
+	const int numSources = G_GetLegacyTrackedSources(trackDbPath, sources);
+	int i;
+
+	for (i = 0; i < numSources; i++)
+	{
+		const int sessions = G_CountLegacyTrackedSessions(sources[i]);
+		if (sessions > 0 && !G_IsTrackedImportDone(db, sources[i]))
+			trap->Print("Duel tracking: %i sessions from an older build are in \"%s\". Run importDuelTrack to merge them into %s.\n",
+				sessions, sources[i], trackDbPath);
+	}
+}
+
+void Svcmd_ImportDuelTrack_f(void)
+{
+	sqlite3 *db = NULL;
+	char effectiveDbPath[MAX_OSPATH];
+	char sources[2][MAX_OSPATH];
+	int numSources;
+	int i;
+	int found = 0;
+
+	if (!LOCAL_DUELTRACK_DB_PATH[0])
+	{
+		trap->Print("importDuelTrack failed: duel tracking database path is not initialized.\n");
+		return;
+	}
+	if (!G_OpenTrackedLocalDB(&db, effectiveDbPath, sizeof(effectiveDbPath)))
+	{
+		trap->Print("importDuelTrack failed: unable to open the duel tracking database \"%s\".\n",
+			LOCAL_DUELTRACK_DB_PATH);
+		return;
+	}
+
+	G_EnsureLocalDuelTrackingSchema(db);
+	G_EnsureTrackedImportTable(db);
+	numSources = G_GetLegacyTrackedSources(effectiveDbPath, sources);
+	for (i = 0; i < numSources; i++)
+	{
+		if (G_CountLegacyTrackedSessions(sources[i]) <= 0)
+			continue;
+		found++;
+		G_ImportLegacyTrackedSource(db, sources[i]);
+	}
+	if (!found)
+		trap->Print("importDuelTrack: no legacy duel tracking data found next to \"%s\".\n", effectiveDbPath);
+
+	G_PrintTrackedDuelTableCounts(db, effectiveDbPath);
+	sqlite3_close(db);
+}
+
 void Svcmd_ResetDuelTrack_f(void)
 {
 	sqlite3 *db = NULL;
@@ -8481,6 +9172,18 @@ void Svcmd_ResetDuelTrack_f(void)
 		}
 		else
 			trackedRows += sqlite3_changes(db);
+	}
+
+	//A reset starts a clean slate, so forget which legacy sources were imported; running
+	//importDuelTrack afterwards can then bring them back without double counting.
+	if (success && G_DoesTrackedDuelTableExist(db, "LocalDuelTrackImport"))
+	{
+		int s = sqlite3_exec(db, "DELETE FROM main.LocalDuelTrackImport", NULL, NULL, NULL);
+		if (s != SQLITE_OK)
+		{
+			G_TrackedDBError("clear LocalDuelTrackImport", db, s);
+			success = qfalse;
+		}
 	}
 
 	//Only the tracking tables are targeted here; account, Elo, race and arcade score data
@@ -12961,6 +13664,8 @@ void InitGameAccountStuff( void ) { //Called every mapload , move the create tab
 		G_ErrorPrint("ERROR: SQL Create Failed (InitGameAccountStuff 3)", s);
 	CALL_SQLITE (finalize(stmt));
 
+	G_FoldBotLadderKeysToLevels(db);
+
 	G_EnsureLocalArcadeSchema(db);
 
 	sql = "CREATE TABLE IF NOT EXISTS LocalTeam(id INTEGER PRIMARY KEY, name VARCHAR(16), tag VARCHAR(16), longname VARCHAR(24), flags UNSIGNED TINYINT)";
@@ -13034,8 +13739,9 @@ void InitGameAccountStuff( void ) { //Called every mapload , move the create tab
 	if (G_OpenTrackedLocalDB(&db, effectiveDuelTrackPath, sizeof(effectiveDuelTrackPath)))
 	{
 		G_EnsureLocalDuelTrackingSchema(db);
-		CALL_SQLITE(close(db));
 		trap->Print("Duel tracking database: %s\n", effectiveDuelTrackPath);
+		G_ReportLegacyTrackedData(db, effectiveDuelTrackPath);
+		CALL_SQLITE(close(db));
 	}
 	else
 	{
