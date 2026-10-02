@@ -6150,7 +6150,8 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker, vec3_
 
 	// do the damage
 	if (!take && asave > 0)
-		G_TrackedDuelRecordDamage(targ, attacker, asave, mod);
+		G_TrackedDuelRecordDamage(targ, attacker,
+			G_DuelCaptureDamageAmount(targ->health, targ->health, asave), mod);
 	if (take)
 	{
 		if (targ->client && targ->s.number < MAX_CLIENTS &&

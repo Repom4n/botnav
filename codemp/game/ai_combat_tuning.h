@@ -283,6 +283,12 @@ static inline int NewBotAI_SaberCanOwnInputs(int holdingSaber, int visibleEnemy,
 	return holdingSaber && visibleEnemy && !engineBusy && !forceMovement && !navigationMovement;
 }
 
+static inline int NewBotAI_SaberPrimaryBladeAvailable(int holstered)
+{
+	// Staff/dual partial holster (1) disables the second blade, not primary attacks.
+	return holstered >= 0 && holstered < 2;
+}
+
 static inline int NewBotAI_ShouldAnticipateSaberThrow(int saberOnlyDuel, int saberInFlight, int basicSwing)
 {
 	return !saberOnlyDuel && !saberInFlight && !basicSwing;

@@ -9,6 +9,8 @@
 #include "ai_combat_tuning.h"
 #include "w_saber.h"
 
+extern qboolean PM_SaberInTransition(int move);
+
 #define _USE_CURL 0
 
 #if _USE_CURL
@@ -174,6 +176,7 @@ typedef struct
 	float selfYaw;
 	float enemyYaw;
 	unsigned char opponentKind;
+	int opponentClientNum;
 	char opponentKey[64];
 	char opponentLabel[MAX_NETNAME];
 	char sequenceLabel[32];
@@ -313,6 +316,7 @@ typedef struct
 	int totalDamageTaken;
 	int totalDamageDealt;
 	int lowForceWindows;
+	int hasLethalDamage;
 	int knockdownEvents;
 	int resetSuccessEvents;
 	int counterSuccessEvents;
@@ -1447,6 +1451,9 @@ static const char *G_GetTrackedEventQualityName(const tracked_duel_event_t *even
 		if (event->state == DUEL_TRACK_STATE_PANIC)
 			return "bad";
 		return "mediocre";
+	case DUEL_TRACK_EVENT_INPUT_START:
+	case DUEL_TRACK_EVENT_SWING_START:
+		return "mediocre";
 	default:
 		break;
 	}
@@ -1457,6 +1464,13 @@ static const char *G_GetTrackedEventQualityName(const tracked_duel_event_t *even
 static int G_GetTrackedSwingSideValue(int saberMove)
 {
 	return BG_SaberHorizontalSweepDir(saberMove);
+}
+
+static qboolean G_IsTrackedSaberContinuityAllowed(const gentity_t *ent)
+{
+	return ent && ent->client && ent->health > 0 && ent->client->ps.weapon == WP_SABER &&
+		!ent->client->ps.saberInFlight && ent->client->ps.forceHandExtend == HANDEXTEND_NONE &&
+		!BG_InKnockDown(ent->client->ps.legsAnim);
 }
 
 static const char *G_GetTrackedSwingSideName(int swingSide)
@@ -1781,6 +1795,7 @@ static void G_FillTrackedEventContext(tracked_duel_event_t *event, gentity_t *se
 	event->saberStance = self->client->ps.fd.saberAnimLevel;
 	event->grounded = self->client->ps.groundEntityNum != ENTITYNUM_NONE;
 	event->damageSource = -1;
+	event->opponentClientNum = -1;
 	event->saberMove = self->client->ps.saberMove;
 	event->selfHealth = (short)self->health;
 	event->selfArmor = (short)self->client->ps.stats[STAT_ARMOR];
@@ -1789,6 +1804,7 @@ static void G_FillTrackedEventContext(tracked_duel_event_t *event, gentity_t *se
 	if (enemy && enemy->client)
 	{
 		int opponentKind;
+		event->opponentClientNum = enemy->s.number;
 		event->enemySaberMove = enemy->client->ps.saberMove;
 		event->enemyHealth = (short)enemy->health;
 		event->enemyArmor = (short)enemy->client->ps.stats[STAT_ARMOR];
@@ -3197,18 +3213,18 @@ static void G_PersistTrackedDuel(tracked_duel_runtime_t *winnerRuntime, tracked_
 	CALL_SQLITE(close(db));
 }
 
-static void G_ClassifyTrackedAttackOutcomes(tracked_duel_runtime_t *runtime)
+static void G_ClassifyTrackedAttackOutcomes(tracked_duel_event_t *events, int eventCount)
 {
 	int i;
 
-	if (!runtime)
+	if (!events)
 		return;
 
-	for (i = 0; i < runtime->eventCount; i++)
+	for (i = 0; i < eventCount; i++)
 	{
-		tracked_duel_event_t *attack = &runtime->events[i];
+		tracked_duel_event_t *attack = &events[i];
 		int j;
-		int endIndex = runtime->eventCount;
+		int endIndex = eventCount;
 		const int endTime = attack->relTime + TRACKED_ATTACK_CHAIN_WINDOW_MS;
 		duel_capture_outcome_t outcome = { 0, 0, 0 };
 
@@ -3220,9 +3236,9 @@ static void G_ClassifyTrackedAttackOutcomes(tracked_duel_runtime_t *runtime)
 			continue;
 		}
 
-		for (j = i + 1; j < runtime->eventCount; j++)
+		for (j = i + 1; j < eventCount; j++)
 		{
-			const tracked_duel_event_t *event = &runtime->events[j];
+			const tracked_duel_event_t *event = &events[j];
 			const qboolean nextAttack = (attack->eventType == DUEL_TRACK_EVENT_SWING_START ||
 				attack->eventType == DUEL_TRACK_EVENT_ATTACK_CHAIN) ?
 				(event->eventType == DUEL_TRACK_EVENT_SWING_START) :
@@ -3235,9 +3251,12 @@ static void G_ClassifyTrackedAttackOutcomes(tracked_duel_runtime_t *runtime)
 		}
 		for (j = i + 1; j < endIndex; j++)
 		{
-			const tracked_duel_event_t *event = &runtime->events[j];
+			const tracked_duel_event_t *event = &events[j];
 			const int kind = event->eventType == DUEL_TRACK_EVENT_DAMAGE_DEALT ? DUEL_CAPTURE_OUTCOME_DEALT :
 				(event->eventType == DUEL_TRACK_EVENT_DAMAGE ? DUEL_CAPTURE_OUTCOME_TAKEN : DUEL_CAPTURE_OUTCOME_OTHER);
+			if (!G_DuelCaptureSameOpponent(attack->opponentKey, attack->opponentClientNum,
+				event->opponentKey, event->opponentClientNum))
+				continue;
 			G_DuelCaptureAccumulateOutcome(&outcome, i, endIndex, attack->relTime, endTime,
 				j, event->relTime, kind, event->amount, !Q_stricmp(event->note, "kill"));
 		}
@@ -3300,18 +3319,19 @@ void G_UpdateTrackedDuelFrame(gentity_t *ent)
 	opponentHealthArmor = G_GetTrackedCombatHealthArmor(opponent);
 	attackButtons = ent->client->pers.cmd.buttons & attackMask;
 	linkedSwing = G_DuelCaptureSwingLinked(&runtime->swing,
-		BG_SaberInAttack(ent->client->ps.saberMove) && !ent->client->ps.saberInFlight,
+		G_IsTrackedSaberContinuityAllowed(ent) && BG_SaberInAttack(ent->client->ps.saberMove),
 		ent->client->ps.saberMove) ? qtrue : qfalse;
 	if (runtime->swing.active &&
-		(!BG_SaberInAttack(ent->client->ps.saberMove) || ent->client->ps.saberInFlight ||
+		(!G_IsTrackedSaberContinuityAllowed(ent) || !BG_SaberInAttack(ent->client->ps.saberMove) ||
 		runtime->swing.move != ent->client->ps.saberMove))
 	{
 		G_DuelCaptureSampleYaw(&runtime->swing, ent->client->ps.viewangles[YAW]);
 		G_AddTrackedDuelEvent(runtime, DUEL_TRACK_EVENT_SWING_END, level.time - runtime->duelStartTime,
 			runtime->swing.move, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, "completed", ent, opponent);
 	}
-	if (G_DuelCaptureSwingStarted(&runtime->swing,
-		BG_SaberInAttack(ent->client->ps.saberMove) && !ent->client->ps.saberInFlight,
+	if (G_DuelCaptureSwingStartedWithContinuity(&runtime->swing,
+		G_IsTrackedSaberContinuityAllowed(ent) && BG_SaberInAttack(ent->client->ps.saberMove),
+		G_IsTrackedSaberContinuityAllowed(ent) && PM_SaberInTransition(ent->client->ps.saberMove),
 		ent->client->ps.saberMove, level.time, ent->client->ps.viewangles[YAW]))
 	{
 		G_TouchTrackedDuelSequence(runtime);
@@ -3432,6 +3452,131 @@ void G_UpdateTrackedDuelFrame(gentity_t *ent)
 	runtime->lastOpponentHealthArmor = opponentHealthArmor;
 }
 
+static void G_RecordTrackedArcadeDamage(gentity_t *target, gentity_t *attacker, int amount, int mod)
+{
+	tracked_arcade_runtime_t *runtime;
+	gentity_t *opponent;
+	tracked_duel_event_t *event;
+	int firstEvent;
+	int state;
+	int range;
+	qboolean linkedSwing;
+	qboolean endedSwing;
+	const qboolean trackedAttacker = (attacker && attacker->client && attacker->s.number >= 0 &&
+		attacker->s.number < MAX_CLIENTS) ? qtrue : qfalse;
+
+	runtime = &g_trackedArcadeCombats[target->s.number];
+	if (runtime->active && !runtime->hasLethalDamage)
+	{
+		opponent = trackedAttacker && attacker != target ? attacker : G_GetTrackedArcadePrimaryOpponent(target);
+		G_DuelCaptureMarkLethal(target->health, &runtime->hasLethalDamage);
+		runtime->totalDamageTaken += amount;
+		runtime->lastDamageTakenTime = level.time;
+		G_DuelCaptureSampleYaw(&runtime->swing, target->client->ps.viewangles[YAW]);
+		firstEvent = runtime->eventCount;
+		G_AddTrackedArcadeEvent(runtime, DUEL_TRACK_EVENT_DAMAGE, level.time - runtime->startTime,
+			amount, DUEL_TRACK_POWER_UNKNOWN, G_InferTrackedForceState(target, opponent),
+			G_GetTrackedRangeBucket(target, opponent),
+			(mod == MOD_SABER && attacker && attacker->client && attacker->client->ps.saberInFlight) ? "saberthrow" : NULL,
+			target, opponent);
+		if (runtime->eventCount > firstEvent)
+		{
+			event = &runtime->events[runtime->eventCount - 1];
+			event->damageSource = mod;
+			if (trackedAttacker)
+				G_GetDuelTrackingIdentity(attacker, event->damageAttackerKey,
+					sizeof(event->damageAttackerKey), NULL, 0, NULL);
+		}
+		if (runtime->hasLethalDamage && runtime->swing.active)
+		{
+			G_AddTrackedArcadeEvent(runtime, DUEL_TRACK_EVENT_SWING_END, level.time - runtime->startTime,
+				runtime->swing.move, DUEL_TRACK_POWER_UNKNOWN, G_InferTrackedForceState(target, opponent),
+				G_GetTrackedRangeBucket(target, opponent), "session_end", target, opponent);
+			runtime->swing.active = 0;
+			runtime->swing.chainPending = 0;
+		}
+	}
+
+	if (!attacker || !attacker->client || attacker->s.number < 0 || attacker->s.number >= MAX_CLIENTS)
+		return;
+	runtime = &g_trackedArcadeCombats[attacker->s.number];
+	/* Use the selected target snapshot: selecting again after a lethal hit would skip the corpse. */
+	if (!G_DuelCaptureCreditsOpponent(runtime->active, attacker->s.number, attacker->s.number,
+		target->s.number, runtime->lastOpponentClientNum))
+		return;
+	runtime->totalDamageDealt += amount;
+	G_TouchTrackedArcadeSequence(runtime);
+	state = G_InferTrackedForceState(attacker, target);
+	range = G_GetTrackedRangeBucket(attacker, target);
+	firstEvent = runtime->eventCount;
+	endedSwing = G_DuelCapturePrepareSwingTransition(&runtime->swing,
+		G_IsTrackedSaberContinuityAllowed(attacker) && BG_SaberInAttack(attacker->client->ps.saberMove),
+		attacker->client->ps.saberMove, attacker->client->ps.viewangles[YAW]) ? qtrue : qfalse;
+	if (endedSwing)
+	{
+		G_AddTrackedArcadeEvent(runtime, DUEL_TRACK_EVENT_SWING_END, level.time - runtime->startTime,
+			runtime->swing.move, DUEL_TRACK_POWER_UNKNOWN, state, range, "completed", attacker, target);
+		runtime->swing.active = 0;
+	}
+	if (!G_IsTrackedSaberContinuityAllowed(attacker) || !BG_SaberInAttack(attacker->client->ps.saberMove))
+		G_DuelCaptureSwingStartedWithContinuity(&runtime->swing, 0,
+			G_IsTrackedSaberContinuityAllowed(attacker) && PM_SaberInTransition(attacker->client->ps.saberMove),
+			attacker->client->ps.saberMove, level.time, attacker->client->ps.viewangles[YAW]);
+	linkedSwing = G_DuelCaptureSwingLinked(&runtime->swing,
+		G_IsTrackedSaberContinuityAllowed(attacker) && BG_SaberInAttack(attacker->client->ps.saberMove),
+		attacker->client->ps.saberMove) ? qtrue : qfalse;
+	if (mod == MOD_SABER && !runtime->hasLethalDamage &&
+		G_IsTrackedSaberContinuityAllowed(attacker) && BG_SaberInAttack(attacker->client->ps.saberMove))
+	{
+		if (G_DuelCaptureSwingStartedWithContinuity(&runtime->swing, 1, 0, attacker->client->ps.saberMove,
+			level.time, attacker->client->ps.viewangles[YAW]))
+		{
+			runtime->lastAttackTime = level.time;
+			runtime->lastAttackSwingSide = G_GetTrackedSwingSideValue(attacker->client->ps.saberMove);
+			runtime->swing.preStrafe = (runtime->lastRightMove > 0) - (runtime->lastRightMove < 0);
+			G_AddTrackedArcadeEvent(runtime, DUEL_TRACK_EVENT_SWING_START, level.time - runtime->startTime,
+				attacker->client->ps.saberMove, DUEL_TRACK_POWER_UNKNOWN, state, range, "accepted", attacker, target);
+			if (linkedSwing)
+				G_AddTrackedArcadeEvent(runtime, DUEL_TRACK_EVENT_ATTACK_CHAIN, level.time - runtime->startTime,
+					attacker->client->ps.saberMove, DUEL_TRACK_POWER_UNKNOWN, state, range, "accepted_link", attacker, target);
+		}
+		G_AddTrackedArcadeEvent(runtime, DUEL_TRACK_EVENT_SWING_DAMAGE, level.time - runtime->startTime,
+			amount, DUEL_TRACK_POWER_UNKNOWN, state, range, "confirmed", attacker, target);
+	}
+	G_AddTrackedArcadeEvent(runtime, DUEL_TRACK_EVENT_DAMAGE_DEALT, level.time - runtime->startTime,
+		amount, DUEL_TRACK_POWER_UNKNOWN, state, range, target->health <= 0 ? "kill" : "hit", attacker, target);
+	if (runtime->lastDamageTakenTime > 0 && level.time - runtime->lastDamageTakenTime <= TRACKED_COUNTER_WINDOW_MS)
+	{
+		runtime->counterSuccessEvents++;
+		G_AddTrackedArcadeEvent(runtime, DUEL_TRACK_EVENT_COUNTER_SUCCESS, level.time - runtime->startTime,
+			amount, DUEL_TRACK_POWER_UNKNOWN, state, range, "counter", attacker, target);
+	}
+	else if (runtime->swing.startTime > 0 && level.time - runtime->swing.startTime <= TRACKED_PUNISH_WINDOW_MS)
+	{
+		runtime->punishSuccessEvents++;
+		G_AddTrackedArcadeEvent(runtime, DUEL_TRACK_EVENT_PUNISH_SUCCESS, level.time - runtime->startTime,
+			amount, DUEL_TRACK_POWER_UNKNOWN, state, range, "punish", attacker, target);
+	}
+	if (target->client->ps.saberInFlight)
+	{
+		runtime->saberReturnPunishes++;
+		G_AddTrackedArcadeEvent(runtime, DUEL_TRACK_EVENT_SABER_RETURN_PUNISH, level.time - runtime->startTime,
+			amount, DUEL_TRACK_POWER_UNKNOWN, state, range, "return", attacker, target);
+	}
+	if (BG_InKnockDown(target->client->ps.legsAnim))
+		G_AddTrackedArcadeEvent(runtime, DUEL_TRACK_EVENT_KNOCKDOWN_FOLLOWUP, level.time - runtime->startTime,
+			amount, DUEL_TRACK_POWER_UNKNOWN, state, range, "followup", attacker, target);
+	for (; firstEvent < runtime->eventCount; firstEvent++)
+	{
+		event = &runtime->events[firstEvent];
+		if (event->eventType == DUEL_TRACK_EVENT_SWING_START || event->eventType == DUEL_TRACK_EVENT_ATTACK_CHAIN ||
+			event->eventType == DUEL_TRACK_EVENT_SWING_END)
+			continue;
+		event->damageSource = mod;
+		Q_strncpyz(event->damageAttackerKey, runtime->identityKey, sizeof(event->damageAttackerKey));
+	}
+}
+
 void G_TrackedDuelRecordDamage(gentity_t *target, gentity_t *attacker, int amount, int mod)
 {
 	tracked_duel_runtime_t *victim;
@@ -3443,10 +3588,12 @@ void G_TrackedDuelRecordDamage(gentity_t *target, gentity_t *attacker, int amoun
 	int range;
 	qboolean linkedSwing;
 	qboolean lethal;
+	qboolean endedSwing;
 
 	if (!G_IsTrackedDuelCollectionEnabled() || !target || !target->client ||
 		target->s.number < 0 || target->s.number >= MAX_CLIENTS || amount <= 0)
 		return;
+	G_RecordTrackedArcadeDamage(target, attacker, amount, mod);
 	victim = &g_trackedDuels[target->s.number];
 	if (!victim->active || victim->hasDeathSnapshot || victim->hasLethalDamage ||
 		victim->opponentClientNum < 0 || victim->opponentClientNum >= MAX_CLIENTS)
@@ -3464,7 +3611,7 @@ void G_TrackedDuelRecordDamage(gentity_t *target, gentity_t *attacker, int amoun
 	{
 		event = &victim->events[victim->eventCount - 1];
 		event->damageSource = mod;
-		if (attacker && attacker->client)
+		if (attacker && attacker->client && attacker->s.number >= 0 && attacker->s.number < MAX_CLIENTS)
 			G_GetDuelTrackingIdentity(attacker, event->damageAttackerKey,
 				sizeof(event->damageAttackerKey), NULL, 0, NULL);
 	}
@@ -3489,19 +3636,27 @@ void G_TrackedDuelRecordDamage(gentity_t *target, gentity_t *attacker, int amoun
 	state = G_InferTrackedForceState(attacker, target);
 	range = G_GetTrackedRangeBucket(attacker, target);
 	eventCount = source->eventCount;
-	G_DuelCapturePrepareSwingTransition(&source->swing,
-		BG_SaberInAttack(attacker->client->ps.saberMove) && !attacker->client->ps.saberInFlight,
-		attacker->client->ps.saberMove, attacker->client->ps.viewangles[YAW]);
-	linkedSwing = G_DuelCaptureSwingLinked(&source->swing, 1, attacker->client->ps.saberMove) ? qtrue : qfalse;
-	/* A saber hit is not a damaging swing when the blade is in flight. */
-	if (mod == MOD_SABER && G_DuelCaptureCanObserveInputs(attacker->health, source->hasDeathSnapshot) &&
-		!attacker->client->ps.saberInFlight &&
-		BG_SaberInAttack(attacker->client->ps.saberMove))
+	endedSwing = G_DuelCapturePrepareSwingTransition(&source->swing,
+		G_IsTrackedSaberContinuityAllowed(attacker) && BG_SaberInAttack(attacker->client->ps.saberMove),
+		attacker->client->ps.saberMove, attacker->client->ps.viewangles[YAW]) ? qtrue : qfalse;
+	if (endedSwing)
 	{
-		if (linkedSwing)
-			G_AddTrackedDuelEvent(source, DUEL_TRACK_EVENT_SWING_END, level.time - source->duelStartTime,
-				source->swing.move, DUEL_TRACK_POWER_UNKNOWN, state, range, "completed", attacker, target);
-		if (G_DuelCaptureSwingStarted(&source->swing, 1, attacker->client->ps.saberMove,
+		G_AddTrackedDuelEvent(source, DUEL_TRACK_EVENT_SWING_END, level.time - source->duelStartTime,
+			source->swing.move, DUEL_TRACK_POWER_UNKNOWN, state, range, "completed", attacker, target);
+		source->swing.active = 0;
+	}
+	if (!G_IsTrackedSaberContinuityAllowed(attacker) || !BG_SaberInAttack(attacker->client->ps.saberMove))
+		G_DuelCaptureSwingStartedWithContinuity(&source->swing, 0,
+			G_IsTrackedSaberContinuityAllowed(attacker) && PM_SaberInTransition(attacker->client->ps.saberMove),
+			attacker->client->ps.saberMove, level.time, attacker->client->ps.viewangles[YAW]);
+	linkedSwing = G_DuelCaptureSwingLinked(&source->swing,
+		G_IsTrackedSaberContinuityAllowed(attacker) && BG_SaberInAttack(attacker->client->ps.saberMove),
+		attacker->client->ps.saberMove) ? qtrue : qfalse;
+	/* A saber hit is not a damaging swing when the blade is in flight. */
+	if (mod == MOD_SABER && !source->hasDeathSnapshot &&
+		G_IsTrackedSaberContinuityAllowed(attacker) && BG_SaberInAttack(attacker->client->ps.saberMove))
+	{
+		if (G_DuelCaptureSwingStartedWithContinuity(&source->swing, 1, 0, attacker->client->ps.saberMove,
 			level.time, attacker->client->ps.viewangles[YAW]))
 		{
 			source->lastAttackTime = level.time;
@@ -3562,6 +3717,7 @@ static void G_CloseTrackedDuelSwing(tracked_duel_runtime_t *slot, gentity_t *ent
 		slot->swing.move, DUEL_TRACK_POWER_UNKNOWN, G_InferTrackedForceState(ent, opponent),
 		G_GetTrackedRangeBucket(ent, opponent), "session_end", ent, opponent);
 	slot->swing.active = 0;
+	slot->swing.chainPending = 0;
 }
 
 //Prefer the death snapshot: the respawn path may have already restored live resources.
@@ -3632,8 +3788,8 @@ void G_FinishTrackedDuel(gentity_t *winner, gentity_t *loser, int duelType, qboo
 	loserSlot->didDieLowForce = draw ? 0 : (loserLowForceFinish ? 1 : 0);
 	G_SetTrackedPrimaryIssue(winnerSlot, winnerLowForceFinish);
 	G_SetTrackedPrimaryIssue(loserSlot, loserLowForceFinish);
-	G_ClassifyTrackedAttackOutcomes(winnerSlot);
-	G_ClassifyTrackedAttackOutcomes(loserSlot);
+	G_ClassifyTrackedAttackOutcomes(winnerSlot->events, winnerSlot->eventCount);
+	G_ClassifyTrackedAttackOutcomes(loserSlot->events, loserSlot->eventCount);
 
 	memcpy(&winnerRuntime, winnerSlot, sizeof(winnerRuntime));
 	memcpy(&loserRuntime, loserSlot, sizeof(loserRuntime));
@@ -4013,7 +4169,6 @@ void G_UpdateTrackedArcadeCombatFrame(gentity_t *ent)
 	int curForce;
 	int curHealthArmor;
 	int forceDelta;
-	int healthDelta;
 	int curRangeBucket = 0;
 	int airborne;
 	int knockedDown;
@@ -4030,7 +4185,7 @@ void G_UpdateTrackedArcadeCombatFrame(gentity_t *ent)
 		return;
 
 	runtime = &g_trackedArcadeCombats[ent->s.number];
-	if (!runtime->active)
+	if (!runtime->active || runtime->hasLethalDamage)
 		return;
 
 	opponent = G_GetTrackedArcadePrimaryOpponent(ent);
@@ -4064,18 +4219,19 @@ void G_UpdateTrackedArcadeCombatFrame(gentity_t *ent)
 	attackButtons = ent->client->pers.cmd.buttons & attackMask;
 	observeInputs = G_DuelCaptureCanObserveInputs(ent->health, 0) ? qtrue : qfalse;
 	linkedSwing = G_DuelCaptureSwingLinked(&runtime->swing,
-		observeInputs && BG_SaberInAttack(ent->client->ps.saberMove) && !ent->client->ps.saberInFlight,
+		observeInputs && G_IsTrackedSaberContinuityAllowed(ent) && BG_SaberInAttack(ent->client->ps.saberMove),
 		ent->client->ps.saberMove) ? qtrue : qfalse;
 	if (runtime->swing.active && opponent &&
-		(!BG_SaberInAttack(ent->client->ps.saberMove) || ent->client->ps.saberInFlight ||
+		(!G_IsTrackedSaberContinuityAllowed(ent) || !BG_SaberInAttack(ent->client->ps.saberMove) ||
 		runtime->swing.move != ent->client->ps.saberMove))
 	{
 		G_DuelCaptureSampleYaw(&runtime->swing, ent->client->ps.viewangles[YAW]);
 		G_AddTrackedArcadeEvent(runtime, DUEL_TRACK_EVENT_SWING_END, level.time - runtime->startTime,
 			runtime->swing.move, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, "completed", ent, opponent);
 	}
-	if (G_DuelCaptureSwingStarted(&runtime->swing,
-		observeInputs && BG_SaberInAttack(ent->client->ps.saberMove) && !ent->client->ps.saberInFlight,
+	if (G_DuelCaptureSwingStartedWithContinuity(&runtime->swing,
+		observeInputs && G_IsTrackedSaberContinuityAllowed(ent) && BG_SaberInAttack(ent->client->ps.saberMove),
+		observeInputs && G_IsTrackedSaberContinuityAllowed(ent) && PM_SaberInTransition(ent->client->ps.saberMove),
 		ent->client->ps.saberMove, level.time, ent->client->ps.viewangles[YAW]) && opponent)
 	{
 		G_TouchTrackedArcadeSequence(runtime);
@@ -4132,47 +4288,6 @@ void G_UpdateTrackedArcadeCombatFrame(gentity_t *ent)
 		}
 	}
 
-	healthDelta = curHealthArmor - runtime->lastHealthArmor;
-	if (healthDelta < 0)
-	{
-		const int taken = -healthDelta;
-
-		runtime->totalDamageTaken += taken;
-		runtime->lastDamageTakenTime = level.time;
-		G_AddTrackedArcadeEvent(runtime, DUEL_TRACK_EVENT_DAMAGE, level.time - runtime->startTime, taken, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, (opponent && opponent->client && opponent->client->ps.saberInFlight) ? "saberthrow" : NULL, ent, opponent);
-	}
-
-	if (opponent && runtime->lastOpponentClientNum == opponent->s.number &&
-		runtime->lastOpponentHealthArmor > 0 &&
-		opponentHealthArmor < runtime->lastOpponentHealthArmor)
-	{
-		const int dealt = runtime->lastOpponentHealthArmor - opponentHealthArmor;
-
-		runtime->totalDamageDealt += dealt;
-		G_TouchTrackedArcadeSequence(runtime);
-		if (runtime->lastDamageTakenTime > 0 &&
-			level.time - runtime->lastDamageTakenTime <= TRACKED_COUNTER_WINDOW_MS)
-		{
-			runtime->counterSuccessEvents++;
-			G_AddTrackedArcadeEvent(runtime, DUEL_TRACK_EVENT_COUNTER_SUCCESS, level.time - runtime->startTime, dealt, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, "counter", ent, opponent);
-		}
-		else if (runtime->lastAttackTime > 0 &&
-			level.time - runtime->lastAttackTime <= TRACKED_PUNISH_WINDOW_MS)
-		{
-			runtime->punishSuccessEvents++;
-			G_AddTrackedArcadeEvent(runtime, DUEL_TRACK_EVENT_PUNISH_SUCCESS, level.time - runtime->startTime, dealt, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, "punish", ent, opponent);
-		}
-		if (opponent->client->ps.saberInFlight)
-		{
-			runtime->saberReturnPunishes++;
-			G_AddTrackedArcadeEvent(runtime, DUEL_TRACK_EVENT_SABER_RETURN_PUNISH, level.time - runtime->startTime, dealt, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, "return", ent, opponent);
-		}
-		if (BG_InKnockDown(opponent->client->ps.legsAnim))
-		{
-			G_AddTrackedArcadeEvent(runtime, DUEL_TRACK_EVENT_KNOCKDOWN_FOLLOWUP, level.time - runtime->startTime, dealt, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, "followup", ent, opponent);
-		}
-	}
-
 	if ((opponent && curRangeBucket != runtime->lastRangeBucket) ||
 		(!opponent && runtime->lastOpponentClientNum != ENTITYNUM_NONE))
 	{
@@ -4219,6 +4334,7 @@ void G_FinishTrackedArcadeCombat(gentity_t *ent, const char *result)
 {
 	tracked_arcade_runtime_t runtimeCopy;
 	tracked_arcade_runtime_t *runtime;
+	gentity_t *opponent;
 
 	if (!ent || !ent->client)
 		return;
@@ -4227,12 +4343,24 @@ void G_FinishTrackedArcadeCombat(gentity_t *ent, const char *result)
 	if (!runtime->active)
 		return;
 
+	opponent = runtime->lastOpponentClientNum >= 0 && runtime->lastOpponentClientNum < MAX_CLIENTS ?
+		&g_entities[runtime->lastOpponentClientNum] : NULL;
+	if (runtime->swing.active)
+	{
+		G_DuelCaptureSampleYaw(&runtime->swing, ent->client->ps.viewangles[YAW]);
+		G_AddTrackedArcadeEvent(runtime, DUEL_TRACK_EVENT_SWING_END, level.time - runtime->startTime,
+			runtime->swing.move, DUEL_TRACK_POWER_UNKNOWN, G_InferTrackedForceState(ent, opponent),
+			G_GetTrackedRangeBucket(ent, opponent), "session_end", ent, opponent);
+		runtime->swing.active = 0;
+		runtime->swing.chainPending = 0;
+	}
 	runtime->endingForce = ent->client->ps.fd.forcePower;
 	runtime->endingHP = ent->health;
 	runtime->endingArmor = ent->client->ps.stats[STAT_ARMOR];
 	if (ent->s.number >= 0 && ent->s.number < MAX_CLIENTS)
 		runtime->killCount = level.arcadeRoundKills[ent->s.number];
 
+	G_ClassifyTrackedAttackOutcomes(runtime->events, runtime->eventCount);
 	memcpy(&runtimeCopy, runtime, sizeof(runtimeCopy));
 	memset(runtime, 0, sizeof(*runtime));
 	G_PersistTrackedArcadeCombat(&runtimeCopy, result, level.arcadeLevel);

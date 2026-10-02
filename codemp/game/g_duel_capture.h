@@ -1,9 +1,12 @@
 #ifndef G_DUEL_CAPTURE_H
 #define G_DUEL_CAPTURE_H
 
+#include <string.h>
+
 typedef struct
 {
 	int active;
+	int chainPending;
 	int move;
 	int startTime;
 	float lastYaw;
@@ -32,7 +35,7 @@ static inline int G_DuelCaptureCanObserveInputs(int health, int deathSnapshot)
 
 static inline int G_DuelCaptureSwingLinked(const duel_capture_swing_t *swing, int attacking, int move)
 {
-	return swing->active && attacking && swing->move != move;
+	return swing->chainPending && attacking && (!swing->active || swing->move != move);
 }
 
 static inline int G_DuelCaptureMarkLethal(int health, int *recorded)
@@ -41,6 +44,20 @@ static inline int G_DuelCaptureMarkLethal(int health, int *recorded)
 		return 0;
 	*recorded = 1;
 	return 1;
+}
+
+static inline int G_DuelCaptureCreditsOpponent(int sessionActive, int observer,
+	int attacker, int target, int selectedOpponent)
+{
+	return sessionActive && observer >= 0 && attacker == observer &&
+		selectedOpponent >= 0 && target == selectedOpponent && target != observer;
+}
+
+static inline int G_DuelCaptureSameOpponent(const char *attackKey, int attackClient,
+	const char *eventKey, int eventClient)
+{
+	return attackClient >= 0 && attackClient == eventClient && attackKey && attackKey[0] &&
+		eventKey && !strcmp(attackKey, eventKey);
 }
 
 static inline void G_DuelCaptureAccumulateOutcome(duel_capture_outcome_t *outcome,
@@ -63,6 +80,8 @@ static inline const char *G_DuelCaptureOutcomeQuality(const duel_capture_outcome
 {
 	if (outcome->taken > outcome->dealt)
 		return outcome->taken >= 60 ? "mistake" : "bad";
+	if (outcome->taken == outcome->dealt)
+		return "mediocre";
 	if (outcome->dealt > 0 && (outcome->killedEnemy || outcome->dealt >= 60))
 		return "correct";
 	if (outcome->dealt >= 20)
@@ -104,8 +123,8 @@ static inline int G_DuelCapturePrepareSwingTransition(duel_capture_swing_t *swin
 	return ended;
 }
 
-static inline int G_DuelCaptureSwingStarted(duel_capture_swing_t *swing,
-	int attacking, int move, int time, float yaw)
+static inline int G_DuelCaptureSwingStartedWithContinuity(duel_capture_swing_t *swing,
+	int attacking, int transitioning, int move, int time, float yaw)
 {
 	int started = attacking && (!swing->active || swing->move != move);
 	G_DuelCaptureSampleYaw(swing, yaw);
@@ -116,7 +135,17 @@ static inline int G_DuelCaptureSwingStarted(duel_capture_swing_t *swing,
 	}
 	swing->active = attacking;
 	swing->move = move;
+	if (attacking)
+		swing->chainPending = 1;
+	else if (!transitioning)
+		swing->chainPending = 0;
 	return started;
+}
+
+static inline int G_DuelCaptureSwingStarted(duel_capture_swing_t *swing,
+	int attacking, int move, int time, float yaw)
+{
+	return G_DuelCaptureSwingStartedWithContinuity(swing, attacking, 0, move, time, yaw);
 }
 
 #endif

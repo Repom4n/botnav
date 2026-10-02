@@ -16656,7 +16656,8 @@ static qboolean NewBotAI_CanControlSaber(bot_state_t *bs)
 	const qboolean engineBusy = (g_entities[bs->client].health <= 0 || ps->pm_type != PM_NORMAL ||
 		ps->forceHandExtend != HANDEXTEND_NONE || BG_InKnockDown(ps->legsAnim) ||
 		BG_InRoll(ps, ps->legsAnim) || BG_SaberInSpecial(ps->saberMove) ||
-		ps->saberInFlight || ps->saberHolstered || ps->saberLockTime > level.time ||
+		ps->saberInFlight || !NewBotAI_SaberPrimaryBladeAvailable(ps->saberHolstered) ||
+		ps->saberLockTime > level.time ||
 		ps->m_iVehicleNum || NewBotAI_IsEnemySaberThreatImminent(bs)) ? qtrue : qfalse;
 	qboolean forceMovement = (NewBotAI_HasExclusiveFlipkickMovement(bs) ||
 		bs->gripkickActive || bs->runningLikeASissy ||
@@ -16909,7 +16910,7 @@ static void NewBotAI_ApplySaberTechniqueInput(bot_state_t *bs, bot_input_t *bi, 
 	command.jump = bs->saberTechniqueJumpTime > time && ps->groundEntityNum != ENTITYNUM_NONE;
 	if (command.jump || ps->groundEntityNum == ENTITYNUM_NONE || ps->saberBlocked != BLOCKED_NONE ||
 		(ps->pm_flags & PMF_JUMP_HELD) || ps->fd.forceJumpCharge > 0 ||
-		ps->saberInFlight || ps->saberHolstered ||
+		ps->saberInFlight || !NewBotAI_SaberPrimaryBladeAvailable(ps->saberHolstered) ||
 		NewBotAI_IsJumpAttackSuppressionWindowActive(time, bs->jumpAttackGateTime, NEWBOTAI_JUMP_ATTACK_GATE_MS))
 		command.attack = 0;
 	NewBotAI_SaberSuppressStrafe(&command, NewBotAI_IsDuelStrafeSuppressed(bs));

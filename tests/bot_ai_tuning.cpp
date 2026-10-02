@@ -629,6 +629,22 @@ BOOST_AUTO_TEST_CASE( saber_throw_anticipation_excludes_impossible_duel_throws_a
 	BOOST_CHECK( !NewBotAI_ShouldAnticipateSaberThrow( 0, 1, 0 ) );
 }
 
+BOOST_AUTO_TEST_CASE( saber_primary_legality_accepts_partial_staff_dual_holster )
+{
+	BOOST_CHECK( NewBotAI_SaberPrimaryBladeAvailable( 0 ) );
+	BOOST_CHECK( NewBotAI_SaberPrimaryBladeAvailable( 1 ) );
+	BOOST_CHECK( !NewBotAI_SaberPrimaryBladeAvailable( 2 ) );
+	newbotai_saber_tactic_context_t context = MakeSaberDuelContext( 90.0f );
+	const newbotai_saber_command_t partial = NewBotAI_PlanSaberCommand( context,
+		NEWBOTAI_SABER_TACTIC_ATTACK, NEWBOTAI_SABER_BASIC, 0, 1, 1, 1,
+		NewBotAI_SaberPrimaryBladeAvailable( 1 ), 0 );
+	const newbotai_saber_command_t full = NewBotAI_PlanSaberCommand( context,
+		NEWBOTAI_SABER_TACTIC_ATTACK, NEWBOTAI_SABER_BASIC, 0, 1, 1, 1,
+		NewBotAI_SaberPrimaryBladeAvailable( 2 ), 0 );
+	BOOST_CHECK_EQUAL( partial.attack, 1 );
+	BOOST_CHECK_EQUAL( full.attack, 0 );
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 BOOST_AUTO_TEST_SUITE_END()
