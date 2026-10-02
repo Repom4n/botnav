@@ -24,6 +24,7 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
 // g_combat.c
 
 #include "b_local.h"
+#include "g_duel_capture.h"
 #include "bg_saga.h"
 
 extern int G_ShipSurfaceForSurfName( const char *surfaceName );
@@ -4790,6 +4791,7 @@ vec3_t gPainPoint;
 void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker, vec3_t dir, vec3_t point, int damage, int dflags, int mod ) {
 	gclient_t	*client;
 	int			take, asave, max, subamt = 0, knockback;
+	int			trackedHealth;
 	float		famt = 0, hamt = 0, shieldAbsorbed = 0;
 
 	if (!targ)
@@ -6147,6 +6149,9 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker, vec3_
 	}
 
 	// do the damage
+	if (!take && asave > 0)
+		G_TrackedDuelRecordDamage(targ, attacker,
+			G_DuelCaptureDamageAmount(targ->health, targ->health, asave), mod);
 	if (take)
 	{
 		if (targ->client && targ->s.number < MAX_CLIENTS &&
@@ -6173,6 +6178,7 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker, vec3_
 				take /= (targ->client->ps.fd.forcePowerLevel[FP_RAGE]+1);
 			}
 		}
+		trackedHealth = targ->health;
 		targ->health = targ->health - take;
 
 		if ( (targ->flags&FL_UNDYING) )
@@ -6201,6 +6207,9 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker, vec3_
 				}
 			}
 		}
+
+		G_TrackedDuelRecordDamage(targ, attacker,
+			G_DuelCaptureDamageAmount(trackedHealth, targ->health, asave), mod);
 
 		//We want to go ahead and set gPainHitLoc regardless of if we have a pain func,
 		//so we can adjust the location damage too.

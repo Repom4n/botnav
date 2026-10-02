@@ -25,11 +25,7 @@ typedef enum
 	NEWBOTAI_SABER_TACTIC_LONG_SWING	// "mistake": swing from outside reach (>150u)
 } newbotai_saber_tactic_t;
 
-// Outcome grades derived from human saber-only duels (dueltrack sessions 44-172):
-// correct = counter within ~600ms when hit / keep chaining after landing a hit / step in
-// while swinging; good = short controlled chain then reposition; mediocre = stand and
-// swing at 96-128u; bad = retreat after landing a hit or hold still when hit; mistake =
-// swing beyond 150u or back away while swinging.
+// Grades describe timing/position errors, not permissions to bypass engine guards.
 typedef enum
 {
 	NEWBOTAI_SABER_GRADE_CORRECT = 0,
@@ -63,6 +59,10 @@ typedef struct
 	int chainLength;
 	int landedHit;		// we damaged the enemy within the last ~700ms
 	float enemyDistance;
+	int enemyRecovering;
+	int selfBlocked;
+	int counterReady;
+	int saberCombat;
 } newbotai_saber_tactic_context_t;
 
 typedef struct
@@ -135,38 +135,49 @@ static inline newbotai_saber_grade_t NewBotAI_GetSaberChoiceGrade(int skill, int
 	return NEWBOTAI_SABER_GRADE_GOOD;
 }
 
-// Winner-derived choice for the current saber-only duel state.
+static inline int NewBotAI_SaberNeedsSafetyExit(newbotai_saber_tactic_context_t context)
+{
+	return context.selfBlocked || (!context.enemyVulnerable &&
+		((context.ourTotalHealth <= NEWBOTAI_SABER_CRITICAL_TOTAL_HEALTH &&
+		  context.enemyTotalHealth > context.ourTotalHealth &&
+		  (context.recentlyHurt || context.enemyAttacking)) ||
+		 (context.enemyAttacking && (context.chainLength >= 2 ||
+		  (context.recentlyHurt && context.ourTotalHealth < context.enemyTotalHealth)))));
+}
+
+// A landed hit is not permission to trade indefinitely (BK duel563); exits are
+// useful even above critical health when a continuation becomes exposed.
 static inline newbotai_saber_tactic_t NewBotAI_GetCorrectSaberTactic(
 	newbotai_saber_tactic_context_t context)
 {
 	const float dist = context.enemyDistance;
 	const int inSwingReach = (dist <= NEWBOTAI_SABER_SWING_START_MAX_RANGE) ? 1 : 0;
 
-	if (!context.saberOnlyDuel)
+	if (!context.saberOnlyDuel && !context.saberCombat)
 		return NEWBOTAI_SABER_TACTIC_HOLD;
 
-	//Retreat only at critical health while losing the exchange.
-	if (!context.enemyVulnerable &&
-		context.ourTotalHealth <= NEWBOTAI_SABER_CRITICAL_TOTAL_HEALTH &&
-		context.enemyTotalHealth > context.ourTotalHealth &&
-		(context.recentlyHurt || context.enemyAttacking))
-	{
+	if (NewBotAI_SaberNeedsSafetyExit(context))
 		return NEWBOTAI_SABER_TACTIC_RESET;
-	}
 
 	if (context.enemyVulnerable)
 		return inSwingReach ? NEWBOTAI_SABER_TACTIC_COUNTER : NEWBOTAI_SABER_TACTIC_ADVANCE;
 
-	//Countering right after being hit lands a return hit ~50% of the time versus ~18% for
-	//retreating, and retreating is not safer - so counter is the default.
-	if (context.recentlyHurt ||
-		(context.enemyAttacking && dist <= NEWBOTAI_SABER_STEP_IN_RANGE))
+	if (context.recentlyHurt && !context.counterReady && inSwingReach)
+		return NEWBOTAI_SABER_TACTIC_REPOSITION;
+
+	if (context.recentlyHurt && context.counterReady && context.enemyRecovering)
 	{
 		return inSwingReach ? NEWBOTAI_SABER_TACTIC_COUNTER : NEWBOTAI_SABER_TACTIC_STEP_IN;
 	}
 
-	//Continuing after a landed hit doubles the follow-up hit rate; no fixed chain cap.
-	if (context.selfAttacking || context.landedHit)
+	if (context.enemyAttacking && inSwingReach)
+		return NEWBOTAI_SABER_TACTIC_REPOSITION;
+
+	// Exit unproductive pressure, not a still-safe sequence that is landing hits.
+	if (context.chainLength >= 3 && !context.landedHit && !context.enemyRecovering)
+		return NEWBOTAI_SABER_TACTIC_RESET;
+
+	if (context.landedHit || (context.selfAttacking && context.enemyRecovering))
 	{
 		if (inSwingReach)
 			return NEWBOTAI_SABER_TACTIC_CHAIN;
@@ -204,13 +215,15 @@ static inline newbotai_saber_tactic_t NewBotAI_ApplySaberChoiceGrade(
 		case NEWBOTAI_SABER_TACTIC_ATTACK:
 		case NEWBOTAI_SABER_TACTIC_STEP_IN:
 			return (dist <= NEWBOTAI_SABER_SWING_START_MAX_RANGE) ?
-				NEWBOTAI_SABER_TACTIC_STAND_SWING : NEWBOTAI_SABER_TACTIC_HOLD;
+				NEWBOTAI_SABER_TACTIC_STAND_SWING : NEWBOTAI_SABER_TACTIC_STEP_IN;
 		default:
 			return tactic;
 		}
 	case NEWBOTAI_SABER_GRADE_BAD:
+		if (dist > NEWBOTAI_SABER_SWING_START_MAX_RANGE)
+			return NEWBOTAI_SABER_TACTIC_STEP_IN;
 		return (tactic == NEWBOTAI_SABER_TACTIC_CHAIN) ?
-			NEWBOTAI_SABER_TACTIC_RESET : NEWBOTAI_SABER_TACTIC_HOLD;
+			NEWBOTAI_SABER_TACTIC_RESET : NEWBOTAI_SABER_TACTIC_REPOSITION;
 	case NEWBOTAI_SABER_GRADE_MISTAKE:
 		return (dist > NEWBOTAI_SABER_LONG_SWING_RANGE) ?
 			NEWBOTAI_SABER_TACTIC_LONG_SWING : NEWBOTAI_SABER_TACTIC_BACK_SWING;
@@ -223,12 +236,183 @@ static inline newbotai_saber_tactic_t NewBotAI_ApplySaberChoiceGrade(
 static inline newbotai_saber_tactic_t NewBotAI_SelectSaberTactic(
 	newbotai_saber_tactic_context_t context)
 {
-	if (!context.saberOnlyDuel)
+	if (!context.saberOnlyDuel && !context.saberCombat)
 		return NEWBOTAI_SABER_TACTIC_HOLD;
+
+	// Timing errors must never turn a necessary escape into an exposed swing.
+	if (NewBotAI_GetCorrectSaberTactic(context) == NEWBOTAI_SABER_TACTIC_RESET)
+		return NEWBOTAI_SABER_TACTIC_RESET;
 
 	return NewBotAI_ApplySaberChoiceGrade(context,
 		NewBotAI_GetCorrectSaberTactic(context),
 		NewBotAI_GetSaberChoiceGrade(context.skill, context.mistakeBias, context.mistakeRoll));
+}
+
+typedef enum
+{
+	NEWBOTAI_SABER_BASIC = 0,
+	NEWBOTAI_SABER_HORIZONTAL,
+	NEWBOTAI_SABER_DIAGONAL_VERTICAL,
+	NEWBOTAI_SABER_COUNTER_ENTRY,
+	NEWBOTAI_SABER_FINISH,
+	NEWBOTAI_SABER_BURST
+} newbotai_saber_family_t;
+
+static inline int NewBotAI_SaberBurstComplete(newbotai_saber_family_t family, int acceptedAttacks, int exposed)
+{
+	return family == NEWBOTAI_SABER_BURST && acceptedAttacks >= 2 && exposed;
+}
+
+typedef struct
+{
+	int forward;
+	int right;
+	int jump;
+	int attack;
+} newbotai_saber_command_t;
+
+static inline int NewBotAI_SaberMoveAccepted(int move, int lastMove, int basicAttack)
+{
+	// Starts, transitions, returns and a held input do not advance a sequence.
+	return basicAttack && move != lastMove;
+}
+
+static inline int NewBotAI_SaberCanOwnInputs(int holdingSaber, int visibleEnemy,
+	int engineBusy, int forceMovement, int navigationMovement)
+{
+	return holdingSaber && visibleEnemy && !engineBusy && !forceMovement && !navigationMovement;
+}
+
+static inline int NewBotAI_SaberPrimaryBladeAvailable(int holstered)
+{
+	// Staff/dual partial holster (1) disables the second blade, not primary attacks.
+	return holstered >= 0 && holstered < 2;
+}
+
+static inline int NewBotAI_ShouldAnticipateSaberThrow(int saberOnlyDuel, int saberInFlight, int basicSwing)
+{
+	return !saberOnlyDuel && !saberInFlight && !basicSwing;
+}
+
+static inline newbotai_saber_family_t NewBotAI_SelectSaberFamily(
+	newbotai_saber_tactic_context_t context, int fanBias, int roll)
+{
+	// Zero bias keeps a legal basic attack. Bias weights learned complexity,
+	// never attack permission or an old fan hold/dwell package.
+	if (fanBias <= 0 || roll > (fanBias > 100 ? 100 : fanBias))
+		return NEWBOTAI_SABER_BASIC;
+	if (context.enemyTotalHealth <= 40 && (context.landedHit || context.enemyVulnerable))
+		return NEWBOTAI_SABER_FINISH;
+	if (context.recentlyHurt && context.counterReady &&
+		(context.enemyRecovering || context.enemyVulnerable))
+		return NEWBOTAI_SABER_COUNTER_ENTRY;
+	if (context.ourTotalHealth < context.enemyTotalHealth || context.enemyAttacking)
+		return NEWBOTAI_SABER_BURST;
+	if (context.enemyDistance < 80.0f)
+		return NEWBOTAI_SABER_HORIZONTAL;
+	return NEWBOTAI_SABER_DIAGONAL_VERTICAL;
+}
+
+#define NEWBOTAI_SABER_EXIT_MS 350
+#define NEWBOTAI_SABER_REENTRY_MS 650
+#define NEWBOTAI_SABER_AIR_EXIT_MAX_MS 1400
+
+static inline int NewBotAI_SaberEscapePhase(int now, int exitUntil, int reentryUntil,
+	int airborne, int airExitUntil)
+{
+	if (exitUntil > now || (exitUntil > 0 && airborne && airExitUntil > now))
+		return -1;
+	if (reentryUntil > now)
+		return 1;
+	return 0;
+}
+
+static inline int NewBotAI_SaberCanEscapeJump(int grounded, int jumpReleased,
+	int engineReady, int resourceReady, int safePath, int cooldownReady)
+{
+	return grounded && jumpReleased && engineReady && resourceReady && safePath && cooldownReady;
+}
+
+static inline int NewBotAI_SaberTacticAllowsSwingStart(newbotai_saber_tactic_t tactic, float enemyDistance);
+
+static inline newbotai_saber_command_t NewBotAI_PlanSaberCommand(
+	newbotai_saber_tactic_context_t context, newbotai_saber_tactic_t tactic,
+	newbotai_saber_family_t family, int stage, int direction, int grounded,
+	int choosingMove, int attackLegal, int escapePhase)
+{
+	newbotai_saber_command_t command = { 0, 0, 0, 0 };
+	const int side = direction < 0 ? -1 : 1;
+
+	if (escapePhase > 0 && !context.enemyAttacking && !NewBotAI_SaberNeedsSafetyExit(context))
+		tactic = context.enemyDistance <= NEWBOTAI_SABER_SWING_START_MAX_RANGE ?
+			NEWBOTAI_SABER_TACTIC_ATTACK : NEWBOTAI_SABER_TACTIC_STEP_IN;
+	if (escapePhase < 0 || tactic == NEWBOTAI_SABER_TACTIC_RESET)
+	{
+		command.forward = (escapePhase < 0 && !grounded) || context.enemyDistance < 176.0f ? -1 : 0;
+		command.right = side;
+		return command;
+	}
+	if (tactic == NEWBOTAI_SABER_TACTIC_REPOSITION)
+	{
+		command.forward = context.enemyDistance < 80.0f ? -1 : 0;
+		command.right = side;
+		return command;
+	}
+	if (tactic == NEWBOTAI_SABER_TACTIC_ADVANCE || tactic == NEWBOTAI_SABER_TACTIC_STEP_IN)
+		command.forward = 1;
+	else if (tactic == NEWBOTAI_SABER_TACTIC_BACK_SWING)
+		command.forward = -1;
+
+	command.attack = grounded && attackLegal &&
+		NewBotAI_SaberTacticAllowsSwingStart(tactic, context.enemyDistance);
+	if (command.attack && tactic != NEWBOTAI_SABER_TACTIC_STAND_SWING &&
+		tactic != NEWBOTAI_SABER_TACTIC_BACK_SWING)
+	{
+		command.right = side;
+		command.forward = context.enemyDistance > 48.0f ? 1 : 0;
+		if (choosingMove)
+		{
+			if (family == NEWBOTAI_SABER_HORIZONTAL || family == NEWBOTAI_SABER_FINISH)
+				command.forward = 0;
+			else if (family == NEWBOTAI_SABER_DIAGONAL_VERTICAL && stage % 3 == 1)
+			{
+				command.forward = 1;
+				command.right = 0;
+			}
+			else if (family == NEWBOTAI_SABER_DIAGONAL_VERTICAL && stage % 3 == 2)
+				command.forward = 0;
+			else if (family == NEWBOTAI_SABER_BASIC)
+			{
+				command.forward = 1;
+				command.right = 0;
+			}
+		}
+	}
+	// Airborne footwork stays deliberate, but cannot accidentally start aerial specials.
+	if (!grounded)
+	{
+		command.forward = escapePhase > 0 && !context.enemyAttacking &&
+			!NewBotAI_SaberNeedsSafetyExit(context) ? 1 :
+			context.enemyDistance > 96.0f ? 1 : -1;
+		command.right = side;
+	}
+	return command;
+}
+
+static inline void NewBotAI_SaberSuppressStrafe(newbotai_saber_command_t *command, int suppressed)
+{
+	if (suppressed)
+		command->right = 0;
+}
+
+static inline int NewBotAI_SaberOwnedActionFlags(int flags, int ownedMask, int plannedFlags)
+{
+	return (flags & ~ownedMask) | plannedFlags;
+}
+
+static inline int NewBotAI_SaberDuelActionFlags(int flags, int altAttackMask, int saberOnlyDuel)
+{
+	return saberOnlyDuel ? flags & ~altAttackMask : flags;
 }
 
 // Saber-only footwork: tactics that may start a new swing this frame. Swing starts are

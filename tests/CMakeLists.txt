@@ -25,6 +25,7 @@ set(TestFiles
 	"main.cpp"
 	"bot_ai_tuning.cpp"
 	"duel_identity.cpp"
+	"duel_capture.cpp"
 	"safe/string.cpp"
 	"safe/limited_vector.cpp"
 	"${SharedDir}/qcommon/safe/string.cpp"
