@@ -29,6 +29,11 @@ typedef enum
 	BOTLEARN_TOK_COUNT
 } botlearn_token_t;
 
+/* SQL CASE arms mapping token ids to BotLearn_TokenName strings (keep in sync). */
+#define BOTLEARN_SQL_TOKEN_CASES \
+	"WHEN 1 THEN 'idle' WHEN 2 THEN 'push' WHEN 3 THEN 'pull' WHEN 4 THEN 'grip' WHEN 5 THEN 'drain' " \
+	"WHEN 6 THEN 'throw' WHEN 7 THEN 'swing' WHEN 8 THEN 'kick' WHEN 9 THEN 'jump' WHEN 10 THEN 'knockdown' ELSE 'none'"
+
 #define BOTLEARN_RESPONSE_WINDOW_MS 700
 #define BOTLEARN_FOLLOWUP_WINDOW_MS 1000
 #define BOTLEARN_OUTCOME_WINDOW_MS 2000
