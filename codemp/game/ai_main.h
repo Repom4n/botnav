@@ -24,6 +24,7 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
 #pragma once
 
 #include "bg_saga.h"
+#include "ai_combat_tuning.h"
 
 //#define FORCEJUMP_INSTANTMETHOD 1
 
@@ -400,17 +401,26 @@ typedef struct bot_state_s
 	int					lastSaberContactTargetNum; // enemy clientNum for lastSaberContactTime; fan-chain combo gate only accepts contact on currentEnemy
 	int					lastEnemyDurability; // previous think's tracked enemy HP+armor snapshot for saber-contact confirmation
 	int					lastEnemyDurabilityTargetNum; // enemy clientNum associated with lastEnemyDurability
-	int					saberTacticAction; // NEWBOTAI_SABER_TACTIC_* decision used in saber-only duels
-	int					saberTacticUntil; // level.time when the saber-only tactical decision may be reconsidered
+	int					saberTacticAction;
+	int					saberTacticUntil; // bounded exit deadline, followed by deliberate re-entry
 	int					saberTacticChainLength; // consecutive saber attack transitions in the current pressure sequence
 	int					saberTacticLastMove; // previous saberMove used to count pressure-chain transitions
 	int					saberTacticGrade; // NEWBOTAI_SABER_GRADE_* rolled for the current decision window
 	int					saberTacticGradeUntil; // level.time when a new choice grade is rolled
 	int					saberTacticEnemyHealth; // enemy HP+armor last frame, to detect landed hits
 	int					saberTacticEnemyNum; // entity number the cached enemy health belongs to
-	int					saberTacticLastHitTime; // level.time we last damaged the enemy in a saber-only duel
+	int					saberTacticLastHitTime;
 	int					saberTacticStrafeDir; // alternating lateral direction for horizontal swings (+1 right, -1 left)
-	int					saberTacticHorizontal; // bot_fanbias roll: next swing start uses pure strafe (horizontal fan swing)
+	int					saberTechniqueFamily; // bot_fanbias weights learned technique complexity
+	int					saberTechniqueFamilyUntil;
+	int					saberTechniqueAcceptedTime;
+	int					saberTechniqueReentryUntil;
+	int					saberTechniqueAirExitUntil;
+	int					saberTechniqueJumpTime;
+	int					saberTechniqueJumpCooldown;
+	qboolean			saberTechniqueCandidate;
+	qboolean			saberTechniqueOwnsInputs;
+	newbotai_saber_command_t saberTechniqueCommand;
 	int					drainRollDir; // -1 left, 0 back, 1 right; used by NewBotAI_DrainRollEscape
 	int					drainRollResetTime;
 	int					gripkickJerkUntil;

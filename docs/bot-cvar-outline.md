@@ -45,13 +45,13 @@ BotGetAggressionBias = clamp(bot_aggressionbias + healthComponent*bot_healthbias
 
 ## Combat Behavior Biases
 
-These are all percentage-based (0-100) chance weights that gate specific behaviors. They feed through `BotGetChanceBiasPercent()` (clamped 0-100) and then through `BotGetAggressionWeightedBonus()`.
+Chance weights are clamped to 0-100 by `BotGetChanceBiasPercent()`. Legacy attack weights can also use `BotGetAggressionWeightedBonus()`; the new saber controller uses `bot_fanbias` directly to select technique complexity without gating basic attacks.
 
 | Cvar | Default | Description |
 |------|---------|-------------|
 | `bot_saberthrowbias` | `0` | Chance weight for saber throw decisions. Higher = more throws. Feeds into `NewBotAI_GetSaberthrow()`. |
 | `bot_gripkickbias` | `0` | Chance weight for grip-kick combo initiation. Feeds into `NewBotAI_GetGrip()`. |
-| `bot_fanbias` | `0` | Chance weight for fan-chain attack patterns (horizontal swing chains). Used in `NewBotAI_PrepareHorizontalSwingStart()`. Fan entry opens at 48-110u in neutral spacing (not only with an advantage), the hold phase strafes and steps forward once the swing starts, and red stance fans with alternating horizontal swings. In saber-only duels the bias is scaled by the health difference instead of dropping to zero, and it weights how often each swing start is horizontal. Bots still start swings when it is `0`. |
+| `bot_fanbias` | `0` | Chance weight for human-derived saber technique selection in NewBotAI saber-only duels and general saber combat. Higher values favor varied horizontal, diagonal/vertical, counter-entry, and finishing combinations over basic controlled attacks. It weights the new attacks, not permission to attack: `0` still allows primary attacks and useful chains. Legal force tactics remain separate. |
 | `bot_fan_debug` | `0` | Print selected fan package, direction, range, HP, and FP when a bot commits to a fan-pressure entry. |
 | `bot_fanhold` | `220` | How long (ms) each fan gate holds exclusive left/right strafe plus attack to start the current horizontal swing. |
 | `bot_firstfandwell` | `250` | Special dwell (ms) used only between the first and second swings of a fan chain. |
@@ -66,7 +66,9 @@ These are all percentage-based (0-100) chance weights that gate specific behavio
 | `bot_antidrainbias` | `0` | Weight bonus for attacking drain-users. When enemy can drain and is low HP, bots prioritize killing them. Feeds `NewBotAI_GetAntiDrainWeight()`. |
 | `bot_lightningbias` | `0` | Chance weight for using lightning. Applies to bots that know lightning and pass the normal range/visibility/resource checks. |
 | `bot_lightningdistance` | `400` | Minimum range for lightning usage. Bot must be at least this far from the enemy. |
-| `bot_mistakebias` | `0` | Chance weight (0-100) for imperfect combat decisions. Grip escapes retain their per-session delays, missed pulls, push fumbles, and occasional total failure. In saber-only duels it grades each saber choice from the human duel data: correct (counter within ~600ms when hit, continue the chain after a hit, step in while swinging), good (short chain then reposition), mediocre (stand and swing at 96-128u), bad (retreat after landing a hit, hold still when hit), mistake (swing beyond 150u, back away while swinging). Lower skill and higher bias draw the worse grades more often. Skill contributes a small baseline imperfection below level 10; level 10 always picks the correct option even at maximum bias. |
+| `bot_mistakebias` | `0` | Chance weight (0-100) for imperfect combat decisions. Grip escapes retain their existing mistakes. Saber choices account for spacing, recovery, recent trades, and opponent pressure: countering or continuing after a hit is useful only when the opening supports it. Lower skill and higher bias favor weaker timing, positioning, and combinations rather than persistent inactivity. Level 10 chooses the best supported legal option, even at maximum bias; this is not a guarantee of perfect play. |
+
+The human-technique controller owns saber movement and primary inputs while eligible. Legacy fan hold/dwell/yaw/wobble controls and `bot_fan_debug` still describe the legacy fan path; they do not schedule the new controller's attacks. Random strafe overlays do not overwrite its selected footwork. Legal force actions, knockdown recovery, navigation, and saber retrieval can temporarily take priority.
 
 ## PTK (Pull-Throw-Kick) System
 
@@ -150,10 +152,20 @@ Tracked duel data access:
 - Use server console command `exportDuelTrack [prefix]` to export timestamped CSV files for:
   - `LocalDuelTrackSummary`
   - `LocalDuelTrackParticipant`
-  - `LocalDuelTrackEvent` (includes sequence id/label, outcome-ranked quality, buttons, saber moves, yaw delta, self/opponent HP/AP/FP snapshots, swing side, pre-swing strafe direction, radial movement intent/speed, yaw sweep, attack elapsed time, and saber-throw yaw offset)
+  - `LocalDuelTrackEvent` (includes sequence id/label, outcome-ranked quality, buttons, movement commands, saber stance and grounded state, saber moves, yaw delta, self/opponent HP/AP/FP snapshots, swing side, pre-swing strafe direction, radial movement intent/speed, measured yaw sweep, attack elapsed time, saber-throw yaw offset, and damage source/attacker identity)
   - `LocalDuelTrackGeometry` (when `bot_dueltracking_geometry` is enabled)
   - `LocalDuelTrackAggregate`
 - Every exported CSV is capped below 25MB so it can be uploaded to GitHub. A larger export is split into `<name>.csv`, `<name>_part2.csv`, `<name>_part3.csv`, ...; each part repeats the header row and whole rows are never split across files. Leftover parts from an earlier, larger export are removed.
+- `capture_version` and `capture_revision` identify the recording implementation and build revision for each session, also included in event and participant exports. Imported/historical sessions without provenance remain `0`/blank; an export schema version alone does not establish recording provenance.
+- `input_start` records an attack-button request, not a successful swing; historical `attack_start` records retain their original meaning. `swing_start` records an accepted saber attack animation, and `attack_chain` marks accepted linked swings already counted by `swing_start`. `swing_end` preserves measured signed yaw sweep, and `swing_damage` records confirmed in-hand saber damage. Count distinct swings containing hits, not raw hit events. `damage_dealt`/`damage` record actual attributed resource loss; `damage_source` is the engine means-of-death value (`MOD_*`), and `damage_attacker_key` identifies the actual attacker. Environmental damage must not be credited as opponent saber damage.
+
+Saber combat verification:
+- Validate saber-only duels separately from full-force and arcade matches. Human techniques guide contextual attack and escape choices, not blind replay of recorded commands.
+- With `bot_fanbias 0`, bots should still issue primary attacks, start real swings, and link legal transitions. Increasing the bias should change the mix of human-derived techniques, not turn basic combat on.
+- Backward/lateral jumping exits should avoid unsafe terrain and return to engagement after landing; saber-only bots cannot heal by waiting.
+- Compare primary input requests with accepted swing starts and damaging swings. Define chain frequency as accepted linked swings divided by all accepted swings (count each swing once), and compare damage per second within the same duel mode and stance.
+- The existing runtime event limit is 128 events per participant. Recordings that reach this limit omit later events; do not treat their event-derived rates or exchange outcomes as complete-match measurements.
+- Confirm the deployed build with fresh `capture_revision` values before comparing results. Old rows can be re-exported by a newer build without acquiring movement measurements or proving that build was deployed.
 
 ## Skill Tuning (Debug)
 
