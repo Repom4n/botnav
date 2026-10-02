@@ -67,8 +67,21 @@ Chance weights are clamped to 0-100 by `BotGetChanceBiasPercent()`. Legacy attac
 | `bot_lightningbias` | `0` | Chance weight for using lightning. Applies to bots that know lightning and pass the normal range/visibility/resource checks. |
 | `bot_lightningdistance` | `400` | Minimum range for lightning usage. Bot must be at least this far from the enemy. |
 | `bot_mistakebias` | `0` | Chance weight (0-100) for imperfect combat decisions. Grip escapes retain their existing mistakes. Saber choices account for spacing, recovery, recent trades, and opponent pressure: countering or continuing after a hit is useful only when the opening supports it. Lower skill and higher bias favor weaker timing, positioning, and combinations rather than persistent inactivity. Level 10 chooses the best supported legal option, even at maximum bias; this is not a guarantee of perfect play. |
+| `bot_learning` | `1` | Enables learned sequence weights. On map load the server folds `LocalBotLearnedSequence` (see Learned Sequences below) into an in-memory table; force reactions, combo follow-ups, saber-throw decisions and fan entry add a learned bonus to their built-in weights. `0` keeps the built-in weights only (recording still happens while duel tracking is on). |
+| `bot_learningstrength` | `1` | Scales the learned bonus (`0` disables it). After scaling by strength and skill the bonus is capped at ±30 weight, so data can tip a close choice but cannot override hard safety gates. |
+| `bot_learninghumansonly` | `0` | `0` learns from every tracked participant (humans, bots, all levels); outcomes are what matter, so poor choices by low-level bots still teach which sequences lose. `1` loads only human-performed sequences. |
+| `bot_learningminsamples` | `6` | Minimum recorded samples before a context/response entry influences choices. Below this the bot falls back to the coarse (force/range only) context, then to built-in weights. |
+| `bot_learning_debug` | `0` | `1` prints the top learned responses per context to the console after each map load. |
 
 The human-technique controller owns saber movement, primary inputs and technique yaw while eligible. Horizontal selection holds lateral-only input through starts and transitions; forward pressure resumes during the accepted active swing. Next-swing direction follows the accepted engine move, including engine-imposed responses, rather than flipping on an attack-button request. Yaw preparation, active sweep and recovery follow animation progress instead of legacy dwell timers. Legacy fan hold/dwell/yaw/wobble controls and `bot_fan_debug` still describe the legacy fan path; they do not schedule the new controller's attacks. Random strafe overlays do not overwrite its selected footwork. Legal force actions, knockdown recovery, navigation, and saber retrieval can temporarily take priority.
+
+Data-driven saber tuning (dueltracks2, capture v8):
+- Fan chain (`bot_fanbias`): the pause between L2R/R2L swings shrinks with skill and fan bias and reaches zero at skill 7+. The next swing is linked on the last frames of the current swing (strafe direction flips together with the swing direction), so the engine chains it immediately, as in the long human fan sessions. The chain runs past 3s (up to 6s) while swings keep landing within 700ms. While a horizontal swing is active the aim sweeps through the swing (up to ±80° half-arc at close range, scaled by skill/fan bias, faded out by 200u) instead of a slow fixed turn.
+- Footing: swing starts use predicted 2D range. A swing starts only if the range predicted ~150ms ahead (the swing's damage peak) is 60u or less (70u staff). Between that and 85u the bot keeps holding the swing; above 85u it steps in first and starts no swing. Swings are blocked while the bot is backing away from 100u or more. Chained swings keep forward pressure.
+- Dodging: when an enemy swing starts within ~130u, skill 7+ bots strafe or jump sideways. Backpedalling is reserved for mistake rolls at lower skill. Jump attacks are discouraged unless the enemy is knocked down or getting up.
+- Combos: at skill 7+ pull→kick has no gap, throw→pull ~66ms, grip→throw ~100ms, drain→pull ~66ms. Lower skills add 100–250ms plus a `bot_mistakebias` delay. Pull→swing is replaced by pull→kick or pull→throw.
+- Reactions: enemy drain → pull (or throw); enemy grip → throw, pull or jump rather than a late push; enemy throw → counter-throw; enemy pull → throw or pull back; enemy push → drain. Saber throws are favoured when the bot's own force is ~50 or less or as part of throw→pull. Mid-range throws at high force are discouraged. Pull is preferred while the enemy has force; drain is kept for when the enemy is low.
+- Skill gradient: skill 7+ takes the best choice except for a small mistake roll that disappears at skill 10. Skills 1–5 draw from mistakes observed in the data: backpedal swings, long-range swings, late pushes and jump-dodging throws.
 
 During the temporary duel no-strafe gate, free selection boundaries deliberately fall back to an ordinary vertical attack rather than withholding all attacks. A committed start/transition keeps its actual selection; unsafe or suppressed movement must not silently select a different swing. Movement safety is rechecked against the live position and final yaw before emitting technique inputs.
 
@@ -157,6 +170,7 @@ Tracked duel data access:
   - `LocalDuelTrackEvent` (includes sequence id/label, outcome-ranked quality, buttons, movement commands, saber stance and grounded state, saber moves, yaw delta, self/opponent HP/AP/FP snapshots, swing side, pre-swing strafe direction, radial movement intent/speed, measured yaw sweep, attack elapsed time, saber-throw yaw offset, and damage source/attacker identity)
   - `LocalDuelTrackGeometry` (when `bot_dueltracking_geometry` is enabled)
   - `LocalDuelTrackAggregate`
+  - `LocalBotLearnedSequence` (`learned` CSV: source kind, skill band, context key, stimulus, response, follow-ups, samples, wins, net damage, average response time)
 - Every exported CSV is capped below 25MB so it can be uploaded to GitHub. A larger export is split into `<name>.csv`, `<name>_part2.csv`, `<name>_part3.csv`, ...; each part repeats the header row and whole rows are never split across files. Leftover parts from an earlier, larger export are removed.
 - `capture_version` and `capture_revision` identify the recording implementation and build revision for each session, also included in event and participant exports. Imported/historical sessions without provenance remain `0`/blank; an export schema version alone does not establish recording provenance.
 - `input_start` records an attack-button request, not a successful swing; historical `attack_start` records retain their original meaning. `swing_start` records an accepted saber attack animation, and `attack_chain` marks accepted continuations through legal transitions, including same-direction links, already counted by `swing_start`. `swing_end` preserves measured signed yaw sweep, and `swing_damage` records confirmed in-hand saber damage. Count distinct swings containing hits, not raw hit events. `damage_dealt`/`damage` record actual attributed resource loss; `damage_source` is the engine means-of-death value (`MOD_*`), and `damage_attacker_key` identifies the actual attacker. Environmental damage must not be credited as opponent saber damage.
@@ -178,6 +192,25 @@ Technique evidence and limitations:
 - Duel 625 (capture version 7, revision `509427374`) confirms accepted bot attacks but records 10 vertical, 8 diagonal and only 1 horizontal swing in the retained prefix. The human used staff while the bot used red stance; their attack timing is not directly interchangeable.
 - Historical geometry is event-sampled, and many old rows lack measured swing sweep. Direction/sequence choices are evidence-backed; bounded phase-aware yaw is a controller approximation, not an exact replay or a proven optimal early/extra-damage curve. Validate new yaw trajectories and damage trades in fresh, stance-matched recordings before tuning them.
 - The same Sugar Kane yellow-stance sequence has only two geometry samples per interval: approximately -15.8 degrees over 25.377–25.707s and +31.5 degrees over 25.707–25.938s. BK's full-force yellow sequence has seven samples per 300ms interval and approximately -190.6/+238.8 degrees of accumulated yaw. These different shapes are not interchangeable; sparse endpoints cannot establish exact active-blade timing. The initial controller uses a conservative 18-degree offset envelope and a 240-degrees/second turn limit, not BK's large spins.
+
+## Learned Sequences
+
+At the end of every tracked duel, each participant's events are broken into short sequences of 2–4 tokens: the opponent's move (or `idle` when the participant acted on their own), the participant's response within 700ms, then up to two follow-ups within 1s. Tokens are `push`, `pull`, `grip`, `drain`, `throw`, `swing`, `kick`, `jump`, `knockdown`. Repeated holds of the same power within 400ms are merged; swings are not merged, so fan chains count as chains.
+
+- Context key: HP+armor and force buckets (four each) for both sides, range bucket (<128u, <384u, beyond) and stance at the start of the sequence. A coarse key (both forces and range only) is used as a fallback for sparse contexts.
+- Outcome: net damage (dealt − taken) over the 2s after the response, plus whether the participant won the duel.
+- Storage: `LocalBotLearnedSequence` in `dueltracks.db`, keyed by source kind (human/bot), skill band (human, bot 1–3, 4–5, 6–7, 8–10), context and token sequence. Rows accumulate samples, wins, net damage and response time. `resetdueltrack` does not clear it.
+- Map load: rows are loaded into memory, filtered by `bot_learninghumansonly`. Each context/response gets a confidence-weighted score: with few samples the average is pulled towards zero, so lucky one-offs do not dominate.
+- In game: the same lookup feeds force reactions, combo follow-ups (e.g. pull→kick), the saber-throw decision and fan entry. Skill 7+ follows the best-scoring entry; lower skills see a smaller, noisier bonus and keep their mistake bias.
+
+Duel capture version 9:
+- `throw_start` is logged when a saber throw is released (amount = force at release).
+- `dodge` is logged for the defender when an enemy swing ends within close range without damaging them (note `air`, `blocked` or `evaded`).
+- Knockdown notes record `knockdown_by_opponent` or `knockdown_self`, and the damage attacker key identifies who caused it.
+- Duel winners no longer get `low_force` as their primary issue for deliberately spending force.
+- `LocalDuelTrackAggregate` rows carry `capture_version` and `capture_revision` of the latest update (aggregate export format 3).
+
+Recommended data: record duels against bots at skill 6+ so the skill gradient can be checked against data; the dueltracks2 set had no bots above skill 5.
 
 ## Skill Tuning (Debug)
 

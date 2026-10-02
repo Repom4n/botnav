@@ -24,6 +24,7 @@ endif(NOT InOpenJK)
 set(TestFiles
 	"main.cpp"
 	"bot_ai_tuning.cpp"
+	"bot_learning.cpp"
 	"duel_identity.cpp"
 	"duel_capture.cpp"
 	"safe/string.cpp"
