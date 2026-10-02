@@ -152,6 +152,7 @@ Tracked duel data access:
   - `LocalDuelTrackEvent` (includes sequence id/label, outcome-ranked quality, buttons, saber moves, yaw delta, self/opponent HP/AP/FP snapshots, swing side, pre-swing strafe direction, radial movement intent/speed, yaw sweep, attack elapsed time, and saber-throw yaw offset)
   - `LocalDuelTrackGeometry` (when `bot_dueltracking_geometry` is enabled)
   - `LocalDuelTrackAggregate`
+- Every exported CSV is capped below 25MB so it can be uploaded to GitHub. A larger export is split into `<name>.csv`, `<name>_part2.csv`, `<name>_part3.csv`, ...; each part repeats the header row and whole rows are never split across files. Leftover parts from an earlier, larger export are removed.
 
 ## Skill Tuning (Debug)
 

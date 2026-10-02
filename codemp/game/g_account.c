@@ -7848,23 +7848,102 @@ static void G_WriteTrackedCSVCell(FILE *out, const char *text)
 	fputc('"', out);
 }
 
-static qboolean G_ExportTrackedQueryCSV(sqlite3 *db, const char *sql, const char *outputPath, int *rowsWritten)
+//GitHub rejects web uploads of 25MB or larger, so every export file is capped below that.
+#define TRACKED_EXPORT_MAX_PART_BYTES	(24 * 1000 * 1000)
+#define TRACKED_EXPORT_MAX_PARTS		999
+
+static size_t G_TrackedCSVCellLength(const char *text)
+{
+	size_t len = 2;
+
+	if (!text)
+		return len;
+	for (; *text; text++)
+		len += (*text == '"') ? 2 : 1;
+	return len;
+}
+
+//Part 1 keeps the historical name (e.g. events.csv); later parts are events_part2.csv, ...
+static void G_BuildTrackedExportPartName(const char *baseName, const char *exportSuffix, int part,
+	char *out, int outSize)
+{
+	if (part <= 1)
+		Com_sprintf(out, outSize, "%s%s.csv", baseName, exportSuffix ? exportSuffix : "");
+	else
+		Com_sprintf(out, outSize, "%s%s_part%i.csv", baseName, exportSuffix ? exportSuffix : "", part);
+}
+
+static FILE *G_OpenTrackedExportPart(sqlite3_stmt *stmt, int colCount, const char *outputPath, size_t *bytesWritten)
+{
+	FILE *out;
+	int i;
+
+	out = fopen(outputPath, "wb");
+	if (!out)
+	{
+		trap->Print("Failed opening export file: %s\n", outputPath);
+		return NULL;
+	}
+
+	*bytesWritten = 1;
+	for (i = 0; i < colCount; i++)
+	{
+		const char *name = sqlite3_column_name(stmt, i);
+		if (i > 0)
+		{
+			fputc(',', out);
+			(*bytesWritten)++;
+		}
+		G_WriteTrackedCSVCell(out, name);
+		*bytesWritten += G_TrackedCSVCellLength(name);
+	}
+	fputc('\n', out);
+	return out;
+}
+
+//Removes split parts left behind by an earlier, larger export with the same file names.
+static void G_RemoveTrackedExportParts(const char *dbDir, char pathSep, const char *safePrefix,
+	const char *baseName, const char *exportSuffix, int firstPart)
+{
+	char partName[96];
+	char partPath[MAX_OSPATH];
+	int part;
+
+	for (part = (firstPart < 1) ? 1 : firstPart; part <= TRACKED_EXPORT_MAX_PARTS; part++)
+	{
+		G_BuildTrackedExportPartName(baseName, exportSuffix, part, partName, sizeof(partName));
+		G_BuildTrackedExportPath(dbDir, pathSep, safePrefix, partName, partPath, sizeof(partPath));
+		if (remove(partPath) != 0 && part > 1)
+			break;
+	}
+}
+
+static qboolean G_ExportTrackedQueryCSV(sqlite3 *db, const char *sql, const char *dbDir, char pathSep,
+	const char *safePrefix, const char *baseName, const char *exportSuffix, int *rowsWritten, int *partsWritten)
 {
 	sqlite3_stmt *stmt = NULL;
 	FILE *out;
+	char partName[96];
+	char outputPath[MAX_OSPATH];
+	size_t partBytes = 0;
 	int s;
 	int i;
 	int colCount;
 	int localRows = 0;
+	int partRows = 0;
+	int part = 1;
 
-	if (!db || !sql || !sql[0] || !outputPath)
+	if (!db || !sql || !sql[0] || !baseName || !baseName[0])
 		return qfalse;
+
+	G_BuildTrackedExportPartName(baseName, exportSuffix, part, partName, sizeof(partName));
+	G_BuildTrackedExportPath(dbDir, pathSep, safePrefix, partName, outputPath, sizeof(outputPath));
 
 	s = sqlite3_prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL);
 	if (s != SQLITE_OK || !stmt)
 	{
 		trap->Print("Duel tracking: could not prepare export query for \"%s\" (%i: %s)\n",
-			outputPath, s, sqlite3_errmsg(db));
+			partName, s, sqlite3_errmsg(db));
 		if (stmt)
 			sqlite3_finalize(stmt);
 		return qfalse;
@@ -7872,29 +7951,46 @@ static qboolean G_ExportTrackedQueryCSV(sqlite3 *db, const char *sql, const char
 	colCount = sqlite3_column_count(stmt);
 	if (colCount <= 0)
 	{
-		trap->Print("Duel tracking: export query for \"%s\" returned no columns.\n", outputPath);
+		trap->Print("Duel tracking: export query for \"%s\" returned no columns.\n", partName);
 		CALL_SQLITE(finalize(stmt));
 		return qfalse;
 	}
 
-	out = fopen(outputPath, "wb");
+	out = G_OpenTrackedExportPart(stmt, colCount, outputPath, &partBytes);
 	if (!out)
 	{
-		trap->Print("Failed opening export file: %s\n", outputPath);
 		CALL_SQLITE(finalize(stmt));
 		return qfalse;
 	}
-
-	for (i = 0; i < colCount; i++)
-	{
-		if (i > 0)
-			fputc(',', out);
-		G_WriteTrackedCSVCell(out, sqlite3_column_name(stmt, i));
-	}
-	fputc('\n', out);
 
 	while ((s = sqlite3_step(stmt)) == SQLITE_ROW)
 	{
+		size_t rowBytes = 1;
+
+		for (i = 0; i < colCount; i++)
+		{
+			const unsigned char *text = sqlite3_column_text(stmt, i);
+			rowBytes += G_TrackedCSVCellLength(text ? (const char *)text : "") + ((i > 0) ? 1 : 0);
+		}
+
+		//Start a new part (with its own header) before this row would push the file over the cap.
+		if (partRows > 0 && part < TRACKED_EXPORT_MAX_PARTS &&
+			partBytes + rowBytes > TRACKED_EXPORT_MAX_PART_BYTES)
+		{
+			fclose(out);
+			part++;
+			partRows = 0;
+			G_BuildTrackedExportPartName(baseName, exportSuffix, part, partName, sizeof(partName));
+			G_BuildTrackedExportPath(dbDir, pathSep, safePrefix, partName, outputPath, sizeof(outputPath));
+			out = G_OpenTrackedExportPart(stmt, colCount, outputPath, &partBytes);
+			if (!out)
+			{
+				CALL_SQLITE(finalize(stmt));
+				G_RemoveTrackedExportParts(dbDir, pathSep, safePrefix, baseName, exportSuffix, 1);
+				return qfalse;
+			}
+		}
+
 		for (i = 0; i < colCount; i++)
 		{
 			const unsigned char *text;
@@ -7904,23 +8000,27 @@ static qboolean G_ExportTrackedQueryCSV(sqlite3 *db, const char *sql, const char
 			G_WriteTrackedCSVCell(out, text ? (const char *)text : "");
 		}
 		fputc('\n', out);
+		partBytes += rowBytes;
+		partRows++;
 		localRows++;
 	}
 
+	fclose(out);
 	if (s != SQLITE_DONE)
 	{
 		G_ErrorPrint("ERROR: SQL Select Failed (G_ExportTrackedQueryCSV)", s);
-		G_TrackedDBError(va("export query for \"%s\"", outputPath), db, s);
-		fclose(out);
-		remove(outputPath);
+		G_TrackedDBError(va("export query for \"%s\"", partName), db, s);
 		CALL_SQLITE(finalize(stmt));
+		G_RemoveTrackedExportParts(dbDir, pathSep, safePrefix, baseName, exportSuffix, 1);
 		return qfalse;
 	}
 
-	fclose(out);
 	CALL_SQLITE(finalize(stmt));
+	G_RemoveTrackedExportParts(dbDir, pathSep, safePrefix, baseName, exportSuffix, part + 1);
 	if (rowsWritten)
 		*rowsWritten = localRows;
+	if (partsWritten)
+		*partsWritten = part;
 	return qtrue;
 }
 
@@ -8078,10 +8178,23 @@ static void G_SanitizeTrackedExportPrefix(const char *in, char *out, int outSize
 	out[outIndex] = '\0';
 }
 
-static void G_RemoveTrackedExportFile(const char *path)
+static void G_ExportTrackedTable(sqlite3 *db, qboolean wantExport, const char *sql, const char *baseName,
+	const char *dbDir, char pathSep, const char *safePrefix, const char *exportSuffix)
 {
-	if (path && path[0])
-		remove(path);
+	char exportFileName[96];
+	int rows = 0;
+	int parts = 0;
+
+	G_BuildTrackedExportPartName(baseName, exportSuffix, 1, exportFileName, sizeof(exportFileName));
+	if (!wantExport)
+		G_RemoveTrackedExportParts(dbDir, pathSep, safePrefix, baseName, exportSuffix, 1);
+	else if (!G_ExportTrackedQueryCSV(db, sql, dbDir, pathSep, safePrefix, baseName, exportSuffix, &rows, &parts))
+		trap->Print("Duel tracking: %s export failed, kept any previous %s.\n", baseName, exportFileName);
+	else if (parts > 1)
+		trap->Print("Exported tracked %s (%d rows) split into %d files under 25MB: %s ... %s%s_part%d.csv\n",
+			baseName, rows, parts, exportFileName, baseName, exportSuffix, parts);
+	else
+		trap->Print("Exported tracked %s (%d rows): %s\n", baseName, rows, exportFileName);
 }
 
 static void G_BuildTrackedExportSuffix(qboolean timestamped, char *out, int outSize)
@@ -8444,13 +8557,11 @@ void Svcmd_ExportDuelTrack_f(void)
 	sqlite3 *db;
 	char dbDir[MAX_OSPATH];
 	char effectiveDbPath[MAX_OSPATH];
-	char outPath[MAX_OSPATH];
 	char optionalPrefix[64];
 	char safePrefix[64];
 	char *slashPos;
 	char *backslashPos;
 	int i;
-	int rows;
 	char pathSep;
 	qboolean preHadDuelSummary;
 	qboolean preHadDuelParticipant;
@@ -8464,7 +8575,6 @@ void Svcmd_ExportDuelTrack_f(void)
 	qboolean wantGeometryExport;
 	qboolean wantAggregateExport;
 	char exportSuffix[32];
-	char exportFileName[64];
 	qboolean timestampedExport;
 
 	optionalPrefix[0] = '\0';
@@ -8575,50 +8685,16 @@ void Svcmd_ExportDuelTrack_f(void)
 
 	//Never delete an existing CSV up front: G_ExportTrackedQueryCSV only truncates the file
 	//once its query has prepared, so a failed export leaves the previous good file in place.
-	Com_sprintf(exportFileName, sizeof(exportFileName), "sessions%s.csv", exportSuffix);
-	G_BuildTrackedExportPath(dbDir, pathSep, safePrefix, exportFileName, outPath, sizeof(outPath));
-	if (!wantSessionExport)
-		G_RemoveTrackedExportFile(outPath);
-	else if (G_ExportTrackedQueryCSV(db, G_GetTrackedSessionExportQuery(), outPath, &rows))
-		trap->Print("Exported tracked sessions (%d rows): %s\n", rows, exportFileName);
-	else
-		trap->Print("Duel tracking: sessions export failed, kept any previous %s.\n", exportFileName);
-
-	Com_sprintf(exportFileName, sizeof(exportFileName), "participants%s.csv", exportSuffix);
-	G_BuildTrackedExportPath(dbDir, pathSep, safePrefix, exportFileName, outPath, sizeof(outPath));
-	if (!wantParticipantExport)
-		G_RemoveTrackedExportFile(outPath);
-	else if (G_ExportTrackedQueryCSV(db, G_GetTrackedParticipantExportQuery(), outPath, &rows))
-		trap->Print("Exported tracked participants (%d rows): %s\n", rows, exportFileName);
-	else
-		trap->Print("Duel tracking: participants export failed, kept any previous %s.\n", exportFileName);
-
-	Com_sprintf(exportFileName, sizeof(exportFileName), "events%s.csv", exportSuffix);
-	G_BuildTrackedExportPath(dbDir, pathSep, safePrefix, exportFileName, outPath, sizeof(outPath));
-	if (!wantEventExport)
-		G_RemoveTrackedExportFile(outPath);
-	else if (G_ExportTrackedQueryCSV(db, G_GetTrackedEventExportQuery(), outPath, &rows))
-		trap->Print("Exported tracked events (%d rows): %s\n", rows, exportFileName);
-	else
-		trap->Print("Duel tracking: events export failed, kept any previous %s.\n", exportFileName);
-
-	Com_sprintf(exportFileName, sizeof(exportFileName), "geometry%s.csv", exportSuffix);
-	G_BuildTrackedExportPath(dbDir, pathSep, safePrefix, exportFileName, outPath, sizeof(outPath));
-	if (!wantGeometryExport)
-		G_RemoveTrackedExportFile(outPath);
-	else if (G_ExportTrackedQueryCSV(db, G_GetTrackedGeometryExportQuery(), outPath, &rows))
-		trap->Print("Exported tracked geometry (%d rows): %s\n", rows, exportFileName);
-	else
-		trap->Print("Duel tracking: geometry export failed, kept any previous %s.\n", exportFileName);
-
-	Com_sprintf(exportFileName, sizeof(exportFileName), "aggregate%s.csv", exportSuffix);
-	G_BuildTrackedExportPath(dbDir, pathSep, safePrefix, exportFileName, outPath, sizeof(outPath));
-	if (!wantAggregateExport)
-		G_RemoveTrackedExportFile(outPath);
-	else if (G_ExportTrackedQueryCSV(db, G_GetTrackedAggregateExportQuery(), outPath, &rows))
-		trap->Print("Exported tracked aggregate (%d rows): %s\n", rows, exportFileName);
-	else
-		trap->Print("Duel tracking: aggregate export failed, kept any previous %s.\n", exportFileName);
+	G_ExportTrackedTable(db, wantSessionExport, G_GetTrackedSessionExportQuery(), "sessions",
+		dbDir, pathSep, safePrefix, exportSuffix);
+	G_ExportTrackedTable(db, wantParticipantExport, G_GetTrackedParticipantExportQuery(), "participants",
+		dbDir, pathSep, safePrefix, exportSuffix);
+	G_ExportTrackedTable(db, wantEventExport, G_GetTrackedEventExportQuery(), "events",
+		dbDir, pathSep, safePrefix, exportSuffix);
+	G_ExportTrackedTable(db, wantGeometryExport, G_GetTrackedGeometryExportQuery(), "geometry",
+		dbDir, pathSep, safePrefix, exportSuffix);
+	G_ExportTrackedTable(db, wantAggregateExport, G_GetTrackedAggregateExportQuery(), "aggregate",
+		dbDir, pathSep, safePrefix, exportSuffix);
 
 	CALL_SQLITE(close(db));
 }
