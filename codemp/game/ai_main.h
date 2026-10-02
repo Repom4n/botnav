@@ -394,11 +394,10 @@ typedef struct bot_state_s
 	int					swingDodgeDir; // lateral dodge direction (+1 right, -1 left)
 	int					airSwingRollTime; // level.time we last rolled whether an airborne swing is allowed
 	int					airSwingAllowed; // result of that roll for the current jump
-	int					ownThrowReleaseTime; // level.time our saber last left our hand
-	int					lastOwnSaberInFlight; // saberInFlight on the previous think
+	int					counterThrowRollKey; // enemy throw (its start time) the counter-throw mistake was rolled for
+	qboolean			counterThrowMistake; // low-skill roll: hold the saber instead of counter-throwing
 	int					footingMistakeRollTime; // level.time the swing-footing mistake roll was taken
 	qboolean			footingMistake; // low-skill roll: start swings out of reach / while backing off
-	int					throwPullPendingTime; // level.time a throw->pull follow-up was armed (0 = none)
 	int					drainHoldTime;
 	qboolean			healDrainlockActive; // latched once a health-disadvantaged drainlock starts; stays active on the same enemy until topped off or aggression turns reckless
 	int					healDrainlockTargetNum; // enemy clientNum associated with healDrainlockActive

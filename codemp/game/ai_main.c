@@ -167,6 +167,7 @@ static qboolean NewBotAI_SwingStartFootingAllows(bot_state_t *bs);
 static qboolean NewBotAI_SwingChainFootingAllows(bot_state_t *bs);
 static int NewBotAI_GetDecisionMistakeChance(bot_state_t *bs);
 static qboolean NewBotAI_MayStartAirborneSwing(bot_state_t *bs);
+static int NewBotAI_GetEnemyStimulusToken(bot_state_t *bs);
 static qboolean NewBotAI_HasValidCurrentEnemy(bot_state_t *bs);
 static qboolean NewBotAI_CanInitiateFlipkickUnderFanPressure(bot_state_t *bs);
 
@@ -7507,7 +7508,9 @@ static qboolean NewBotAI_ShouldSuppressDrainlockSaberThrow(bot_state_t *bs)
 //drain (10 at level 3) and it is charged repeatedly for as long as the saber is out.
 #define NEWBOTAI_SABER_THROW_FORCE_BUDGET 40
 //Force we must still have banked after the throw to push/pull our way out of a drain lock.
-#define NEWBOTAI_DRAINLOCK_ESCAPE_RESERVE 30
+//Human throws stayed net positive even though 43% were followed by an enemy drain, so the
+//reserve only guards against throwing ourselves fully dry.
+#define NEWBOTAI_DRAINLOCK_ESCAPE_RESERVE 10
 //Below this the enemy cannot open a drain lock on us in the first place.
 #define NEWBOTAI_DRAINLOCK_ENEMY_MIN_FORCE 25
 
@@ -7542,8 +7545,10 @@ static qboolean NewBotAI_WouldThrowInviteDrainlock(bot_state_t *bs)
 		return qfalse;
 	}
 
-	//Already being drained: throwing now is the exact mistake the tracks flag.
-	if (bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_DRAIN))
+	//Already being drained with little force left: throwing now is the exact mistake the
+	//tracks flag. With force to spare the throw (drain -> throw) still paid off.
+	if ((bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_DRAIN)) &&
+		bs->cur_ps.fd.forcePower < 40)
 	{
 		return qtrue;
 	}
@@ -8945,7 +8950,17 @@ void NewBotAI_ReactToBeingGripped(bot_state_t *bs) //Test this more, does it pus
 	else if (!(g_forcePowerDisable.integer & (1 << FP_PULL)) && !(g_forcePowerDisable.integer & (1 << FP_PUSH)) && (bs->cur_ps.fd.forcePowersKnown & (1 << FP_PULL)) && (bs->cur_ps.fd.forcePowersKnown & (1 << FP_PUSH))) {//Can push or pull
 		if (bs->cur_ps.fd.forcePower >= 20 && InFieldOfVision(bs->viewangles, 50, a_fo)) {
 			if (g_entities[bs->client].health < 30 && bs->gripMistakeNeverEscape <= 0) {
-				level.clients[bs->client].ps.fd.forcePowerSelected = FP_PUSH;
+				//Low on health: pull free immediately. The late push out of a grip lost the
+				//exchange in the duel data, so only lower levels keep it as a mistake.
+				if (bs->settings.skill >= 7.0f)
+				{
+					level.clients[bs->client].ps.fd.forcePowerSelected = FP_PULL;
+					NewBotAI_ApplyPullMistake(bs);
+				}
+				else
+				{
+					level.clients[bs->client].ps.fd.forcePowerSelected = FP_PUSH;
+				}
 				useTheForce = qtrue;
 			}
 			else {
@@ -10948,8 +10963,12 @@ static void NewBotAI_SchedulePullkickJump(bot_state_t *bs)
 				extraDelay = NEWBOTAI_PULLKICK_RANGED_EXTRA_DELAY_MS;
 			}
 		}
+		//Skill 7+ kicks on the predicted arrival like jundon (no extra gap); lower skills
+		//react 100-250ms late plus a mistake-bias delay.
 		bs->pullKickJumpTime = level.time + (int)timeToRange +
-			NewBotAI_GetPullkickExtraDelayMs() + extraDelay;
+			NewBotAI_GetPullkickExtraDelayMs() + extraDelay +
+			NewBotAI_GetComboGapMs(NEWBOTAI_COMBO_PULL_KICK, bs->settings.skill, 0,
+				NewBotAI_GetDecisionMistakeChance(bs));
 	}
 	else
 	{
@@ -13912,9 +13931,15 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 		{
 			startDir = bs->randomStrafeDir;
 		}
-		else if (fanBias > 0.0f && Q_irand(1, 100) <= (int)fanBias)
+		else if (fanBias > 0.0f)
 		{
-			startDir = Q_irand(0, 1) ? 1 : -1;
+			//Learned outcomes of opening with a swing in this context nudge the fan entry
+			//chance up or down (capped by G_BotLearnBonus, 0 without enough data).
+			const int learnedEntry = G_BotLearnBonus(&g_entities[bs->client], bs->currentEnemy,
+				NewBotAI_GetEnemyStimulusToken(bs), BOTLEARN_TOK_SWING, BOTLEARN_TOK_NONE, bs->settings.skill);
+
+			if (Q_irand(1, 100) <= (int)fanBias + learnedEntry)
+				startDir = Q_irand(0, 1) ? 1 : -1;
 		}
 
 		if (startDir)
@@ -14902,6 +14927,7 @@ static void NewBotAI_TrySaberThrowDefenseBreak(bot_state_t *bs)
 {
 	vec3_t a_fo;
 	qboolean preferPull;
+	int ownThrowTime;
 
 	if (!bs->currentEnemy || !bs->currentEnemy->client || !bs->cur_ps.saberInFlight)
 	{
@@ -14915,7 +14941,15 @@ static void NewBotAI_TrySaberThrowDefenseBreak(bot_state_t *bs)
 		return;
 	}
 
-	if (bs->frame_Enemy_Len < 96 || bs->frame_Enemy_Len > 256)
+	//Throw -> pull: jundon pulls ~66ms after the release, from anywhere the throw reaches.
+	//Lower skills follow up later (see NewBotAI_GetComboGapMs).
+	if (bs->frame_Enemy_Len < 96 || bs->frame_Enemy_Len > 640)
+	{
+		return;
+	}
+	ownThrowTime = G_BotLearnLastTokenTime(bs->client, BOTLEARN_TOK_THROW);
+	if (ownThrowTime > 0 && level.time - ownThrowTime < NewBotAI_GetComboGapMs(NEWBOTAI_COMBO_THROW_PULL,
+		bs->settings.skill, 0, NewBotAI_GetDecisionMistakeChance(bs)))
 	{
 		return;
 	}
@@ -14927,9 +14961,9 @@ static void NewBotAI_TrySaberThrowDefenseBreak(bot_state_t *bs)
 		return;
 	}
 
-	//When our actions are PTK-weighted (aggressive bias) we pull them in for the kick
-	//follow-up; when defensive we push to break their guard instead.
-	preferPull = (BotGetAggressionBias(bs) > 0.0f) ? qtrue : qfalse;
+	//Throw -> pull won the exchange in the duel data, so skill 7+ always pulls; lower
+	//skills pull when PTK-weighted (aggressive bias) and push to break the guard otherwise.
+	preferPull = (bs->settings.skill >= 7.0f || BotGetAggressionBias(bs) > 0.0f) ? qtrue : qfalse;
 
 	if (!NewBotAI_CanUseSaberThrowDefenseBreakForce(bs, preferPull))
 	{
@@ -16236,6 +16270,8 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 	const float saberthrowBias = BotGetChanceBiasPercent(bot_saberthrowbias.value);
 	const int antiDrainWeight = NewBotAI_GetAntiDrainWeight(bs);
 	int weight = 0;
+	qboolean counterThrow = qfalse;
+	qboolean gripThrowCombo = qfalse;
 
 	//Check if we should saberthrow I guess.
 	if (bs->cur_ps.weapon != WP_SABER || bs->frame_Enemy_Len >= 400 || bs->cur_ps.saberInFlight)
@@ -16246,15 +16282,26 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 		return 0;
 	if (!bs->frame_Enemy_Vis)
 		return 0;
-	//The enemy is already committed to a saber throw - keeping our own saber in hand
-	//maintains our block/defense against their incoming throw, and a pullkick (pull +
-	//flipkick, no throw) punishes their now-saberless state far better than trading
-	//throws would. Hold the saber instead of also throwing it.
+	//The enemy is already committed to a saber throw. While it is about to hit us keep our
+	//own saber in hand to block it; otherwise they are saberless and the counter-throw was
+	//the best answer in the duel data (net +14..+27, vs -17 for a push or a jump dodge).
+	//Lower levels keep the old hold-the-saber habit as a mistake.
 	if (bs->currentEnemy->client->ps.saberInFlight)
-		return 0;
-	//Losing the force game (under 50 points left): fanbias/drain/retreat options take
-	//priority over spending force on a throw.
-	if (ourForce < 50)
+	{
+		const int enemyThrowKey = G_BotLearnLastTokenTime(bs->currentEnemy->s.number, BOTLEARN_TOK_THROW);
+
+		if (bs->counterThrowRollKey != enemyThrowKey)
+		{
+			bs->counterThrowRollKey = enemyThrowKey;
+			bs->counterThrowMistake = (Q_irand(1, 100) <= NewBotAI_GetDecisionMistakeChance(bs)) ? qtrue : qfalse;
+		}
+		if (NewBotAI_IsEnemySaberThreatImminent(bs) || bs->counterThrowMistake)
+			return 0;
+		counterThrow = qtrue;
+	}
+	//Out of force: a throw that cannot be sustained just drops the saber. Human throws hit
+	//at every force level, so only the real floor is vetoed here.
+	if (ourForce < 30)
 		return 0;
 	//Too hurt to risk going saberless while the enemy holds a big force lead: even when
 	//we still hold the health advantage, a throw here gives them the opening their force
@@ -16299,6 +16346,15 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 
 	g_entities[bs->client].client->ps.fd.forcePowerLevel[FP_SABERTHROW] = 3;
 	g_entities[bs->client].client->ps.fd.forcePowersKnown |= (1 << FP_SABERTHROW);
+
+	//Grip -> throw: throw ~100ms (skill 7+) into the target we are holding.
+	if ((bs->cur_ps.fd.forcePowersActive & (1 << FP_GRIP)) &&
+		level.time - G_BotLearnLastTokenTime(bs->client, BOTLEARN_TOK_GRIP) >=
+			NewBotAI_GetComboGapMs(NEWBOTAI_COMBO_GRIP_THROW, bs->settings.skill, 0,
+				NewBotAI_GetDecisionMistakeChance(bs)))
+	{
+		gripThrowCombo = qtrue;
+	}
 
 	if (enemyKnockedDown) {
 		if (enemyPreGetupResponse &&
@@ -16407,7 +16463,81 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 		}
 	}
 
+	if (counterThrow && weight < 40)
+		weight = 40;
+	if (gripThrowCombo && weight < 50)
+		weight = 50;
+
+	if (weight > 0)
+	{
+		//Situational read from the duel data: throws into a jumping target or right after
+		//our own pull/swing/kick rarely landed; throws at a committed target and at our own
+		//force <= 50 did. Plus the opponent reaction table and the learned sequence bonus.
+		const int stimulus = NewBotAI_GetEnemyStimulusToken(bs);
+		const qboolean ownActionRecent = (G_BotLearnRecentToken(bs->client, BOTLEARN_TOK_PULL, 400) ||
+			G_BotLearnRecentToken(bs->client, BOTLEARN_TOK_SWING, 400) ||
+			G_BotLearnRecentToken(bs->client, BOTLEARN_TOK_KICK, 400)) ? qtrue : qfalse;
+		const qboolean enemyCommitted = (BG_SaberInAttack(bs->currentEnemy->client->ps.saberMove) ||
+			bs->currentEnemy->client->ps.fd.forcePowersActive != 0 ||
+			bs->currentEnemy->client->ps.saberInFlight) ? qtrue : qfalse;
+		const float skillScale = BotLearn_SkillScale(bs->settings.skill);
+
+		weight += (int)(NewBotAI_GetSaberThrowSituationBonus(ourForce, bs->frame_Enemy_Len,
+			enemyAirborne ? 1 : 0, enemyKnockedDown ? 1 : 0, ownActionRecent ? 1 : 0,
+			enemyCommitted ? 1 : 0) * skillScale);
+		weight += (int)(NewBotAI_GetReactionBonus(stimulus, BOTLEARN_TOK_THROW) * skillScale);
+		weight += G_BotLearnBonus(&g_entities[bs->client], bs->currentEnemy, stimulus,
+			BOTLEARN_TOK_THROW, BOTLEARN_TOK_NONE, bs->settings.skill);
+		if (weight < 0)
+			weight = 0;
+	}
+
 	return weight;
+}
+
+// The opponent's most recent action (what we are reacting to), IDLE when nothing recent.
+static int NewBotAI_GetEnemyStimulusToken(bot_state_t *bs)
+{
+	int token;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+		return BOTLEARN_TOK_IDLE;
+	token = G_BotLearnLatestToken(bs->currentEnemy->s.number, BOTLEARN_RESPONSE_WINDOW_MS);
+	return (token == BOTLEARN_TOK_NONE) ? BOTLEARN_TOK_IDLE : token;
+}
+
+// Additive weight for answering the current situation with `response`:
+//  - reaction table from the duel data (scaled down for lower skills),
+//  - force economy (pull while the enemy still has force, drain when they are low),
+//  - drain -> pull follow-up once the skill-scaled combo gap has passed,
+//  - learned sequence bonus (bot_learning).
+static int NewBotAI_GetForceDecisionBonus(bot_state_t *bs, int response)
+{
+	const int stimulus = NewBotAI_GetEnemyStimulusToken(bs);
+	const float skillScale = BotLearn_SkillScale(bs->settings.skill);
+	int bonus;
+	int ownDrainTime;
+
+	if (!bs->currentEnemy || !bs->currentEnemy->client)
+		return 0;
+
+	bonus = (int)(NewBotAI_GetReactionBonus(stimulus, response) * skillScale);
+	bonus += (int)(NewBotAI_GetForceEconomyBonus(response, bs->currentEnemy->client->ps.fd.forcePower) * skillScale);
+
+	ownDrainTime = G_BotLearnLastTokenTime(bs->client, BOTLEARN_TOK_DRAIN);
+	if (response == BOTLEARN_TOK_PULL && ownDrainTime > 0 &&
+		level.time - ownDrainTime >= NewBotAI_GetComboGapMs(NEWBOTAI_COMBO_DRAIN_FOLLOWUP,
+			bs->settings.skill, 0, NewBotAI_GetDecisionMistakeChance(bs)) &&
+		level.time - ownDrainTime <= 600)
+	{
+		bonus += 20;
+	}
+
+	//A pull we can cash in with a kick is scored as the pull -> kick sequence.
+	bonus += G_BotLearnBonus(&g_entities[bs->client], bs->currentEnemy, stimulus, response,
+		(response == BOTLEARN_TOK_PULL && NewBotAI_IsPullkickOpportunity(bs)) ? BOTLEARN_TOK_KICK : BOTLEARN_TOK_NONE,
+		bs->settings.skill);
+	return bonus;
 }
 
 void NewBotAI_GetDSForcepower(bot_state_t *bs)
@@ -16478,6 +16608,20 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 		drainWeight = 0;
 	}
 	//doNothingWeight = NewBotAI_GetWait(bs);
+
+	//Counters/combos from the duel data plus the learned sequence weights. Only adjusts
+	//powers that are already available (weight > 0) so every existing gate still applies.
+	if (!longRangeLightningOnly)
+	{
+		if (pullWeight > 0)
+			pullWeight += NewBotAI_GetForceDecisionBonus(bs, BOTLEARN_TOK_PULL);
+		if (pushWeight > 0)
+			pushWeight += NewBotAI_GetForceDecisionBonus(bs, BOTLEARN_TOK_PUSH);
+		if (gripWeight > 0)
+			gripWeight += NewBotAI_GetForceDecisionBonus(bs, BOTLEARN_TOK_GRIP);
+		if (drainWeight > 0)
+			drainWeight += NewBotAI_GetForceDecisionBonus(bs, BOTLEARN_TOK_DRAIN);
+	}
 
 	if (!longRangeLightningOnly && bs->currentEnemy && bs->currentEnemy->client)
 	{
