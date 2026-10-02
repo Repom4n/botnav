@@ -208,6 +208,7 @@ Duel capture version 9:
 - `dodge` is logged for the defender when an enemy swing ends within close range without damaging them (note `air`, `blocked` or `evaded`).
 - Knockdown notes record `knockdown_by_opponent` or `knockdown_self`, and the damage attacker key identifies who caused it.
 - Duel winners no longer get `low_force` as their primary issue for deliberately spending force.
+- `force` events whose power could only be guessed from the selected power (force lost to an enemy drain, or the cost of a saber throw) carry the note `selected_fallback`. Leaving the ground with jump held and upward velocity is noted `jump` instead of `airborne`. Learning ignores both guessed force spends and non-jump launches, so victims are not credited with actions they never took.
 - `LocalDuelTrackAggregate` rows carry `capture_version` and `capture_revision` of the latest update (aggregate export format 3).
 
 Recommended data: record duels against bots at skill 6+ so the skill gradient can be checked against data; the dueltracks2 set had no bots above skill 5.

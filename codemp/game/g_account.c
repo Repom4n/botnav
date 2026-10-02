@@ -33,6 +33,8 @@ static char LOCAL_DUELTRACK_DB_PATH[MAX_OSPATH];
 //Duel "type" used for arcade rows, matching the arcade leaderboard type in G_AddDuel.
 #define TRACKED_ARCADE_DUEL_TYPE 21
 #define TRACKED_CAPTURE_VERSION 9
+#define TRACKED_FORCE_NOTE_SELECTED_FALLBACK "selected_fallback"
+#define TRACKED_AIR_NOTE_JUMP "jump"
 #define TRACKED_DUEL_MAX_EVENTS 8192
 #define TRACKED_DUEL_TUTORIAL_MAX_MESSAGES 3
 #define TRACKED_DUEL_TUTORIAL_COOLDOWN_MS 7000
@@ -2890,12 +2892,14 @@ static void G_InitTrackedDuelRuntimeForClient(gentity_t *ent, gentity_t *opponen
 	G_GetDuelTrackingIdentity(opponent, runtime->opponentKey, sizeof(runtime->opponentKey), runtime->opponentLabel, sizeof(runtime->opponentLabel), NULL);
 }
 
-static duel_track_power_t G_InferTrackedPowerSpend(gentity_t *ent, tracked_duel_runtime_t *runtime)
+static duel_track_power_t G_InferTrackedPowerSpend(gentity_t *ent, tracked_duel_runtime_t *runtime, qboolean *confirmed)
 {
 	static const int sustainedPowers[] = { FP_GRIP, FP_DRAIN, FP_ABSORB, FP_PROTECT, FP_SPEED, FP_SEE, FP_RAGE };
 	int i;
 	duel_track_power_t mappedPower;
 
+	if (confirmed)
+		*confirmed = qfalse;
 	if (!ent || !ent->client || !runtime)
 		return DUEL_TRACK_POWER_UNKNOWN;
 
@@ -2910,12 +2914,19 @@ static duel_track_power_t G_InferTrackedPowerSpend(gentity_t *ent, tracked_duel_
 		{
 			mappedPower = G_MapForcePowerToTrackedPower(i);
 			if (mappedPower != DUEL_TRACK_POWER_UNKNOWN)
+			{
+				if (confirmed)
+					*confirmed = qtrue;
 				return mappedPower;
+			}
 		}
 	}
 
 	if (ent->client->ps.forceHandExtendTime > level.time)
 	{
+		if (confirmed && (ent->client->ps.forceHandExtend == HANDEXTEND_FORCEPULL ||
+			ent->client->ps.forceHandExtend == HANDEXTEND_FORCEPUSH))
+			*confirmed = qtrue;
 		if (ent->client->ps.forceHandExtend == HANDEXTEND_FORCEPULL)
 			return DUEL_TRACK_POWER_PULL;
 		if (ent->client->ps.forceHandExtend == HANDEXTEND_FORCEPUSH)
@@ -2925,7 +2936,11 @@ static duel_track_power_t G_InferTrackedPowerSpend(gentity_t *ent, tracked_duel_
 	for (i = 0; i < (int)(sizeof(sustainedPowers) / sizeof(sustainedPowers[0])); i++)
 	{
 		if (ent->client->ps.fd.forcePowersActive & (1 << sustainedPowers[i]))
+		{
+			if (confirmed)
+				*confirmed = qtrue;
 			return G_MapForcePowerToTrackedPower(sustainedPowers[i]);
+		}
 	}
 
 	mappedPower = G_MapForcePowerToTrackedPower(ent->client->ps.fd.forcePowerSelected);
@@ -3294,6 +3309,8 @@ static int G_BotLearnTokenForTrackedEvent(const tracked_duel_event_t *event)
 	switch (event->eventType)
 	{
 	case DUEL_TRACK_EVENT_FORCE:
+		if (!Q_stricmp(event->note, TRACKED_FORCE_NOTE_SELECTED_FALLBACK))
+			return BOTLEARN_TOK_NONE;
 		switch (event->power)
 		{
 		case DUEL_TRACK_POWER_PUSH: return BOTLEARN_TOK_PUSH;
@@ -3308,7 +3325,7 @@ static int G_BotLearnTokenForTrackedEvent(const tracked_duel_event_t *event)
 		return (event->amount >= LS_KICK_F && event->amount <= LS_KICK_L_AIR) ?
 			BOTLEARN_TOK_KICK : BOTLEARN_TOK_SWING;
 	case DUEL_TRACK_EVENT_AIR:
-		return event->amount ? BOTLEARN_TOK_JUMP : BOTLEARN_TOK_NONE;
+		return (event->amount && !Q_stricmp(event->note, TRACKED_AIR_NOTE_JUMP)) ? BOTLEARN_TOK_JUMP : BOTLEARN_TOK_NONE;
 	case DUEL_TRACK_EVENT_KNOCKDOWN:
 		return BOTLEARN_TOK_KNOCKDOWN;
 	default:
@@ -3834,7 +3851,8 @@ void G_UpdateTrackedDuelFrame(gentity_t *ent)
 	if (forceDelta < 0)
 	{
 		int spent = -forceDelta;
-		power = G_InferTrackedPowerSpend(ent, runtime);
+		qboolean powerConfirmed;
+		power = G_InferTrackedPowerSpend(ent, runtime, &powerConfirmed);
 		runtime->lastForceSpendTime = level.time;
 		runtime->totalForceSpent += spent;
 		runtime->forceSpentByPower[power] += spent;
@@ -3851,7 +3869,10 @@ void G_UpdateTrackedDuelFrame(gentity_t *ent)
 			(ent->health <= 45 || state == DUEL_TRACK_STATE_PANIC || state == DUEL_TRACK_STATE_DISADVANTAGE))
 			runtime->lateDefenseSpends++;
 		G_SetTrackedOpeningIfEmpty(runtime, power, NULL);
-		G_AddTrackedDuelEvent(runtime, DUEL_TRACK_EVENT_FORCE, level.time - runtime->duelStartTime, spent, power, state, curRangeBucket, NULL, ent, opponent);
+		// Force lost to an enemy drain or a saber throw falls back to the selected power;
+		// mark it so it is not mistaken for an action the player chose.
+		G_AddTrackedDuelEvent(runtime, DUEL_TRACK_EVENT_FORCE, level.time - runtime->duelStartTime, spent, power, state, curRangeBucket,
+			powerConfirmed ? NULL : TRACKED_FORCE_NOTE_SELECTED_FALLBACK, ent, opponent);
 	}
 	else if (forceDelta > 0)
 	{
@@ -3880,7 +3901,13 @@ void G_UpdateTrackedDuelFrame(gentity_t *ent)
 		G_AddTrackedDuelEvent(runtime, DUEL_TRACK_EVENT_RANGE, level.time - runtime->duelStartTime, curRangeBucket, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, NULL, ent, opponent);
 
 	if (airborne != runtime->lastAirborne)
-		G_AddTrackedDuelEvent(runtime, DUEL_TRACK_EVENT_AIR, level.time - runtime->duelStartTime, airborne, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, airborne ? "airborne" : "landed", ent, opponent);
+	{
+		const char *airNote = "landed";
+		if (airborne)
+			airNote = (ent->client->pers.cmd.upmove > 0 && ent->client->ps.velocity[2] > 0.0f && !knockedDown) ?
+				TRACKED_AIR_NOTE_JUMP : "airborne";
+		G_AddTrackedDuelEvent(runtime, DUEL_TRACK_EVENT_AIR, level.time - runtime->duelStartTime, airborne, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, airNote, ent, opponent);
+	}
 
 	if (knockedDown && !runtime->lastKnockdown)
 	{
