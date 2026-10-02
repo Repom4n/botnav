@@ -1,6 +1,9 @@
 #ifndef AI_COMBAT_TUNING_H
 #define AI_COMBAT_TUNING_H
 
+#include <math.h>
+#include "g_bot_learning.h"
+
 #define NEWBOTAI_TUNING_ESCAPE_YAW_SPEED 333.0f
 
 typedef enum
@@ -35,9 +38,10 @@ typedef enum
 	NEWBOTAI_SABER_GRADE_MISTAKE
 } newbotai_saber_grade_t;
 
-#define NEWBOTAI_SABER_ATTACK_RANGE 96.0f
+// 2D origin distances. Human hits cluster at 41-53u; bots started most swings from 100u+.
+#define NEWBOTAI_SABER_ATTACK_RANGE 85.0f
 #define NEWBOTAI_SABER_STEP_IN_RANGE 160.0f
-#define NEWBOTAI_SABER_SWING_START_MAX_RANGE 128.0f
+#define NEWBOTAI_SABER_SWING_START_MAX_RANGE 85.0f
 #define NEWBOTAI_SABER_LONG_SWING_RANGE 150.0f
 #define NEWBOTAI_SABER_CRITICAL_TOTAL_HEALTH 30
 #define NEWBOTAI_SABER_COUNTER_WINDOW_MS 600
@@ -87,6 +91,19 @@ static inline int NewBotAI_GetEffectiveMoveInput(int cmdMove, int forcedMove)
 	return forcedMove ? forcedMove : cmdMove;
 }
 
+// Skill gradient: skill 7+ takes the best choice except for a small mistake-bias roll that
+// reaches zero at skill 10; lower skills keep the full mistake band.
+static inline int NewBotAI_GetHighSkillMistakeChance(int skill, int mistakeBias)
+{
+	if (skill >= 10)
+		return 0;
+	if (mistakeBias < 0)
+		mistakeBias = 0;
+	else if (mistakeBias > 100)
+		mistakeBias = 100;
+	return (mistakeBias * (10 - skill)) / 30;
+}
+
 static inline int NewBotAI_GetSaberTacticMistakeChance(int skill, int mistakeBias)
 {
 	int clampedSkill = skill;
@@ -103,6 +120,10 @@ static inline int NewBotAI_GetSaberTacticMistakeChance(int skill, int mistakeBia
 		clampedBias = 100;
 	if (clampedSkill >= 10)
 		return 0;
+	// Skill 7+ plays the best known choice apart from a small bias roll (see
+	// NewBotAI_GetHighSkillMistakeChance); the full mistake band is for skills 1-6.
+	if (clampedSkill >= 7)
+		return NewBotAI_GetHighSkillMistakeChance(clampedSkill, clampedBias);
 
 	chance = (10 - clampedSkill) * 3;
 	chance += (clampedBias * (140 - clampedSkill * 8)) / 100;
@@ -946,10 +967,9 @@ static inline newbotai_drainlock_force_choice_t NewBotAI_GetDrainlockForceChoice
 		return NEWBOTAI_DRAINLOCK_FORCE_NONE;
 	}
 
-	// Once the enemy is truly below the free-pull threshold, preserve the legacy tie-break:
-	// equal pull/drain weights still resolve to pull so the finisher can fire immediately.
-	if (context.enemyForce < 20 &&
-		context.pullWeight >= context.minWeight &&
+	// Pull whenever it matches or beats drain (jundon pulls while the enemy still has force
+	// and saves drain for when they are low): equal weights resolve to pull.
+	if (context.pullWeight > context.minWeight &&
 		context.pullWeight >= context.drainWeight)
 	{
 		return NEWBOTAI_DRAINLOCK_FORCE_PULL;
@@ -1166,5 +1186,328 @@ static inline int NewBotAI_ShouldForceImmediateSaberThrowHop(
 
 	return 0;
 }
+
+/* ------------------------------------------------------------------------------------
+ * Dueltracks2 data-driven tuning (fan chain, footing, dodges, combos, reactions).
+ * ------------------------------------------------------------------------------------ */
+
+// Fan chain (sessions 34-48): human L2R/R2L chains link on the frame the previous swing
+// ends (no dwell), sweep 100-160 degrees per ~300ms swing, and keep running while hits land.
+#define NEWBOTAI_FAN_SWEEP_SWING_MS 300
+#define NEWBOTAI_FAN_SWEEP_MAX_HALF_ARC 80.0f
+#define NEWBOTAI_FAN_SWEEP_FULL_RANGE 110.0f
+#define NEWBOTAI_FAN_SWEEP_FADE_RANGE 200.0f
+#define NEWBOTAI_FAN_CHAIN_BASE_MS 3000
+#define NEWBOTAI_FAN_CHAIN_EXTENDED_MS 6000
+#define NEWBOTAI_FAN_CHAIN_HIT_WINDOW_MS 700
+#define NEWBOTAI_FAN_LINK_SKILL 7.0f
+
+// Gap between fan swings: zero at skill 7+, otherwise the configured dwell shrunk by skill
+// and by fan bias (a bot told to fan hard also links faster).
+static inline int NewBotAI_GetFanDwellMs(int baseDwellMs, float skill, float fanBiasPercent)
+{
+	float scale;
+
+	if (baseDwellMs <= 0 || skill >= NEWBOTAI_FAN_LINK_SKILL)
+		return 0;
+	if (skill < 1.0f)
+		skill = 1.0f;
+	if (fanBiasPercent < 0.0f)
+		fanBiasPercent = 0.0f;
+	else if (fanBiasPercent > 100.0f)
+		fanBiasPercent = 100.0f;
+	scale = (NEWBOTAI_FAN_LINK_SKILL - skill) / (NEWBOTAI_FAN_LINK_SKILL - 1.0f);
+	scale *= 1.0f - 0.5f * (fanBiasPercent / 100.0f);
+	return (int)((float)baseDwellMs * scale);
+}
+
+// Half of the yaw arc swept during one horizontal swing. High-skill bots approach the human
+// 55-80 degree half arc; the arc fades with range so the aim stays on a distant target.
+static inline float NewBotAI_GetFanSweepHalfArc(float skill, float fanBiasPercent, float enemyDistance2D)
+{
+	float skillT;
+	float arc;
+
+	if (skill < 1.0f)
+		skill = 1.0f;
+	skillT = (skill - 1.0f) / (NEWBOTAI_FAN_LINK_SKILL - 1.0f);
+	if (skillT > 1.0f)
+		skillT = 1.0f;
+	if (fanBiasPercent < 0.0f)
+		fanBiasPercent = 0.0f;
+	else if (fanBiasPercent > 100.0f)
+		fanBiasPercent = 100.0f;
+	arc = 20.0f + 50.0f * skillT + 10.0f * (fanBiasPercent / 100.0f);
+	if (enemyDistance2D > NEWBOTAI_FAN_SWEEP_FULL_RANGE)
+	{
+		float fade = 1.0f - 0.5f * (enemyDistance2D - NEWBOTAI_FAN_SWEEP_FULL_RANGE) /
+			(NEWBOTAI_FAN_SWEEP_FADE_RANGE - NEWBOTAI_FAN_SWEEP_FULL_RANGE);
+		if (fade < 0.5f)
+			fade = 0.5f;
+		arc *= fade;
+	}
+	return (arc > NEWBOTAI_FAN_SWEEP_MAX_HALF_ARC) ? NEWBOTAI_FAN_SWEEP_MAX_HALF_ARC : arc;
+}
+
+// Absolute yaw offset from the enemy direction during a horizontal swing. sweepDir follows
+// BG_SaberHorizontalSweepDir (L2R = +1 turns right / yaw decreasing). The swing starts on
+// the far side (+halfArc for L2R), crosses the target mid-swing (when hits land, 150ms in)
+// and ends on the other side, matching the human yaw sweep.
+static inline float NewBotAI_GetFanSweepOffset(float halfArc, int sweepDir, int elapsedMs, int swingMs)
+{
+	float progress;
+
+	if (!sweepDir || halfArc <= 0.0f || swingMs <= 0)
+		return 0.0f;
+	progress = (float)elapsedMs / (float)swingMs;
+	if (progress < 0.0f)
+		progress = 0.0f;
+	else if (progress > 1.0f)
+		progress = 1.0f;
+	return (float)sweepDir * halfArc * (1.0f - 2.0f * progress);
+}
+
+// Chains end at the base 3 seconds unless the last hit landed within the hit window, in
+// which case they may run on up to the extended cap.
+static inline int NewBotAI_FanChainMayContinue(int chainElapsedMs, int msSinceLastHit)
+{
+	if (chainElapsedMs <= NEWBOTAI_FAN_CHAIN_BASE_MS)
+		return 1;
+	if (chainElapsedMs > NEWBOTAI_FAN_CHAIN_EXTENDED_MS)
+		return 0;
+	return (msSinceLastHit >= 0 && msSinceLastHit <= NEWBOTAI_FAN_CHAIN_HIT_WINDOW_MS) ? 1 : 0;
+}
+
+// Saber-only planner sweep amplitude/rate scaled from the conservative 18 deg / 240 deg/s
+// envelope toward the human fan sweep by skill and fan bias.
+static inline float NewBotAI_GetSaberSweepAmplitude(float skill, float fanBiasPercent)
+{
+	const float arc = NewBotAI_GetFanSweepHalfArc(skill, fanBiasPercent, 0.0f);
+	return (arc < NEWBOTAI_SABER_SWEEP_DEGREES) ? NEWBOTAI_SABER_SWEEP_DEGREES : arc;
+}
+
+static inline float NewBotAI_GetSaberSweepRate(float amplitude)
+{
+	const float rate = amplitude * 2.0f * 1000.0f / (float)NEWBOTAI_FAN_SWEEP_SWING_MS;
+	return (rate < NEWBOTAI_SABER_SWEEP_RATE) ? NEWBOTAI_SABER_SWEEP_RATE : rate;
+}
+
+static inline float NewBotAI_SaberYawOffsetScaled(newbotai_saber_yaw_phase_t phase,
+	float progress, int actualDirection, int desiredDirection, int sweep, float amplitude)
+{
+	const float base = NewBotAI_SaberYawOffset(phase, progress, actualDirection, desiredDirection, sweep);
+	return base * (amplitude / NEWBOTAI_SABER_SWEEP_DEGREES);
+}
+
+static inline float NewBotAI_SaberStepYawOffsetScaled(float current, float target, int elapsedMs,
+	float amplitude, float rate)
+{
+	float delta;
+	float step;
+
+	if (target > amplitude) target = amplitude;
+	if (target < -amplitude) target = -amplitude;
+	if (elapsedMs < 0) elapsedMs = 0;
+	step = rate * (float)elapsedMs / 1000.0f;
+	delta = target - current;
+	if (delta > step) delta = step;
+	if (delta < -step) delta = -step;
+	return current + delta;
+}
+
+// Footing (void/jundon hits land 41-53u at peak, +141u/s closing): only start a swing when
+// the predicted distance ~150ms in is inside reach; above 85u step in first; never swing
+// while backing away from 100u+.
+#define NEWBOTAI_SWING_PEAK_LEAD_MS 150
+#define NEWBOTAI_SWING_PEAK_RANGE 60.0f
+#define NEWBOTAI_SWING_PEAK_RANGE_STAFF 70.0f
+#define NEWBOTAI_SWING_LINK_RANGE 85.0f
+#define NEWBOTAI_SWING_STEP_IN_RANGE 85.0f
+#define NEWBOTAI_SWING_BACKING_BLOCK_RANGE 100.0f
+#define NEWBOTAI_SWING_BACKING_SPEED 40.0f
+
+typedef enum
+{
+	NEWBOTAI_SWING_FOOTING_START = 0,
+	NEWBOTAI_SWING_FOOTING_STEP_IN,
+	NEWBOTAI_SWING_FOOTING_HOLD
+} newbotai_swing_footing_t;
+
+// 2D distance after leadMs given the 2D offset to the enemy and the relative velocity
+// (enemy velocity minus ours).
+static inline float NewBotAI_PredictRange2D(float dx, float dy, float relVx, float relVy, int leadMs)
+{
+	const float t = (float)leadMs / 1000.0f;
+	const float px = dx + relVx * t;
+	const float py = dy + relVy * t;
+	return sqrtf(px * px + py * py);
+}
+
+// radialSpeed > 0 means we are closing on the enemy. linkedSwing relaxes the peak range for
+// a chain continuation that is already committed.
+static inline newbotai_swing_footing_t NewBotAI_GetSwingFooting(float currentRange, float predictedRange,
+	float radialSpeed, int linkedSwing, int staff)
+{
+	const float peakRange = linkedSwing ? NEWBOTAI_SWING_LINK_RANGE :
+		(staff ? NEWBOTAI_SWING_PEAK_RANGE_STAFF : NEWBOTAI_SWING_PEAK_RANGE);
+
+	if (currentRange >= NEWBOTAI_SWING_BACKING_BLOCK_RANGE && radialSpeed < -NEWBOTAI_SWING_BACKING_SPEED)
+		return NEWBOTAI_SWING_FOOTING_HOLD;
+	if (predictedRange <= peakRange)
+		return NEWBOTAI_SWING_FOOTING_START;
+	return NEWBOTAI_SWING_FOOTING_STEP_IN;
+}
+
+// Dodging an enemy swing that starts within 130u: stationary/backpedal defenders were hit
+// 28-36%, a fast lateral strafe 7-9%, airborne 3-5%. Backpedal is a low-skill mistake only.
+#define NEWBOTAI_SWING_DODGE_RANGE 130.0f
+
+typedef enum
+{
+	NEWBOTAI_SWING_DODGE_NONE = 0,
+	NEWBOTAI_SWING_DODGE_LATERAL,
+	NEWBOTAI_SWING_DODGE_JUMP,
+	NEWBOTAI_SWING_DODGE_BACKPEDAL
+} newbotai_swing_dodge_t;
+
+static inline newbotai_swing_dodge_t NewBotAI_GetSwingDodgeChoice(float enemyDistance2D, int grounded,
+	int canJump, int mistakeChance, int mistakeRoll, int styleRoll)
+{
+	if (enemyDistance2D > NEWBOTAI_SWING_DODGE_RANGE)
+		return NEWBOTAI_SWING_DODGE_NONE;
+	if (mistakeChance > 0 && mistakeRoll > 0 && mistakeRoll <= mistakeChance)
+		return NEWBOTAI_SWING_DODGE_BACKPEDAL;
+	if (grounded && canJump && styleRoll > 0 && styleRoll <= 25)
+		return NEWBOTAI_SWING_DODGE_JUMP;
+	return NEWBOTAI_SWING_DODGE_LATERAL;
+}
+
+// Airborne swings hit 8% vs 17% grounded and bots landed 0 of 29: only allow jump attacks
+// into a knocked-down/recovering enemy, or as a low-skill mistake.
+static inline int NewBotAI_AllowAirborneSwingStart(int enemyKnockedOrRecovering, int mistakeChance, int roll)
+{
+	if (enemyKnockedOrRecovering)
+		return 1;
+	return (mistakeChance > 0 && roll > 0 && roll <= mistakeChance) ? 1 : 0;
+}
+
+// Combo gaps measured from jundon/void: pull->kick 0ms, throw->pull ~66ms, grip->throw
+// ~100ms, drain->pull/throw ~66ms. Skill 7+ uses those directly; lower skills add 100-250ms
+// plus the configured extra delay and a mistake-bias delay.
+typedef enum
+{
+	NEWBOTAI_COMBO_PULL_KICK = 0,
+	NEWBOTAI_COMBO_THROW_PULL,
+	NEWBOTAI_COMBO_GRIP_THROW,
+	NEWBOTAI_COMBO_DRAIN_FOLLOWUP,
+	NEWBOTAI_COMBO_COUNT
+} newbotai_combo_t;
+
+static inline int NewBotAI_GetComboBaseGapMs(newbotai_combo_t combo)
+{
+	switch (combo)
+	{
+	case NEWBOTAI_COMBO_THROW_PULL:
+		return 66;
+	case NEWBOTAI_COMBO_GRIP_THROW:
+		return 100;
+	case NEWBOTAI_COMBO_DRAIN_FOLLOWUP:
+		return 66;
+	case NEWBOTAI_COMBO_PULL_KICK:
+	default:
+		return 0;
+	}
+}
+
+static inline int NewBotAI_GetComboGapMs(newbotai_combo_t combo, float skill, int extraDelayMs, int mistakeChance)
+{
+	int gap = NewBotAI_GetComboBaseGapMs(combo);
+
+	if (skill >= NEWBOTAI_FAN_LINK_SKILL)
+		return gap;
+	if (skill < 1.0f)
+		skill = 1.0f;
+	gap += 100 + (int)((6.0f - (skill > 6.0f ? 6.0f : skill)) * 30.0f);
+	if (extraDelayMs > 0)
+		gap += extraDelayMs;
+	if (mistakeChance > 0)
+		gap += (mistakeChance > 100 ? 100 : mistakeChance) * 2;
+	return gap;
+}
+
+// Reaction re-weighting from the stimulus -> response outcomes (net damage over 2s):
+// enemy drain -> pull (+20) / throw (+8..11), push -11; enemy grip -> throw/pull, late push -5;
+// enemy throw -> counter-throw (+14..27), push -17; enemy pull -> throw/pull back, drain -20;
+// enemy push -> instant drain (+11).
+static inline int NewBotAI_GetReactionBonus(int enemyAction, int response)
+{
+	switch (enemyAction)
+	{
+	case BOTLEARN_TOK_DRAIN:
+		if (response == BOTLEARN_TOK_PULL) return 35;
+		if (response == BOTLEARN_TOK_THROW) return 20;
+		if (response == BOTLEARN_TOK_PUSH) return -25;
+		return 0;
+	case BOTLEARN_TOK_GRIP:
+		if (response == BOTLEARN_TOK_THROW) return 30;
+		if (response == BOTLEARN_TOK_PULL) return 25;
+		if (response == BOTLEARN_TOK_PUSH) return -20;
+		return 0;
+	case BOTLEARN_TOK_THROW:
+		if (response == BOTLEARN_TOK_THROW) return 30;
+		if (response == BOTLEARN_TOK_PUSH) return -20;
+		if (response == BOTLEARN_TOK_JUMP) return -20;
+		return 0;
+	case BOTLEARN_TOK_PULL:
+		if (response == BOTLEARN_TOK_THROW) return 25;
+		if (response == BOTLEARN_TOK_PULL) return 25;
+		if (response == BOTLEARN_TOK_DRAIN) return -20;
+		if (response == BOTLEARN_TOK_JUMP) return -20;
+		return 0;
+	case BOTLEARN_TOK_PUSH:
+		if (response == BOTLEARN_TOK_DRAIN) return 35;
+		return 0;
+	default:
+		return 0;
+	}
+}
+
+// Force economy (jundon pulls at enemy FP ~65, drains at enemy FP ~18): pull while the enemy
+// still has force, save drain for when they are low.
+static inline int NewBotAI_GetForceEconomyBonus(int response, int enemyForce)
+{
+	if (response == BOTLEARN_TOK_PULL)
+		return (enemyForce >= 50) ? 15 : 0;
+	if (response == BOTLEARN_TOK_DRAIN)
+	{
+		if (enemyForce <= 30)
+			return 15;
+		return (enemyForce >= 60) ? -10 : 0;
+	}
+	return 0;
+}
+
+// Saber-throw situational bias. Human throws hit 46-61% at every force level, bots 27-30%;
+// the differences are the target state and what came right before: throws into a jumping
+// target hit 18-27%, throws right after our own pull/grip/swing/kick 6-22%, throws at an
+// idle or committed target 57-71%. Bots at high force from mid range were net negative.
+static inline int NewBotAI_GetSaberThrowSituationBonus(int ourForce, float enemyDistance,
+	int enemyAirborne, int enemyKnockedDown, int ownActionRecent, int enemyCommitted)
+{
+	int bonus = 0;
+
+	if (enemyAirborne && !enemyKnockedDown)
+		bonus -= 25;
+	if (ownActionRecent)
+		bonus -= 20;
+	if (enemyCommitted)
+		bonus += 15;
+	if (ourForce <= 50)
+		bonus += 10;
+	else if (ourForce > 75 && enemyDistance >= 130.0f && enemyDistance <= 260.0f && !enemyCommitted)
+		bonus -= 10;
+	return bonus;
+}
+
 
 #endif

@@ -159,8 +159,15 @@ static float NewBotAI_GetSelfFacingErrorToEnemy(bot_state_t *bs);
 static void NewBotAI_SaberDuelIndecisionFallback(bot_state_t *bs, qboolean horizontalSwingStart);
 static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs);
 static void NewBotAI_ApplyHorizontalSwingMove(bot_state_t *bs);
+static qboolean NewBotAI_FanHoldMayStartSwing(bot_state_t *bs);
 static void NewBotAI_ResetFanChain(bot_state_t *bs);
-static void NewBotAI_ApplyFanDwellYaw(bot_state_t *bs);
+static void NewBotAI_ApplyFanDwellYaw(bot_state_t *bs, qboolean aimRewritten);
+static float NewBotAI_GetEnemyDistance2D(bot_state_t *bs);
+static qboolean NewBotAI_SwingStartFootingAllows(bot_state_t *bs);
+static qboolean NewBotAI_SwingChainFootingAllows(bot_state_t *bs);
+static int NewBotAI_GetDecisionMistakeChance(bot_state_t *bs);
+static qboolean NewBotAI_MayStartAirborneSwing(bot_state_t *bs);
+static int NewBotAI_GetEnemyStimulusToken(bot_state_t *bs);
 static qboolean NewBotAI_HasValidCurrentEnemy(bot_state_t *bs);
 static qboolean NewBotAI_CanInitiateFlipkickUnderFanPressure(bot_state_t *bs);
 
@@ -6965,7 +6972,55 @@ static void NewBotAI_ApplyHumanSwingAimOffset(bot_state_t *bs)
 	NewBotAI_ApplyRelativeAimPointOffset(bs, -((float)sweepDir) * sideOffsetUnits, 0.0f);
 }
 
-static void NewBotAI_ApplyFanDwellYaw(bot_state_t *bs)
+// Swing-tracking yaw sweep: during a horizontal swing turn with the blade across the target
+// (L2R turns right, R2L left), 100-160 degrees per ~300ms swing at high skill like the human
+// fan chains, crossing the target mid-swing when hits land. Must run right after the aim was
+// rewritten from the enemy position because the offset is absolute. Returns qtrue if applied.
+static qboolean NewBotAI_ApplySwingSweepYaw(bot_state_t *bs)
+{
+	const int move = bs ? bs->cur_ps.saberMove : LS_NONE;
+	int sweepDir;
+	float dist2D;
+	float halfArc;
+	float offset;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+		return qfalse;
+	if (bs->cur_ps.weapon != WP_SABER || bs->cur_ps.saberInFlight)
+	{
+		bs->fanSweepMove = 0;
+		return qfalse;
+	}
+	sweepDir = NewBotAI_GetHorizontalSwingSweepDir(move);
+	if (!sweepDir || !BG_SaberInAttack(move))
+	{
+		bs->fanSweepMove = 0;
+		return qfalse;
+	}
+	if (move != bs->fanSweepMove)
+	{
+		bs->fanSweepMove = move;
+		bs->fanSweepStartTime = level.time;
+	}
+
+	dist2D = NewBotAI_GetEnemyDistance2D(bs);
+	if (dist2D > 220.0f)
+		return qfalse;
+
+	halfArc = NewBotAI_GetFanSweepHalfArc(bs->settings.skill,
+		BotGetChanceBiasPercent(bot_fanbias.value), dist2D);
+	if (bs->fanPhase == FAN_PHASE_INACTIVE)
+	{
+		//Single horizontal swings outside a fan chain sweep less.
+		halfArc *= 0.6f;
+	}
+	offset = NewBotAI_GetFanSweepOffset(halfArc, sweepDir,
+		level.time - bs->fanSweepStartTime, NEWBOTAI_FAN_SWEEP_SWING_MS);
+	bs->goalAngles[YAW] = AngleNormalize360(bs->goalAngles[YAW] + offset);
+	return qtrue;
+}
+
+static void NewBotAI_ApplyFanDwellYaw(bot_state_t *bs, qboolean aimRewritten)
 {
 	float dwellElapsedMs;
 	float dwellDurationMs;
@@ -6977,6 +7032,13 @@ static void NewBotAI_ApplyFanDwellYaw(bot_state_t *bs)
 	{
 		return;
 	}
+	if (aimRewritten)
+	{
+		//goalAngles was rebuilt from the enemy position this frame, so the previous offset
+		//is no longer part of it; apply the full offset rather than the delta.
+		bs->fanDwellYawOffset = 0.0f;
+	}
+
 	if (bs->fanPhase != FAN_PHASE_DWELL || !bs->fanAttackDir)
 	{
 		if (bs->fanDwellYawOffset != 0.0f)
@@ -7042,6 +7104,7 @@ void NewBotAI_GetAim(bot_state_t *bs)
 	int closestSaber = 0, saberDistance = 9999999, dist, saberOwner;
 	vec3_t saberDiff;
 	gentity_t *saber;
+	qboolean aimRewritten = qfalse;
 
 	bs->hitSpotted = qfalse;
 	if (bs->runningLikeASissy) {
@@ -7125,12 +7188,13 @@ void NewBotAI_GetAim(bot_state_t *bs)
 			NewBotAI_AdjustSaberThrowLead(bs);
 			NewBotAI_AdjustCloseRangeSaberThrowRoute(bs);
 		}
-		else
+		else if (!NewBotAI_ApplySwingSweepYaw(bs))
 		{
 			NewBotAI_ApplyHumanSwingAimOffset(bs);
 		}
+		aimRewritten = qtrue;
 	}
-	NewBotAI_ApplyFanDwellYaw(bs);
+	NewBotAI_ApplyFanDwellYaw(bs, aimRewritten);
 	NewBotAI_ApplyFanAttackWobble(bs);
 	VectorCopy(bs->goalAngles, bs->ideal_viewangles);
 }
@@ -7444,7 +7508,9 @@ static qboolean NewBotAI_ShouldSuppressDrainlockSaberThrow(bot_state_t *bs)
 //drain (10 at level 3) and it is charged repeatedly for as long as the saber is out.
 #define NEWBOTAI_SABER_THROW_FORCE_BUDGET 40
 //Force we must still have banked after the throw to push/pull our way out of a drain lock.
-#define NEWBOTAI_DRAINLOCK_ESCAPE_RESERVE 30
+//Human throws stayed net positive even though 43% were followed by an enemy drain, so the
+//reserve only guards against throwing ourselves fully dry.
+#define NEWBOTAI_DRAINLOCK_ESCAPE_RESERVE 10
 //Below this the enemy cannot open a drain lock on us in the first place.
 #define NEWBOTAI_DRAINLOCK_ENEMY_MIN_FORCE 25
 
@@ -7479,8 +7545,10 @@ static qboolean NewBotAI_WouldThrowInviteDrainlock(bot_state_t *bs)
 		return qfalse;
 	}
 
-	//Already being drained: throwing now is the exact mistake the tracks flag.
-	if (bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_DRAIN))
+	//Already being drained with little force left: throwing now is the exact mistake the
+	//tracks flag. With force to spare the throw (drain -> throw) still paid off.
+	if ((bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_DRAIN)) &&
+		bs->cur_ps.fd.forcePower < 40)
 	{
 		return qtrue;
 	}
@@ -8882,7 +8950,17 @@ void NewBotAI_ReactToBeingGripped(bot_state_t *bs) //Test this more, does it pus
 	else if (!(g_forcePowerDisable.integer & (1 << FP_PULL)) && !(g_forcePowerDisable.integer & (1 << FP_PUSH)) && (bs->cur_ps.fd.forcePowersKnown & (1 << FP_PULL)) && (bs->cur_ps.fd.forcePowersKnown & (1 << FP_PUSH))) {//Can push or pull
 		if (bs->cur_ps.fd.forcePower >= 20 && InFieldOfVision(bs->viewangles, 50, a_fo)) {
 			if (g_entities[bs->client].health < 30 && bs->gripMistakeNeverEscape <= 0) {
-				level.clients[bs->client].ps.fd.forcePowerSelected = FP_PUSH;
+				//Low on health: pull free immediately. The late push out of a grip lost the
+				//exchange in the duel data, so only lower levels keep it as a mistake.
+				if (bs->settings.skill >= 7.0f)
+				{
+					level.clients[bs->client].ps.fd.forcePowerSelected = FP_PULL;
+					NewBotAI_ApplyPullMistake(bs);
+				}
+				else
+				{
+					level.clients[bs->client].ps.fd.forcePowerSelected = FP_PUSH;
+				}
 				useTheForce = qtrue;
 			}
 			else {
@@ -10250,7 +10328,8 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 		if (bs->saberTechniqueCandidate)
 			return;
 		if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE &&
-			!BG_SaberInAttack(bs->cur_ps.saberMove))
+			!BG_SaberInAttack(bs->cur_ps.saberMove) &&
+			!NewBotAI_MayStartAirborneSwing(bs))
 		{
 			return;
 		}
@@ -10292,7 +10371,8 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 			if (bs->fanPhase != FAN_PHASE_INACTIVE)
 			{
 				NewBotAI_ApplyHorizontalSwingMove(bs);
-				if (!suppressSaberAttack && bs->fanPhase == FAN_PHASE_HOLD)
+				if (!suppressSaberAttack && bs->fanPhase == FAN_PHASE_HOLD &&
+					NewBotAI_FanHoldMayStartSwing(bs))
 					trap->EA_Attack(bs->client);
 				return;
 			}
@@ -10305,7 +10385,8 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 			if (BG_SaberInAttack(bs->cur_ps.saberMove) &&
 				(bs->fanPhase != FAN_PHASE_INACTIVE || bs->cur_ps.saberMove == LS_A_L2R || bs->cur_ps.saberMove == LS_A_R2L) &&
 				bs->frame_Enemy_Len < 320 &&
-				NewBotAI_GetTimeToInRange(bs, 75, 800) < 800 && g_entities[bs->client].health > 40)
+				NewBotAI_GetTimeToInRange(bs, 75, 800) < 800 && g_entities[bs->client].health > 40 &&
+				NewBotAI_SwingChainFootingAllows(bs))
 			{
 				if (!suppressSaberAttack)
 					trap->EA_Attack(bs->client);
@@ -10332,8 +10413,9 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 			//enemy is inside reach so attacking never depends on the fan.
 			if ((g_entities[bs->client].client->ps.saberMove == LS_NONE || g_entities[bs->client].client->ps.saberMove == LS_READY) &&
 				bs->fanPhase == FAN_PHASE_INACTIVE &&
-				NewBotAI_ShouldStartRedStanceSwing(bs->frame_Enemy_Len, NewBotAI_GetTimeToInRange(bs, 75, 300),
-					g_entities[bs->client].health))
+				NewBotAI_ShouldStartRedStanceSwing(NewBotAI_GetEnemyDistance2D(bs), NewBotAI_GetTimeToInRange(bs, 75, 300),
+					g_entities[bs->client].health) &&
+				NewBotAI_SwingStartFootingAllows(bs))
 			{
 				if (!suppressSaberAttack)
 					trap->EA_Attack(bs->client);
@@ -10388,7 +10470,8 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 			if (bs->fanPhase != FAN_PHASE_INACTIVE)
 			{
 				NewBotAI_ApplyHorizontalSwingMove(bs);
-				if (!suppressSaberAttack && bs->fanPhase == FAN_PHASE_HOLD)
+				if (!suppressSaberAttack && bs->fanPhase == FAN_PHASE_HOLD &&
+					NewBotAI_FanHoldMayStartSwing(bs))
 					trap->EA_Attack(bs->client);
 				return;
 			}
@@ -10397,7 +10480,7 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 			//swing instead of releasing through every swing tail (same fix as the lightside
 			//path above - the press has to still be down when weaponTime clears).
 			if (BG_SaberInAttack(bs->cur_ps.saberMove) && NewBotAI_GetTimeToInRange(bs, 75, 600) < 600 &&
-				g_entities[bs->client].health > 70)
+				g_entities[bs->client].health > 70 && NewBotAI_SwingChainFootingAllows(bs))
 			{
 				if (!suppressSaberAttack)
 					trap->EA_Attack(bs->client);
@@ -10407,8 +10490,9 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 			//todo - skip if we are already during a swing
 			if ((g_entities[bs->client].client->ps.saberMove == LS_NONE || g_entities[bs->client].client->ps.saberMove == LS_READY) && NewBotAI_GetTimeToInRange(bs, 75, 600) < 600) {
 				if (g_entities[bs->client].health > 70) {
-					if ((bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_DRAIN) || (bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB))) ||
-						((bs->cur_ps.fd.forcePower < 60) || ((bs->frame_Enemy_Len < 70) && (bs->currentEnemy->client->ps.origin[2] - bs->cur_ps.origin[2]) > 50))) {
+					if (((bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_DRAIN) || (bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB))) ||
+						((bs->cur_ps.fd.forcePower < 60) || ((bs->frame_Enemy_Len < 70) && (bs->currentEnemy->client->ps.origin[2] - bs->cur_ps.origin[2]) > 50))) &&
+						NewBotAI_SwingStartFootingAllows(bs)) {
 						if (!suppressSaberAttack)
 							trap->EA_Attack(bs->client);
 						return;
@@ -10419,8 +10503,9 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 			//Normal red-stance swing start once the enemy is within reach (or about to be);
 			//previously red only swung in the drain/absorb/low-force special cases.
 			if ((g_entities[bs->client].client->ps.saberMove == LS_NONE || g_entities[bs->client].client->ps.saberMove == LS_READY) &&
-				NewBotAI_ShouldStartRedStanceSwing(bs->frame_Enemy_Len, NewBotAI_GetTimeToInRange(bs, 75, 300),
-					g_entities[bs->client].health))
+				NewBotAI_ShouldStartRedStanceSwing(NewBotAI_GetEnemyDistance2D(bs), NewBotAI_GetTimeToInRange(bs, 75, 300),
+					g_entities[bs->client].health) &&
+				NewBotAI_SwingStartFootingAllows(bs))
 			{
 				if (!suppressSaberAttack)
 					trap->EA_Attack(bs->client);
@@ -10878,8 +10963,12 @@ static void NewBotAI_SchedulePullkickJump(bot_state_t *bs)
 				extraDelay = NEWBOTAI_PULLKICK_RANGED_EXTRA_DELAY_MS;
 			}
 		}
+		//Skill 7+ kicks on the predicted arrival like jundon (no extra gap); lower skills
+		//react 100-250ms late plus a mistake-bias delay.
 		bs->pullKickJumpTime = level.time + (int)timeToRange +
-			NewBotAI_GetPullkickExtraDelayMs() + extraDelay;
+			NewBotAI_GetPullkickExtraDelayMs() + extraDelay +
+			NewBotAI_GetComboGapMs(NEWBOTAI_COMBO_PULL_KICK, bs->settings.skill, 0,
+				NewBotAI_GetDecisionMistakeChance(bs));
 	}
 	else
 	{
@@ -11052,6 +11141,59 @@ static qboolean NewBotAI_ShouldConserveForce(bot_state_t *bs)
 		return qfalse;
 
 	return (Q_flrand(0.0f, 100.0f) < chance) ? qtrue : qfalse;
+}
+
+// Enemy swing starting within ~130u: winners side-stepped fast or jumped; backpedalling got
+// caught by the swing's reach. Backpedal stays as a low-skill mistake roll. Returns qtrue
+// when the dodge drove movement this frame.
+static qboolean NewBotAI_UpdateSwingDodge(bot_state_t *bs)
+{
+	const playerState_t *enemyPs;
+	float dist2D;
+	int enemyMove;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client || bs->cur_ps.weapon != WP_SABER)
+		return qfalse;
+	enemyPs = &bs->currentEnemy->client->ps;
+	enemyMove = enemyPs->saberMove;
+	if (enemyPs->weapon != WP_SABER || enemyPs->saberInFlight ||
+		!(PM_SaberInStart(enemyMove) || BG_SaberInAttack(enemyMove)))
+	{
+		bs->swingDodgeEnemyMove = 0;
+		return qfalse;
+	}
+	//Our own swing or a running fan hold owns movement.
+	if (BG_SaberInAttack(bs->cur_ps.saberMove) || PM_SaberInStart(bs->cur_ps.saberMove) ||
+		bs->fanPhase == FAN_PHASE_HOLD || NewBotAI_HasExclusiveFlipkickMovement(bs))
+		return qfalse;
+
+	dist2D = NewBotAI_GetEnemyDistance2D(bs);
+	if (enemyMove != bs->swingDodgeEnemyMove)
+	{
+		const int mistakeChance = (bs->settings.skill < 7.0f) ? NewBotAI_GetDecisionMistakeChance(bs) / 2 : 0;
+
+		bs->swingDodgeEnemyMove = enemyMove;
+		bs->swingDodgeStyle = NewBotAI_GetSwingDodgeChoice(dist2D,
+			bs->cur_ps.groundEntityNum != ENTITYNUM_NONE ? 1 : 0,
+			(bs->cur_ps.fd.forcePowersKnown & (1 << FP_LEVITATION)) ? 1 : 0,
+			mistakeChance, Q_irand(1, 100), Q_irand(1, 100));
+		bs->swingDodgeDir = Q_irand(0, 1) ? 1 : -1;
+		if (bs->swingDodgeStyle == NEWBOTAI_SWING_DODGE_JUMP)
+			trap->EA_Jump(bs->client);
+	}
+	if (bs->swingDodgeStyle == NEWBOTAI_SWING_DODGE_NONE)
+		return qfalse;
+
+	if (bs->swingDodgeStyle == NEWBOTAI_SWING_DODGE_BACKPEDAL)
+	{
+		trap->EA_MoveBack(bs->client);
+		return qtrue;
+	}
+	if (bs->swingDodgeDir > 0)
+		trap->EA_MoveRight(bs->client);
+	else
+		trap->EA_MoveLeft(bs->client);
+	return qtrue;
 }
 
 void NewBotAI_GetMovement(bot_state_t *bs)
@@ -11581,6 +11723,10 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 				//another jump the instant we land next to the (still close) enemy.
 				bs->lastFlipkickAttemptTime = level.time + 300;
 			}
+		}
+		else if (!horizontalSwingStart && NewBotAI_UpdateSwingDodge(bs))
+		{
+			//Dodge handled (lateral strafe / jump, or a low-skill backpedal mistake).
 		}
 		else if (bs->frame_Enemy_Len > 80) {
 			float dot;
@@ -13377,10 +13523,130 @@ static qboolean NewBotAI_IsSaberSwingStartWindow(bot_state_t *bs)
 
 // Fan-chain phases (see NewBotAI_PrepareHorizontalSwingStart): HOLD owns exclusive
 // left/right strafe plus attack long enough to start the horizontal swing, then DWELL
-// frees movement before the next alternating hold. The chain ends after a flat 3 second
-// cap or when the bot drops below 70 HP.
-#define NEWBOTAI_FAN_CHAIN_MAX_MS 3000
+// frees movement before the next alternating hold. Skill 7+ skips DWELL and links the next
+// swing on the frame the current one ends. The chain ends after 3 seconds unless it is
+// still landing hits (NewBotAI_FanChainMayContinue), or when the bot drops below 70 HP.
 #define NEWBOTAI_FAN_CHAIN_MIN_HEALTH 70
+#define NEWBOTAI_FAN_LINK_LEAD_MS 60
+
+// Predicted 2D footing for a swing that would start this frame (see NewBotAI_GetSwingFooting).
+// 2D range to the enemy now, predicted at the swing peak, and the closing speed (>0 closing).
+static qboolean NewBotAI_GetEnemyRangeKinematics(bot_state_t *bs, float *range, float *predicted, float *radial)
+{
+	vec3_t diff;
+	float relVx, relVy;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return qfalse;
+	}
+
+	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->cur_ps.origin, diff);
+	diff[2] = 0.0f;
+	*range = VectorLength(diff);
+	relVx = bs->currentEnemy->client->ps.velocity[0] - bs->cur_ps.velocity[0];
+	relVy = bs->currentEnemy->client->ps.velocity[1] - bs->cur_ps.velocity[1];
+	*predicted = NewBotAI_PredictRange2D(diff[0], diff[1], relVx, relVy, NEWBOTAI_SWING_PEAK_LEAD_MS);
+	*radial = 0.0f;
+	if (*range > 1.0f)
+	{
+		//Positive when the gap is shrinking.
+		*radial = -((relVx * diff[0] + relVy * diff[1]) / *range);
+	}
+	return qtrue;
+}
+
+static newbotai_swing_footing_t NewBotAI_GetCurrentSwingFooting(bot_state_t *bs, qboolean linkedSwing)
+{
+	float range, predicted, radial;
+
+	if (!NewBotAI_GetEnemyRangeKinematics(bs, &range, &predicted, &radial))
+	{
+		return NEWBOTAI_SWING_FOOTING_HOLD;
+	}
+
+	return NewBotAI_GetSwingFooting(range, predicted, radial, linkedSwing ? 1 : 0,
+		(bs->cur_ps.fd.saberAnimLevel == SS_STAFF) ? 1 : 0);
+}
+
+// Per-decision skill mistake chance (percent): full band for skills 1-6, a small roll that
+// reaches 0 at skill 10 for 7+.
+static int NewBotAI_GetDecisionMistakeChance(bot_state_t *bs)
+{
+	return NewBotAI_GetSaberTacticMistakeChance((int)bs->settings.skill,
+		(int)BotGetChanceBiasPercent(bot_mistakebias.value));
+}
+
+// Gate for starting a NEW saber swing (chain holds use NewBotAI_SwingChainFootingAllows).
+// Humans that landed swings started them when the range predicted at the swing peak was
+// 60u or less, stepped in first when further, and never swung while backing off from 100u+.
+// Returns qtrue when attack may be pressed; on STEP_IN it walks forward instead.
+static qboolean NewBotAI_SwingStartFootingAllows(bot_state_t *bs)
+{
+	newbotai_swing_footing_t footing;
+	qboolean enemyDown;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+		return qfalse;
+
+	enemyDown = BG_InKnockDown(bs->currentEnemy->client->ps.legsAnim) ? qtrue : qfalse;
+
+	if (level.time - bs->footingMistakeRollTime > 500)
+	{
+		//Lower levels keep the observed mistakes: long-range and backpedal swings.
+		bs->footingMistakeRollTime = level.time;
+		bs->footingMistake = (Q_irand(1, 100) <= NewBotAI_GetDecisionMistakeChance(bs) / 2) ? qtrue : qfalse;
+	}
+
+	//Pull -> swing rarely landed in the duel data (the pull leaves no time to close in);
+	//winners followed a pull with a kick or a throw instead.
+	if (!enemyDown && !bs->footingMistake &&
+		G_BotLearnRecentToken(bs->client, BOTLEARN_TOK_PULL, 600))
+		return qfalse;
+
+	footing = NewBotAI_GetCurrentSwingFooting(bs, qfalse);
+	if (footing == NEWBOTAI_SWING_FOOTING_START || bs->footingMistake)
+		return qtrue;
+	if (footing == NEWBOTAI_SWING_FOOTING_STEP_IN)
+		trap->EA_MoveForward(bs->client);
+	return qfalse;
+}
+
+// Gate for holding attack through a swing so the engine chains the next one. Keeps walking
+// forward while the peak is still out of reach and drops the chain when backing off.
+static qboolean NewBotAI_SwingChainFootingAllows(bot_state_t *bs)
+{
+	const newbotai_swing_footing_t footing = NewBotAI_GetCurrentSwingFooting(bs, qtrue);
+
+	if (footing == NEWBOTAI_SWING_FOOTING_HOLD && !bs->footingMistake)
+		return qfalse;
+	if (footing == NEWBOTAI_SWING_FOOTING_STEP_IN)
+		trap->EA_MoveForward(bs->client);
+	return qtrue;
+}
+
+static float NewBotAI_GetEnemyDistance2D(bot_state_t *bs)
+{
+	vec3_t diff;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		return 0.0f;
+	}
+	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->cur_ps.origin, diff);
+	diff[2] = 0.0f;
+	return VectorLength(diff);
+}
+
+static int NewBotAI_GetMsSinceSaberContactOnEnemy(bot_state_t *bs)
+{
+	if (!bs || !bs->currentEnemy || bs->lastSaberContactTime <= 0 ||
+		bs->lastSaberContactTargetNum != bs->currentEnemy->s.number)
+	{
+		return -1;
+	}
+	return level.time - bs->lastSaberContactTime;
+}
 
 static void NewBotAI_ResetFanChain(bot_state_t *bs)
 {
@@ -13395,6 +13661,7 @@ static void NewBotAI_ResetFanChain(bot_state_t *bs)
 	bs->fanSwingStarted = 0;
 	bs->fanDwellYawOffset = 0.0f;
 	bs->fanWobbleStartTime = 0;
+	bs->fanLinkMove = 0;
 }
 
 static int NewBotAI_GetFanPackage(bot_state_t *bs)
@@ -13513,8 +13780,12 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 {
 	const float fanBias = NewBotAI_GetFanBiasPercent(bs);
 	const int holdMs = Com_Clampi(10, 3000, bot_fanhold.integer);
-	const int firstDwellMs = Com_Clampi(10, 3000, bot_firstfandwell.integer);
-	const int dwellMs = Com_Clampi(10, 3000, bot_fandwell.integer);
+	//Human fan chains link with no dwell; the configured dwell now shrinks with skill and
+	//fan bias and is zero at skill 7+.
+	const int firstDwellMs = NewBotAI_GetFanDwellMs(Com_Clampi(10, 3000, bot_firstfandwell.integer),
+		bs->settings.skill, fanBias);
+	const int dwellMs = NewBotAI_GetFanDwellMs(Com_Clampi(10, 3000, bot_fandwell.integer),
+		bs->settings.skill, fanBias);
 
 	if (bs->saberTechniqueCandidate)
 	{
@@ -13550,7 +13821,8 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 	}
 
 	if (bs->fanPhase != FAN_PHASE_INACTIVE &&
-		level.time - bs->fanChainStartTime > NEWBOTAI_FAN_CHAIN_MAX_MS)
+		!NewBotAI_FanChainMayContinue(level.time - bs->fanChainStartTime,
+			NewBotAI_GetMsSinceSaberContactOnEnemy(bs)))
 	{
 		NewBotAI_ResetFanChain(bs);
 		return;
@@ -13560,25 +13832,50 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 	{
 	case FAN_PHASE_HOLD:
 	{
+		const int currentMove = bs->cur_ps.saberMove;
 		const qboolean inHorizontalSwingWindow =
-			(BG_SaberInAttack(bs->cur_ps.saberMove) ||
-			bs->cur_ps.saberMove == LS_A_L2R ||
-			bs->cur_ps.saberMove == LS_A_R2L) ? qtrue : qfalse;
+			(BG_SaberInAttack(currentMove) ||
+			currentMove == LS_A_L2R ||
+			currentMove == LS_A_R2L) ? qtrue : qfalse;
+		const int nextDwellMs = (bs->fanSwingCount <= 0) ? firstDwellMs : dwellMs;
+		qboolean linkNow;
 
-		if (inHorizontalSwingWindow)
+		//A swing only counts as "started" for this HOLD once it is a new move - not the
+		//tail of the swing we already linked out of.
+		if (inHorizontalSwingWindow && currentMove != bs->fanLinkMove)
 		{
 			bs->fanSwingStarted = 1;
+			bs->fanLinkMove = 0;
 		}
-		if (bs->fanSwingStarted && !inHorizontalSwingWindow)
+		else if (!inHorizontalSwingWindow)
 		{
-			const int completedSwingCount = bs->fanSwingCount;
-			const int nextDwellMs = (completedSwingCount <= 0) ? firstDwellMs : dwellMs;
+			bs->fanLinkMove = 0;
+		}
+		//The engine picks the next chained move from the movement held as the current
+		//swing runs out, so a no-dwell link flips the strafe on the last frame of the swing.
+		linkNow = (nextDwellMs <= 0 && bs->fanSwingStarted && inHorizontalSwingWindow &&
+			bs->cur_ps.weaponTime > 0 && bs->cur_ps.weaponTime <= NEWBOTAI_FAN_LINK_LEAD_MS) ? qtrue : qfalse;
 
-			bs->fanSwingCount = completedSwingCount + 1;
+		if (bs->fanSwingStarted && (!inHorizontalSwingWindow || linkNow))
+		{
+			bs->fanSwingCount++;
 			bs->fanSwingStarted = 0;
-			bs->fanPhase = FAN_PHASE_DWELL;
-			bs->fanPhaseStartTime = level.time;
-			bs->fanAttackTime = level.time + nextDwellMs;
+			if (nextDwellMs <= 0)
+			{
+				//Link on the swing-change frame: flip the strafe together with the swing
+				//while attack stays held, like the L2R/R2L chains in sessions 34-48.
+				bs->fanAttackDir = -bs->fanAttackDir;
+				bs->fanPhase = FAN_PHASE_HOLD;
+				bs->fanPhaseStartTime = level.time;
+				bs->fanAttackTime = level.time + holdMs;
+				bs->fanLinkMove = inHorizontalSwingWindow ? currentMove : 0;
+			}
+			else
+			{
+				bs->fanPhase = FAN_PHASE_DWELL;
+				bs->fanPhaseStartTime = level.time;
+				bs->fanAttackTime = level.time + nextDwellMs;
+			}
 		}
 		else if (bs->fanSwingStarted)
 		{
@@ -13587,9 +13884,26 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 				NewBotAI_ResetFanChain(bs);
 			}
 		}
-		else if (bs->fanAttackTime <= level.time)
+		else
 		{
-			NewBotAI_ResetFanChain(bs);
+			const newbotai_swing_footing_t footing =
+				NewBotAI_GetCurrentSwingFooting(bs, (bs->fanSwingCount > 0) ? qtrue : qfalse);
+
+			if (footing == NEWBOTAI_SWING_FOOTING_HOLD)
+			{
+				//Never fan while backing off from 100u+ - those swings never landed.
+				NewBotAI_ResetFanChain(bs);
+			}
+			else if (footing == NEWBOTAI_SWING_FOOTING_STEP_IN &&
+				level.time < bs->fanPhaseStartTime + holdMs + 600)
+			{
+				//Step in first; the swing starts once the predicted peak range is in reach.
+				bs->fanAttackTime = level.time + 50;
+			}
+			else if (bs->fanAttackTime <= level.time)
+			{
+				NewBotAI_ResetFanChain(bs);
+			}
 		}
 		break;
 	}
@@ -13617,9 +13931,15 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 		{
 			startDir = bs->randomStrafeDir;
 		}
-		else if (fanBias > 0.0f && Q_irand(1, 100) <= (int)fanBias)
+		else if (fanBias > 0.0f)
 		{
-			startDir = Q_irand(0, 1) ? 1 : -1;
+			//Learned outcomes of opening with a swing in this context nudge the fan entry
+			//chance up or down (capped by G_BotLearnBonus, 0 without enough data).
+			const int learnedEntry = G_BotLearnBonus(&g_entities[bs->client], bs->currentEnemy,
+				NewBotAI_GetEnemyStimulusToken(bs), BOTLEARN_TOK_SWING, BOTLEARN_TOK_NONE, bs->settings.skill);
+
+			if (Q_irand(1, 100) <= (int)fanBias + learnedEntry)
+				startDir = Q_irand(0, 1) ? 1 : -1;
 		}
 
 		if (startDir)
@@ -13679,10 +13999,22 @@ static void NewBotAI_ApplyHorizontalSwingMove(bot_state_t *bs)
 	}
 	//The swing-start frame stays pure strafe so the engine picks a horizontal L2R/R2L;
 	//once the swing is running, step forward like human winners did while it landed.
-	if (NewBotAI_FanHoldUsesForward(bs->fanSwingStarted, bs->frame_Enemy_Len))
+	//Before the swing starts, close the gap until the predicted peak range is in reach.
+	if (NewBotAI_FanHoldUsesForward(bs->fanSwingStarted, NewBotAI_GetEnemyDistance2D(bs)) ||
+		(!bs->fanSwingStarted && !NewBotAI_FanHoldMayStartSwing(bs)))
 	{
 		trap->EA_MoveForward(bs->client);
 	}
+}
+
+static qboolean NewBotAI_FanHoldMayStartSwing(bot_state_t *bs)
+{
+	if (bs->fanSwingStarted || BG_SaberInAttack(bs->cur_ps.saberMove))
+	{
+		return qtrue;
+	}
+	return (NewBotAI_GetCurrentSwingFooting(bs, (bs->fanSwingCount > 0) ? qtrue : qfalse) ==
+		NEWBOTAI_SWING_FOOTING_START) ? qtrue : qfalse;
 }
 
 
@@ -14595,6 +14927,7 @@ static void NewBotAI_TrySaberThrowDefenseBreak(bot_state_t *bs)
 {
 	vec3_t a_fo;
 	qboolean preferPull;
+	int ownThrowTime;
 
 	if (!bs->currentEnemy || !bs->currentEnemy->client || !bs->cur_ps.saberInFlight)
 	{
@@ -14608,7 +14941,15 @@ static void NewBotAI_TrySaberThrowDefenseBreak(bot_state_t *bs)
 		return;
 	}
 
-	if (bs->frame_Enemy_Len < 96 || bs->frame_Enemy_Len > 256)
+	//Throw -> pull: jundon pulls ~66ms after the release, from anywhere the throw reaches.
+	//Lower skills follow up later (see NewBotAI_GetComboGapMs).
+	if (bs->frame_Enemy_Len < 96 || bs->frame_Enemy_Len > 640)
+	{
+		return;
+	}
+	ownThrowTime = G_BotLearnLastTokenTime(bs->client, BOTLEARN_TOK_THROW);
+	if (ownThrowTime > 0 && level.time - ownThrowTime < NewBotAI_GetComboGapMs(NEWBOTAI_COMBO_THROW_PULL,
+		bs->settings.skill, 0, NewBotAI_GetDecisionMistakeChance(bs)))
 	{
 		return;
 	}
@@ -14620,9 +14961,9 @@ static void NewBotAI_TrySaberThrowDefenseBreak(bot_state_t *bs)
 		return;
 	}
 
-	//When our actions are PTK-weighted (aggressive bias) we pull them in for the kick
-	//follow-up; when defensive we push to break their guard instead.
-	preferPull = (BotGetAggressionBias(bs) > 0.0f) ? qtrue : qfalse;
+	//Throw -> pull won the exchange in the duel data, so skill 7+ always pulls; lower
+	//skills pull when PTK-weighted (aggressive bias) and push to break the guard otherwise.
+	preferPull = (bs->settings.skill >= 7.0f || BotGetAggressionBias(bs) > 0.0f) ? qtrue : qfalse;
 
 	if (!NewBotAI_CanUseSaberThrowDefenseBreakForce(bs, preferPull))
 	{
@@ -14652,6 +14993,27 @@ static void NewBotAI_TrySaberThrowDefenseBreak(bot_state_t *bs)
 			trap->EA_ForcePower(bs->client);
 		}
 	}
+}
+
+// Airborne swings hit 8% vs 17% grounded in the duel data and bot jump attacks landed 0 of 29:
+// only start one into a knocked-down/recovering enemy, or as a per-jump low-skill mistake roll.
+static qboolean NewBotAI_MayStartAirborneSwing(bot_state_t *bs)
+{
+	int enemyAnim;
+	qboolean enemyDown;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+		return qfalse;
+	enemyAnim = bs->currentEnemy->client->ps.legsAnim;
+	enemyDown = (BG_InKnockDown(enemyAnim) || NewBotAI_IsGetupAnim(enemyAnim) ||
+		NewBotAI_IsForceGetupAnim(enemyAnim)) ? qtrue : qfalse;
+	if (bs->airSwingRollTime != bs->jumpAttackGateTime || !bs->airSwingRollTime)
+	{
+		bs->airSwingRollTime = bs->jumpAttackGateTime ? bs->jumpAttackGateTime : level.time;
+		bs->airSwingAllowed = NewBotAI_AllowAirborneSwingStart(0,
+			NewBotAI_GetDecisionMistakeChance(bs) / 2, Q_irand(1, 100)) ? qtrue : qfalse;
+	}
+	return (NewBotAI_AllowAirborneSwingStart(enemyDown ? 1 : 0, 0, 0) || bs->airSwingAllowed) ? qtrue : qfalse;
 }
 
 static void NewBotAI_ApplyJumpAttackGate(bot_state_t *bs)
@@ -15908,6 +16270,8 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 	const float saberthrowBias = BotGetChanceBiasPercent(bot_saberthrowbias.value);
 	const int antiDrainWeight = NewBotAI_GetAntiDrainWeight(bs);
 	int weight = 0;
+	qboolean counterThrow = qfalse;
+	qboolean gripThrowCombo = qfalse;
 
 	//Check if we should saberthrow I guess.
 	if (bs->cur_ps.weapon != WP_SABER || bs->frame_Enemy_Len >= 400 || bs->cur_ps.saberInFlight)
@@ -15918,15 +16282,26 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 		return 0;
 	if (!bs->frame_Enemy_Vis)
 		return 0;
-	//The enemy is already committed to a saber throw - keeping our own saber in hand
-	//maintains our block/defense against their incoming throw, and a pullkick (pull +
-	//flipkick, no throw) punishes their now-saberless state far better than trading
-	//throws would. Hold the saber instead of also throwing it.
+	//The enemy is already committed to a saber throw. While it is about to hit us keep our
+	//own saber in hand to block it; otherwise they are saberless and the counter-throw was
+	//the best answer in the duel data (net +14..+27, vs -17 for a push or a jump dodge).
+	//Lower levels keep the old hold-the-saber habit as a mistake.
 	if (bs->currentEnemy->client->ps.saberInFlight)
-		return 0;
-	//Losing the force game (under 50 points left): fanbias/drain/retreat options take
-	//priority over spending force on a throw.
-	if (ourForce < 50)
+	{
+		const int enemyThrowKey = G_BotLearnLastTokenTime(bs->currentEnemy->s.number, BOTLEARN_TOK_THROW);
+
+		if (bs->counterThrowRollKey != enemyThrowKey)
+		{
+			bs->counterThrowRollKey = enemyThrowKey;
+			bs->counterThrowMistake = (Q_irand(1, 100) <= NewBotAI_GetDecisionMistakeChance(bs)) ? qtrue : qfalse;
+		}
+		if (NewBotAI_IsEnemySaberThreatImminent(bs) || bs->counterThrowMistake)
+			return 0;
+		counterThrow = qtrue;
+	}
+	//Out of force: a throw that cannot be sustained just drops the saber. Human throws hit
+	//at every force level, so only the real floor is vetoed here.
+	if (ourForce < 30)
 		return 0;
 	//Too hurt to risk going saberless while the enemy holds a big force lead: even when
 	//we still hold the health advantage, a throw here gives them the opening their force
@@ -15971,6 +16346,15 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 
 	g_entities[bs->client].client->ps.fd.forcePowerLevel[FP_SABERTHROW] = 3;
 	g_entities[bs->client].client->ps.fd.forcePowersKnown |= (1 << FP_SABERTHROW);
+
+	//Grip -> throw: throw ~100ms (skill 7+) into the target we are holding.
+	if ((bs->cur_ps.fd.forcePowersActive & (1 << FP_GRIP)) &&
+		level.time - G_BotLearnLastTokenTime(bs->client, BOTLEARN_TOK_GRIP) >=
+			NewBotAI_GetComboGapMs(NEWBOTAI_COMBO_GRIP_THROW, bs->settings.skill, 0,
+				NewBotAI_GetDecisionMistakeChance(bs)))
+	{
+		gripThrowCombo = qtrue;
+	}
 
 	if (enemyKnockedDown) {
 		if (enemyPreGetupResponse &&
@@ -16079,7 +16463,81 @@ int NewBotAI_GetSaberthrow(bot_state_t* bs) {
 		}
 	}
 
+	if (counterThrow && weight < 40)
+		weight = 40;
+	if (gripThrowCombo && weight < 50)
+		weight = 50;
+
+	if (weight > 0)
+	{
+		//Situational read from the duel data: throws into a jumping target or right after
+		//our own pull/swing/kick rarely landed; throws at a committed target and at our own
+		//force <= 50 did. Plus the opponent reaction table and the learned sequence bonus.
+		const int stimulus = NewBotAI_GetEnemyStimulusToken(bs);
+		const qboolean ownActionRecent = (G_BotLearnRecentToken(bs->client, BOTLEARN_TOK_PULL, 400) ||
+			G_BotLearnRecentToken(bs->client, BOTLEARN_TOK_SWING, 400) ||
+			G_BotLearnRecentToken(bs->client, BOTLEARN_TOK_KICK, 400)) ? qtrue : qfalse;
+		const qboolean enemyCommitted = (BG_SaberInAttack(bs->currentEnemy->client->ps.saberMove) ||
+			bs->currentEnemy->client->ps.fd.forcePowersActive != 0 ||
+			bs->currentEnemy->client->ps.saberInFlight) ? qtrue : qfalse;
+		const float skillScale = BotLearn_SkillScale(bs->settings.skill);
+
+		weight += (int)(NewBotAI_GetSaberThrowSituationBonus(ourForce, bs->frame_Enemy_Len,
+			enemyAirborne ? 1 : 0, enemyKnockedDown ? 1 : 0, ownActionRecent ? 1 : 0,
+			enemyCommitted ? 1 : 0) * skillScale);
+		weight += (int)(NewBotAI_GetReactionBonus(stimulus, BOTLEARN_TOK_THROW) * skillScale);
+		weight += G_BotLearnBonus(&g_entities[bs->client], bs->currentEnemy, stimulus,
+			BOTLEARN_TOK_THROW, BOTLEARN_TOK_NONE, bs->settings.skill);
+		if (weight < 0)
+			weight = 0;
+	}
+
 	return weight;
+}
+
+// The opponent's most recent action (what we are reacting to), IDLE when nothing recent.
+static int NewBotAI_GetEnemyStimulusToken(bot_state_t *bs)
+{
+	int token;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+		return BOTLEARN_TOK_IDLE;
+	token = G_BotLearnLatestToken(bs->currentEnemy->s.number, BOTLEARN_RESPONSE_WINDOW_MS);
+	return (token == BOTLEARN_TOK_NONE) ? BOTLEARN_TOK_IDLE : token;
+}
+
+// Additive weight for answering the current situation with `response`:
+//  - reaction table from the duel data (scaled down for lower skills),
+//  - force economy (pull while the enemy still has force, drain when they are low),
+//  - drain -> pull follow-up once the skill-scaled combo gap has passed,
+//  - learned sequence bonus (bot_learning).
+static int NewBotAI_GetForceDecisionBonus(bot_state_t *bs, int response)
+{
+	const int stimulus = NewBotAI_GetEnemyStimulusToken(bs);
+	const float skillScale = BotLearn_SkillScale(bs->settings.skill);
+	int bonus;
+	int ownDrainTime;
+
+	if (!bs->currentEnemy || !bs->currentEnemy->client)
+		return 0;
+
+	bonus = (int)(NewBotAI_GetReactionBonus(stimulus, response) * skillScale);
+	bonus += (int)(NewBotAI_GetForceEconomyBonus(response, bs->currentEnemy->client->ps.fd.forcePower) * skillScale);
+
+	ownDrainTime = G_BotLearnLastTokenTime(bs->client, BOTLEARN_TOK_DRAIN);
+	if (response == BOTLEARN_TOK_PULL && ownDrainTime > 0 &&
+		level.time - ownDrainTime >= NewBotAI_GetComboGapMs(NEWBOTAI_COMBO_DRAIN_FOLLOWUP,
+			bs->settings.skill, 0, NewBotAI_GetDecisionMistakeChance(bs)) &&
+		level.time - ownDrainTime <= 600)
+	{
+		bonus += 20;
+	}
+
+	//A pull we can cash in with a kick is scored as the pull -> kick sequence.
+	bonus += G_BotLearnBonus(&g_entities[bs->client], bs->currentEnemy, stimulus, response,
+		(response == BOTLEARN_TOK_PULL && NewBotAI_IsPullkickOpportunity(bs)) ? BOTLEARN_TOK_KICK : BOTLEARN_TOK_NONE,
+		bs->settings.skill);
+	return bonus;
 }
 
 void NewBotAI_GetDSForcepower(bot_state_t *bs)
@@ -16150,6 +16608,20 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 		drainWeight = 0;
 	}
 	//doNothingWeight = NewBotAI_GetWait(bs);
+
+	//Counters/combos from the duel data plus the learned sequence weights. Only adjusts
+	//powers that are already available (weight > 0) so every existing gate still applies.
+	if (!longRangeLightningOnly)
+	{
+		if (pullWeight > 0)
+			pullWeight += NewBotAI_GetForceDecisionBonus(bs, BOTLEARN_TOK_PULL);
+		if (pushWeight > 0)
+			pushWeight += NewBotAI_GetForceDecisionBonus(bs, BOTLEARN_TOK_PUSH);
+		if (gripWeight > 0)
+			gripWeight += NewBotAI_GetForceDecisionBonus(bs, BOTLEARN_TOK_GRIP);
+		if (drainWeight > 0)
+			drainWeight += NewBotAI_GetForceDecisionBonus(bs, BOTLEARN_TOK_DRAIN);
+	}
 
 	if (!longRangeLightningOnly && bs->currentEnemy && bs->currentEnemy->client)
 	{
@@ -16856,7 +17328,16 @@ static void NewBotAI_RunSaberTechniques(bot_state_t *bs)
 	context.chainLength = bs->saberTacticChainLength;
 	context.landedHit = bs->saberTacticLastHitTime > 0 &&
 		bs->saberTacticLastHitTime > level.time - NEWBOTAI_SABER_LANDED_HIT_WINDOW_MS;
-	context.enemyDistance = bs->frame_Enemy_Len;
+	{
+		float range2D, predicted2D, radial2D;
+
+		//Plan on the 2D range predicted at the swing peak; humans that landed swings started
+		//them when the peak range would be 60u or less.
+		if (NewBotAI_GetEnemyRangeKinematics(bs, &range2D, &predicted2D, &radial2D))
+			context.enemyDistance = predicted2D;
+		else
+			context.enemyDistance = bs->frame_Enemy_Len;
+	}
 	if (bs->saberTacticGradeUntil <= level.time)
 	{
 		bs->saberTacticGrade = NewBotAI_GetSaberChoiceGrade(context.skill,
@@ -17044,19 +17525,24 @@ static void NewBotAI_ApplySaberTechniqueInput(bot_state_t *bs, bot_input_t *bi, 
 		 (bs->saberTechniqueYawTime && fabs(bs->saberTechniqueYawOffset) > 0.001f)))
 	{
 		int preparationDirection = selectedForward == 0 ? selectedRight : 0;
+		float sweepAmplitude;
 		if (PM_SaberInStart(ps->saberMove))
 			preparationDirection = NewBotAI_SaberHorizontalDirection(
 				LS_A_TL2BR + ps->saberMove - LS_S_TL2BR, LS_A_L2R, LS_A_R2L);
 		else if (PM_SaberInTransition(ps->saberMove))
 			preparationDirection = NewBotAI_SaberHorizontalDirection(
 				saberMoveData[ps->saberMove].chain_attack, LS_A_L2R, LS_A_R2L);
-		offset = NewBotAI_SaberYawOffset(phase,
+		sweepAmplitude = NewBotAI_GetSaberSweepAmplitude(bs->settings.skill,
+			BotGetChanceBiasPercent(bot_fanbias.value));
+		offset = NewBotAI_SaberYawOffsetScaled(phase,
 			NewBotAI_SaberAnimationProgress(ps->torsoTimer, bs->saberTechniqueAnimDuration),
-			actualDirection, preparationDirection, bs->saberTechniqueFamily != NEWBOTAI_SABER_BASIC);
+			actualDirection, preparationDirection, bs->saberTechniqueFamily != NEWBOTAI_SABER_BASIC,
+			sweepAmplitude);
 		if (!bs->saberTechniqueYawTime)
 			bs->saberTechniqueYawOffset = 0.0f;
-		bs->saberTechniqueYawOffset = NewBotAI_SaberStepYawOffset(bs->saberTechniqueYawOffset,
-			offset, bs->saberTechniqueYawTime ? time - bs->saberTechniqueYawTime : 0);
+		bs->saberTechniqueYawOffset = NewBotAI_SaberStepYawOffsetScaled(bs->saberTechniqueYawOffset,
+			offset, bs->saberTechniqueYawTime ? time - bs->saberTechniqueYawTime : 0,
+			sweepAmplitude, NewBotAI_GetSaberSweepRate(sweepAmplitude));
 		bs->saberTechniqueYawTime = time;
 		bi->viewangles[YAW] = NewBotAI_SaberApplyYawOffset(bi->viewangles[YAW], bs->saberTechniqueYawOffset);
 		bs->viewangles[YAW] = bi->viewangles[YAW];
@@ -20064,7 +20550,7 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 			}
 		}
 
-		if (airborneStart && !hasDroppedOwnSaber)
+		if (airborneStart && !hasDroppedOwnSaber && !NewBotAI_MayStartAirborneSwing(bs))
 		{
 			bs->doAttack = 0;
 		}

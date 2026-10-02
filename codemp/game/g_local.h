@@ -1897,6 +1897,19 @@ void G_FinishTrackedArcadeCombat(gentity_t *ent, const char *result);
 void G_ClearTrackedArcadeCombat(int clientNum);
 void G_QueueArcadeBotTutorial(gentity_t *speaker, gentity_t *listener, int roundNumber, qboolean betweenRounds);
 
+// g_bot_learning.c
+void G_BotLearnResetClient(int clientNum);
+void G_BotLearnObserveClient(gentity_t *ent);
+int G_BotLearnLastTokenTime(int clientNum, int token);
+qboolean G_BotLearnRecentToken(int clientNum, int token, int maxAgeMs);
+int G_BotLearnLatestToken(int clientNum, int maxAgeMs);
+void G_BotLearnCacheClear(void);
+int G_BotLearnCacheCount(void);
+void G_BotLearnCacheAdd(int contextKey, int stimulus, int response, int follow1, int samples, int wins, int netDamage);
+int G_BotLearnLiveContextKey(gentity_t *self, gentity_t *enemy);
+int G_BotLearnBonus(gentity_t *self, gentity_t *enemy, int stimulus, int response, int follow1, float skill);
+void G_BotLearnDebugPrint(int maxLines);
+
 //
 // g_cmds.c
 //

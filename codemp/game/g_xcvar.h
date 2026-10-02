@@ -369,6 +369,17 @@ XCVAR_DEF( bot_gripkickbias,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 // Chance for a bot to misfire or delay a gripkick escape attempt when it has a pull available.
 // Scales with bot skill: lower-skill bots are more likely to miss/delay the pull.
 XCVAR_DEF( bot_mistakebias, 			"0", 			NULL, 				CVAR_ARCHIVE, 							qtrue )
+// Sequence learning: on map load bots read LocalBotLearnedSequence (stimulus -> response ->
+// follow-up outcomes recorded from tracked duels) and add a capped, skill-scaled bonus to the
+// matching counter/combo weights. bot_learningstrength scales the bonus (0 disables it),
+// bot_learninghumansonly 1 ignores sequences performed by bots, bot_learningminsamples is the
+// sample count a context needs before it is used, bot_learning_debug 1 prints the best learned
+// responses on map load.
+XCVAR_DEF( bot_learning,				"1",			NULL,				CVAR_ARCHIVE,									qtrue )
+XCVAR_DEF( bot_learningstrength,		"1",			NULL,				CVAR_ARCHIVE,									qtrue )
+XCVAR_DEF( bot_learninghumansonly,		"0",			NULL,				CVAR_ARCHIVE,									qtrue )
+XCVAR_DEF( bot_learningminsamples,		"6",			NULL,				CVAR_ARCHIVE,									qtrue )
+XCVAR_DEF( bot_learning_debug,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 // Percentage scaler (10-300) for the Gripkick aim-down/hold phase: how long the bot
 // holds the gripped target and aims down toward it (forward-only movement) before the
 // flipkick approach, and how long a failed kick attempt dwells before retrying.

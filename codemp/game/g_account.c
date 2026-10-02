@@ -7,6 +7,7 @@
 #include <string.h>
 #include "sqlite3.h"
 #include "ai_combat_tuning.h"
+#include "g_bot_learning.h"
 #include "ai_main.h"
 #include "w_saber.h"
 
@@ -31,7 +32,9 @@ static char LOCAL_DUELTRACK_DB_PATH[MAX_OSPATH];
 #define BOT_DUEL_SEED_ELO_DEFAULT 1000.0f
 //Duel "type" used for arcade rows, matching the arcade leaderboard type in G_AddDuel.
 #define TRACKED_ARCADE_DUEL_TYPE 21
-#define TRACKED_CAPTURE_VERSION 8
+#define TRACKED_CAPTURE_VERSION 9
+#define TRACKED_FORCE_NOTE_SELECTED_FALLBACK "selected_fallback"
+#define TRACKED_AIR_NOTE_JUMP "jump"
 #define TRACKED_DUEL_MAX_EVENTS 8192
 #define TRACKED_DUEL_TUTORIAL_MAX_MESSAGES 3
 #define TRACKED_DUEL_TUTORIAL_COOLDOWN_MS 7000
@@ -148,7 +151,9 @@ typedef enum
 	DUEL_TRACK_EVENT_SWING_DAMAGE,
 	DUEL_TRACK_EVENT_SWING_END,
 	DUEL_TRACK_EVENT_DAMAGE_DEALT,
-	DUEL_TRACK_EVENT_INPUT_START
+	DUEL_TRACK_EVENT_INPUT_START,
+	DUEL_TRACK_EVENT_THROW_START,
+	DUEL_TRACK_EVENT_DODGE
 } duel_track_event_type_t;
 
 typedef struct
@@ -807,6 +812,26 @@ static void G_EnsureLocalDuelTrackingSchema(sqlite3 *db)
 	}
 	CALL_SQLITE(finalize(stmt));
 
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackAggregate", "capture_version", "UNSIGNED INTEGER DEFAULT 0");
+	G_EnsureTrackedTableColumn(db, "LocalDuelTrackAggregate", "capture_revision", "VARCHAR(40) DEFAULT ''");
+
+	//Bot sequence learning: outcome counts per (who, skill band, context, opponent action,
+	//response, follow-ups). See g_bot_learning.h for the token/context encoding.
+	sql = "CREATE TABLE IF NOT EXISTS LocalBotLearnedSequence("
+		"source_kind UNSIGNED TINYINT, skill_band UNSIGNED TINYINT, ctx_key UNSIGNED INTEGER, "
+		"stimulus UNSIGNED TINYINT, response UNSIGNED TINYINT, follow1 UNSIGNED TINYINT, follow2 UNSIGNED TINYINT, "
+		"samples UNSIGNED INTEGER DEFAULT 0, wins UNSIGNED INTEGER DEFAULT 0, net_damage INTEGER DEFAULT 0, "
+		"total_response_ms UNSIGNED INTEGER DEFAULT 0, capture_version UNSIGNED INTEGER DEFAULT 0, "
+		"PRIMARY KEY(source_kind, skill_band, ctx_key, stimulus, response, follow1, follow2))";
+	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
+	s = sqlite3_step(stmt);
+	if (s != SQLITE_DONE)
+	{
+		G_ErrorPrint("ERROR: SQL Create Failed (LocalBotLearnedSequence)", s);
+		G_TrackedDBError("CREATE TABLE LocalBotLearnedSequence", db, s);
+	}
+	CALL_SQLITE(finalize(stmt));
+
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackSummary", "source_context", "VARCHAR(16) DEFAULT 'duel'");
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackSummary", "draw", "UNSIGNED TINYINT DEFAULT 0");
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackSummary", "winner_opening", "VARCHAR(32) DEFAULT ''");
@@ -995,6 +1020,8 @@ static qboolean G_ShouldCaptureTrackedGeometryEvent(int eventType)
 	case DUEL_TRACK_EVENT_SWING_END:
 	case DUEL_TRACK_EVENT_DAMAGE_DEALT:
 	case DUEL_TRACK_EVENT_INPUT_START:
+	case DUEL_TRACK_EVENT_THROW_START:
+	case DUEL_TRACK_EVENT_DODGE:
 		return qtrue;
 	default:
 		return qfalse;
@@ -1437,6 +1464,8 @@ static const char *G_GetTrackedEventTypeName(int eventType)
 	case DUEL_TRACK_EVENT_SWING_END: return "swing_end";
 	case DUEL_TRACK_EVENT_DAMAGE_DEALT: return "damage_dealt";
 	case DUEL_TRACK_EVENT_INPUT_START: return "input_start";
+	case DUEL_TRACK_EVENT_THROW_START: return "throw_start";
+	case DUEL_TRACK_EVENT_DODGE: return "dodge";
 	case DUEL_TRACK_EVENT_COUNTER_SUCCESS: return "counter_success";
 	case DUEL_TRACK_EVENT_PUNISH_SUCCESS: return "punish_success";
 	case DUEL_TRACK_EVENT_SABER_RETURN_PUNISH: return "saber_return_punish";
@@ -2189,7 +2218,7 @@ static void G_AddTrackedArcadeEvent(tracked_arcade_runtime_t *runtime, int event
 		Q_strncpyz(event->note, note, sizeof(event->note));
 }
 
-static void G_SetTrackedPrimaryIssue(tracked_duel_runtime_t *runtime, qboolean lowForceFinish)
+static void G_SetTrackedPrimaryIssue(tracked_duel_runtime_t *runtime, qboolean lowForceFinish, qboolean won)
 {
 	int lowForceScore;
 	int gripScore;
@@ -2208,6 +2237,9 @@ static void G_SetTrackedPrimaryIssue(tracked_duel_runtime_t *runtime, qboolean l
 	lowForceScore = ((lowForceFinish || runtime->didDieLowForce) ? TRACKED_DUEL_SCORE_LOW_FORCE_FINISH_BONUS : 0) +
 		(runtime->spentByState[DUEL_TRACK_STATE_PANIC] / TRACKED_DUEL_SCORE_SPENT_PANIC_DIVISOR) +
 		runtime->lowForceWindows;
+	//Spending force down to empty on the way to a win is deliberate pressure, not a problem.
+	if (won)
+		lowForceScore = 0;
 	gripScore = runtime->gripCrippleEvents * TRACKED_DUEL_SCORE_GRIP_EVENT_WEIGHT;
 	saberThrowScore = (runtime->saberThrowPunishes * TRACKED_DUEL_SCORE_SABER_THROW_PUNISH_WEIGHT) - runtime->antiThrowSuccessEvents;
 	knockdownScore = runtime->knockdownEvents * TRACKED_DUEL_SCORE_KNOCKDOWN_EVENT_WEIGHT;
@@ -2860,12 +2892,14 @@ static void G_InitTrackedDuelRuntimeForClient(gentity_t *ent, gentity_t *opponen
 	G_GetDuelTrackingIdentity(opponent, runtime->opponentKey, sizeof(runtime->opponentKey), runtime->opponentLabel, sizeof(runtime->opponentLabel), NULL);
 }
 
-static duel_track_power_t G_InferTrackedPowerSpend(gentity_t *ent, tracked_duel_runtime_t *runtime)
+static duel_track_power_t G_InferTrackedPowerSpend(gentity_t *ent, tracked_duel_runtime_t *runtime, qboolean *confirmed)
 {
 	static const int sustainedPowers[] = { FP_GRIP, FP_DRAIN, FP_ABSORB, FP_PROTECT, FP_SPEED, FP_SEE, FP_RAGE };
 	int i;
 	duel_track_power_t mappedPower;
 
+	if (confirmed)
+		*confirmed = qfalse;
 	if (!ent || !ent->client || !runtime)
 		return DUEL_TRACK_POWER_UNKNOWN;
 
@@ -2880,12 +2914,19 @@ static duel_track_power_t G_InferTrackedPowerSpend(gentity_t *ent, tracked_duel_
 		{
 			mappedPower = G_MapForcePowerToTrackedPower(i);
 			if (mappedPower != DUEL_TRACK_POWER_UNKNOWN)
+			{
+				if (confirmed)
+					*confirmed = qtrue;
 				return mappedPower;
+			}
 		}
 	}
 
 	if (ent->client->ps.forceHandExtendTime > level.time)
 	{
+		if (confirmed && (ent->client->ps.forceHandExtend == HANDEXTEND_FORCEPULL ||
+			ent->client->ps.forceHandExtend == HANDEXTEND_FORCEPUSH))
+			*confirmed = qtrue;
 		if (ent->client->ps.forceHandExtend == HANDEXTEND_FORCEPULL)
 			return DUEL_TRACK_POWER_PULL;
 		if (ent->client->ps.forceHandExtend == HANDEXTEND_FORCEPUSH)
@@ -2895,7 +2936,11 @@ static duel_track_power_t G_InferTrackedPowerSpend(gentity_t *ent, tracked_duel_
 	for (i = 0; i < (int)(sizeof(sustainedPowers) / sizeof(sustainedPowers[0])); i++)
 	{
 		if (ent->client->ps.fd.forcePowersActive & (1 << sustainedPowers[i]))
+		{
+			if (confirmed)
+				*confirmed = qtrue;
 			return G_MapForcePowerToTrackedPower(sustainedPowers[i]);
+		}
 	}
 
 	mappedPower = G_MapForcePowerToTrackedPower(ent->client->ps.fd.forcePowerSelected);
@@ -3218,6 +3263,23 @@ static qboolean G_UpdateTrackedAggregate(sqlite3 *db, tracked_duel_runtime_t *ru
 	CALL_SQLITE(bind_int(stmt, 21, runtime->side));
 	CALL_SQLITE(bind_int(stmt, 22, matchup));
 	s = sqlite3_step(stmt);
+	if (s == SQLITE_DONE)
+	{
+		//Stamp the capture version/revision that last touched this aggregate row.
+		sqlite3_stmt *stampStmt = NULL;
+		const char *stampSql = "UPDATE LocalDuelTrackAggregate SET capture_version = ?, capture_revision = ? WHERE participant_key = ? AND participant_kind = ? AND side = ? AND matchup = ?";
+		if (sqlite3_prepare_v2(db, stampSql, -1, &stampStmt, NULL) == SQLITE_OK)
+		{
+			sqlite3_bind_int(stampStmt, 1, TRACKED_CAPTURE_VERSION);
+			sqlite3_bind_text(stampStmt, 2, GIT_HASH, -1, SQLITE_STATIC);
+			sqlite3_bind_text(stampStmt, 3, runtime->identityKey, -1, SQLITE_STATIC);
+			sqlite3_bind_int(stampStmt, 4, runtime->identityKind);
+			sqlite3_bind_int(stampStmt, 5, runtime->side);
+			sqlite3_bind_int(stampStmt, 6, matchup);
+			sqlite3_step(stampStmt);
+		}
+		sqlite3_finalize(stampStmt);
+	}
 	if (s != SQLITE_DONE)
 	{
 		G_ErrorPrint("ERROR: SQL Update Failed (LocalDuelTrackAggregate update)", s);
@@ -3227,6 +3289,244 @@ static qboolean G_UpdateTrackedAggregate(sqlite3 *db, tracked_duel_runtime_t *ru
 	}
 	CALL_SQLITE(finalize(stmt));
 	return qtrue;
+}
+
+// ---------------------------------------------------------------------------------------
+// Bot sequence learning: turn a finished duel's two event streams into
+// stimulus -> response -> follow-up sequences and accumulate their outcomes.
+// ---------------------------------------------------------------------------------------
+
+#define BOTLEARN_MAX_DUEL_SEQUENCES 2048
+
+typedef struct
+{
+	botlearn_event_t ev;
+	int ownerStance;
+} botlearn_merge_row_t;
+
+static int G_BotLearnTokenForTrackedEvent(const tracked_duel_event_t *event)
+{
+	switch (event->eventType)
+	{
+	case DUEL_TRACK_EVENT_FORCE:
+		if (!Q_stricmp(event->note, TRACKED_FORCE_NOTE_SELECTED_FALLBACK))
+			return BOTLEARN_TOK_NONE;
+		switch (event->power)
+		{
+		case DUEL_TRACK_POWER_PUSH: return BOTLEARN_TOK_PUSH;
+		case DUEL_TRACK_POWER_PULL: return BOTLEARN_TOK_PULL;
+		case DUEL_TRACK_POWER_GRIP: return BOTLEARN_TOK_GRIP;
+		case DUEL_TRACK_POWER_DRAIN: return BOTLEARN_TOK_DRAIN;
+		default: return BOTLEARN_TOK_NONE;
+		}
+	case DUEL_TRACK_EVENT_THROW_START:
+		return BOTLEARN_TOK_THROW;
+	case DUEL_TRACK_EVENT_SWING_START:
+		return (event->amount >= LS_KICK_F && event->amount <= LS_KICK_L_AIR) ?
+			BOTLEARN_TOK_KICK : BOTLEARN_TOK_SWING;
+	case DUEL_TRACK_EVENT_AIR:
+		return (event->amount && !Q_stricmp(event->note, TRACKED_AIR_NOTE_JUMP)) ? BOTLEARN_TOK_JUMP : BOTLEARN_TOK_NONE;
+	case DUEL_TRACK_EVENT_KNOCKDOWN:
+		return BOTLEARN_TOK_KNOCKDOWN;
+	default:
+		return BOTLEARN_TOK_NONE;
+	}
+}
+
+static int G_BotLearnAppendRows(botlearn_merge_row_t *rows, int count, int maxRows,
+	const tracked_duel_runtime_t *runtime, int actor)
+{
+	int i;
+
+	for (i = 0; i < runtime->eventCount && count < maxRows; i++)
+	{
+		const tracked_duel_event_t *event = &runtime->events[i];
+		const int token = G_BotLearnTokenForTrackedEvent(event);
+		const int damage = (event->eventType == DUEL_TRACK_EVENT_DAMAGE_DEALT && event->amount > 0) ? event->amount : 0;
+		botlearn_merge_row_t *row;
+		const int ownHA = event->selfHealth + event->selfArmor;
+		const int otherHA = event->enemyHealth + event->enemyArmor;
+
+		if (token == BOTLEARN_TOK_NONE && !damage)
+			continue;
+		row = &rows[count++];
+		memset(row, 0, sizeof(*row));
+		row->ev.time = event->relTime;
+		row->ev.actor = actor;
+		row->ev.token = token;
+		row->ev.damage = damage;
+		//Snapshots are stored from the owner's point of view; flip them into the
+		//perspective participant's ("self") point of view.
+		row->ev.selfHealthArmor = actor ? otherHA : ownHA;
+		row->ev.enemyHealthArmor = actor ? ownHA : otherHA;
+		row->ev.selfForce = actor ? event->enemyForce : event->selfForce;
+		row->ev.enemyForce = actor ? event->selfForce : event->enemyForce;
+		row->ev.rangeBucket = (event->rangeBucket > 0) ? event->rangeBucket - 1 : 0;
+		if (row->ev.rangeBucket > 2)
+			row->ev.rangeBucket = 2;
+		row->ownerStance = event->saberStance;
+	}
+	return count;
+}
+
+static int QDECL G_BotLearnCompareRows(const void *a, const void *b)
+{
+	const botlearn_merge_row_t *ra = (const botlearn_merge_row_t *)a;
+	const botlearn_merge_row_t *rb = (const botlearn_merge_row_t *)b;
+
+	if (ra->ev.time != rb->ev.time)
+		return ra->ev.time - rb->ev.time;
+	//Opponent rows first on ties so a same-frame answer still counts as a response.
+	return rb->ev.actor - ra->ev.actor;
+}
+
+static int G_BotLearnSkillBand(const tracked_duel_runtime_t *runtime)
+{
+	int skill = 0;
+
+	if (runtime->identityKind != DUEL_TRACK_ID_BOT)
+		return BotLearn_SkillBand(0, 0);
+	if (!Q_strncmp(runtime->eloKey, "botlvl", 6))
+		skill = atoi(runtime->eloKey + 6);
+	else if (runtime->eventCount > 0)
+		skill = (int)runtime->events[0].controllerSkill;
+	return BotLearn_SkillBand(1, skill);
+}
+
+static qboolean G_BotLearnRecordPerspective(sqlite3 *db, const tracked_duel_runtime_t *self,
+	const tracked_duel_runtime_t *opponent, qboolean won)
+{
+	botlearn_merge_row_t *rows;
+	botlearn_event_t *events;
+	botlearn_sequence_t *sequences;
+	sqlite3_stmt *insertStmt = NULL;
+	sqlite3_stmt *updateStmt = NULL;
+	const int maxRows = self->eventCount + opponent->eventCount;
+	const int sourceKind = (self->identityKind == DUEL_TRACK_ID_BOT) ? BOTLEARN_SOURCE_BOT : BOTLEARN_SOURCE_HUMAN;
+	const int skillBand = G_BotLearnSkillBand(self);
+	int lastStance[2] = { 0, 0 };
+	int count = 0, sequenceCount, i;
+	qboolean ok = qtrue;
+
+	if (!self->events || !opponent->events || maxRows <= 0)
+		return qtrue;
+
+	rows = (botlearn_merge_row_t *)malloc(sizeof(*rows) * maxRows);
+	events = (botlearn_event_t *)malloc(sizeof(*events) * maxRows);
+	sequences = (botlearn_sequence_t *)malloc(sizeof(*sequences) * BOTLEARN_MAX_DUEL_SEQUENCES);
+	if (!rows || !events || !sequences)
+	{
+		free(rows);
+		free(events);
+		free(sequences);
+		return qtrue;
+	}
+
+	count = G_BotLearnAppendRows(rows, count, maxRows, self, 0);
+	count = G_BotLearnAppendRows(rows, count, maxRows, opponent, 1);
+	qsort(rows, count, sizeof(rows[0]), G_BotLearnCompareRows);
+	for (i = 0; i < count; i++)
+	{
+		lastStance[rows[i].ev.actor] = rows[i].ownerStance;
+		events[i] = rows[i].ev;
+		events[i].selfStance = lastStance[0];
+		events[i].enemyStance = lastStance[1];
+	}
+	count = BotLearn_CollapseRepeats(events, count);
+	sequenceCount = BotLearn_ExtractSequences(events, count, won ? 1 : 0, sequences, BOTLEARN_MAX_DUEL_SEQUENCES);
+
+	if (sequenceCount > 0 &&
+		sqlite3_prepare_v2(db, "INSERT OR IGNORE INTO LocalBotLearnedSequence(source_kind, skill_band, ctx_key, stimulus, response, follow1, follow2) VALUES (?, ?, ?, ?, ?, ?, ?)",
+			-1, &insertStmt, NULL) == SQLITE_OK &&
+		sqlite3_prepare_v2(db, "UPDATE LocalBotLearnedSequence SET samples = samples + 1, wins = wins + ?, net_damage = net_damage + ?, total_response_ms = total_response_ms + ?, capture_version = ? "
+			"WHERE source_kind = ? AND skill_band = ? AND ctx_key = ? AND stimulus = ? AND response = ? AND follow1 = ? AND follow2 = ?",
+			-1, &updateStmt, NULL) == SQLITE_OK)
+	{
+		for (i = 0; i < sequenceCount && ok; i++)
+		{
+			const botlearn_sequence_t *seq = &sequences[i];
+			int rc;
+
+			sqlite3_reset(insertStmt);
+			sqlite3_bind_int(insertStmt, 1, sourceKind);
+			sqlite3_bind_int(insertStmt, 2, skillBand);
+			sqlite3_bind_int(insertStmt, 3, seq->contextKey);
+			sqlite3_bind_int(insertStmt, 4, seq->stimulus);
+			sqlite3_bind_int(insertStmt, 5, seq->response);
+			sqlite3_bind_int(insertStmt, 6, seq->follow1);
+			sqlite3_bind_int(insertStmt, 7, seq->follow2);
+			rc = sqlite3_step(insertStmt);
+			if (rc != SQLITE_DONE)
+			{
+				G_TrackedDBError("insert LocalBotLearnedSequence", db, rc);
+				ok = qfalse;
+				break;
+			}
+
+			sqlite3_reset(updateStmt);
+			sqlite3_bind_int(updateStmt, 1, seq->won);
+			sqlite3_bind_int(updateStmt, 2, seq->netDamage);
+			sqlite3_bind_int(updateStmt, 3, seq->responseDelayMs);
+			sqlite3_bind_int(updateStmt, 4, TRACKED_CAPTURE_VERSION);
+			sqlite3_bind_int(updateStmt, 5, sourceKind);
+			sqlite3_bind_int(updateStmt, 6, skillBand);
+			sqlite3_bind_int(updateStmt, 7, seq->contextKey);
+			sqlite3_bind_int(updateStmt, 8, seq->stimulus);
+			sqlite3_bind_int(updateStmt, 9, seq->response);
+			sqlite3_bind_int(updateStmt, 10, seq->follow1);
+			sqlite3_bind_int(updateStmt, 11, seq->follow2);
+			rc = sqlite3_step(updateStmt);
+			if (rc != SQLITE_DONE)
+			{
+				G_TrackedDBError("update LocalBotLearnedSequence", db, rc);
+				ok = qfalse;
+			}
+		}
+	}
+	else if (sequenceCount > 0)
+	{
+		G_TrackedDBError("prepare LocalBotLearnedSequence", db, sqlite3_errcode(db));
+		ok = qfalse;
+	}
+	sqlite3_finalize(insertStmt);
+	sqlite3_finalize(updateStmt);
+	free(rows);
+	free(events);
+	free(sequences);
+	return ok;
+}
+
+// Map load: fold LocalBotLearnedSequence into the in-memory learned weight cache.
+static void G_BotLearnLoadCache(sqlite3 *db)
+{
+	sqlite3_stmt *stmt = NULL;
+	const char *sql = bot_learninghumansonly.integer ?
+		"SELECT ctx_key, stimulus, response, follow1, SUM(samples), SUM(wins), SUM(net_damage) FROM LocalBotLearnedSequence "
+		"WHERE source_kind = 0 GROUP BY ctx_key, stimulus, response, follow1" :
+		"SELECT ctx_key, stimulus, response, follow1, SUM(samples), SUM(wins), SUM(net_damage) FROM LocalBotLearnedSequence "
+		"GROUP BY ctx_key, stimulus, response, follow1";
+	int rows = 0;
+
+	G_BotLearnCacheClear();
+	if (!bot_learning.integer || !db)
+		return;
+	if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK)
+	{
+		sqlite3_finalize(stmt);
+		return;
+	}
+	while (sqlite3_step(stmt) == SQLITE_ROW)
+	{
+		G_BotLearnCacheAdd(sqlite3_column_int(stmt, 0), sqlite3_column_int(stmt, 1),
+			sqlite3_column_int(stmt, 2), sqlite3_column_int(stmt, 3), sqlite3_column_int(stmt, 4),
+			sqlite3_column_int(stmt, 5), sqlite3_column_int(stmt, 6));
+		rows++;
+	}
+	sqlite3_finalize(stmt);
+	trap->Print("Bot learning: loaded %i learned sequence groups (%i cache entries)%s\n", rows,
+		G_BotLearnCacheCount(), bot_learninghumansonly.integer ? " [humans only]" : "");
+	if (bot_learning_debug.integer)
+		G_BotLearnDebugPrint(60);
 }
 
 static void G_PersistTrackedDuel(tracked_duel_runtime_t *winnerRuntime, tracked_duel_runtime_t *loserRuntime, int duelType, qboolean draw)
@@ -3315,6 +3615,10 @@ static void G_PersistTrackedDuel(tracked_duel_runtime_t *winnerRuntime, tracked_
 		persistOk = G_UpdateTrackedAggregate(db, winnerRuntime, draw ? qfalse : qtrue, draw);
 	if (persistOk)
 		persistOk = G_UpdateTrackedAggregate(db, loserRuntime, qfalse, draw);
+	if (persistOk)
+		persistOk = G_BotLearnRecordPerspective(db, winnerRuntime, loserRuntime, draw ? qfalse : qtrue);
+	if (persistOk)
+		persistOk = G_BotLearnRecordPerspective(db, loserRuntime, winnerRuntime, qfalse);
 
 	s = sqlite3_exec(db, persistOk ? "COMMIT" : "ROLLBACK", NULL, NULL, NULL);
 	if (s != SQLITE_OK)
@@ -3407,6 +3711,39 @@ void G_StartTrackedDuel(gentity_t *first, gentity_t *second, int duelType)
 	G_InitTrackedDuelRuntimeForClient(second, first, duelType);
 }
 
+// Knockdowns caused by the opponent (push/pull/kick/grip set ps.otherKiller) vs. our own
+// (slips, wall hits, failed rolls).
+static qboolean G_IsTrackedKnockdownByOpponent(gentity_t *ent, gentity_t *opponent)
+{
+	if (!ent || !ent->client || !opponent)
+		return qfalse;
+	return (ent->client->ps.otherKiller == opponent->s.number &&
+		ent->client->ps.otherKillerTime > level.time - 2000) ? qtrue : qfalse;
+}
+
+// An opponent swing that ended in close range without hurting us is a dodge (or block) for us.
+static void G_RecordTrackedDuelDodge(tracked_duel_runtime_t *attackerRuntime, gentity_t *attacker, gentity_t *defender)
+{
+	tracked_duel_runtime_t *defenderRuntime;
+	int state;
+	int range;
+
+	if (!attackerRuntime || !attacker || !defender || !defender->client ||
+		defender->s.number < 0 || defender->s.number >= MAX_CLIENTS)
+		return;
+	defenderRuntime = &g_trackedDuels[defender->s.number];
+	if (!defenderRuntime->active || defenderRuntime->opponentClientNum != attacker->s.number)
+		return;
+	range = G_GetTrackedRangeBucket(defender, attacker);
+	if (range != 1 || defenderRuntime->lastDamageTakenTime >= attackerRuntime->swing.startTime)
+		return;
+	state = G_InferTrackedForceState(defender, attacker);
+	G_AddTrackedDuelEvent(defenderRuntime, DUEL_TRACK_EVENT_DODGE, level.time - defenderRuntime->duelStartTime,
+		attackerRuntime->swing.move, DUEL_TRACK_POWER_UNKNOWN, state, range,
+		(defender->client->ps.groundEntityNum == ENTITYNUM_NONE) ? "air" :
+		(defender->client->ps.saberBlocked != BLOCKED_NONE ? "blocked" : "evaded"), defender, attacker);
+}
+
 void G_UpdateTrackedDuelFrame(gentity_t *ent)
 {
 	tracked_duel_runtime_t *runtime;
@@ -3459,6 +3796,7 @@ void G_UpdateTrackedDuelFrame(gentity_t *ent)
 		G_DuelCaptureSampleYaw(&runtime->swing, ent->client->ps.viewangles[YAW]);
 		G_AddTrackedDuelEvent(runtime, DUEL_TRACK_EVENT_SWING_END, level.time - runtime->duelStartTime,
 			runtime->swing.move, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, "completed", ent, opponent);
+		G_RecordTrackedDuelDodge(runtime, ent, opponent);
 	}
 	if (G_DuelCaptureSwingStartedWithContinuity(&runtime->swing,
 		G_IsTrackedSaberContinuityAllowed(ent) && BG_SaberInAttack(ent->client->ps.saberMove),
@@ -3483,6 +3821,8 @@ void G_UpdateTrackedDuelFrame(gentity_t *ent)
 		runtime->lastThrowTime = level.time;
 		runtime->lastThrowYawOffset = G_GetTrackedThrowYawOffset(ent, opponent);
 		G_TouchTrackedDuelSequence(runtime);
+		G_AddTrackedDuelEvent(runtime, DUEL_TRACK_EVENT_THROW_START, level.time - runtime->duelStartTime,
+			curForce, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, "release", ent, opponent);
 	}
 	if ((state == DUEL_TRACK_STATE_PANIC || state == DUEL_TRACK_STATE_DISADVANTAGE) &&
 		curForce <= TRACKED_DUEL_LOW_FORCE_THRESHOLD)
@@ -3511,7 +3851,8 @@ void G_UpdateTrackedDuelFrame(gentity_t *ent)
 	if (forceDelta < 0)
 	{
 		int spent = -forceDelta;
-		power = G_InferTrackedPowerSpend(ent, runtime);
+		qboolean powerConfirmed;
+		power = G_InferTrackedPowerSpend(ent, runtime, &powerConfirmed);
 		runtime->lastForceSpendTime = level.time;
 		runtime->totalForceSpent += spent;
 		runtime->forceSpentByPower[power] += spent;
@@ -3528,7 +3869,10 @@ void G_UpdateTrackedDuelFrame(gentity_t *ent)
 			(ent->health <= 45 || state == DUEL_TRACK_STATE_PANIC || state == DUEL_TRACK_STATE_DISADVANTAGE))
 			runtime->lateDefenseSpends++;
 		G_SetTrackedOpeningIfEmpty(runtime, power, NULL);
-		G_AddTrackedDuelEvent(runtime, DUEL_TRACK_EVENT_FORCE, level.time - runtime->duelStartTime, spent, power, state, curRangeBucket, NULL, ent, opponent);
+		// Force lost to an enemy drain or a saber throw falls back to the selected power;
+		// mark it so it is not mistaken for an action the player chose.
+		G_AddTrackedDuelEvent(runtime, DUEL_TRACK_EVENT_FORCE, level.time - runtime->duelStartTime, spent, power, state, curRangeBucket,
+			powerConfirmed ? NULL : TRACKED_FORCE_NOTE_SELECTED_FALLBACK, ent, opponent);
 	}
 	else if (forceDelta > 0)
 	{
@@ -3557,12 +3901,24 @@ void G_UpdateTrackedDuelFrame(gentity_t *ent)
 		G_AddTrackedDuelEvent(runtime, DUEL_TRACK_EVENT_RANGE, level.time - runtime->duelStartTime, curRangeBucket, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, NULL, ent, opponent);
 
 	if (airborne != runtime->lastAirborne)
-		G_AddTrackedDuelEvent(runtime, DUEL_TRACK_EVENT_AIR, level.time - runtime->duelStartTime, airborne, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, airborne ? "airborne" : "landed", ent, opponent);
+	{
+		const char *airNote = "landed";
+		if (airborne)
+			airNote = (ent->client->pers.cmd.upmove > 0 && ent->client->ps.velocity[2] > 0.0f && !knockedDown) ?
+				TRACKED_AIR_NOTE_JUMP : "airborne";
+		G_AddTrackedDuelEvent(runtime, DUEL_TRACK_EVENT_AIR, level.time - runtime->duelStartTime, airborne, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, airNote, ent, opponent);
+	}
 
 	if (knockedDown && !runtime->lastKnockdown)
 	{
+		const qboolean byOpponent = G_IsTrackedKnockdownByOpponent(ent, opponent);
 		runtime->knockdownEvents++;
-		G_AddTrackedDuelEvent(runtime, DUEL_TRACK_EVENT_KNOCKDOWN, level.time - runtime->duelStartTime, 1, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, "knockdown", ent, opponent);
+		G_AddTrackedDuelEvent(runtime, DUEL_TRACK_EVENT_KNOCKDOWN, level.time - runtime->duelStartTime, 1, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket,
+			byOpponent ? "knockdown_by_opponent" : "knockdown_self", ent, opponent);
+		if (byOpponent && runtime->eventCount &&
+			runtime->events[runtime->eventCount - 1].eventType == DUEL_TRACK_EVENT_KNOCKDOWN)
+			G_GetDuelTrackingIdentity(opponent, runtime->events[runtime->eventCount - 1].damageAttackerKey,
+				sizeof(runtime->events[runtime->eventCount - 1].damageAttackerKey), NULL, 0, NULL);
 	}
 
 	if (curForce < runtime->lowestForce)
@@ -3926,8 +4282,8 @@ void G_FinishTrackedDuel(gentity_t *winner, gentity_t *loser, int duelType, qboo
 	winnerLowForceFinish = (winnerSlot->endingForce <= TRACKED_DUEL_LOW_FORCE_THRESHOLD || winnerSlot->lowestForce <= TRACKED_DUEL_LOW_FORCE_THRESHOLD) ? qtrue : qfalse;
 	loserLowForceFinish = (loserSlot->endingForce <= TRACKED_DUEL_LOW_FORCE_THRESHOLD || loserSlot->lowestForce <= TRACKED_DUEL_LOW_FORCE_THRESHOLD) ? qtrue : qfalse;
 	loserSlot->didDieLowForce = draw ? 0 : (loserLowForceFinish ? 1 : 0);
-	G_SetTrackedPrimaryIssue(winnerSlot, winnerLowForceFinish);
-	G_SetTrackedPrimaryIssue(loserSlot, loserLowForceFinish);
+	G_SetTrackedPrimaryIssue(winnerSlot, winnerLowForceFinish, draw ? qfalse : qtrue);
+	G_SetTrackedPrimaryIssue(loserSlot, loserLowForceFinish, qfalse);
 	G_ClassifyTrackedAttackOutcomes(winnerSlot->events, winnerSlot->eventCount, &winnerSlot->capture);
 	G_ClassifyTrackedAttackOutcomes(loserSlot->events, loserSlot->eventCount, &loserSlot->capture);
 	G_DuelCaptureSuppressSequenceRanking(&winnerSlot->capture,
@@ -8686,12 +9042,30 @@ static const char *G_GetTrackedGeometryExportQuery(void)
 static const char *G_GetTrackedAggregateExportQuery(void)
 {
 	return
-		"SELECT 2 AS export_format_version, 'duel_aggregate' AS record_type, 'duel' AS source_context, "
+		"SELECT 3 AS export_format_version, 'duel_aggregate' AS record_type, 'duel' AS source_context, "
 		"participant_key, participant_kind, side, matchup, duels, wins, losses, "
 		"total_force_spent, total_force_regen, low_force_deaths, grip_cripples, saber_throw_punishes, "
 		"force_push, force_pull, force_grip, force_drain, force_rage, force_absorb, force_protect, force_heal, "
-		"force_speed, force_seeing, force_unknown "
+		"force_speed, force_seeing, force_unknown, capture_version, capture_revision "
 		"FROM LocalDuelTrackAggregate";
+}
+
+static const char *G_GetTrackedLearnedExportQuery(void)
+{
+	return
+		"SELECT 1 AS export_format_version, 'bot_learned_sequence' AS record_type, "
+		"CASE source_kind WHEN 1 THEN 'bot' ELSE 'human' END AS source, skill_band, ctx_key, "
+		"(ctx_key & 3) AS self_ha_bucket, ((ctx_key >> 2) & 3) AS enemy_ha_bucket, "
+		"((ctx_key >> 4) & 3) AS self_force_bucket, ((ctx_key >> 6) & 3) AS enemy_force_bucket, "
+		"((ctx_key >> 8) & 3) AS range_bucket, ((ctx_key >> 10) & 3) AS self_stance, ((ctx_key >> 12) & 3) AS enemy_stance, "
+		"CASE stimulus " BOTLEARN_SQL_TOKEN_CASES " END AS stimulus, "
+		"CASE response " BOTLEARN_SQL_TOKEN_CASES " END AS response, "
+		"CASE follow1 " BOTLEARN_SQL_TOKEN_CASES " END AS follow1, "
+		"CASE follow2 " BOTLEARN_SQL_TOKEN_CASES " END AS follow2, "
+		"samples, wins, net_damage, "
+		"CASE WHEN samples > 0 THEN (total_response_ms / samples) ELSE 0 END AS avg_response_ms, "
+		"capture_version "
+		"FROM LocalBotLearnedSequence ORDER BY samples DESC";
 }
 
 static void G_SanitizeTrackedExportPrefix(const char *in, char *out, int outSize)
@@ -9870,6 +10244,8 @@ void Svcmd_ExportDuelTrack_f(void)
 		dbDir, pathSep, safePrefix, exportSuffix);
 	G_ExportTrackedTable(db, wantAggregateExport, G_GetTrackedAggregateExportQuery(), "aggregate",
 		dbDir, pathSep, safePrefix, exportSuffix);
+	G_ExportTrackedTable(db, G_DoesTrackedDuelTableExist(db, "LocalBotLearnedSequence"),
+		G_GetTrackedLearnedExportQuery(), "learned", dbDir, pathSep, safePrefix, exportSuffix);
 
 	CALL_SQLITE(close(db));
 }
@@ -14217,6 +14593,7 @@ void InitGameAccountStuff( void ) { //Called every mapload , move the create tab
 		G_EnsureLocalDuelTrackingSchema(db);
 		trap->Print("Duel tracking database: %s\n", effectiveDuelTrackPath);
 		G_ReportLegacyTrackedData(db, effectiveDuelTrackPath);
+		G_BotLearnLoadCache(db);
 		CALL_SQLITE(close(db));
 	}
 	else
