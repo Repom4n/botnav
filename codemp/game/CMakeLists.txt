@@ -50,6 +50,7 @@ set(MPGameGameFiles
 	"${MPDir}/game/g_account.c"
 	"${MPDir}/game/g_active.c"
 	"${MPDir}/game/g_bot.c"
+	"${MPDir}/game/g_bot_learning.c"
 	"${MPDir}/game/g_client.c"
 	"${MPDir}/game/g_cmds.c"
 	"${MPDir}/game/g_combat.c"

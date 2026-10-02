@@ -396,6 +396,8 @@ typedef struct bot_state_s
 	int					airSwingAllowed; // result of that roll for the current jump
 	int					ownThrowReleaseTime; // level.time our saber last left our hand
 	int					lastOwnSaberInFlight; // saberInFlight on the previous think
+	int					footingMistakeRollTime; // level.time the swing-footing mistake roll was taken
+	qboolean			footingMistake; // low-skill roll: start swings out of reach / while backing off
 	int					throwPullPendingTime; // level.time a throw->pull follow-up was armed (0 = none)
 	int					drainHoldTime;
 	qboolean			healDrainlockActive; // latched once a health-disadvantaged drainlock starts; stays active on the same enemy until topped off or aggression turns reckless
