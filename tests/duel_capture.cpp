@@ -3,6 +3,268 @@
 
 BOOST_AUTO_TEST_SUITE(duel_capture)
 
+struct capture_test_record
+{
+	unsigned long long index;
+	int time;
+	int priority;
+};
+
+static int CaptureTestPriority(const void *record)
+{
+	return static_cast<const capture_test_record *>(record)->priority;
+}
+
+static void *CaptureTestFailedAllocation(void *, size_t)
+{
+	return NULL;
+}
+
+BOOST_AUTO_TEST_CASE(full_95_second_duel_survives_old_128_event_limit)
+{
+	duel_capture_storage_t storage = {};
+	capture_test_record *records = NULL;
+	int count = 0;
+	for (int time = 0; time <= 95000; time += 100)
+	{
+		records = static_cast<capture_test_record *>(G_DuelCaptureReserve(records, &count,
+			sizeof(*records), &storage, 8192, CaptureTestPriority));
+		BOOST_REQUIRE(records);
+		records[count++] = { ++storage.total, time, time % 1000 ? 0 : 2 };
+	}
+	BOOST_CHECK_EQUAL(count, 951);
+	BOOST_CHECK_EQUAL(records[count - 1].time, 95000);
+	BOOST_CHECK_EQUAL(storage.dropped, 0);
+	BOOST_CHECK_EQUAL(storage.compactions, 0);
+	free(records);
+}
+
+BOOST_AUTO_TEST_CASE(bounded_capture_continues_past_16_bit_indices_and_keeps_late_combat)
+{
+	duel_capture_storage_t storage = {};
+	capture_test_record *records = NULL;
+	int count = 0;
+	for (int i = 1; i <= 100000; ++i)
+	{
+		records = static_cast<capture_test_record *>(G_DuelCaptureReserve(records, &count,
+			sizeof(*records), &storage, 8192, CaptureTestPriority));
+		BOOST_REQUIRE(records);
+		records[count++] = { ++storage.total, i * 10, i % 10 ? 0 : 2 };
+		BOOST_REQUIRE(count <= 8192);
+	}
+	BOOST_CHECK_EQUAL(storage.capacity, 8192);
+	BOOST_CHECK_EQUAL(storage.total, 100000);
+	BOOST_CHECK_EQUAL(storage.total, storage.dropped + count);
+	BOOST_CHECK_EQUAL(records[0].index, 1);
+	BOOST_CHECK_EQUAL(records[count - 1].index, 100000);
+	BOOST_CHECK_EQUAL(records[count - 1].priority, 2);
+	BOOST_CHECK(storage.compactions > 0);
+	for (int i = 1; i < count; ++i)
+	{
+		BOOST_REQUIRE(records[i].index > records[i - 1].index);
+		BOOST_REQUIRE(records[i].time > records[i - 1].time);
+	}
+	free(records);
+}
+
+BOOST_AUTO_TEST_CASE(compaction_prioritizes_damage_and_keeps_recent_records)
+{
+	capture_test_record records[16] = {};
+	duel_capture_storage_t storage = {};
+	for (int i = 0; i < 16; ++i)
+		records[i] = { static_cast<unsigned long long>(i + 1), i * 100, i == 3 || i == 7 ? 2 : 0 };
+	int count = G_DuelCaptureCompact(records, 16, sizeof(records[0]), &storage, CaptureTestPriority);
+	BOOST_CHECK_EQUAL(count, 8);
+	BOOST_CHECK_EQUAL(records[0].index, 1);
+	BOOST_CHECK_EQUAL(storage.dropped, 8);
+	BOOST_CHECK_EQUAL(storage.criticalDropped, 0);
+	BOOST_CHECK_EQUAL(records[1].index, 4);
+	BOOST_CHECK_EQUAL(records[2].index, 8);
+	for (int i = 4; i < count; ++i)
+		BOOST_CHECK_EQUAL(records[i].index, static_cast<unsigned long long>(i + 9));
+}
+
+BOOST_AUTO_TEST_CASE(all_critical_overflow_is_explicit_and_time_sampled)
+{
+	capture_test_record records[16] = {};
+	duel_capture_storage_t storage = {};
+	for (int i = 0; i < 16; ++i)
+		records[i] = { static_cast<unsigned long long>(i + 1), i * 100, 2 };
+	int count = G_DuelCaptureCompact(records, 16, sizeof(records[0]), &storage, CaptureTestPriority);
+	BOOST_CHECK_EQUAL(count, 8);
+	BOOST_CHECK_EQUAL(storage.criticalDropped, 8);
+	BOOST_CHECK_EQUAL(records[0].index, 1);
+	BOOST_CHECK(records[1].index < 8);
+	BOOST_CHECK(records[2].index >= 8);
+	BOOST_CHECK_EQUAL(records[count - 1].index, 16);
+}
+
+BOOST_AUTO_TEST_CASE(allocation_failure_keeps_existing_buffer_and_allows_late_append)
+{
+	duel_capture_storage_t storage = {};
+	int count = 0;
+	void *records = G_DuelCaptureReserveWithAllocator(NULL, &count, sizeof(capture_test_record),
+		&storage, 8192, CaptureTestPriority, CaptureTestFailedAllocation);
+	BOOST_CHECK(!records);
+	BOOST_CHECK_EQUAL(storage.capacity, 0);
+	BOOST_CHECK_EQUAL(storage.allocationFailures, 1);
+	capture_test_record existing[128] = {};
+	for (int i = 0; i < 128; ++i)
+		existing[i] = { static_cast<unsigned long long>(i + 1), i, 2 };
+	storage.capacity = count = 128;
+	records = G_DuelCaptureReserveWithAllocator(existing, &count, sizeof(existing[0]),
+		&storage, 8192, CaptureTestPriority, CaptureTestFailedAllocation);
+	BOOST_CHECK(records == existing);
+	BOOST_CHECK_EQUAL(count, 64);
+	BOOST_CHECK_EQUAL(storage.capacity, 128);
+	BOOST_CHECK_EQUAL(storage.allocationFailures, 2);
+	existing[count++] = { 129, 128, 2 };
+	BOOST_CHECK_EQUAL(existing[count - 1].index, 129);
+}
+
+BOOST_AUTO_TEST_CASE(outcomes_use_original_indices_after_compaction_without_16_bit_wrap)
+{
+	duel_capture_outcome_t outcome = {};
+	G_DuelCaptureAccumulateOutcome(&outcome, 70000, 70010, 1000, 2200,
+		70002, 1100, DUEL_CAPTURE_OUTCOME_DEALT, 40, 0);
+	G_DuelCaptureAccumulateOutcome(&outcome, 70000, 70010, 1000, 2200,
+		70009, 1200, DUEL_CAPTURE_OUTCOME_TAKEN, 10, 0);
+	BOOST_CHECK_EQUAL(outcome.dealt, 40);
+	BOOST_CHECK_EQUAL(outcome.taken, 10);
+}
+
+BOOST_AUTO_TEST_CASE(missing_records_make_outcomes_uncertain_not_false_misses)
+{
+	BOOST_CHECK(!G_DuelCaptureHasIndexGap(65535, 65536));
+	BOOST_CHECK(!G_DuelCaptureHasIndexGap(70000, 70001));
+	BOOST_CHECK(G_DuelCaptureHasIndexGap(70000, 70002));
+	BOOST_CHECK(G_DuelCaptureHasIndexGap(70000, 65535));
+}
+
+BOOST_AUTO_TEST_CASE(any_record_loss_disables_outcome_and_sequence_ranking)
+{
+	duel_capture_storage_t storage = {};
+	BOOST_CHECK(G_DuelCaptureCanRankOutcomes(&storage));
+	storage.dropped = 1;
+	BOOST_CHECK(!G_DuelCaptureCanRankOutcomes(&storage));
+	storage.criticalDropped = 1;
+	BOOST_CHECK(!G_DuelCaptureCanRankOutcomes(&storage));
+	storage.dropped = 0;
+	BOOST_CHECK(!G_DuelCaptureCanRankOutcomes(&storage));
+	storage.criticalDropped = 0;
+	storage.allocationFailures = 1;
+	BOOST_CHECK(G_DuelCaptureCanRankOutcomes(&storage));
+}
+
+BOOST_AUTO_TEST_CASE(long_capture_keeps_aggregates_and_tail_but_never_coaches_from_lost_damage)
+{
+	duel_capture_storage_t storage = {};
+	capture_test_record *records = NULL;
+	int count = 0, totalDamageDealt = 0;
+	duel_capture_outcome_t favorable = { 60, 0, 1 };
+	char goodSequence[32] = "clean_counter";
+	char badSequence[32] = "forced_entry";
+	BOOST_CHECK_EQUAL(G_DuelCaptureRankedOutcomeQuality(&storage, &favorable), "correct");
+	G_DuelCaptureSuppressSequenceRanking(&storage, goodSequence, badSequence);
+	BOOST_CHECK_EQUAL(goodSequence, "clean_counter");
+	BOOST_CHECK_EQUAL(badSequence, "forced_entry");
+	for (int i = 1; i <= 20000; ++i)
+	{
+		records = static_cast<capture_test_record *>(G_DuelCaptureReserve(records, &count,
+			sizeof(*records), &storage, 8192, CaptureTestPriority));
+		BOOST_REQUIRE(records);
+		records[count++] = { ++storage.total, i * 10, 2 };
+		totalDamageDealt += 3;
+	}
+	BOOST_CHECK_EQUAL(totalDamageDealt, 60000);
+	BOOST_CHECK_EQUAL(storage.total, storage.dropped + count);
+	BOOST_CHECK_EQUAL(storage.dropped, storage.criticalDropped);
+	BOOST_CHECK(storage.criticalDropped > 0);
+	BOOST_CHECK_EQUAL(records[count - 1].index, 20000);
+	BOOST_CHECK_EQUAL(records[count - 1].time, 200000);
+	BOOST_CHECK_EQUAL(G_DuelCaptureRankedOutcomeQuality(&storage, &favorable), "unknown");
+	G_DuelCaptureSuppressSequenceRanking(&storage, goodSequence, badSequence);
+	BOOST_CHECK_EQUAL(goodSequence, "");
+	BOOST_CHECK_EQUAL(badSequence, "");
+	free(records);
+}
+
+BOOST_AUTO_TEST_CASE(finishing_transfers_ownership_without_freeing_events_before_persistence)
+{
+	struct test_runtime
+	{
+		capture_test_record *records;
+		duel_capture_storage_t storage;
+		int active;
+		int count;
+	};
+	test_runtime source = {}, copy = {};
+	source.active = 1;
+	source.records = static_cast<capture_test_record *>(G_DuelCaptureReserve(NULL, &source.count,
+		sizeof(capture_test_record), &source.storage, 8192, CaptureTestPriority));
+	BOOST_REQUIRE(source.records);
+	source.records[source.count++] = { 1, 95000, 2 };
+	source.storage.total = 1;
+	capture_test_record *owned = source.records;
+	G_DuelCaptureMoveRuntime(&copy, &source, sizeof(source));
+	BOOST_CHECK(!source.records);
+	BOOST_CHECK_EQUAL(source.count, 0);
+	BOOST_CHECK_EQUAL(source.active, 0);
+	BOOST_CHECK_EQUAL(source.storage.capacity, 0);
+	BOOST_CHECK(copy.records == owned);
+	G_DuelCaptureClearRuntime(&source, sizeof(source), source.records);
+	BOOST_CHECK_EQUAL(copy.count, 1);
+	BOOST_CHECK_EQUAL(copy.records[0].time, 95000);
+	BOOST_CHECK_EQUAL(copy.storage.total, 1);
+	// A new capture on the cleared slot cannot invalidate the persistence copy.
+	source.records = static_cast<capture_test_record *>(G_DuelCaptureReserve(NULL, &source.count,
+		sizeof(capture_test_record), &source.storage, 8192, CaptureTestPriority));
+	BOOST_REQUIRE(source.records);
+	BOOST_CHECK(source.records != copy.records);
+	G_DuelCaptureClearRuntime(&source, sizeof(source), source.records);
+	BOOST_CHECK_EQUAL(copy.records[0].index, 1);
+	G_DuelCaptureClearRuntime(&copy, sizeof(copy), copy.records);
+	BOOST_CHECK(!copy.records);
+	G_DuelCaptureClearRuntime(&copy, sizeof(copy), copy.records);
+	BOOST_CHECK_EQUAL(copy.storage.capacity, 0);
+}
+
+BOOST_AUTO_TEST_CASE(small_capacity_and_failed_growth_do_not_overrun_or_compact_tiny_buffers)
+{
+	for (int maximum = 1; maximum <= 3; ++maximum)
+	{
+		duel_capture_storage_t storage = {};
+		int count = 0;
+		capture_test_record *records = static_cast<capture_test_record *>(G_DuelCaptureReserve(NULL,
+			&count, sizeof(*records), &storage, maximum, CaptureTestPriority));
+		BOOST_REQUIRE(records);
+		BOOST_CHECK_EQUAL(storage.capacity, maximum);
+		for (int i = 0; i < maximum; ++i)
+			records[count++] = { static_cast<unsigned long long>(i + 1), i, 2 };
+		void *unchanged = G_DuelCaptureReserve(records, &count, sizeof(*records),
+			&storage, maximum, CaptureTestPriority);
+		BOOST_CHECK(unchanged == records);
+		BOOST_CHECK_EQUAL(count, maximum);
+		BOOST_CHECK_EQUAL(storage.compactions, 0);
+		unchanged = G_DuelCaptureReserveWithAllocator(records, &count, sizeof(*records),
+			&storage, 8192, CaptureTestPriority, CaptureTestFailedAllocation);
+		BOOST_CHECK(unchanged == records);
+		BOOST_CHECK_EQUAL(count, maximum);
+		BOOST_CHECK_EQUAL(storage.allocationFailures, 1);
+		BOOST_CHECK_EQUAL(storage.compactions, 0);
+		BOOST_CHECK_EQUAL(records[count - 1].index, static_cast<unsigned long long>(maximum));
+		free(records);
+	}
+	duel_capture_storage_t storage = {};
+	int count = 0;
+	BOOST_CHECK(!G_DuelCaptureReserve(NULL, &count, sizeof(capture_test_record),
+		&storage, 0, CaptureTestPriority));
+	BOOST_CHECK_EQUAL(storage.capacity, 0);
+	BOOST_CHECK(!G_DuelCaptureReserve(NULL, &count, sizeof(capture_test_record),
+		&storage, -1, CaptureTestPriority));
+	BOOST_CHECK_EQUAL(storage.capacity, 0);
+}
+
 BOOST_AUTO_TEST_CASE(yaw_wrap_and_reversal_are_measured)
 {
 	duel_capture_swing_t swing = {};

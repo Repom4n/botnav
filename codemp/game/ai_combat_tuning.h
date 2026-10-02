@@ -277,6 +277,95 @@ static inline int NewBotAI_SaberMoveAccepted(int move, int lastMove, int basicAt
 	return basicAttack && move != lastMove;
 }
 
+static inline int NewBotAI_SaberHorizontalDirection(int move, int leftToRight, int rightToLeft)
+{
+	return move == leftToRight ? 1 : move == rightToLeft ? -1 : 0;
+}
+
+static inline int NewBotAI_SaberNextHorizontalDirection(int actualDirection, int desiredDirection)
+{
+	return actualDirection ? -actualDirection : desiredDirection;
+}
+
+typedef enum
+{
+	NEWBOTAI_SABER_YAW_PREPARE = 0,
+	NEWBOTAI_SABER_YAW_ACTIVE,
+	NEWBOTAI_SABER_YAW_RECOVER,
+	NEWBOTAI_SABER_YAW_NEXT
+} newbotai_saber_yaw_phase_t;
+
+// Conservative control envelopes, not measured human animation templates.
+#define NEWBOTAI_SABER_SWEEP_DEGREES 18.0f
+#define NEWBOTAI_SABER_SWEEP_RATE 240.0f
+
+static inline float NewBotAI_SaberAnimationProgress(int remaining, int duration)
+{
+	float progress;
+	if (duration <= 0)
+		return 0.0f;
+	progress = 1.0f - (float)remaining / duration;
+	return progress < 0.0f ? 0.0f : progress > 1.0f ? 1.0f : progress;
+}
+
+static inline newbotai_saber_yaw_phase_t NewBotAI_SaberYawPhase(
+	int basicAttack, int preparing, int remaining, int duration)
+{
+	const float progress = NewBotAI_SaberAnimationProgress(remaining, duration);
+	if (!basicAttack)
+		return preparing ? NEWBOTAI_SABER_YAW_PREPARE : NEWBOTAI_SABER_YAW_RECOVER;
+	if (remaining <= 0 || progress >= 0.8f)
+		return NEWBOTAI_SABER_YAW_NEXT;
+	return progress < 0.15f ? NEWBOTAI_SABER_YAW_PREPARE : NEWBOTAI_SABER_YAW_ACTIVE;
+}
+
+static inline int NewBotAI_SaberCanApplyPressure(newbotai_saber_yaw_phase_t phase,
+	int acceptedAttack, int weaponTime)
+{
+	return phase == NEWBOTAI_SABER_YAW_ACTIVE && acceptedAttack && weaponTime > 0;
+}
+
+static inline float NewBotAI_SaberYawOffset(newbotai_saber_yaw_phase_t phase,
+	float progress, int actualDirection, int desiredDirection, int sweep)
+{
+	const float amplitude = sweep ? NEWBOTAI_SABER_SWEEP_DEGREES : 0.0f;
+	if (phase == NEWBOTAI_SABER_YAW_RECOVER)
+		return 0.0f;
+	if (phase == NEWBOTAI_SABER_YAW_NEXT)
+		return desiredDirection * amplitude;
+	if (phase == NEWBOTAI_SABER_YAW_PREPARE)
+		return (actualDirection ? actualDirection : desiredDirection) * amplitude;
+	progress = (progress - 0.15f) / 0.65f;
+	if (progress < 0.0f) progress = 0.0f;
+	if (progress > 1.0f) progress = 1.0f;
+	// Conservative sign convention, not a universal human curve: L2R biases
+	// yaw downward and R2L upward; recorded full-force variants can differ.
+	return actualDirection * amplitude * (1.0f - 2.0f * progress);
+}
+
+static inline float NewBotAI_SaberApplyYawOffset(float baseYaw, float offset)
+{
+	baseYaw += offset;
+	while (baseYaw >= 360.0f) baseYaw -= 360.0f;
+	while (baseYaw < 0.0f) baseYaw += 360.0f;
+	return baseYaw;
+}
+
+static inline float NewBotAI_SaberStepYawOffset(float current, float target, int elapsedMs)
+{
+	float delta;
+	float step;
+	if (target > NEWBOTAI_SABER_SWEEP_DEGREES) target = NEWBOTAI_SABER_SWEEP_DEGREES;
+	if (target < -NEWBOTAI_SABER_SWEEP_DEGREES) target = -NEWBOTAI_SABER_SWEEP_DEGREES;
+	if (elapsedMs < 0) elapsedMs = 0;
+	if (elapsedMs > 100) elapsedMs = 100;
+	delta = target - current;
+	step = NEWBOTAI_SABER_SWEEP_RATE * elapsedMs / 1000.0f;
+	if (delta > step) delta = step;
+	if (delta < -step) delta = -step;
+	return current + delta;
+}
+
 static inline int NewBotAI_SaberCanOwnInputs(int holdingSaber, int visibleEnemy,
 	int engineBusy, int forceMovement, int navigationMovement)
 {
@@ -287,6 +376,11 @@ static inline int NewBotAI_SaberPrimaryBladeAvailable(int holstered)
 {
 	// Staff/dual partial holster (1) disables the second blade, not primary attacks.
 	return holstered >= 0 && holstered < 2;
+}
+
+static inline int NewBotAI_SaberOrdinaryAttackSafe(int ducked, int rising, int redDfaBoundary)
+{
+	return !ducked && !rising && !redDfaBoundary;
 }
 
 static inline int NewBotAI_ShouldAnticipateSaberThrow(int saberOnlyDuel, int saberInFlight, int basicSwing)
@@ -308,9 +402,59 @@ static inline newbotai_saber_family_t NewBotAI_SelectSaberFamily(
 		return NEWBOTAI_SABER_COUNTER_ENTRY;
 	if (context.ourTotalHealth < context.enemyTotalHealth || context.enemyAttacking)
 		return NEWBOTAI_SABER_BURST;
-	if (context.enemyDistance < 80.0f)
-		return NEWBOTAI_SABER_HORIZONTAL;
-	return NEWBOTAI_SABER_DIAGONAL_VERTICAL;
+	if (!context.recentlyHurt && (context.enemyRecovering || context.enemyVulnerable) && roll % 10 == 0)
+		return NEWBOTAI_SABER_DIAGONAL_VERTICAL;
+	return NEWBOTAI_SABER_HORIZONTAL;
+}
+
+static inline void NewBotAI_SaberSelectionInputs(newbotai_saber_family_t family,
+	int stage, int direction, int *forward, int *right)
+{
+	*forward = 0;
+	*right = direction < 0 ? -1 : 1;
+	if (family == NEWBOTAI_SABER_DIAGONAL_VERTICAL)
+	{
+		if (stage % 3 == 0)
+			*forward = 1;
+		else if (stage % 3 == 1)
+		{
+			*forward = 1;
+			*right = 0;
+		}
+	}
+	else if (family == NEWBOTAI_SABER_BASIC)
+	{
+		if (stage % 3 == 1)
+		{
+			*forward = 1;
+			*right = 0;
+		}
+		else if (stage % 3 == 2)
+			*forward = 1;
+	}
+}
+
+static inline int NewBotAI_SaberPreparationInputs(int attackIndex, int *forward, int *right)
+{
+	// Basic attack order: TL2BR, L2R, BL2TR, BR2TL, R2L, TR2BL, T2B.
+	static const int forwardInputs[7] = { 1, 0, -1, -1, 0, 1, 1 };
+	static const int rightInputs[7] = { 1, 1, 1, -1, -1, -1, 0 };
+	if (attackIndex < 0 || attackIndex >= 7)
+		return 0;
+	*forward = forwardInputs[attackIndex];
+	*right = rightInputs[attackIndex];
+	return 1;
+}
+
+static inline void NewBotAI_SaberNoStrafeFallback(int suppressed, int preparing, int *forward, int *right)
+{
+	if (suppressed && !preparing && *right)
+	{
+		// Choose an ordinary grounded vertical attack explicitly at a free boundary.
+		// A committed horizontal start must finish before its selection can change.
+		*forward = 1;
+		*right = 0;
+	}
 }
 
 #define NEWBOTAI_SABER_EXIT_MS 350
@@ -365,28 +509,16 @@ static inline newbotai_saber_command_t NewBotAI_PlanSaberCommand(
 
 	command.attack = grounded && attackLegal &&
 		NewBotAI_SaberTacticAllowsSwingStart(tactic, context.enemyDistance);
-	if (command.attack && tactic != NEWBOTAI_SABER_TACTIC_STAND_SWING &&
-		tactic != NEWBOTAI_SABER_TACTIC_BACK_SWING)
+	if (command.attack)
 	{
 		command.right = side;
-		command.forward = context.enemyDistance > 48.0f ? 1 : 0;
+		command.forward = tactic == NEWBOTAI_SABER_TACTIC_STAND_SWING ? 0 :
+			tactic == NEWBOTAI_SABER_TACTIC_BACK_SWING ? -1 :
+			context.enemyDistance > 48.0f ? 1 : 0;
+		// Starts and transitions can be much longer than 100ms (especially red).
+		// Hold the deliberate family/stage selection until an accepted attack owns pressure.
 		if (choosingMove)
-		{
-			if (family == NEWBOTAI_SABER_HORIZONTAL || family == NEWBOTAI_SABER_FINISH)
-				command.forward = 0;
-			else if (family == NEWBOTAI_SABER_DIAGONAL_VERTICAL && stage % 3 == 1)
-			{
-				command.forward = 1;
-				command.right = 0;
-			}
-			else if (family == NEWBOTAI_SABER_DIAGONAL_VERTICAL && stage % 3 == 2)
-				command.forward = 0;
-			else if (family == NEWBOTAI_SABER_BASIC)
-			{
-				command.forward = 1;
-				command.right = 0;
-			}
-		}
+			NewBotAI_SaberSelectionInputs(family, stage, side, &command.forward, &command.right);
 	}
 	// Airborne footwork stays deliberate, but cannot accidentally start aerial specials.
 	if (!grounded)
@@ -403,6 +535,56 @@ static inline void NewBotAI_SaberSuppressStrafe(newbotai_saber_command_t *comman
 {
 	if (suppressed)
 		command->right = 0;
+}
+
+static inline void NewBotAI_SaberGuardSelection(newbotai_saber_command_t *command, int selecting,
+	int selectedForward, int selectedRight)
+{
+	if (command->attack && selecting)
+	{
+		if (command->right != selectedRight || command->forward != selectedForward ||
+			(!command->forward && !command->right))
+			command->attack = 0;
+		command->forward = selectedForward && command->attack ? selectedForward : 0;
+	}
+}
+
+typedef struct
+{
+	int selecting;
+	int selectedForward;
+	int selectedRight;
+	int pressureForward;
+	int pressureRight;
+	int strafeSuppressed;
+	int attackSafe;
+} newbotai_saber_final_context_t;
+
+static inline newbotai_saber_command_t NewBotAI_FinalizeSaberCommand(
+	newbotai_saber_command_t command, newbotai_saber_final_context_t context)
+{
+	if (!context.attackSafe)
+		command.attack = 0;
+	if (command.attack && (command.forward || command.right))
+	{
+		command.forward = context.selecting ? context.selectedForward : context.pressureForward;
+		command.right = context.selecting ? context.selectedRight : context.pressureRight;
+	}
+	NewBotAI_SaberSuppressStrafe(&command, context.strafeSuppressed);
+	NewBotAI_SaberGuardSelection(&command, context.selecting, context.selectedForward, context.selectedRight);
+	return command;
+}
+
+static inline void NewBotAI_SaberApplyMovementSafety(newbotai_saber_command_t *command, int safe)
+{
+	if (!safe)
+	{
+		command->forward = 0;
+		command->right = 0;
+		command->jump = 0;
+		// A blocked directional selection must not fall through to a different swing.
+		command->attack = 0;
+	}
 }
 
 static inline int NewBotAI_SaberOwnedActionFlags(int flags, int ownedMask, int plannedFlags)

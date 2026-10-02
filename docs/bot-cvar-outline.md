@@ -45,13 +45,13 @@ BotGetAggressionBias = clamp(bot_aggressionbias + healthComponent*bot_healthbias
 
 ## Combat Behavior Biases
 
-Chance weights are clamped to 0-100 by `BotGetChanceBiasPercent()`. Legacy attack weights can also use `BotGetAggressionWeightedBonus()`; the new saber controller uses `bot_fanbias` directly to select technique complexity without gating basic attacks.
+Chance weights are clamped to 0-100 by `BotGetChanceBiasPercent()`. Legacy attack weights can also use `BotGetAggressionWeightedBonus()`; the new saber controller uses `bot_fanbias` directly to weight coordinated horizontal techniques without gating basic attacks.
 
 | Cvar | Default | Description |
 |------|---------|-------------|
 | `bot_saberthrowbias` | `0` | Chance weight for saber throw decisions. Higher = more throws. Feeds into `NewBotAI_GetSaberthrow()`. |
 | `bot_gripkickbias` | `0` | Chance weight for grip-kick combo initiation. Feeds into `NewBotAI_GetGrip()`. |
-| `bot_fanbias` | `0` | Chance weight for human-derived saber technique selection in NewBotAI saber-only duels and general saber combat. Higher values favor varied horizontal, diagonal/vertical, counter-entry, finishing, and burst-exit combinations over basic controlled attacks. It weights the new attacks, not permission to attack: `0` still allows primary attacks and useful chains. Legal force tactics remain separate. |
+| `bot_fanbias` | `0` | Chance weight for coordinated human-derived horizontal saber techniques in NewBotAI saber-only duels and general saber combat. Higher values favor L2R/R2L pressure, counters, finishing and burst-exit sequences with bounded swing-phase yaw. Diagonal/vertical attacks remain intentional alternatives. It weights techniques, not permission to attack: `0` still allows primary attacks and useful chains. Legal force tactics remain separate. |
 | `bot_fan_debug` | `0` | Print selected fan package, direction, range, HP, and FP when a bot commits to a fan-pressure entry. |
 | `bot_fanhold` | `220` | How long (ms) each fan gate holds exclusive left/right strafe plus attack to start the current horizontal swing. |
 | `bot_firstfandwell` | `250` | Special dwell (ms) used only between the first and second swings of a fan chain. |
@@ -68,7 +68,9 @@ Chance weights are clamped to 0-100 by `BotGetChanceBiasPercent()`. Legacy attac
 | `bot_lightningdistance` | `400` | Minimum range for lightning usage. Bot must be at least this far from the enemy. |
 | `bot_mistakebias` | `0` | Chance weight (0-100) for imperfect combat decisions. Grip escapes retain their existing mistakes. Saber choices account for spacing, recovery, recent trades, and opponent pressure: countering or continuing after a hit is useful only when the opening supports it. Lower skill and higher bias favor weaker timing, positioning, and combinations rather than persistent inactivity. Level 10 chooses the best supported legal option, even at maximum bias; this is not a guarantee of perfect play. |
 
-The human-technique controller owns saber movement and primary inputs while eligible. Legacy fan hold/dwell/yaw/wobble controls and `bot_fan_debug` still describe the legacy fan path; they do not schedule the new controller's attacks. Random strafe overlays do not overwrite its selected footwork. Legal force actions, knockdown recovery, navigation, and saber retrieval can temporarily take priority.
+The human-technique controller owns saber movement, primary inputs and technique yaw while eligible. Horizontal selection holds lateral-only input through starts and transitions; forward pressure resumes during the accepted active swing. Next-swing direction follows the accepted engine move, including engine-imposed responses, rather than flipping on an attack-button request. Yaw preparation, active sweep and recovery follow animation progress instead of legacy dwell timers. Legacy fan hold/dwell/yaw/wobble controls and `bot_fan_debug` still describe the legacy fan path; they do not schedule the new controller's attacks. Random strafe overlays do not overwrite its selected footwork. Legal force actions, knockdown recovery, navigation, and saber retrieval can temporarily take priority.
+
+During the temporary duel no-strafe gate, free selection boundaries deliberately fall back to an ordinary vertical attack rather than withholding all attacks. A committed start/transition keeps its actual selection; unsafe or suppressed movement must not silently select a different swing. Movement safety is rechecked against the live position and final yaw before emitting technique inputs.
 
 ## PTK (Pull-Throw-Kick) System
 
@@ -158,15 +160,24 @@ Tracked duel data access:
 - Every exported CSV is capped below 25MB so it can be uploaded to GitHub. A larger export is split into `<name>.csv`, `<name>_part2.csv`, `<name>_part3.csv`, ...; each part repeats the header row and whole rows are never split across files. Leftover parts from an earlier, larger export are removed.
 - `capture_version` and `capture_revision` identify the recording implementation and build revision for each session, also included in event and participant exports. Imported/historical sessions without provenance remain `0`/blank; an export schema version alone does not establish recording provenance.
 - `input_start` records an attack-button request, not a successful swing; historical `attack_start` records retain their original meaning. `swing_start` records an accepted saber attack animation, and `attack_chain` marks accepted continuations through legal transitions, including same-direction links, already counted by `swing_start`. `swing_end` preserves measured signed yaw sweep, and `swing_damage` records confirmed in-hand saber damage. Count distinct swings containing hits, not raw hit events. `damage_dealt`/`damage` record actual attributed resource loss; `damage_source` is the engine means-of-death value (`MOD_*`), and `damage_attacker_key` identifies the actual attacker. Environmental damage must not be credited as opponent saber damage.
+- New event diagnostics distinguish controller enablement from actual ownership: `controller_enabled` records `g_newBotAI`, `controller_candidate` identifies a bot routed toward the technique controller, and `controller_owns_inputs` records actual ownership. Candidate `1` with ownership `0` identifies refused ownership. `controller_family` identifies the selected family (`0` basic, `1` horizontal, `2` diagonal/vertical, `3` counter-entry, `4` finish, `5` burst). `controller_fanbias`, `controller_mistakebias` and `controller_skill` record configured biases and raw bot skill. Humans/no bot state have family/skill `-1` and candidate/ownership `0`; migrated old diagnostic fields are unknown (`-1`).
 
 Saber combat verification:
 - Enable `g_newBotAI 1` to exercise the shared technique controller; the legacy StandardBotAI fallback is unchanged.
 - Validate saber-only duels separately from full-force and arcade matches. Human techniques guide contextual attack and escape choices, not blind replay of recorded commands.
-- With `bot_fanbias 0`, bots should still issue primary attacks, start real swings, and link legal transitions. Increasing the bias should change the mix of human-derived techniques, not turn basic combat on.
+- With `bot_fanbias 0`, bots should still issue primary attacks, start real swings, and link legal transitions. Compare against `bot_fanbias 100` with the same stance and skill: horizontal L2R/R2L frequency and phase-coordinated yaw should increase, not merely the number of vertical attacks.
 - Backward/lateral jumping exits should avoid unsafe terrain and return to engagement after landing; saber-only bots cannot heal by waiting.
 - Compare primary input requests with accepted swing starts and damaging swings. Define chain frequency as accepted linked swings divided by all accepted swings (count each swing once), and compare damage per second within the same duel mode and stance.
-- The existing runtime event limit is 128 events per participant. Recordings that reach this limit omit later events; do not treat their event-derived rates or exchange outcomes as complete-match measurements.
+- Capture version 8 grows event storage on demand, up to 8,192 records per participant, instead of stopping at 128. At the bound (or after a growth allocation failure), compaction prioritizes damage/knockdown events, preserves the opening record and recent tail, and samples older records. Capture continues through later exchanges; it is not unlimited or lossless.
+- Participant exports expose `event_total`, `event_retained`, `event_dropped`, `event_critical_dropped`, `event_compactions` and `event_allocation_failures`. Event indices remain monotonic across compaction, so gaps identify missing records. Any capture loss disables outcome/sequence ranking for that participant: attack quality becomes `unknown` and good/bad sequence coaching is withheld. Do not compute complete-match event rates from compacted samples. Aggregate damage/force totals remain independent of retained events. Migrated old records have unknown coverage counters (`-1`), and old version-7 recordings remain truncated at their original limit.
 - Confirm the deployed build with fresh `capture_revision` values before comparing results. Old rows can be re-exported by a newer build without acquiring movement measurements or proving that build was deployed.
+
+Technique evidence and limitations:
+- Sugar Kane's saber-only duel 162 includes L2R at 25.377s, R2L at 25.707s, another L2R at 26.763s, and a recorded 40-damage finishing punish at 26.994s. This supports alternating horizontal pressure and finishing continuation, not a universal instruction to hold attack forever.
+- BK's full-force duel 563 includes R2L/L2R/R2L at 10.300s/10.600s/10.900s, two recorded 40-damage successes, then 40 damage taken at 10.950s. Use this as a burst-and-counter-risk example, not a saber-only training outcome. His backward/lateral rising movement in duel 565 at 8.300s supports the escape shape, not unconditional jumping or a guaranteed successful exit.
+- Duel 625 (capture version 7, revision `509427374`) confirms accepted bot attacks but records 10 vertical, 8 diagonal and only 1 horizontal swing in the retained prefix. The human used staff while the bot used red stance; their attack timing is not directly interchangeable.
+- Historical geometry is event-sampled, and many old rows lack measured swing sweep. Direction/sequence choices are evidence-backed; bounded phase-aware yaw is a controller approximation, not an exact replay or a proven optimal early/extra-damage curve. Validate new yaw trajectories and damage trades in fresh, stance-matched recordings before tuning them.
+- The same Sugar Kane yellow-stance sequence has only two geometry samples per interval: approximately -15.8 degrees over 25.377–25.707s and +31.5 degrees over 25.707–25.938s. BK's full-force yellow sequence has seven samples per 300ms interval and approximately -190.6/+238.8 degrees of accumulated yaw. These different shapes are not interchangeable; sparse endpoints cannot establish exact active-blade timing. The initial controller uses a conservative 18-degree offset envelope and a 240-degrees/second turn limit, not BK's large spins.
 
 ## Skill Tuning (Debug)
 
@@ -201,13 +212,19 @@ g_newBotAI (master switch)
   |     +-- Consumed by:
   |           +-- bot_saberthrowbias --> saber throw weight
   |           +-- bot_gripkickbias --> grip initiation weight
-  |           +-- bot_fanbias + bot_fanhold + bot_firstfandwell + bot_fandwell + bot_fanyawspeed --> fan-chain patterns
+  |           +-- Legacy fan hold/dwell/yaw controls --> legacy fan-chain patterns only
   |           +-- bot_drainbias --> drain hold duration
   |           +-- bot_antidrainbias --> anti-drain priority
   |           +-- bot_lightningbias + bot_lightningdistance --> lightning
   |           +-- bot_ptk_aggressionbias + bot_ptk_fpdifference + bot_ptk_hpdifference --> PTK
   |           +-- Retreat thresholds (health/distance)
   |           +-- Saber throw defense break (pull vs push)
+  |
+  +-- Shared Saber Techniques
+  |     +-- bot_fanbias --> coordinated horizontal family weight (not attack permission)
+  |     +-- bot_mistakebias + skill --> contextual timing/positioning choices
+  |     +-- Accepted animation + final input ownership --> selection, pressure and bounded yaw
+  |     +-- Live movement safety + engine/force/navigation priority --> legal inputs
   |
   +-- Aim & Response
   |     +-- bot_aimspeed

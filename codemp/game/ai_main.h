@@ -410,16 +410,24 @@ typedef struct bot_state_s
 	int					saberTacticEnemyHealth; // enemy HP+armor last frame, to detect landed hits
 	int					saberTacticEnemyNum; // entity number the cached enemy health belongs to
 	int					saberTacticLastHitTime;
-	int					saberTacticStrafeDir; // alternating lateral direction for horizontal swings (+1 right, -1 left)
-	int					saberTechniqueFamily; // bot_fanbias weights learned technique complexity
-	int					saberTechniqueFamilyUntil;
+	int					saberTacticStrafeDir; // next horizontal input, derived from the accepted swing
+	int					saberTechniqueFamily; // bot_fanbias weights sweeps and controlled alternatives
+	int					saberTechniqueFamilyUntil; // accepted-boundary stamp for family selection
 	int					saberTechniqueAcceptedTime;
+	int					saberTechniqueActualDir;
+	int					saberTechniqueAnim;
+	int					saberTechniqueAnimMove;
+	int					saberTechniqueAnimDuration;
+	int					saberTechniqueAnimRemaining;
+	int					saberTechniqueYawTime;
+	float				saberTechniqueYawOffset; // bounded offset; never fed back into base aim smoothing
 	int					saberTechniqueReentryUntil;
 	int					saberTechniqueAirExitUntil;
 	int					saberTechniqueJumpTime;
 	int					saberTechniqueJumpCooldown;
 	qboolean			saberTechniqueCandidate;
 	qboolean			saberTechniqueOwnsInputs;
+	qboolean			saberTechniqueClearQueuedAttack; // cleared with the next EA_ResetInput batch
 	newbotai_saber_command_t saberTechniqueCommand;
 	int					drainRollDir; // -1 left, 0 back, 1 right; used by NewBotAI_DrainRollEscape
 	int					drainRollResetTime;

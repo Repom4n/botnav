@@ -2,6 +2,120 @@
 #define G_DUEL_CAPTURE_H
 
 #include <string.h>
+#include <stdlib.h>
+
+typedef struct
+{
+	int capacity;
+	unsigned long long total;
+	unsigned long long dropped;
+	unsigned long long criticalDropped;
+	unsigned int compactions;
+	unsigned int allocationFailures;
+} duel_capture_storage_t;
+
+/* Transfer a capture runtime's owned buffer to an empty destination, leaving
+ * the source safe for reset/reuse while persistence still reads the copy. */
+static inline void G_DuelCaptureMoveRuntime(void *destination, void *source, size_t size)
+{
+	memcpy(destination, source, size);
+	memset(source, 0, size);
+}
+
+static inline void G_DuelCaptureClearRuntime(void *runtime, size_t size, void *records)
+{
+	free(records);
+	memset(runtime, 0, size);
+}
+
+static inline int G_DuelCaptureCanRankOutcomes(const duel_capture_storage_t *storage)
+{
+	return !storage->dropped && !storage->criticalDropped;
+}
+
+static inline void G_DuelCaptureSuppressSequenceRanking(const duel_capture_storage_t *storage,
+	char *goodSequence, char *badSequence)
+{
+	if (!G_DuelCaptureCanRankOutcomes(storage))
+		goodSequence[0] = badSequence[0] = '\0';
+}
+
+/* Keep the first record and newest quarter intact. Fill the remaining half-buffer
+ * budget with evenly spaced records, highest priority first, in original order. */
+static inline int G_DuelCaptureCompact(void *records, int count, size_t stride,
+	duel_capture_storage_t *storage, int (*priority)(const void *))
+{
+	int totals[3] = { 0, 0, 0 }, quotas[3], seen[3] = { 0, 0, 0 };
+	int recent = count - count / 4, budget = count / 2 - (count - recent) - 1;
+	int i, tier, retained = 0;
+	unsigned char *bytes = (unsigned char *)records;
+	for (i = 1; i < recent; ++i)
+		++totals[priority(bytes + i * stride)];
+	for (tier = 2; tier >= 0; --tier)
+	{
+		quotas[tier] = totals[tier] < budget ? totals[tier] : budget;
+		budget -= quotas[tier];
+	}
+	for (i = 0; i < count; ++i)
+	{
+		int keep = i == 0 || i >= recent;
+		tier = priority(bytes + i * stride);
+		if (!keep)
+		{
+			keep = ((long long)(seen[tier] + 1) * quotas[tier] / totals[tier]) !=
+				((long long)seen[tier] * quotas[tier] / totals[tier]);
+			++seen[tier];
+		}
+		if (keep)
+		{
+			if (retained != i)
+				memmove(bytes + retained * stride, bytes + i * stride, stride);
+			++retained;
+		}
+		else
+		{
+			++storage->dropped;
+			if (tier == 2)
+				++storage->criticalDropped;
+		}
+	}
+	++storage->compactions;
+	return retained;
+}
+
+/* A failed growth still compacts existing storage; it never freezes the tail. */
+static inline void *G_DuelCaptureReserveWithAllocator(void *records, int *count, size_t stride,
+	duel_capture_storage_t *storage, int maximum, int (*priority)(const void *),
+	void *(*allocate)(void *, size_t))
+{
+	if (maximum <= 0 || !stride || *count < 0 || storage->capacity < 0 ||
+		*count > storage->capacity)
+		return records;
+	if (*count == storage->capacity && storage->capacity < maximum)
+	{
+		int capacity = storage->capacity ? storage->capacity * 2 : 128;
+		void *grown;
+		if (capacity > maximum)
+			capacity = maximum;
+		grown = allocate(records, (size_t)capacity * stride);
+		if (grown)
+		{
+			records = grown;
+			storage->capacity = capacity;
+		}
+		else
+			++storage->allocationFailures;
+	}
+	if (*count == storage->capacity && *count >= 4)
+		*count = G_DuelCaptureCompact(records, *count, stride, storage, priority);
+	return records;
+}
+
+static inline void *G_DuelCaptureReserve(void *records, int *count, size_t stride,
+	duel_capture_storage_t *storage, int maximum, int (*priority)(const void *))
+{
+	return G_DuelCaptureReserveWithAllocator(records, count, stride, storage, maximum, priority, realloc);
+}
 
 typedef struct
 {
@@ -60,9 +174,14 @@ static inline int G_DuelCaptureSameOpponent(const char *attackKey, int attackCli
 		eventKey && !strcmp(attackKey, eventKey);
 }
 
+static inline int G_DuelCaptureHasIndexGap(unsigned long long previous, unsigned long long next)
+{
+	return next != previous + 1;
+}
+
 static inline void G_DuelCaptureAccumulateOutcome(duel_capture_outcome_t *outcome,
-	int attackIndex, int endIndex, int startTime, int endTime,
-	int eventIndex, int eventTime, int kind, int amount, int killedEnemy)
+	unsigned long long attackIndex, unsigned long long endIndex, int startTime, int endTime,
+	unsigned long long eventIndex, int eventTime, int kind, int amount, int killedEnemy)
 {
 	if (eventIndex <= attackIndex || eventIndex >= endIndex ||
 		eventTime < startTime || eventTime > endTime || amount <= 0)
@@ -87,6 +206,12 @@ static inline const char *G_DuelCaptureOutcomeQuality(const duel_capture_outcome
 	if (outcome->dealt >= 20)
 		return "good";
 	return "mediocre";
+}
+
+static inline const char *G_DuelCaptureRankedOutcomeQuality(const duel_capture_storage_t *storage,
+	const duel_capture_outcome_t *outcome)
+{
+	return G_DuelCaptureCanRankOutcomes(storage) ? G_DuelCaptureOutcomeQuality(outcome) : "unknown";
 }
 
 static inline int G_DuelCaptureDamageAmount(int oldHealth, int newHealth, int armorLost)
