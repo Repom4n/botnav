@@ -531,6 +531,8 @@ static qboolean G_IsAllowedTrackedColumnName(const char *columnName)
 		"note",
 		"swing_side",
 		"pre_swing_strafe",
+		"movement_intent",
+		"radial_speed",
 		"yaw_sweep",
 		"attack_elapsed_ms",
 		"throw_yaw_offset",
