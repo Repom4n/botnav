@@ -476,16 +476,16 @@ BOOST_AUTO_TEST_CASE( human_saber_sequence_uses_engine_accepted_attacks_only )
 	BOOST_CHECK( !NewBotAI_SaberBurstComplete( NEWBOTAI_SABER_HORIZONTAL, 12, 1 ) );
 	BOOST_CHECK( !NewBotAI_SaberBurstComplete( NEWBOTAI_SABER_FINISH, 12, 1 ) );
 	newbotai_saber_tactic_context_t context = MakeSaberDuelContext( 90.0f );
-	const newbotai_saber_command_t diagonal = NewBotAI_PlanSaberCommand( context,
+	const newbotai_saber_command_t first = NewBotAI_PlanSaberCommand( context,
 		NEWBOTAI_SABER_TACTIC_ATTACK, NEWBOTAI_SABER_DIAGONAL_VERTICAL, 0, -1, 1, 1, 1, 0 );
-	const newbotai_saber_command_t vertical = NewBotAI_PlanSaberCommand( context,
+	const newbotai_saber_command_t second = NewBotAI_PlanSaberCommand( context,
 		NEWBOTAI_SABER_TACTIC_CHAIN, NEWBOTAI_SABER_DIAGONAL_VERTICAL, 1, 1, 1, 1, 1, 0 );
 	const newbotai_saber_command_t finisher = NewBotAI_PlanSaberCommand( context,
 		NEWBOTAI_SABER_TACTIC_CHAIN, NEWBOTAI_SABER_DIAGONAL_VERTICAL, 2, -1, 1, 1, 1, 0 );
-	BOOST_CHECK_EQUAL( diagonal.forward, 1 );
-	BOOST_CHECK_EQUAL( diagonal.right, -1 );
-	BOOST_CHECK_EQUAL( vertical.forward, 1 );
-	BOOST_CHECK_EQUAL( vertical.right, 0 );
+	BOOST_CHECK_EQUAL( first.forward, 1 );
+	BOOST_CHECK_EQUAL( first.right, -1 );
+	BOOST_CHECK_EQUAL( second.forward, 1 );
+	BOOST_CHECK_EQUAL( second.right, 0 );
 	BOOST_CHECK_EQUAL( finisher.forward, 0 );
 	BOOST_CHECK_EQUAL( finisher.right, -1 );
 	BOOST_CHECK_EQUAL( finisher.attack, 1 );
@@ -494,6 +494,147 @@ BOOST_AUTO_TEST_CASE( human_saber_sequence_uses_engine_accepted_attacks_only )
 	BOOST_CHECK_EQUAL( running.forward, 1 );
 	BOOST_CHECK_EQUAL( NewBotAI_PlanSaberCommand( context, NEWBOTAI_SABER_TACTIC_ATTACK,
 		NEWBOTAI_SABER_HORIZONTAL, 0, 1, 1, 1, 1, 0 ).forward, 0 );
+}
+
+BOOST_AUTO_TEST_CASE( human_saber_mix_is_deliberate_and_horizontal_sweeps_remain_primary )
+{
+	newbotai_saber_tactic_context_t context = MakeSaberDuelContext( 90.0f );
+	int horizontal = 0, mixed = 0;
+	for ( int roll = 1; roll <= 100; roll++ )
+		BOOST_CHECK_EQUAL( NewBotAI_SelectSaberFamily( context, 100, roll ), NEWBOTAI_SABER_HORIZONTAL );
+	context.enemyRecovering = 1;
+	for ( int roll = 1; roll <= 100; roll++ )
+	{
+		const newbotai_saber_family_t family = NewBotAI_SelectSaberFamily( context, 100, roll );
+		horizontal += family == NEWBOTAI_SABER_HORIZONTAL;
+		mixed += family == NEWBOTAI_SABER_DIAGONAL_VERTICAL;
+	}
+	BOOST_CHECK_EQUAL( horizontal, 90 );
+	BOOST_CHECK_EQUAL( mixed, 10 );
+	for ( int family : { NEWBOTAI_SABER_BASIC, NEWBOTAI_SABER_DIAGONAL_VERTICAL } )
+	{
+		int horizontalStarts = 0, diagonalStarts = 0, verticalStarts = 0;
+		for ( int stage = 0; stage < 3; stage++ )
+		{
+			// Stage is an accepted-attack count, never a timer/held-input counter.
+			for ( int preparationFrame = 0; preparationFrame < 5; preparationFrame++ )
+			{
+				const newbotai_saber_command_t command = NewBotAI_PlanSaberCommand( context,
+					NEWBOTAI_SABER_TACTIC_ATTACK, (newbotai_saber_family_t)family,
+					stage, -1, 1, 1, 1, 0 );
+				BOOST_CHECK_EQUAL( command.attack, 1 );
+				if (!preparationFrame)
+				{
+					horizontalStarts += command.forward == 0 && command.right == -1;
+					diagonalStarts += command.forward == 1 && command.right == -1;
+					verticalStarts += command.forward == 1 && command.right == 0;
+				}
+				int forward, right;
+				NewBotAI_SaberSelectionInputs((newbotai_saber_family_t)family, stage, -1, &forward, &right);
+				BOOST_CHECK_EQUAL( command.forward, forward );
+				BOOST_CHECK_EQUAL( command.right, right );
+			}
+		}
+		BOOST_CHECK_EQUAL( horizontalStarts, 1 );
+		BOOST_CHECK_EQUAL( diagonalStarts, 1 );
+		BOOST_CHECK_EQUAL( verticalStarts, 1 );
+	}
+	newbotai_saber_command_t vertical = { 1, 0, 0, 1 };
+	NewBotAI_SaberGuardSelection( &vertical, 1, 1, 0 );
+	BOOST_CHECK_EQUAL( vertical.attack, 1 );
+	BOOST_CHECK_EQUAL( vertical.forward, 1 );
+	newbotai_saber_command_t suppressedDiagonal = { 1, 0, 0, 1 };
+	NewBotAI_SaberGuardSelection( &suppressedDiagonal, 1, 1, -1 );
+	BOOST_CHECK_EQUAL( suppressedDiagonal.attack, 0 );
+}
+
+BOOST_AUTO_TEST_CASE( slow_red_start_and_transition_keep_lateral_selection_until_active )
+{
+	newbotai_saber_tactic_context_t context = MakeSaberDuelContext( 90.0f );
+	context.selfAttacking = 1; // Also true during engine starts and transitions.
+	for ( int remaining : { 1200, 800, 300, 99, 0 } )
+	{
+		const newbotai_saber_yaw_phase_t phase =
+			NewBotAI_SaberYawPhase( 0, 1, remaining, 1200 );
+		BOOST_CHECK_EQUAL( phase, NEWBOTAI_SABER_YAW_PREPARE );
+		for ( int family : { NEWBOTAI_SABER_HORIZONTAL, NEWBOTAI_SABER_COUNTER_ENTRY,
+			NEWBOTAI_SABER_FINISH, NEWBOTAI_SABER_BURST } )
+		{
+			const newbotai_saber_command_t command = NewBotAI_PlanSaberCommand( context,
+				NEWBOTAI_SABER_TACTIC_CHAIN, (newbotai_saber_family_t)family, 1, -1,
+				1, phase != NEWBOTAI_SABER_YAW_ACTIVE, 1, 0 );
+			BOOST_CHECK_EQUAL( command.forward, 0 );
+			BOOST_CHECK_EQUAL( command.right, -1 );
+			BOOST_CHECK_EQUAL( command.attack, 1 );
+		}
+	}
+	BOOST_CHECK_EQUAL( NewBotAI_SaberYawPhase( 1, 0, 1000, 1000 ), NEWBOTAI_SABER_YAW_PREPARE );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberYawPhase( 1, 0, 600, 1000 ), NEWBOTAI_SABER_YAW_ACTIVE );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberYawPhase( 1, 0, 150, 1000 ), NEWBOTAI_SABER_YAW_NEXT );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberYawPhase( 1, 0, 0, 1000 ), NEWBOTAI_SABER_YAW_NEXT );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberYawPhase( 0, 0, 500, 800 ), NEWBOTAI_SABER_YAW_RECOVER );
+	// A held expired animation never retains forward pressure at selection.
+	const newbotai_saber_command_t next = NewBotAI_PlanSaberCommand( context,
+		NEWBOTAI_SABER_TACTIC_CHAIN, NEWBOTAI_SABER_HORIZONTAL, 1, -1, 1,
+		NewBotAI_SaberYawPhase( 1, 0, 0, 1000 ) != NEWBOTAI_SABER_YAW_ACTIVE, 1, 0 );
+	BOOST_CHECK_EQUAL( next.forward, 0 );
+	BOOST_CHECK( NewBotAI_SaberCanApplyPressure( NEWBOTAI_SABER_YAW_ACTIVE, 1, 400 ) );
+	BOOST_CHECK( !NewBotAI_SaberCanApplyPressure( NEWBOTAI_SABER_YAW_ACTIVE, 1, 0 ) );
+	BOOST_CHECK( !NewBotAI_SaberCanApplyPressure( NEWBOTAI_SABER_YAW_ACTIVE, 0, 400 ) );
+	BOOST_CHECK( !NewBotAI_SaberCanApplyPressure( NEWBOTAI_SABER_YAW_PREPARE, 1, 400 ) );
+	BOOST_CHECK( !NewBotAI_SaberCanApplyPressure( NEWBOTAI_SABER_YAW_NEXT, -1, 50 ) );
+}
+
+BOOST_AUTO_TEST_CASE( actual_horizontal_move_drives_sweep_sign_and_next_preparation )
+{
+	// Model the engine accepting L2R even if the request was R2L.
+	const int accepted = NewBotAI_SaberHorizontalDirection( 5, 5, 8 );
+	BOOST_CHECK_EQUAL( accepted, 1 );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberNextHorizontalDirection( accepted, -1 ), -1 );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberNextHorizontalDirection( -1, -1 ), 1 );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberNextHorizontalDirection( 0, -1 ), -1 );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberHorizontalDirection( 8, 5, 8 ), -1 );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberHorizontalDirection( 4, 5, 8 ), 0 );
+	for ( int direction : { -1, 1 } )
+	{
+		const float amplitude = NEWBOTAI_SABER_SWEEP_DEGREES;
+		BOOST_CHECK_CLOSE( NewBotAI_SaberYawOffset( NEWBOTAI_SABER_YAW_PREPARE,
+			0.0f, direction, -direction, 1 ), direction * amplitude, 0.001f );
+		BOOST_CHECK_CLOSE( NewBotAI_SaberYawOffset( NEWBOTAI_SABER_YAW_ACTIVE,
+			0.15f, direction, -direction, 1 ), direction * amplitude, 0.001f );
+		BOOST_CHECK_CLOSE( NewBotAI_SaberYawOffset( NEWBOTAI_SABER_YAW_ACTIVE,
+			0.8f, direction, -direction, 1 ), -direction * amplitude, 0.001f );
+		BOOST_CHECK_CLOSE( NewBotAI_SaberYawOffset( NEWBOTAI_SABER_YAW_NEXT,
+			1.0f, direction, -direction, 1 ), -direction * amplitude, 0.001f );
+		BOOST_CHECK_EQUAL( NewBotAI_SaberYawOffset( NEWBOTAI_SABER_YAW_RECOVER,
+			1.0f, direction, -direction, 1 ), 0.0f );
+		BOOST_CHECK_EQUAL( NewBotAI_SaberYawOffset( NEWBOTAI_SABER_YAW_ACTIVE,
+			0.5f, direction, -direction, 0 ), 0.0f );
+	}
+}
+
+BOOST_AUTO_TEST_CASE( coordinated_saber_yaw_wraps_and_bounds_final_command_rate )
+{
+	BOOST_CHECK_CLOSE( NewBotAI_SaberApplyYawOffset( 359.0f, 2.0f ), 1.0f, 0.001f );
+	BOOST_CHECK_CLOSE( NewBotAI_SaberApplyYawOffset( 1.0f, -2.0f ), 359.0f, 0.001f );
+	BOOST_CHECK_CLOSE( NewBotAI_SaberStepYawOffset( 0.0f, 18.0f, 10 ), 2.4f, 0.001f );
+	BOOST_CHECK_CLOSE( NewBotAI_SaberStepYawOffset( 18.0f, -18.0f, 1000 ), -6.0f, 0.001f );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberStepYawOffset( 10.0f, 18.0f, -1 ), 10.0f );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberStepYawOffset( 0.0f, 180.0f, 100 ), 18.0f );
+	// Detach last command's offset before normal base aim, then reapply exactly once.
+	float yaw = 359.0f;
+	for ( int frame = 0; frame < 20; frame++ )
+	{
+		yaw = NewBotAI_SaberApplyYawOffset( yaw, 18.0f );
+		BOOST_CHECK_CLOSE( yaw, 17.0f, 0.001f );
+		yaw = NewBotAI_SaberApplyYawOffset( yaw, -18.0f );
+		BOOST_CHECK_CLOSE( yaw, 359.0f, 0.001f );
+	}
+	// Moving the base aim still tracks a moving enemy throughout a held sweep.
+	BOOST_CHECK_CLOSE( NewBotAI_SaberApplyYawOffset( 10.0f, 18.0f ), 28.0f, 0.001f );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberAnimationProgress( 500, 0 ), 0.0f );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberAnimationProgress( 1500, 1000 ), 0.0f );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberAnimationProgress( -20, 1000 ), 1.0f );
 }
 
 BOOST_AUTO_TEST_CASE( saber_command_ownership_replaces_conflicts_and_preserves_force_actions )
@@ -521,6 +662,18 @@ BOOST_AUTO_TEST_CASE( saber_command_ownership_replaces_conflicts_and_preserves_f
 	NewBotAI_SaberSuppressStrafe( &command, 1 );
 	BOOST_CHECK_EQUAL( command.right, 0 );
 	BOOST_CHECK_EQUAL( command.attack, 1 );
+	// If navigation or strafe suppression removes lateral input, do not silently
+	// turn the horizontal request into an engine-selected vertical/diagonal.
+	NewBotAI_SaberGuardSelection( &command, 1, 0, 1 );
+	BOOST_CHECK_EQUAL( command.attack, 0 );
+	command = { 0, -1, 0, 1 };
+	NewBotAI_SaberGuardSelection( &command, 1, 0, -1 );
+	BOOST_CHECK_EQUAL( command.forward, 0 );
+	BOOST_CHECK_EQUAL( command.right, -1 );
+	BOOST_CHECK_EQUAL( command.attack, 1 );
+	command.forward = 1;
+	NewBotAI_SaberGuardSelection( &command, 0, 0, -1 );
+	BOOST_CHECK_EQUAL( command.forward, 1 );
 }
 
 BOOST_AUTO_TEST_CASE( saber_airborne_footwork_and_bounded_escape_have_deliberate_reentry )

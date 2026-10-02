@@ -410,10 +410,17 @@ typedef struct bot_state_s
 	int					saberTacticEnemyHealth; // enemy HP+armor last frame, to detect landed hits
 	int					saberTacticEnemyNum; // entity number the cached enemy health belongs to
 	int					saberTacticLastHitTime;
-	int					saberTacticStrafeDir; // alternating lateral direction for horizontal swings (+1 right, -1 left)
-	int					saberTechniqueFamily; // bot_fanbias weights learned technique complexity
-	int					saberTechniqueFamilyUntil;
+	int					saberTacticStrafeDir; // next horizontal input, derived from the accepted swing
+	int					saberTechniqueFamily; // bot_fanbias weights sweeps and controlled alternatives
+	int					saberTechniqueFamilyUntil; // accepted-boundary stamp for family selection
 	int					saberTechniqueAcceptedTime;
+	int					saberTechniqueActualDir;
+	int					saberTechniqueAnim;
+	int					saberTechniqueAnimMove;
+	int					saberTechniqueAnimDuration;
+	int					saberTechniqueAnimRemaining;
+	int					saberTechniqueYawTime;
+	float				saberTechniqueYawOffset; // bounded offset; never fed back into base aim smoothing
 	int					saberTechniqueReentryUntil;
 	int					saberTechniqueAirExitUntil;
 	int					saberTechniqueJumpTime;
