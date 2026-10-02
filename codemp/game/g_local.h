@@ -860,7 +860,7 @@ typedef struct clientPersistant_s {
 
 	char		guid[33];
 	char		userName[16];
-	char		lastUserName[32];//To stop duel stats abuse (fits "<botfile> [bot L10]" ladder keys)
+	char		lastUserName[32];//To stop duel stats abuse (ladder key: account, "botlvlN", or a guest "iphash:" key)
 	int			duelStartTime;
 	qboolean	backwardsRocket;
 	qboolean	noFollow;

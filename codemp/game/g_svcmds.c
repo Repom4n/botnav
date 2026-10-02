@@ -1616,6 +1616,7 @@ void Svcmd_ClearIP_f( void );
 void Svcmd_DBInfo_f( void );
 void Svcmd_ExportDuelTrack_f(void);
 void Svcmd_ResetDuelTrack_f(void);
+void Svcmd_ImportDuelTrack_f(void);
 void Svcmd_DuelTrackInfo_f(void);
 #if _ELORANKING
 #if 0
@@ -1687,6 +1688,7 @@ svcmd_t svcmds[] = {
 	{ "forceteam",					Svcmd_ForceTeam_f,					qfalse },
 	{ "gametype",					Svcmd_ChangeGametype_f,				qfalse },
 	{ "game_memory",				Svcmd_GameMem_f,					qfalse },
+	{ "importDuelTrack",			Svcmd_ImportDuelTrack_f,			qfalse },
 
 	{ "listAdmins",					Svcmd_ListAdmins_f,					qfalse },
 
