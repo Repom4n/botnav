@@ -1363,25 +1363,90 @@ static inline int NewBotAI_GetFanLinkDwellMs(int dwellMs, int msSinceLastHit)
 	return NewBotAI_FanChainIsLanding(msSinceLastHit) ? 0 : dwellMs;
 }
 
-// Saber-only planner sweep amplitude/rate scaled from the conservative 18 deg / 240 deg/s
-// envelope toward the human fan sweep by skill and fan bias.
-static inline float NewBotAI_GetSaberSweepAmplitude(float skill, float fanBiasPercent)
+// Saber-only planner sweep: humans swept ~60-70 degrees per swing at 200-450 deg/s
+// (dueltracks2 1c34db989), starting ~20 degrees off the target on the swing's starting
+// side. Amplitude is half the swept arc and scales with skill and fan bias.
+#define NEWBOTAI_SABER_SWEEP_MIN_HALF_ARC 25.0f
+#define NEWBOTAI_SABER_SWEEP_MAX_HALF_ARC 35.0f
+#define NEWBOTAI_SABER_SWEEP_MIN_RATE 200.0f
+#define NEWBOTAI_SABER_SWEEP_MAX_RATE 450.0f
+#define NEWBOTAI_SABER_SWING_START_OFFSET 20.0f
+
+static inline float NewBotAI_GetSaberSweepScale(float skill, float fanBiasPercent)
 {
-	const float arc = NewBotAI_GetFanSweepHalfArc(skill, fanBiasPercent, 0.0f);
-	return (arc < NEWBOTAI_SABER_SWEEP_DEGREES) ? NEWBOTAI_SABER_SWEEP_DEGREES : arc;
+	float skillT;
+
+	if (skill < 1.0f)
+		skill = 1.0f;
+	skillT = (skill - 1.0f) / (NEWBOTAI_FAN_LINK_SKILL - 1.0f);
+	if (skillT > 1.0f)
+		skillT = 1.0f;
+	if (fanBiasPercent < 0.0f)
+		fanBiasPercent = 0.0f;
+	else if (fanBiasPercent > 100.0f)
+		fanBiasPercent = 100.0f;
+	return skillT * (0.5f + 0.5f * fanBiasPercent / 100.0f);
 }
 
+static inline float NewBotAI_GetSaberSweepAmplitude(float skill, float fanBiasPercent)
+{
+	return NEWBOTAI_SABER_SWEEP_MIN_HALF_ARC + (NEWBOTAI_SABER_SWEEP_MAX_HALF_ARC -
+		NEWBOTAI_SABER_SWEEP_MIN_HALF_ARC) * NewBotAI_GetSaberSweepScale(skill, fanBiasPercent);
+}
+
+static inline float NewBotAI_GetSaberSweepRateScaled(float skill, float fanBiasPercent)
+{
+	return NEWBOTAI_SABER_SWEEP_MIN_RATE + (NEWBOTAI_SABER_SWEEP_MAX_RATE -
+		NEWBOTAI_SABER_SWEEP_MIN_RATE) * NewBotAI_GetSaberSweepScale(skill, fanBiasPercent);
+}
+
+// Rate needed to cover the full arc in one swing, kept inside the human envelope.
 static inline float NewBotAI_GetSaberSweepRate(float amplitude)
 {
 	const float rate = amplitude * 2.0f * 1000.0f / (float)NEWBOTAI_FAN_SWEEP_SWING_MS;
-	return (rate < NEWBOTAI_SABER_SWEEP_RATE) ? NEWBOTAI_SABER_SWEEP_RATE : rate;
+	return (rate < NEWBOTAI_SABER_SWEEP_MIN_RATE) ? NEWBOTAI_SABER_SWEEP_MIN_RATE :
+		(rate > NEWBOTAI_SABER_SWEEP_MAX_RATE) ? NEWBOTAI_SABER_SWEEP_MAX_RATE : rate;
 }
 
+// Approaching without attacking, humans held aim ~13 degrees off the target (bots ~8).
+#define NEWBOTAI_APPROACH_AIM_MIN_OFFSET 10.0f
+#define NEWBOTAI_APPROACH_AIM_MAX_OFFSET 15.0f
+#define NEWBOTAI_APPROACH_AIM_MIN_RANGE 60.0f
+#define NEWBOTAI_APPROACH_AIM_MAX_RANGE 400.0f
+
+static inline float NewBotAI_GetApproachAimOffset(float skill, float enemyDistance2D, int side)
+{
+	float skillT;
+
+	if (!side || enemyDistance2D <= NEWBOTAI_APPROACH_AIM_MIN_RANGE ||
+		enemyDistance2D > NEWBOTAI_APPROACH_AIM_MAX_RANGE)
+		return 0.0f;
+	if (skill < 1.0f)
+		skill = 1.0f;
+	skillT = (skill - 1.0f) / 9.0f;
+	if (skillT > 1.0f)
+		skillT = 1.0f;
+	return (side < 0 ? -1.0f : 1.0f) * (NEWBOTAI_APPROACH_AIM_MIN_OFFSET +
+		(NEWBOTAI_APPROACH_AIM_MAX_OFFSET - NEWBOTAI_APPROACH_AIM_MIN_OFFSET) * skillT);
+}
+
+// Yaw offset from the target: prepare ~20 degrees off on the starting side, then sweep the
+// full 2*amplitude arc across the target during the active part of the swing.
 static inline float NewBotAI_SaberYawOffsetScaled(newbotai_saber_yaw_phase_t phase,
 	float progress, int actualDirection, int desiredDirection, int sweep, float amplitude)
 {
-	const float base = NewBotAI_SaberYawOffset(phase, progress, actualDirection, desiredDirection, sweep);
-	return base * (amplitude / NEWBOTAI_SABER_SWEEP_DEGREES);
+	const float start = (amplitude < NEWBOTAI_SABER_SWING_START_OFFSET) ?
+		amplitude : NEWBOTAI_SABER_SWING_START_OFFSET;
+	if (!sweep || phase == NEWBOTAI_SABER_YAW_RECOVER)
+		return 0.0f;
+	if (phase == NEWBOTAI_SABER_YAW_NEXT)
+		return desiredDirection * start;
+	if (phase == NEWBOTAI_SABER_YAW_PREPARE)
+		return (actualDirection ? actualDirection : desiredDirection) * start;
+	progress = (progress - 0.15f) / 0.65f;
+	if (progress < 0.0f) progress = 0.0f;
+	if (progress > 1.0f) progress = 1.0f;
+	return actualDirection * (start - 2.0f * amplitude * progress);
 }
 
 static inline float NewBotAI_SaberStepYawOffsetScaled(float current, float target, int elapsedMs,
@@ -1390,8 +1455,9 @@ static inline float NewBotAI_SaberStepYawOffsetScaled(float current, float targe
 	float delta;
 	float step;
 
-	if (target > amplitude) target = amplitude;
-	if (target < -amplitude) target = -amplitude;
+	// The active sweep ends 2*amplitude - start past the target.
+	if (target > 2.0f * amplitude) target = 2.0f * amplitude;
+	if (target < -2.0f * amplitude) target = -2.0f * amplitude;
 	if (elapsedMs < 0) elapsedMs = 0;
 	step = rate * (float)elapsedMs / 1000.0f;
 	delta = target - current;
@@ -1598,5 +1664,51 @@ static inline int NewBotAI_GetSaberThrowSituationBonus(int ourForce, float enemy
 	return bonus;
 }
 
+// Saber-throw hold (dueltracks2 1c34db989): human throw hit rate rises with alt hold
+// (<=100ms 41%, 500-1000ms ~80%, >1s 85-89%), the saber passes the target ~630ms in,
+// and holding past the pass landed 0.99 return-pass hits vs 0.11. Hold at least 600ms
+// and through the first pass while it still heads toward the target, up to 1.5s.
+#define NEWBOTAI_THROW_MIN_HOLD_MS 600
+#define NEWBOTAI_THROW_MAX_PASS_HOLD_MS 1500
+#define NEWBOTAI_THROW_TRAIL_MIN_DEG 5.0f
+#define NEWBOTAI_THROW_TRAIL_MAX_DEG 10.0f
+#define NEWBOTAI_THROW_PASS_SWITCH_DEG 9.0f
+#define NEWBOTAI_THROW_TRAIL_RANGE 400.0f
+
+static inline int NewBotAI_SaberThrowHoldProtected(int heldMs, int passedTarget, int headingToTarget)
+{
+	if (heldMs < NEWBOTAI_THROW_MIN_HOLD_MS)
+		return 1;
+	return (!passedTarget && headingToTarget && heldMs < NEWBOTAI_THROW_MAX_PASS_HOLD_MS) ? 1 : 0;
+}
+
+// Early-release rules only apply after the hold; drain-lock and lethal danger always may.
+static inline int NewBotAI_SaberThrowMayRelease(int heldMs, int passedTarget, int headingToTarget,
+	int drainlockRule, int lethalDanger)
+{
+	if (drainlockRule || lethalDanger)
+		return 1;
+	return !NewBotAI_SaberThrowHoldProtected(heldMs, passedTarget, headingToTarget);
+}
+
+// Yaw offset (degrees, positive toward the target's lateral motion) for a thrown saber:
+// humans trail the moving target by 5-10 degrees until the saber passes it, then switch
+// ~9 degrees to the other side so the homing return cuts back through the target.
+static inline float NewBotAI_GetSaberThrowAimOffset(int lateralMotionSide, int passedTarget, float enemyDistance)
+{
+	float t;
+
+	if (!lateralMotionSide)
+		return 0.0f;
+	if (passedTarget)
+		return (lateralMotionSide < 0 ? -1.0f : 1.0f) * NEWBOTAI_THROW_PASS_SWITCH_DEG;
+	t = (NEWBOTAI_THROW_TRAIL_RANGE - enemyDistance) / NEWBOTAI_THROW_TRAIL_RANGE;
+	if (t < 0.0f)
+		t = 0.0f;
+	else if (t > 1.0f)
+		t = 1.0f;
+	return (lateralMotionSide < 0 ? 1.0f : -1.0f) * (NEWBOTAI_THROW_TRAIL_MIN_DEG +
+		(NEWBOTAI_THROW_TRAIL_MAX_DEG - NEWBOTAI_THROW_TRAIL_MIN_DEG) * t);
+}
 
 #endif

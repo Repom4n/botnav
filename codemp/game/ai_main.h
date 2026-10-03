@@ -350,6 +350,7 @@ typedef struct bot_state_s
 	int					saberSTime;
 	int					saberThrowTime;
 	int					saberThrowStartTime;
+	qboolean			saberThrowPassedTarget; // current throw has flown past the target once
 
 	qboolean			saberPower;
 	int					saberPowerTime;
