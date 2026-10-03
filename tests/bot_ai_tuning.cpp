@@ -296,7 +296,10 @@ BOOST_AUTO_TEST_CASE( saber_tactic_ranges_match_winner_spacing )
 BOOST_AUTO_TEST_CASE( saber_tactic_swing_starts_are_limited_to_reach )
 {
 	BOOST_CHECK( NewBotAI_SaberTacticAllowsSwingStart( NEWBOTAI_SABER_TACTIC_STEP_IN, 80.0f ) );
-	BOOST_CHECK( !NewBotAI_SaberTacticAllowsSwingStart( NEWBOTAI_SABER_TACTIC_STEP_IN, 90.0f ) );
+	// No 85-100u dead zone: step in and swing together.
+	BOOST_CHECK( NewBotAI_SaberTacticAllowsSwingStart( NEWBOTAI_SABER_TACTIC_STEP_IN, 90.0f ) );
+	BOOST_CHECK( NewBotAI_SaberTacticAllowsSwingStart( NEWBOTAI_SABER_TACTIC_STEP_IN, 100.0f ) );
+	BOOST_CHECK( !NewBotAI_SaberTacticAllowsSwingStart( NEWBOTAI_SABER_TACTIC_STEP_IN, 105.0f ) );
 	BOOST_CHECK( !NewBotAI_SaberTacticAllowsSwingStart( NEWBOTAI_SABER_TACTIC_ATTACK, 129.0f ) );
 	BOOST_CHECK( !NewBotAI_SaberTacticAllowsSwingStart( NEWBOTAI_SABER_TACTIC_ADVANCE, 60.0f ) );
 	BOOST_CHECK( !NewBotAI_SaberTacticAllowsSwingStart( NEWBOTAI_SABER_TACTIC_RESET, 60.0f ) );
@@ -398,8 +401,13 @@ BOOST_AUTO_TEST_CASE( saber_choice_grades_map_to_human_outcomes )
 		NEWBOTAI_SABER_TACTIC_RESET );
 	BOOST_CHECK_EQUAL( NewBotAI_ApplySaberChoiceGrade( context, NEWBOTAI_SABER_TACTIC_COUNTER, NEWBOTAI_SABER_GRADE_BAD ),
 		NEWBOTAI_SABER_TACTIC_REPOSITION );
+	// Backpedal swings are a low-skill mistake only (humans: 0% of swing starts).
+	BOOST_CHECK_EQUAL( NewBotAI_ApplySaberChoiceGrade( context, NEWBOTAI_SABER_TACTIC_ATTACK, NEWBOTAI_SABER_GRADE_MISTAKE ),
+		NEWBOTAI_SABER_TACTIC_STAND_SWING );
+	context.skill = 4;
 	BOOST_CHECK_EQUAL( NewBotAI_ApplySaberChoiceGrade( context, NEWBOTAI_SABER_TACTIC_ATTACK, NEWBOTAI_SABER_GRADE_MISTAKE ),
 		NEWBOTAI_SABER_TACTIC_BACK_SWING );
+	context.skill = 10;
 	context.enemyDistance = 200.0f;
 	BOOST_CHECK_EQUAL( NewBotAI_ApplySaberChoiceGrade( context, NEWBOTAI_SABER_TACTIC_ADVANCE, NEWBOTAI_SABER_GRADE_MISTAKE ),
 		NEWBOTAI_SABER_TACTIC_LONG_SWING );
@@ -1010,10 +1018,24 @@ BOOST_AUTO_TEST_CASE( saber_planner_sweep_scales_from_conservative_envelope )
 	const float amp = NewBotAI_GetSaberSweepAmplitude( 8.0f, 50.0f );
 
 	BOOST_CHECK( amp > NEWBOTAI_SABER_SWEEP_DEGREES );
-	BOOST_CHECK( NewBotAI_GetSaberSweepRate( amp ) > NEWBOTAI_SABER_SWEEP_RATE );
-	BOOST_CHECK_CLOSE( NewBotAI_SaberYawOffsetScaled( NEWBOTAI_SABER_YAW_PREPARE, 0.0f, 1, 1, 1, amp ), amp, 0.01f );
+	// Human envelope: ~60-70 degrees swept per swing at 200-450 deg/s.
+	BOOST_CHECK( 2.0f * NewBotAI_GetSaberSweepAmplitude( 10.0f, 100.0f ) <= 70.0f );
+	BOOST_CHECK( 2.0f * NewBotAI_GetSaberSweepAmplitude( 7.0f, 100.0f ) >= 60.0f );
+	BOOST_CHECK( NewBotAI_GetSaberSweepAmplitude( 2.0f, 0.0f ) < amp );
+	BOOST_CHECK( NewBotAI_GetSaberSweepRate( amp ) >= NEWBOTAI_SABER_SWEEP_MIN_RATE );
+	BOOST_CHECK( NewBotAI_GetSaberSweepRate( amp ) <= NEWBOTAI_SABER_SWEEP_MAX_RATE );
+	BOOST_CHECK_CLOSE( NewBotAI_GetSaberSweepRateScaled( 1.0f, 0.0f ), NEWBOTAI_SABER_SWEEP_MIN_RATE, 0.01f );
+	BOOST_CHECK_CLOSE( NewBotAI_GetSaberSweepRateScaled( 10.0f, 100.0f ), NEWBOTAI_SABER_SWEEP_MAX_RATE, 0.01f );
+	// Each swing starts ~20 degrees off the target on its starting side...
+	BOOST_CHECK_CLOSE( NewBotAI_SaberYawOffsetScaled( NEWBOTAI_SABER_YAW_PREPARE, 0.0f, 1, 1, 1, amp ),
+		NEWBOTAI_SABER_SWING_START_OFFSET, 0.01f );
+	BOOST_CHECK_CLOSE( NewBotAI_SaberYawOffsetScaled( NEWBOTAI_SABER_YAW_PREPARE, 0.0f, 0, -1, 1, amp ),
+		-NEWBOTAI_SABER_SWING_START_OFFSET, 0.01f );
+	// ...and sweeps the full 2*amp arc across the target.
+	BOOST_CHECK_CLOSE( NewBotAI_SaberYawOffsetScaled( NEWBOTAI_SABER_YAW_ACTIVE, 0.8f, 1, 1, 1, amp ),
+		NEWBOTAI_SABER_SWING_START_OFFSET - 2.0f * amp, 0.01f );
 	BOOST_CHECK_SMALL( NewBotAI_SaberYawOffsetScaled( NEWBOTAI_SABER_YAW_PREPARE, 0.0f, 1, 1, 0, amp ), 0.01f );
-	BOOST_CHECK_CLOSE( NewBotAI_SaberStepYawOffsetScaled( 0.0f, 100.0f, 1000, amp, 1000.0f ), amp, 0.01f );
+	BOOST_CHECK_CLOSE( NewBotAI_SaberStepYawOffsetScaled( 0.0f, 100.0f, 1000, amp, 1000.0f ), 2.0f * amp, 0.01f );
 	BOOST_CHECK_CLOSE( NewBotAI_SaberStepYawOffsetScaled( 0.0f, 50.0f, 10, amp, 1000.0f ), 10.0f, 0.01f );
 }
 
@@ -1024,7 +1046,10 @@ BOOST_AUTO_TEST_CASE( swing_footing_uses_predicted_peak_range )
 
 	BOOST_CHECK_CLOSE( predicted, 45.0f, 0.01f );
 	BOOST_CHECK_EQUAL( NewBotAI_GetSwingFooting( 90.0f, predicted, 300.0f, 0, 0 ), NEWBOTAI_SWING_FOOTING_START );
-	BOOST_CHECK_EQUAL( NewBotAI_GetSwingFooting( 90.0f, 90.0f, 0.0f, 0, 0 ), NEWBOTAI_SWING_FOOTING_STEP_IN );
+	// Inside ~100u and not backing off: step in and swing together.
+	BOOST_CHECK_EQUAL( NewBotAI_GetSwingFooting( 90.0f, 90.0f, 0.0f, 0, 0 ), NEWBOTAI_SWING_FOOTING_START );
+	BOOST_CHECK_EQUAL( NewBotAI_GetSwingFooting( 90.0f, 90.0f, -120.0f, 0, 0 ), NEWBOTAI_SWING_FOOTING_STEP_IN );
+	BOOST_CHECK_EQUAL( NewBotAI_GetSwingFooting( 120.0f, 120.0f, 0.0f, 0, 0 ), NEWBOTAI_SWING_FOOTING_STEP_IN );
 	BOOST_CHECK_EQUAL( NewBotAI_GetSwingFooting( 66.0f, 66.0f, 0.0f, 0, 1 ), NEWBOTAI_SWING_FOOTING_START );
 	BOOST_CHECK_EQUAL( NewBotAI_GetSwingFooting( 80.0f, 80.0f, 0.0f, 1, 0 ), NEWBOTAI_SWING_FOOTING_START );
 	BOOST_CHECK_EQUAL( NewBotAI_GetSwingFooting( 110.0f, 50.0f, -120.0f, 0, 0 ), NEWBOTAI_SWING_FOOTING_HOLD );
@@ -1078,6 +1103,118 @@ BOOST_AUTO_TEST_CASE( saber_throw_situation_matches_human_hit_rates )
 	BOOST_CHECK( NewBotAI_GetSaberThrowSituationBonus( 60, 300.0f, 0, 0, 1, 0 ) < 0 );
 	BOOST_CHECK( NewBotAI_GetSaberThrowSituationBonus( 90, 200.0f, 0, 0, 0, 0 ) <
 		NewBotAI_GetSaberThrowSituationBonus( 40, 200.0f, 0, 0, 0, 0 ) );
+}
+
+BOOST_AUTO_TEST_CASE( saber_range_buffer_holds_reach_decision )
+{
+	const float threshold = NEWBOTAI_SABER_STEP_IN_SWING_RANGE;
+	const float band = NEWBOTAI_SABER_RANGE_HYSTERESIS;
+
+	// Outside: the range is used as is.
+	BOOST_CHECK_CLOSE( NewBotAI_SaberRangeWithHysteresis( threshold + 5.0f, threshold, band, 0 ),
+		threshold + 5.0f, 0.001f );
+	// Already inside: small drifts past the threshold stay inside.
+	BOOST_CHECK_CLOSE( NewBotAI_SaberRangeWithHysteresis( threshold + 5.0f, threshold, band, 1 ),
+		threshold, 0.001f );
+	BOOST_CHECK_CLOSE( NewBotAI_SaberRangeWithHysteresis( threshold + band + 1.0f, threshold, band, 1 ),
+		threshold + band + 1.0f, 0.001f );
+	BOOST_CHECK_CLOSE( NewBotAI_SaberRangeWithHysteresis( 60.0f, threshold, band, 1 ), 60.0f, 0.001f );
+	BOOST_CHECK( NewBotAI_SaberTacticAllowsSwingStart( NEWBOTAI_SABER_TACTIC_STEP_IN,
+		NewBotAI_SaberRangeWithHysteresis( threshold + 8.0f, threshold, band, 1 ) ) );
+}
+
+BOOST_AUTO_TEST_CASE( saber_grade_is_held_through_the_swing )
+{
+	BOOST_CHECK( NewBotAI_SaberGradeShouldReroll( 1000, 0, 0 ) );
+	BOOST_CHECK( !NewBotAI_SaberGradeShouldReroll( 1300, 1000, 0 ) );
+	BOOST_CHECK( !NewBotAI_SaberGradeShouldReroll( 1550, 1000, 1 ) );
+	BOOST_CHECK( NewBotAI_SaberGradeShouldReroll( 1550, 1000, 0 ) );
+	BOOST_CHECK( NewBotAI_SaberGradeShouldReroll( 1000 + NEWBOTAI_SABER_GRADE_HOLD_MAX_MS, 1000, 1 ) );
+}
+
+BOOST_AUTO_TEST_CASE( saber_attacks_commit_forward_and_handover_keeps_intent )
+{
+	BOOST_CHECK_EQUAL( NewBotAI_SaberAttackForward( NEWBOTAI_SABER_TACTIC_ATTACK, 70.0f ), 1 );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberAttackForward( NEWBOTAI_SABER_TACTIC_ATTACK, 40.0f ), 0 );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberAttackForward( NEWBOTAI_SABER_TACTIC_STAND_SWING, 70.0f ), 1 );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberAttackForward( NEWBOTAI_SABER_TACTIC_STAND_SWING, 50.0f ), 0 );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberAttackForward( NEWBOTAI_SABER_TACTIC_BACK_SWING, 70.0f ), -1 );
+	newbotai_saber_tactic_context_t context = MakeSaberDuelContext( 95.0f );
+	const newbotai_saber_command_t stepIn = NewBotAI_PlanSaberCommand( context,
+		NEWBOTAI_SABER_TACTIC_STEP_IN, NEWBOTAI_SABER_HORIZONTAL, 1, 1, 1, 0, 1, 0 );
+	BOOST_CHECK_EQUAL( stepIn.attack, 1 );
+	BOOST_CHECK_EQUAL( stepIn.forward, 1 );
+
+	BOOST_CHECK_EQUAL( NewBotAI_SaberHandoverForward( 1, -1, 100, 0 ), 1 );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberHandoverForward( 1, 0, 100, 0 ), 1 );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberHandoverForward( 1, -1, 100, 1 ), -1 );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberHandoverForward( 1, -1, NEWBOTAI_SABER_HANDOVER_MS + 1, 0 ), -1 );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberHandoverForward( -1, 1, 100, 0 ), 1 );
+
+	BOOST_CHECK_EQUAL( NewBotAI_SaberSwingStartForward( 8, 1, -1, 0 ), 1 );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberSwingStartForward( 8, 1, -1, 1 ), -1 );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberSwingStartForward( 8, 0, -1, 0 ), -1 );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberSwingStartForward( 4, 1, -1, 0 ), -1 );
+}
+
+BOOST_AUTO_TEST_CASE( fan_chain_drives_on_while_landing_hits )
+{
+	BOOST_CHECK_EQUAL( NewBotAI_GetFanLinkDwellMs( 200, 300 ), 0 );
+	BOOST_CHECK_EQUAL( NewBotAI_GetFanLinkDwellMs( 200, NEWBOTAI_FAN_CHAIN_HIT_WINDOW_MS + 1 ), 200 );
+	BOOST_CHECK_EQUAL( NewBotAI_GetFanLinkDwellMs( 200, -1 ), 200 );
+	BOOST_CHECK( NewBotAI_FanChainIsLanding( 0 ) );
+	BOOST_CHECK( !NewBotAI_FanChainIsLanding( -1 ) );
+}
+
+BOOST_AUTO_TEST_CASE( approach_aim_is_held_off_centre )
+{
+	BOOST_CHECK_CLOSE( NewBotAI_GetApproachAimOffset( 1.0f, 150.0f, 1 ), NEWBOTAI_APPROACH_AIM_MIN_OFFSET, 0.01f );
+	BOOST_CHECK_CLOSE( NewBotAI_GetApproachAimOffset( 10.0f, 150.0f, -1 ), -NEWBOTAI_APPROACH_AIM_MAX_OFFSET, 0.01f );
+	BOOST_CHECK_SMALL( NewBotAI_GetApproachAimOffset( 10.0f, 40.0f, 1 ), 0.01f );
+	BOOST_CHECK_SMALL( NewBotAI_GetApproachAimOffset( 10.0f, 600.0f, 1 ), 0.01f );
+}
+
+BOOST_AUTO_TEST_CASE( saber_throw_is_held_through_first_pass )
+{
+	// Always held for the minimum hold.
+	BOOST_CHECK( NewBotAI_SaberThrowHoldProtected( 300, 1, 0 ) );
+	// Held past the minimum while still flying toward the target...
+	BOOST_CHECK( NewBotAI_SaberThrowHoldProtected( 900, 0, 1 ) );
+	// ...but not once it passed, not when heading elsewhere, and never past the cap.
+	BOOST_CHECK( !NewBotAI_SaberThrowHoldProtected( 900, 1, 0 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowHoldProtected( 900, 0, 0 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowHoldProtected( NEWBOTAI_THROW_MAX_PASS_HOLD_MS, 0, 1 ) );
+	// Early-release rules wait for the pass; drain-lock and lethal danger do not.
+	BOOST_CHECK( !NewBotAI_SaberThrowMayRelease( 400, 0, 1, 0, 0 ) );
+	BOOST_CHECK( NewBotAI_SaberThrowMayRelease( 400, 0, 1, 1, 0 ) );
+	BOOST_CHECK( NewBotAI_SaberThrowMayRelease( 400, 0, 1, 0, 1 ) );
+	BOOST_CHECK( NewBotAI_SaberThrowMayRelease( 800, 1, 0, 0, 0 ) );
+}
+
+BOOST_AUTO_TEST_CASE( saber_throw_trails_then_switches_side_after_pass )
+{
+	const float farTrail = NewBotAI_GetSaberThrowAimOffset( 1, 0, 500.0f );
+	const float nearTrail = NewBotAI_GetSaberThrowAimOffset( 1, 0, 0.0f );
+
+	// Trails behind the target's motion by 5-10 degrees...
+	BOOST_CHECK_CLOSE( farTrail, -NEWBOTAI_THROW_TRAIL_MIN_DEG, 0.01f );
+	BOOST_CHECK_CLOSE( nearTrail, -NEWBOTAI_THROW_TRAIL_MAX_DEG, 0.01f );
+	BOOST_CHECK_CLOSE( NewBotAI_GetSaberThrowAimOffset( -1, 0, 500.0f ), NEWBOTAI_THROW_TRAIL_MIN_DEG, 0.01f );
+	// ...then switches ~9 degrees to the other side once the saber passed.
+	BOOST_CHECK_CLOSE( NewBotAI_GetSaberThrowAimOffset( 1, 1, 200.0f ), NEWBOTAI_THROW_PASS_SWITCH_DEG, 0.01f );
+	BOOST_CHECK_CLOSE( NewBotAI_GetSaberThrowAimOffset( -1, 1, 200.0f ), -NEWBOTAI_THROW_PASS_SWITCH_DEG, 0.01f );
+	BOOST_CHECK_SMALL( NewBotAI_GetSaberThrowAimOffset( 0, 1, 200.0f ), 0.01f );
+}
+
+BOOST_AUTO_TEST_CASE( learning_score_is_net_damage_first_relative_to_source )
+{
+	// Humans win ~80% of tracked duels: a human row at that rate is neutral, not positive.
+	BOOST_CHECK_SMALL( BotLearn_ScoreRelative( 50.0f, BotLearn_ExcessWins( 50.0f, 40.0f, 0.8f ), 0.0f ), 0.001f );
+	BOOST_CHECK( BotLearn_ScoreRelative( 50.0f, BotLearn_ExcessWins( 50.0f, 40.0f, 0.8f ), 300.0f ) > 0.0f );
+	// A bot row is down-weighted, so the same raw outcome moves the score less.
+	const float w = BotLearn_SourceWeight( BOTLEARN_SOURCE_BOT );
+	BOOST_CHECK( BotLearn_ScoreRelative( 20.0f * w, 0.0f, -200.0f * w ) >
+		BotLearn_ScoreRelative( 20.0f, 0.0f, -200.0f ) );
 }
 
 BOOST_AUTO_TEST_CASE( high_skill_mistakes_are_small_and_vanish_at_ten )

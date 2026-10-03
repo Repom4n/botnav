@@ -126,15 +126,39 @@ BOOST_AUTO_TEST_CASE( score_is_confidence_weighted )
 	BOOST_CHECK( BotLearn_Score( 40, 0, -800 ) < 0.0f );
 }
 
+BOOST_AUTO_TEST_CASE( score_is_net_damage_first_and_win_rate_relative_to_source )
+{
+	// A human row that won at the usual human rate scores on net damage alone.
+	const float humanBaseline = BotLearn_ScoreRelative( 40.0f,
+		BotLearn_ExcessWins( 40.0f, 32.0f, 0.8f ), 0.0f );
+	BOOST_CHECK_SMALL( humanBaseline, 0.001f );
+	// Winning 80% against a 50% baseline would have looked strongly positive.
+	BOOST_CHECK( BotLearn_Score( 40, 32, 0 ) > 1.0f );
+	// Net damage dominates the win term: losing damage with a slightly better win rate is negative.
+	BOOST_CHECK( BotLearn_ScoreRelative( 40.0f, BotLearn_ExcessWins( 40.0f, 34.0f, 0.8f ), -400.0f ) < 0.0f );
+	BOOST_CHECK_CLOSE( BotLearn_SourceWeight( BOTLEARN_SOURCE_HUMAN ), 1.0f, 0.001f );
+	BOOST_CHECK( BotLearn_SourceWeight( BOTLEARN_SOURCE_BOT ) < 0.5f );
+}
+
+BOOST_AUTO_TEST_CASE( weight_bonus_needs_many_samples_to_reach_cap )
+{
+	// Same score: a thin context stays well under the cap a well-sampled one reaches.
+	BOOST_CHECK( BotLearn_WeightBonus( 20.0f, 6, 6, 1.0f, 10.0f ) < BOTLEARN_BONUS_CAP / 2 );
+	BOOST_CHECK_EQUAL( BotLearn_WeightBonus( 20.0f, 200, 6, 1.0f, 10.0f ), BOTLEARN_BONUS_CAP );
+	BOOST_CHECK( BotLearn_WeightBonus( 20.0f, 60, 6, 1.0f, 10.0f ) >
+		BotLearn_WeightBonus( 20.0f, 10, 6, 1.0f, 10.0f ) );
+}
+
 BOOST_AUTO_TEST_CASE( weight_bonus_needs_samples_and_is_capped )
 {
 	BOOST_CHECK_EQUAL( BotLearn_WeightBonus( 50.0f, 3, 6, 1.0f, 10.0f ), 0 );
 	BOOST_CHECK_EQUAL( BotLearn_WeightBonus( 50.0f, 20, 6, 0.0f, 10.0f ), 0 );
 	BOOST_CHECK_EQUAL( BotLearn_WeightBonus( 50.0f, 20, 6, 1.0f, 10.0f ), BOTLEARN_BONUS_CAP );
 	BOOST_CHECK_EQUAL( BotLearn_WeightBonus( -50.0f, 20, 6, 1.0f, 10.0f ), -BOTLEARN_BONUS_CAP );
-	BOOST_CHECK_EQUAL( BotLearn_WeightBonus( 5.0f, 20, 6, 1.0f, 7.0f ), 10 );
+	// 20 samples is half confidence (BOTLEARN_CONFIDENCE_SAMPLES).
+	BOOST_CHECK_EQUAL( BotLearn_WeightBonus( 5.0f, 20, 6, 1.0f, 7.0f ), 5 );
 	// Lower skills lean on the data less and sample more widely.
-	BOOST_CHECK( BotLearn_WeightBonus( 5.0f, 20, 6, 1.0f, 1.0f ) < 10 );
+	BOOST_CHECK( BotLearn_WeightBonus( 5.0f, 20, 6, 1.0f, 1.0f ) < 5 );
 	BOOST_CHECK_EQUAL( BotLearn_SampleNoise( 7.0f ), 0 );
 	BOOST_CHECK( BotLearn_SampleNoise( 2.0f ) > 0 );
 }

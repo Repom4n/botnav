@@ -162,9 +162,9 @@ typedef struct
 	int stimulus;
 	int response;
 	int follow1;
-	int samples;
-	int wins;
-	int netDamage;
+	float samples;		// source-weighted sample count
+	float excessWins;	// wins above the source's baseline win rate (weighted)
+	float netDamage;	// weighted
 } botlearn_cache_entry_t;
 
 static botlearn_cache_entry_t g_botLearnCache[BOTLEARN_CACHE_SIZE];
@@ -221,23 +221,25 @@ int G_BotLearnCacheCount(void)
 }
 
 static void G_BotLearnCacheAccumulate(int contextKey, int stimulus, int response, int follow1,
-	int samples, int wins, int netDamage)
+	float samples, float excessWins, float netDamage)
 {
 	botlearn_cache_entry_t *e = G_BotLearnCacheFind(contextKey, stimulus, response, follow1, qtrue);
 
 	if (!e)
 		return;
 	e->samples += samples;
-	e->wins += wins;
+	e->excessWins += excessWins;
 	e->netDamage += netDamage;
 }
 
+// samples/excessWins/netDamage are already weighted by source (BotLearn_SourceWeight) and
+// excessWins is relative to the source's baseline win rate (BotLearn_ExcessWins).
 void G_BotLearnCacheAdd(int contextKey, int stimulus, int response, int follow1,
-	int samples, int wins, int netDamage)
+	float samples, float excessWins, float netDamage)
 {
 	const int coarseKey = BotLearn_CoarseKey(contextKey);
 
-	if (samples <= 0 || stimulus <= BOTLEARN_TOK_NONE || stimulus >= BOTLEARN_TOK_COUNT ||
+	if (samples <= 0.0f || stimulus <= BOTLEARN_TOK_NONE || stimulus >= BOTLEARN_TOK_COUNT ||
 		!BotLearn_IsResponseToken(response))
 		return;
 	if (follow1 < BOTLEARN_TOK_NONE || follow1 >= BOTLEARN_TOK_COUNT)
@@ -245,10 +247,10 @@ void G_BotLearnCacheAdd(int contextKey, int stimulus, int response, int follow1,
 
 	//Each row feeds the exact context and the coarse (force/range/stance-only) fallback,
 	//both for its specific follow-up and for "any follow-up".
-	G_BotLearnCacheAccumulate(contextKey, stimulus, response, BOTLEARN_FOLLOW_ANY, samples, wins, netDamage);
-	G_BotLearnCacheAccumulate(coarseKey, stimulus, response, BOTLEARN_FOLLOW_ANY, samples, wins, netDamage);
-	G_BotLearnCacheAccumulate(contextKey, stimulus, response, follow1, samples, wins, netDamage);
-	G_BotLearnCacheAccumulate(coarseKey, stimulus, response, follow1, samples, wins, netDamage);
+	G_BotLearnCacheAccumulate(contextKey, stimulus, response, BOTLEARN_FOLLOW_ANY, samples, excessWins, netDamage);
+	G_BotLearnCacheAccumulate(coarseKey, stimulus, response, BOTLEARN_FOLLOW_ANY, samples, excessWins, netDamage);
+	G_BotLearnCacheAccumulate(contextKey, stimulus, response, follow1, samples, excessWins, netDamage);
+	G_BotLearnCacheAccumulate(coarseKey, stimulus, response, follow1, samples, excessWins, netDamage);
 }
 
 static int G_BotLearnMinSamples(void)
@@ -296,7 +298,7 @@ int G_BotLearnBonus(gentity_t *self, gentity_t *enemy, int stimulus, int respons
 	if (!e || e->samples < minSamples)
 		return 0;
 
-	bonus = BotLearn_WeightBonus(BotLearn_Score(e->samples, e->wins, e->netDamage), e->samples,
+	bonus = BotLearn_WeightBonus(BotLearn_ScoreRelative(e->samples, e->excessWins, e->netDamage), e->samples,
 		minSamples, bot_learningstrength.value, skill);
 	noise = BotLearn_SampleNoise(skill);
 	if (noise > 0)
@@ -317,8 +319,8 @@ static int QDECL G_BotLearnCompareDebugRows(const void *a, const void *b)
 		return ea->contextKey - eb->contextKey;
 	if (ea->stimulus != eb->stimulus)
 		return ea->stimulus - eb->stimulus;
-	sa = BotLearn_Score(ea->samples, ea->wins, ea->netDamage);
-	sb = BotLearn_Score(eb->samples, eb->wins, eb->netDamage);
+	sa = BotLearn_ScoreRelative(ea->samples, ea->excessWins, ea->netDamage);
+	sb = BotLearn_ScoreRelative(eb->samples, eb->excessWins, eb->netDamage);
 	return (sa > sb) ? -1 : (sa < sb) ? 1 : 0;
 }
 
@@ -343,15 +345,15 @@ void G_BotLearnDebugPrint(int maxLines)
 		const botlearn_cache_entry_t *best = rows[i];
 		int j = i + 1;
 
-		Com_Printf("selfF %i enemyF %i range %i | vs %-9s -> %-9s %6.1f (%i)",
+		Com_Printf("selfF %i enemyF %i range %i | vs %-9s -> %-9s %6.1f (%.1f)",
 			best->contextKey & 3, (best->contextKey >> 2) & 3, (best->contextKey >> 4) & 3,
 			BotLearn_TokenName(best->stimulus), BotLearn_TokenName(best->response),
-			BotLearn_Score(best->samples, best->wins, best->netDamage), best->samples);
+			BotLearn_ScoreRelative(best->samples, best->excessWins, best->netDamage), best->samples);
 		while (j < count && rows[j]->contextKey == best->contextKey && rows[j]->stimulus == best->stimulus)
 		{
 			if (j - i < 3)
-				Com_Printf(" | %s %.1f (%i)", BotLearn_TokenName(rows[j]->response),
-					BotLearn_Score(rows[j]->samples, rows[j]->wins, rows[j]->netDamage), rows[j]->samples);
+				Com_Printf(" | %s %.1f (%.1f)", BotLearn_TokenName(rows[j]->response),
+					BotLearn_ScoreRelative(rows[j]->samples, rows[j]->excessWins, rows[j]->netDamage), rows[j]->samples);
 			j++;
 		}
 		Com_Printf("\n");

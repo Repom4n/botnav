@@ -40,7 +40,14 @@ typedef enum
 #define BOTLEARN_IDLE_GAP_MS 1000
 #define BOTLEARN_REPEAT_COLLAPSE_MS 400
 #define BOTLEARN_MAX_FOLLOWUPS 2
-#define BOTLEARN_PRIOR_SAMPLES 4.0f
+#define BOTLEARN_PRIOR_SAMPLES 8.0f
+/* Weight of the (baseline-relative) win rate next to the mean net damage. */
+#define BOTLEARN_WIN_WEIGHT 8.0f
+/* Sample count at which the learned bonus reaches half its full strength. */
+#define BOTLEARN_CONFIDENCE_SAMPLES 20.0f
+/* Bot-performed rows count this much of a human row: poor bot execution of a good action
+ * should not teach that the action itself loses. */
+#define BOTLEARN_BOT_SAMPLE_WEIGHT 0.25f
 #define BOTLEARN_DEFAULT_MIN_SAMPLES 6
 #define BOTLEARN_BONUS_CAP 30
 #define BOTLEARN_COARSE_KEY_FLAG 0x8000
@@ -308,21 +315,37 @@ static inline int BotLearn_ExtractSequences(const botlearn_event_t *events, int 
 	return produced;
 }
 
-/* Confidence-weighted success score: the average net damage and the win rate are both
- * shrunk toward neutral by BOTLEARN_PRIOR_SAMPLES so a handful of lucky rows cannot
- * dominate a well-sampled alternative. Positive scores mean the response tends to win. */
-static inline float BotLearn_Score(int samples, int wins, int netDamage)
+/* Wins above what the recording source usually wins (its baseline win rate). Humans win
+ * ~80% of tracked duels, so a raw win rate would inflate every human row. */
+static inline float BotLearn_ExcessWins(float samples, float wins, float baselineWinRate)
+{
+	return wins - samples * baselineWinRate;
+}
+
+/* Confidence-weighted success score, mainly on net damage: the mean net damage and the
+ * baseline-relative win rate are both shrunk toward neutral by BOTLEARN_PRIOR_SAMPLES so
+ * a handful of lucky rows cannot dominate a well-sampled alternative. Positive scores mean
+ * the response tends to come out ahead. */
+static inline float BotLearn_ScoreRelative(float samples, float excessWins, float netDamage)
 {
 	float denom;
-	float meanNet;
-	float winRate;
 
-	if (samples <= 0)
+	if (samples <= 0.0f)
 		return 0.0f;
-	denom = (float)samples + BOTLEARN_PRIOR_SAMPLES;
-	meanNet = (float)netDamage / denom;
-	winRate = ((float)wins + BOTLEARN_PRIOR_SAMPLES * 0.5f) / denom;
-	return meanNet + (winRate - 0.5f) * 20.0f;
+	denom = samples + BOTLEARN_PRIOR_SAMPLES;
+	return netDamage / denom + (excessWins / denom) * BOTLEARN_WIN_WEIGHT;
+}
+
+/* Score against a neutral 50% baseline. */
+static inline float BotLearn_Score(int samples, int wins, int netDamage)
+{
+	return BotLearn_ScoreRelative((float)samples,
+		BotLearn_ExcessWins((float)samples, (float)wins, 0.5f), (float)netDamage);
+}
+
+static inline float BotLearn_SourceWeight(int sourceKind)
+{
+	return (sourceKind == BOTLEARN_SOURCE_BOT) ? BOTLEARN_BOT_SAMPLE_WEIGHT : 1.0f;
 }
 
 /* Skill scale for the learned bonus: skill 7+ follows the data fully, lower skills lean on
@@ -336,13 +359,15 @@ static inline float BotLearn_SkillScale(float skill)
 	return 0.4f + 0.6f * (skill - 1.0f) / 6.0f;
 }
 
-static inline int BotLearn_WeightBonus(float score, int samples, int minSamples, float strength, float skill)
+/* The bonus grows with sample confidence, so reaching the cap needs a well-sampled context. */
+static inline int BotLearn_WeightBonus(float score, float samples, int minSamples, float strength, float skill)
 {
 	float bonus;
 
-	if (samples < minSamples || strength <= 0.0f)
+	if (samples < (float)minSamples || strength <= 0.0f)
 		return 0;
-	bonus = score * 2.0f * strength * BotLearn_SkillScale(skill);
+	bonus = score * 2.0f * strength * BotLearn_SkillScale(skill) *
+		(samples / (samples + BOTLEARN_CONFIDENCE_SAMPLES));
 	if (bonus > (float)BOTLEARN_BONUS_CAP)
 		bonus = (float)BOTLEARN_BONUS_CAP;
 	else if (bonus < -(float)BOTLEARN_BONUS_CAP)

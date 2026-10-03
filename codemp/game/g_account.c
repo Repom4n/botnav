@@ -3496,20 +3496,37 @@ static qboolean G_BotLearnRecordPerspective(sqlite3 *db, const tracked_duel_runt
 	return ok;
 }
 
-// Map load: fold LocalBotLearnedSequence into the in-memory learned weight cache.
+// Map load: fold LocalBotLearnedSequence into the in-memory learned weight cache. Wins are
+// judged relative to each source's usual win rate and bot rows are down-weighted (or left
+// out with bot_learninghumansonly 1).
 static void G_BotLearnLoadCache(sqlite3 *db)
 {
 	sqlite3_stmt *stmt = NULL;
+	const char *baselineSql =
+		"SELECT source_kind, SUM(samples), SUM(wins) FROM LocalBotLearnedSequence GROUP BY source_kind";
 	const char *sql = bot_learninghumansonly.integer ?
-		"SELECT ctx_key, stimulus, response, follow1, SUM(samples), SUM(wins), SUM(net_damage) FROM LocalBotLearnedSequence "
-		"WHERE source_kind = 0 GROUP BY ctx_key, stimulus, response, follow1" :
-		"SELECT ctx_key, stimulus, response, follow1, SUM(samples), SUM(wins), SUM(net_damage) FROM LocalBotLearnedSequence "
-		"GROUP BY ctx_key, stimulus, response, follow1";
+		"SELECT source_kind, ctx_key, stimulus, response, follow1, SUM(samples), SUM(wins), SUM(net_damage) FROM LocalBotLearnedSequence "
+		"WHERE source_kind = 0 GROUP BY source_kind, ctx_key, stimulus, response, follow1" :
+		"SELECT source_kind, ctx_key, stimulus, response, follow1, SUM(samples), SUM(wins), SUM(net_damage) FROM LocalBotLearnedSequence "
+		"GROUP BY source_kind, ctx_key, stimulus, response, follow1";
+	float baseline[2] = { 0.5f, 0.5f };
 	int rows = 0;
 
 	G_BotLearnCacheClear();
 	if (!bot_learning.integer || !db)
 		return;
+	if (sqlite3_prepare_v2(db, baselineSql, -1, &stmt, NULL) == SQLITE_OK)
+	{
+		while (sqlite3_step(stmt) == SQLITE_ROW)
+		{
+			const int source = sqlite3_column_int(stmt, 0);
+			const double samples = sqlite3_column_double(stmt, 1);
+			if (source >= BOTLEARN_SOURCE_HUMAN && source <= BOTLEARN_SOURCE_BOT && samples > 0.0)
+				baseline[source] = (float)(sqlite3_column_double(stmt, 2) / samples);
+		}
+	}
+	sqlite3_finalize(stmt);
+	stmt = NULL;
 	if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK)
 	{
 		sqlite3_finalize(stmt);
@@ -3517,14 +3534,21 @@ static void G_BotLearnLoadCache(sqlite3 *db)
 	}
 	while (sqlite3_step(stmt) == SQLITE_ROW)
 	{
-		G_BotLearnCacheAdd(sqlite3_column_int(stmt, 0), sqlite3_column_int(stmt, 1),
-			sqlite3_column_int(stmt, 2), sqlite3_column_int(stmt, 3), sqlite3_column_int(stmt, 4),
-			sqlite3_column_int(stmt, 5), sqlite3_column_int(stmt, 6));
+		const int source = sqlite3_column_int(stmt, 0) == BOTLEARN_SOURCE_BOT ?
+			BOTLEARN_SOURCE_BOT : BOTLEARN_SOURCE_HUMAN;
+		const float weight = BotLearn_SourceWeight(source);
+		const float samples = (float)sqlite3_column_double(stmt, 5);
+
+		G_BotLearnCacheAdd(sqlite3_column_int(stmt, 1), sqlite3_column_int(stmt, 2),
+			sqlite3_column_int(stmt, 3), sqlite3_column_int(stmt, 4), samples * weight,
+			BotLearn_ExcessWins(samples, (float)sqlite3_column_double(stmt, 6), baseline[source]) * weight,
+			(float)sqlite3_column_double(stmt, 7) * weight);
 		rows++;
 	}
 	sqlite3_finalize(stmt);
-	trap->Print("Bot learning: loaded %i learned sequence groups (%i cache entries)%s\n", rows,
-		G_BotLearnCacheCount(), bot_learninghumansonly.integer ? " [humans only]" : "");
+	trap->Print("Bot learning: loaded %i learned sequence groups (%i cache entries)%s baseline win human %.2f bot %.2f\n",
+		rows, G_BotLearnCacheCount(), bot_learninghumansonly.integer ? " [humans only]" : "",
+		baseline[BOTLEARN_SOURCE_HUMAN], baseline[BOTLEARN_SOURCE_BOT]);
 	if (bot_learning_debug.integer)
 		G_BotLearnDebugPrint(60);
 }

@@ -1905,7 +1905,7 @@ qboolean G_BotLearnRecentToken(int clientNum, int token, int maxAgeMs);
 int G_BotLearnLatestToken(int clientNum, int maxAgeMs);
 void G_BotLearnCacheClear(void);
 int G_BotLearnCacheCount(void);
-void G_BotLearnCacheAdd(int contextKey, int stimulus, int response, int follow1, int samples, int wins, int netDamage);
+void G_BotLearnCacheAdd(int contextKey, int stimulus, int response, int follow1, float samples, float excessWins, float netDamage);
 int G_BotLearnLiveContextKey(gentity_t *self, gentity_t *enemy);
 int G_BotLearnBonus(gentity_t *self, gentity_t *enemy, int stimulus, int response, int follow1, float skill);
 void G_BotLearnDebugPrint(int maxLines);
