@@ -233,6 +233,7 @@ static qboolean NewBotAI_IsDuelStrafeSuppressed(bot_state_t *bs);
 static qboolean NewBotAI_CanControlSaber(bot_state_t *bs);
 static void NewBotAI_RunSaberTechniques(bot_state_t *bs);
 static void NewBotAI_ApplySaberTechniqueInput(bot_state_t *bs, bot_input_t *bi, int time);
+static void NewBotAI_ApplySaberHandover(bot_state_t *bs, bot_input_t *bi, int time);
 static int NewBotAI_GetWallStrafeAwayDir(bot_state_t *bs);
 static qboolean NewBotAI_ShouldPursueTargetThroughWaypoints(bot_state_t *bs, gentity_t *enemy);
 static float NewBotAI_GetRecoveryYawSpeedDegPerSec(void);
@@ -976,6 +977,7 @@ void BotUpdateInput(bot_state_t *bs, int time, int elapsed_time) {
 	//Defensive rolls are a last resort only - see NewBotAI_FilterDefensiveRollInput.
 	NewBotAI_FilterDefensiveRollInput(bs, &bi);
 	NewBotAI_ApplySaberTechniqueInput(bs, &bi, time);
+	NewBotAI_ApplySaberHandover(bs, &bi, time);
 	if (g_newBotAI.integer && bs->saberTechniqueCandidate && NewBotAI_IsDuelStrafeSuppressed(bs))
 	{
 		vec3_t right, angles;
@@ -13559,14 +13561,22 @@ static qboolean NewBotAI_GetEnemyRangeKinematics(bot_state_t *bs, float *range, 
 static newbotai_swing_footing_t NewBotAI_GetCurrentSwingFooting(bot_state_t *bs, qboolean linkedSwing)
 {
 	float range, predicted, radial;
+	newbotai_swing_footing_t footing;
 
 	if (!NewBotAI_GetEnemyRangeKinematics(bs, &range, &predicted, &radial))
 	{
+		bs->swingFootingInReach = qfalse;
 		return NEWBOTAI_SWING_FOOTING_HOLD;
 	}
 
-	return NewBotAI_GetSwingFooting(range, predicted, radial, linkedSwing ? 1 : 0,
+	predicted = NewBotAI_SaberRangeWithHysteresis(predicted, NEWBOTAI_SABER_STEP_IN_SWING_RANGE,
+		NEWBOTAI_SABER_RANGE_HYSTERESIS, bs->swingFootingInReach);
+	footing = NewBotAI_GetSwingFooting(range, predicted, radial, linkedSwing ? 1 : 0,
 		(bs->cur_ps.fd.saberAnimLevel == SS_STAFF) ? 1 : 0);
+	bs->swingFootingInReach = (predicted <= NEWBOTAI_SABER_STEP_IN_SWING_RANGE) ? qtrue : qfalse;
+	bs->swingFootingCommitForward = (footing == NEWBOTAI_SWING_FOOTING_START &&
+		predicted > NEWBOTAI_SABER_COMMIT_PEAK_RANGE) ? qtrue : qfalse;
+	return footing;
 }
 
 // Per-decision skill mistake chance (percent): full band for skills 1-6, a small roll that
@@ -13579,7 +13589,8 @@ static int NewBotAI_GetDecisionMistakeChance(bot_state_t *bs)
 
 // Gate for starting a NEW saber swing (chain holds use NewBotAI_SwingChainFootingAllows).
 // Humans that landed swings started them when the range predicted at the swing peak was
-// 60u or less, stepped in first when further, and never swung while backing off from 100u+.
+// 60u or less (or inside ~100u while still closing), stepped in first when further, and
+// never swung while backing off from 100u+.
 // Returns qtrue when attack may be pressed; on STEP_IN it walks forward instead.
 static qboolean NewBotAI_SwingStartFootingAllows(bot_state_t *bs)
 {
@@ -13595,18 +13606,30 @@ static qboolean NewBotAI_SwingStartFootingAllows(bot_state_t *bs)
 	{
 		//Lower levels keep the observed mistakes: long-range and backpedal swings.
 		bs->footingMistakeRollTime = level.time;
-		bs->footingMistake = (Q_irand(1, 100) <= NewBotAI_GetDecisionMistakeChance(bs) / 2) ? qtrue : qfalse;
+		bs->footingMistake = (bs->settings.skill < NEWBOTAI_SABER_BACKPEDAL_SWING_MAX_SKILL &&
+			Q_irand(1, 100) <= NewBotAI_GetDecisionMistakeChance(bs) / 2) ? qtrue : qfalse;
 	}
 
-	//Pull -> swing rarely landed in the duel data (the pull leaves no time to close in);
-	//winners followed a pull with a kick or a throw instead.
+	//Pull -> swing only lands when the pull already closed the gap (humans: +7.3 net,
+	//68% win when closing); otherwise follow a pull with a kick or a throw instead.
 	if (!enemyDown && !bs->footingMistake &&
 		G_BotLearnRecentToken(bs->client, BOTLEARN_TOK_PULL, 600))
-		return qfalse;
+	{
+		float range, predicted, radial;
+
+		if (!NewBotAI_GetEnemyRangeKinematics(bs, &range, &predicted, &radial) ||
+			radial < NEWBOTAI_SWING_BACKING_SPEED)
+			return qfalse;
+	}
 
 	footing = NewBotAI_GetCurrentSwingFooting(bs, qfalse);
 	if (footing == NEWBOTAI_SWING_FOOTING_START || bs->footingMistake)
+	{
+		//Commit with the swing: keep stepping in until the peak lands at ~40-55u.
+		if (footing == NEWBOTAI_SWING_FOOTING_START && bs->swingFootingCommitForward)
+			trap->EA_MoveForward(bs->client);
 		return qtrue;
+	}
 	if (footing == NEWBOTAI_SWING_FOOTING_STEP_IN)
 		trap->EA_MoveForward(bs->client);
 	return qfalse;
@@ -13620,7 +13643,8 @@ static qboolean NewBotAI_SwingChainFootingAllows(bot_state_t *bs)
 
 	if (footing == NEWBOTAI_SWING_FOOTING_HOLD && !bs->footingMistake)
 		return qfalse;
-	if (footing == NEWBOTAI_SWING_FOOTING_STEP_IN)
+	if (footing == NEWBOTAI_SWING_FOOTING_STEP_IN ||
+		(footing == NEWBOTAI_SWING_FOOTING_START && bs->swingFootingCommitForward))
 		trap->EA_MoveForward(bs->client);
 	return qtrue;
 }
@@ -13837,7 +13861,10 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 			(BG_SaberInAttack(currentMove) ||
 			currentMove == LS_A_L2R ||
 			currentMove == LS_A_R2L) ? qtrue : qfalse;
-		const int nextDwellMs = (bs->fanSwingCount <= 0) ? firstDwellMs : dwellMs;
+		const int msSinceHit = NewBotAI_GetMsSinceSaberContactOnEnemy(bs);
+		//Still landing hits: link straight into the next swing and keep driving in.
+		const int nextDwellMs = NewBotAI_GetFanLinkDwellMs(
+			(bs->fanSwingCount <= 0) ? firstDwellMs : dwellMs, msSinceHit);
 		qboolean linkNow;
 
 		//A swing only counts as "started" for this HOLD once it is a new move - not the
@@ -13889,12 +13916,13 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 			const newbotai_swing_footing_t footing =
 				NewBotAI_GetCurrentSwingFooting(bs, (bs->fanSwingCount > 0) ? qtrue : qfalse);
 
-			if (footing == NEWBOTAI_SWING_FOOTING_HOLD)
+			if (footing == NEWBOTAI_SWING_FOOTING_HOLD && !NewBotAI_FanChainIsLanding(msSinceHit))
 			{
 				//Never fan while backing off from 100u+ - those swings never landed.
 				NewBotAI_ResetFanChain(bs);
 			}
-			else if (footing == NEWBOTAI_SWING_FOOTING_STEP_IN &&
+			else if ((footing == NEWBOTAI_SWING_FOOTING_STEP_IN ||
+				footing == NEWBOTAI_SWING_FOOTING_HOLD) &&
 				level.time < bs->fanPhaseStartTime + holdMs + 600)
 			{
 				//Step in first; the swing starts once the predicted peak range is in reach.
@@ -14001,6 +14029,7 @@ static void NewBotAI_ApplyHorizontalSwingMove(bot_state_t *bs)
 	//once the swing is running, step forward like human winners did while it landed.
 	//Before the swing starts, close the gap until the predicted peak range is in reach.
 	if (NewBotAI_FanHoldUsesForward(bs->fanSwingStarted, NewBotAI_GetEnemyDistance2D(bs)) ||
+		(bs->fanSwingStarted && NewBotAI_FanChainIsLanding(NewBotAI_GetMsSinceSaberContactOnEnemy(bs))) ||
 		(!bs->fanSwingStarted && !NewBotAI_FanHoldMayStartSwing(bs)))
 	{
 		trap->EA_MoveForward(bs->client);
@@ -17168,9 +17197,34 @@ static qboolean NewBotAI_CanControlSaber(bot_state_t *bs)
 		NewBotAI_IsRecoveryMovementActive(bs)) ? qtrue : qfalse;
 }
 
+static qboolean NewBotAI_SaberSafeFootworkTrace(bot_state_t *bs, const vec3_t origin, float yaw,
+	int forwardMove, int rightMove, qboolean jump);
+
 // Trace the whole body and several landing probes, not just the backward ray.
 // This ordinary, briefly pressed jump never charges levitation or wallruns.
+// The current opponent's body is not an obstacle: walking into them is the point of a
+// committed swing, and treating them as a wall froze bots at saber's length (dueltracks2:
+// 45% no-input at 40-60u vs 5% for humans). Walls, ledges and hazards still block.
 static qboolean NewBotAI_SaberSafeFootwork(bot_state_t *bs, const vec3_t origin, float yaw,
+	int forwardMove, int rightMove, qboolean jump)
+{
+	gentity_t *enemy = (bs && bs->currentEnemy && bs->currentEnemy->client &&
+		bs->currentEnemy->inuse) ? bs->currentEnemy : NULL;
+	int enemyContents = 0;
+	qboolean safe;
+
+	if (enemy)
+	{
+		enemyContents = enemy->r.contents;
+		enemy->r.contents = 0;
+	}
+	safe = NewBotAI_SaberSafeFootworkTrace(bs, origin, yaw, forwardMove, rightMove, jump);
+	if (enemy)
+		enemy->r.contents = enemyContents;
+	return safe;
+}
+
+static qboolean NewBotAI_SaberSafeFootworkTrace(bot_state_t *bs, const vec3_t origin, float yaw,
 	int forwardMove, int rightMove, qboolean jump)
 {
 	vec3_t angles, forward, right, direction, end, probe, mins, maxs;
@@ -17337,12 +17391,16 @@ static void NewBotAI_RunSaberTechniques(bot_state_t *bs)
 			context.enemyDistance = predicted2D;
 		else
 			context.enemyDistance = bs->frame_Enemy_Len;
+		context.enemyDistance = NewBotAI_SaberRangeWithHysteresis(context.enemyDistance,
+			NEWBOTAI_SABER_STEP_IN_SWING_RANGE, NEWBOTAI_SABER_RANGE_HYSTERESIS, bs->saberTechniqueInReach);
+		bs->saberTechniqueInReach = context.enemyDistance <= NEWBOTAI_SABER_STEP_IN_SWING_RANGE;
 	}
-	if (bs->saberTacticGradeUntil <= level.time)
+	//Hold the choice grade through the current swing instead of re-rolling mid-swing.
+	if (NewBotAI_SaberGradeShouldReroll(level.time, bs->saberTacticGradeUntil, context.selfAttacking))
 	{
 		bs->saberTacticGrade = NewBotAI_GetSaberChoiceGrade(context.skill,
 			(int)BotGetChanceBiasPercent(bot_mistakebias.value), Q_irand(1, 100));
-		bs->saberTacticGradeUntil = level.time + 300;
+		bs->saberTacticGradeUntil = level.time;
 	}
 	if (!bs->saberTechniqueFamilyUntil ||
 		bs->saberTechniqueFamilyUntil != bs->saberTechniqueAcceptedTime)
@@ -17509,9 +17567,13 @@ static void NewBotAI_ApplySaberTechniqueInput(bot_state_t *bs, bot_input_t *bi, 
 	finalContext.selecting = selecting;
 	finalContext.selectedForward = selectedForward;
 	finalContext.selectedRight = selectedRight;
-	finalContext.pressureForward = bs->saberTacticAction == NEWBOTAI_SABER_TACTIC_STAND_SWING ? 0 :
-		bs->saberTacticAction == NEWBOTAI_SABER_TACTIC_BACK_SWING ? -1 :
-		bs->frame_Enemy_Len > 48.0f ? 1 : 0;
+	{
+		float range2D, predicted2D, radial2D;
+		finalContext.pressureForward = NewBotAI_SaberAttackForward(
+			(newbotai_saber_tactic_t)bs->saberTacticAction,
+			NewBotAI_GetEnemyRangeKinematics(bs, &range2D, &predicted2D, &radial2D) ?
+			predicted2D : bs->frame_Enemy_Len);
+	}
 	finalContext.pressureRight = bs->saberTacticStrafeDir;
 	finalContext.strafeSuppressed = NewBotAI_IsDuelStrafeSuppressed(bs);
 	// Refresh at command frequency, not just at the slower AI decision boundary.
@@ -17565,6 +17627,90 @@ static void NewBotAI_ApplySaberTechniqueInput(bot_state_t *bs, bot_input_t *bi, 
 	VectorClear(bi->dir);
 	bi->speed = 0;
 	bi->actionflags = NewBotAI_SaberOwnedActionFlags(bi->actionflags, ownedMask, plannedFlags);
+}
+
+// Longitudinal intent (-1 back, 0 none, 1 forward) of a final bot input.
+static int NewBotAI_GetInputForward(bot_input_t *bi)
+{
+	vec3_t angles, forward;
+	float along;
+
+	if (bi->actionflags & ACTION_MOVEFORWARD)
+		return 1;
+	if (bi->actionflags & ACTION_MOVEBACK)
+		return -1;
+	if (bi->speed <= 0.0f)
+		return 0;
+	VectorSet(angles, 0, bi->viewangles[YAW], 0);
+	AngleVectors(angles, forward, NULL, NULL);
+	along = DotProduct(bi->dir, forward);
+	return along > 0.3f ? 1 : along < -0.3f ? -1 : 0;
+}
+
+static void NewBotAI_SetInputForward(bot_input_t *bi)
+{
+	vec3_t angles, forward;
+	float along;
+
+	bi->actionflags &= ~ACTION_MOVEBACK;
+	bi->actionflags |= ACTION_MOVEFORWARD;
+	if (bi->speed <= 0.0f)
+		return;
+	VectorSet(angles, 0, bi->viewangles[YAW], 0);
+	AngleVectors(angles, forward, NULL, NULL);
+	along = DotProduct(bi->dir, forward);
+	if (along < 0.0f)
+		VectorMA(bi->dir, -along, forward, bi->dir);
+}
+
+// Final input boundary for saber duels: carry the previous owner's forward intent across a
+// controller <-> force/fan ownership change, and keep high-skill swing starts off the
+// backpedal (humans never started a swing while backpedalling).
+static void NewBotAI_ApplySaberHandover(bot_state_t *bs, bot_input_t *bi, int time)
+{
+	playerState_t *ps;
+	const int owner = bs->saberTechniqueOwnsInputs ? 1 : 0;
+	int forward;
+	int adjusted;
+	qboolean escape;
+
+	if (!g_newBotAI.integer || bi->weapon != WP_SABER || !bs->currentEnemy ||
+		!bs->currentEnemy->client || bs->currentEnemy->health <= 0 ||
+		//Fan holds need pure strafe to select the horizontal swing; kick/grip
+		//sequences own their movement exclusively.
+		bs->fanPhase == FAN_PHASE_HOLD || NewBotAI_HasExclusiveFlipkickMovement(bs) ||
+		(g_entities[bs->client].client->ps.fd.forcePowersActive & (1 << FP_GRIP)))
+	{
+		bs->saberHandoverOwner = owner;
+		bs->saberHandoverTime = 0;
+		bs->saberLastForward = 0;
+		return;
+	}
+	ps = &g_entities[bs->client].client->ps;
+	forward = NewBotAI_GetInputForward(bi);
+	if (owner != bs->saberHandoverOwner)
+	{
+		bs->saberHandoverOwner = owner;
+		bs->saberHandoverTime = time;
+		bs->saberHandoverForward = bs->saberLastForward;
+	}
+	escape = (bs->combatAction == BOT_COMBAT_ACTION_RETREAT_DEFENSE || bs->runningLikeASissy ||
+		ps->forceHandExtend == HANDEXTEND_KNOCKDOWN || BG_InKnockDown(ps->legsAnim) ||
+		NewBotAI_IsEnemySaberThreatImminent(bs) ||
+		(owner && (bs->saberTacticAction == NEWBOTAI_SABER_TACTIC_RESET ||
+			bs->saberTacticAction == NEWBOTAI_SABER_TACTIC_REPOSITION))) ? qtrue : qfalse;
+	adjusted = forward;
+	if (bs->saberHandoverTime > 0)
+		adjusted = NewBotAI_SaberHandoverForward(bs->saberHandoverForward, adjusted,
+			time - bs->saberHandoverTime, escape);
+	if (bi->actionflags & ACTION_ATTACK)
+		adjusted = NewBotAI_SaberSwingStartForward((int)bs->settings.skill,
+			ps->weaponTime <= 0 && !BG_SaberInAttack(ps->saberMove) &&
+			!PM_SaberInStart(ps->saberMove) && !PM_SaberInTransition(ps->saberMove),
+			adjusted, escape);
+	if (adjusted > forward)
+		NewBotAI_SetInputForward(bi);
+	bs->saberLastForward = adjusted;
 }
 
 void NewBotAI_NF(bot_state_t *bs)

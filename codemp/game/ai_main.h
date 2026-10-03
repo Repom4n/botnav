@@ -398,6 +398,8 @@ typedef struct bot_state_s
 	qboolean			counterThrowMistake; // low-skill roll: hold the saber instead of counter-throwing
 	int					footingMistakeRollTime; // level.time the swing-footing mistake roll was taken
 	qboolean			footingMistake; // low-skill roll: start swings out of reach / while backing off
+	qboolean			swingFootingInReach; // last predicted peak range was inside the step-in swing range (hysteresis)
+	qboolean			swingFootingCommitForward; // last footing START still needs forward to reach ~40-55u at peak
 	int					drainHoldTime;
 	qboolean			healDrainlockActive; // latched once a health-disadvantaged drainlock starts; stays active on the same enemy until topped off or aggression turns reckless
 	int					healDrainlockTargetNum; // enemy clientNum associated with healDrainlockActive
@@ -418,7 +420,12 @@ typedef struct bot_state_s
 	int					saberTacticChainLength; // consecutive saber attack transitions in the current pressure sequence
 	int					saberTacticLastMove; // previous saberMove used to count pressure-chain transitions
 	int					saberTacticGrade; // NEWBOTAI_SABER_GRADE_* rolled for the current decision window
-	int					saberTacticGradeUntil; // level.time when a new choice grade is rolled
+	int					saberTacticGradeUntil; // level.time the current choice grade was rolled (held per swing)
+	qboolean			saberTechniqueInReach; // planner range was inside the step-in swing range (hysteresis)
+	int					saberHandoverOwner; // last saberTechniqueOwnsInputs seen at the input boundary
+	int					saberHandoverTime; // time the input owner last changed
+	int					saberHandoverForward; // longitudinal intent (-1/0/1) of the previous owner at the change
+	int					saberLastForward; // longitudinal intent sent on the last input frame
 	int					saberTacticEnemyHealth; // enemy HP+armor last frame, to detect landed hits
 	int					saberTacticEnemyNum; // entity number the cached enemy health belongs to
 	int					saberTacticLastHitTime;
