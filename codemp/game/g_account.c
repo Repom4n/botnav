@@ -153,7 +153,8 @@ typedef enum
 	DUEL_TRACK_EVENT_DAMAGE_DEALT,
 	DUEL_TRACK_EVENT_INPUT_START,
 	DUEL_TRACK_EVENT_THROW_START,
-	DUEL_TRACK_EVENT_DODGE
+	DUEL_TRACK_EVENT_DODGE,
+	DUEL_TRACK_EVENT_THROW_END
 } duel_track_event_type_t;
 
 typedef struct
@@ -245,6 +246,8 @@ typedef struct
 	int lastForceSpendTime;
 	int lastThrowTime;
 	int lastThrowYawOffset;
+	int throwActive;
+	int throwDamage;
 	int lastSaberInFlight;
 	int currentSequenceId;
 	int lastSequenceTime;
@@ -322,6 +325,8 @@ typedef struct
 	int lastForceSpendTime;
 	int lastThrowTime;
 	int lastThrowYawOffset;
+	int throwActive;
+	int throwDamage;
 	int lastSaberInFlight;
 	int currentSequenceId;
 	int lastSequenceTime;
@@ -1021,6 +1026,7 @@ static qboolean G_ShouldCaptureTrackedGeometryEvent(int eventType)
 	case DUEL_TRACK_EVENT_DAMAGE_DEALT:
 	case DUEL_TRACK_EVENT_INPUT_START:
 	case DUEL_TRACK_EVENT_THROW_START:
+	case DUEL_TRACK_EVENT_THROW_END:
 	case DUEL_TRACK_EVENT_DODGE:
 		return qtrue;
 	default:
@@ -1465,6 +1471,7 @@ static const char *G_GetTrackedEventTypeName(int eventType)
 	case DUEL_TRACK_EVENT_DAMAGE_DEALT: return "damage_dealt";
 	case DUEL_TRACK_EVENT_INPUT_START: return "input_start";
 	case DUEL_TRACK_EVENT_THROW_START: return "throw_start";
+	case DUEL_TRACK_EVENT_THROW_END: return "throw_end";
 	case DUEL_TRACK_EVENT_DODGE: return "dodge";
 	case DUEL_TRACK_EVENT_COUNTER_SUCCESS: return "counter_success";
 	case DUEL_TRACK_EVENT_PUNISH_SUCCESS: return "punish_success";
@@ -1657,11 +1664,24 @@ static qboolean G_IsTrackedSaberThrowRelease(gentity_t *ent)
 		return qfalse;
 	if (ent->client->ps.weapon != WP_SABER)
 		return qfalse;
-	if (ent->client->ps.saberEntityState != SES_LEAVING)
-		return qfalse;
-	if (ent->client->ps.weaponstate != WEAPON_FIRING)
+	//pmove sets saberInFlight on the throw before the game side marks saberEntityState, so
+	//the old SES_LEAVING/WEAPON_FIRING test never matched (0 throw_start rows exported).
+	//A knocked-out saber also sets saberInFlight but clears saberEntityNum and arms
+	//saberKnockedTime - exclude that instead.
+	if (!ent->client->ps.saberEntityNum || ent->client->saberKnockedTime > level.time)
 		return qfalse;
 	return qtrue;
+}
+
+static int G_GetTrackedDistance2D(gentity_t *ent, gentity_t *opponent)
+{
+	vec3_t diff;
+
+	if (!ent || !ent->client || !opponent || !opponent->client)
+		return 0;
+	VectorSubtract(opponent->client->ps.origin, ent->client->ps.origin, diff);
+	diff[2] = 0.0f;
+	return (int)(VectorLength(diff) + 0.5f);
 }
 
 static void G_FillTrackedEventCoachingContext(tracked_duel_event_t *event, int eventType,
@@ -3884,9 +3904,20 @@ void G_UpdateTrackedDuelFrame(gentity_t *ent)
 	{
 		runtime->lastThrowTime = level.time;
 		runtime->lastThrowYawOffset = G_GetTrackedThrowYawOffset(ent, opponent);
+		runtime->throwActive = 1;
+		runtime->throwDamage = 0;
 		G_TouchTrackedDuelSequence(runtime);
+		//amount = 2D distance at release; aim is in throw_yaw_offset, outcome in throw_end.
 		G_AddTrackedDuelEvent(runtime, DUEL_TRACK_EVENT_THROW_START, level.time - runtime->duelStartTime,
-			curForce, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, "release", ent, opponent);
+			G_GetTrackedDistance2D(ent, opponent), DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket, "release", ent, opponent);
+	}
+	else if (runtime->throwActive && !ent->client->ps.saberInFlight)
+	{
+		//amount = damage the throw dealt while in flight.
+		runtime->throwActive = 0;
+		G_AddTrackedDuelEvent(runtime, DUEL_TRACK_EVENT_THROW_END, level.time - runtime->duelStartTime,
+			runtime->throwDamage, DUEL_TRACK_POWER_UNKNOWN, state, curRangeBucket,
+			runtime->throwDamage > 0 ? "hit" : "miss", ent, opponent);
 	}
 	if ((state == DUEL_TRACK_STATE_PANIC || state == DUEL_TRACK_STATE_DISADVANTAGE) &&
 		curForce <= TRACKED_DUEL_LOW_FORCE_THRESHOLD)
@@ -4057,6 +4088,8 @@ static void G_RecordTrackedArcadeDamage(gentity_t *target, gentity_t *attacker, 
 		target->s.number, runtime->lastOpponentClientNum))
 		return;
 	runtime->totalDamageDealt += amount;
+	if (mod == MOD_SABER && runtime->throwActive && attacker->client->ps.saberInFlight)
+		runtime->throwDamage += amount;
 	G_TouchTrackedArcadeSequence(runtime);
 	state = G_InferTrackedForceState(attacker, target);
 	range = G_GetTrackedRangeBucket(attacker, target);
@@ -4185,6 +4218,8 @@ void G_TrackedDuelRecordDamage(gentity_t *target, gentity_t *attacker, int amoun
 	if (!source->active || source->opponentClientNum != target->s.number)
 		return;
 	source->totalDamageDealt += amount;
+	if (mod == MOD_SABER && source->throwActive && attacker->client->ps.saberInFlight)
+		source->throwDamage += amount;
 	if (lethal)
 		source->totalKills++;
 	G_TouchTrackedDuelSequence(source);
@@ -4781,7 +4816,20 @@ void G_UpdateTrackedArcadeCombatFrame(gentity_t *ent)
 	{
 		runtime->lastThrowTime = level.time;
 		runtime->lastThrowYawOffset = G_GetTrackedThrowYawOffset(ent, opponent);
+		runtime->throwActive = 1;
+		runtime->throwDamage = 0;
 		G_TouchTrackedArcadeSequence(runtime);
+		G_AddTrackedArcadeEvent(runtime, DUEL_TRACK_EVENT_THROW_START, level.time - runtime->startTime,
+			G_GetTrackedDistance2D(ent, opponent), DUEL_TRACK_POWER_UNKNOWN, state,
+			G_GetTrackedRangeBucket(ent, opponent), "release", ent, opponent);
+	}
+	else if (runtime->throwActive && !ent->client->ps.saberInFlight)
+	{
+		runtime->throwActive = 0;
+		G_AddTrackedArcadeEvent(runtime, DUEL_TRACK_EVENT_THROW_END, level.time - runtime->startTime,
+			runtime->throwDamage, DUEL_TRACK_POWER_UNKNOWN, state,
+			opponent ? G_GetTrackedRangeBucket(ent, opponent) : 0,
+			runtime->throwDamage > 0 ? "hit" : "miss", ent, opponent);
 	}
 
 	if ((state == DUEL_TRACK_STATE_PANIC || state == DUEL_TRACK_STATE_DISADVANTAGE) &&
