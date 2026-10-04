@@ -226,7 +226,10 @@ static void G_ArcadeBroadcastLevelCenterMessage(int levelNumber)
 	trap->SendServerCommand(-1, va("cp \"^2Level %i\n\"", levelNumber));
 }
 
-static void G_ArcadeQueueActiveFreeHumans(void)
+//Arcade never pulls humans into the game on its own: anyone sitting on the free team who is not
+//a round participant or a queued joiner is moved to spectator so players must explicitly join.
+//forceAll is used when a new arcade run starts so every human begins as a spectator.
+static void G_ArcadeForceSpectateFreeHumans(qboolean forceAll)
 {
 	int i;
 
@@ -238,11 +241,21 @@ static void G_ArcadeQueueActiveFreeHumans(void)
 		{
 			continue;
 		}
-		if (ent->client->sess.sessionTeam == TEAM_FREE &&
-			!level.arcadeParticipant[i] && !level.arcadeQueued[i])
+		if (ent->client->sess.sessionTeam == TEAM_SPECTATOR)
 		{
-			level.arcadeQueued[i] = qtrue;
+			continue;
 		}
+		if (!forceAll && (level.arcadeParticipant[i] || level.arcadeQueued[i]))
+		{
+			continue;
+		}
+		level.arcadeParticipant[i] = qfalse;
+		level.arcadeQueued[i] = qfalse;
+		SetTeam(ent, "spectator", qtrue);
+		if (!level.arcadeGameOverTime && level.arcadeLevel == ARCADE_START_LEVEL)
+			trap->SendServerCommand(i, "print \"Arcade: use /team free during level 1 to join the run.\n\"");
+		else
+			trap->SendServerCommand(i, "print \"Arcade: the run is locked; wait for the next level 1 to join.\n\"");
 	}
 }
 
@@ -1685,12 +1698,12 @@ static void G_ArcadeRunFrame(void)
 		level.arcadeGameOverCenterReplayTime = 0;
 		level.arcadeGameOverCenterReplaySent = qfalse;
 		level.arcadeGameOverComplete = qfalse;
-		G_ArcadeQueueActiveFreeHumans();
+		G_ArcadeForceSpectateFreeHumans(qtrue);
 		G_ArcadeBroadcastLevelCenterMessage(level.arcadeLevel);
 	}
+	G_ArcadeForceSpectateFreeHumans(qfalse);
 	if (level.arcadeRoundStartTime <= 0)
 	{
-		G_ArcadeQueueActiveFreeHumans();
 		(void)G_ArcadeEnsureHumanReserveSlots();
 	}
 	if (level.arcadeGameOverTime &&
@@ -1714,7 +1727,7 @@ static void G_ArcadeRunFrame(void)
 		level.arcadeGameOverCenterReplayTime = 0;
 		level.arcadeGameOverCenterReplaySent = qfalse;
 		level.arcadeGameOverComplete = qfalse;
-		G_ArcadeQueueActiveFreeHumans();
+		G_ArcadeForceSpectateFreeHumans(qtrue);
 		G_ArcadeBroadcastLevelCenterMessage(level.arcadeLevel);
 	}
 	if (level.arcadeCleanupRetryTime && level.time >= level.arcadeCleanupRetryTime)

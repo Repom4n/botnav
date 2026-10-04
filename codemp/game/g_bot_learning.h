@@ -48,7 +48,7 @@ typedef enum
 /* Bot-performed rows count this much of a human row: poor bot execution of a good action
  * should not teach that the action itself loses. */
 #define BOTLEARN_BOT_SAMPLE_WEIGHT 0.25f
-#define BOTLEARN_DEFAULT_MIN_SAMPLES 6
+#define BOTLEARN_DEFAULT_MIN_SAMPLES 4
 #define BOTLEARN_BONUS_CAP 30
 #define BOTLEARN_COARSE_KEY_FLAG 0x8000
 
@@ -162,6 +162,42 @@ static inline int BotLearn_ContextKey(int selfHealthArmor, int enemyHealthArmor,
 static inline int BotLearn_CoarseKey(int contextKey)
 {
 	return BOTLEARN_COARSE_KEY_FLAG | ((contextKey >> 4) & 0x3F);
+}
+
+/* Similar contexts: a context whose HP+armor / force buckets (both sides) differ from the
+ * live one by at most BOTLEARN_NEIGHBOR_MAX_DISTANCE bucket steps in total (same range and
+ * stances) is pooled with weight BotLearn_NeighborWeight(steps), so close HP/AP/FP values
+ * share samples instead of needing an exact bucket match. */
+#define BOTLEARN_NEIGHBOR_MAX_DISTANCE 2
+
+static inline float BotLearn_NeighborWeight(int steps)
+{
+	if (steps <= 0)
+		return 1.0f;
+	if (steps > BOTLEARN_NEIGHBOR_MAX_DISTANCE)
+		return 0.0f;
+	return steps == 1 ? 0.5f : 0.25f;
+}
+
+/* contextKey with its self HP, enemy HP, self force and enemy force buckets shifted by the
+ * given steps, or -1 when a bucket leaves its 0-3 range. */
+static inline int BotLearn_NeighborKey(int contextKey, int dSelfHealth, int dEnemyHealth,
+	int dSelfForce, int dEnemyForce)
+{
+	const int deltas[4] = { dSelfHealth, dEnemyHealth, dSelfForce, dEnemyForce };
+	int field, key = contextKey;
+
+	if (contextKey < 0 || (contextKey & BOTLEARN_COARSE_KEY_FLAG))
+		return -1;
+	for (field = 0; field < 4; field++)
+	{
+		const int shift = field * 2;
+		const int value = ((contextKey >> shift) & 3) + deltas[field];
+		if (value < 0 || value > 3)
+			return -1;
+		key = (key & ~(3 << shift)) | (value << shift);
+	}
+	return key;
 }
 
 static inline int BotLearn_SkillBand(int isBot, int skill)

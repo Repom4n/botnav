@@ -61,6 +61,101 @@ typedef enum
 // Movement intent carried across controller <-> force/fan code ownership changes.
 #define NEWBOTAI_SABER_HANDOVER_MS 200
 
+// Saber advance footwork (dueltracks3, capture 15a44a555): human saber hits landed at a
+// median 73u while still closing at +170-250u/s (jundon: windup hits 101u at +249u/s, apex
+// 44u at +42u/s, cooldown 75u at +358u/s); failed human swings started at 120-140u closing
+// only ~+30u/s. Current bots released swings while backing off (-57u/s) and their damage per
+// duel fell 204 -> 131. Bots therefore keep walking in through windup, apex and cooldown and
+// between swings, and only hand the stick back to the planned direction in the last
+// NEWBOTAI_SABER_ADVANCE_RELINK_MS before a chained swing is chosen, so the next swing's
+// direction (which the engine reads from the movement keys) is not corrupted.
+#define NEWBOTAI_SABER_ADVANCE_RELINK_MS 150
+#define NEWBOTAI_SABER_ADVANCE_WINDUP_MIN_RANGE 40.0f
+#define NEWBOTAI_SABER_ADVANCE_APEX_MIN_RANGE 60.0f
+#define NEWBOTAI_SABER_ADVANCE_COOLDOWN_MIN_RANGE 48.0f
+#define NEWBOTAI_SABER_ADVANCE_IDLE_MIN_RANGE 70.0f
+#define NEWBOTAI_SABER_ADVANCE_MAX_RANGE 400.0f
+
+typedef enum
+{
+	NEWBOTAI_SABER_PHASE_IDLE = 0,	// ready, between swings
+	NEWBOTAI_SABER_PHASE_WINDUP,	// start move
+	NEWBOTAI_SABER_PHASE_APEX,		// attack move
+	NEWBOTAI_SABER_PHASE_COOLDOWN	// return / transition move
+} newbotai_saber_phase_t;
+
+// Longitudinal input (-1/0/1) for the final saber-duel input. plannedForward is what the
+// planner already chose; chaining is set while attack is held for the next swing and
+// msToChain is the time until the engine picks that swing (weaponTime).
+static inline int NewBotAI_SaberAdvanceForward(newbotai_saber_phase_t phase, float range,
+	int plannedForward, int chaining, int msToChain, int startingSwing, int enemyAttacking,
+	int deliberateEscape)
+{
+	float minRange;
+
+	if (deliberateEscape || plannedForward > 0 || startingSwing)
+		return plannedForward;
+	if (range > NEWBOTAI_SABER_ADVANCE_MAX_RANGE)
+		return plannedForward;
+	if (chaining && phase != NEWBOTAI_SABER_PHASE_IDLE && msToChain <= NEWBOTAI_SABER_ADVANCE_RELINK_MS)
+		return plannedForward;
+	switch (phase)
+	{
+	case NEWBOTAI_SABER_PHASE_WINDUP:
+		minRange = NEWBOTAI_SABER_ADVANCE_WINDUP_MIN_RANGE;
+		break;
+	case NEWBOTAI_SABER_PHASE_APEX:
+		minRange = NEWBOTAI_SABER_ADVANCE_APEX_MIN_RANGE;
+		break;
+	case NEWBOTAI_SABER_PHASE_COOLDOWN:
+		minRange = NEWBOTAI_SABER_ADVANCE_COOLDOWN_MIN_RANGE;
+		break;
+	default:
+		//Between swings humans advanced on ~64% of enemy swings and dodged back otherwise:
+		//keep a planned dodge back from an incoming swing, otherwise close to swing range.
+		if (enemyAttacking && plannedForward < 0)
+			return plannedForward;
+		minRange = NEWBOTAI_SABER_ADVANCE_IDLE_MIN_RANGE;
+		break;
+	}
+	return range > minRange ? 1 : plannedForward;
+}
+
+// jundon swing ends (dueltracks3) usually stepped back and aside (radial -58u/s, rightmove
+// +/-127) when the swing had not landed and no chain followed. One short sidestep-back per
+// unproductive swing return; a landed hit or a held chain keeps advancing instead.
+#define NEWBOTAI_SABER_SIDESTEP_MS 200
+
+static inline int NewBotAI_ShouldSidestepAfterSwing(int inReturn, int chaining, int msSinceHit,
+	int deliberateEscape)
+{
+	if (!inReturn || chaining || deliberateEscape)
+		return 0;
+	return (msSinceHit < 0 || msSinceHit > NEWBOTAI_SABER_LANDED_HIT_WINDOW_MS) ? 1 : 0;
+}
+
+// Reaction to an enemy swing (humans within 700ms: advance 240 + dodge-advance 59 vs retreat
+// 137 + dodge-retreat 53, ~61-65% advance): roll once per enemy swing.
+#define NEWBOTAI_ENEMY_SWING_ADVANCE_PERCENT 65
+// Counter-swings (jundon 34) started a median ~100ms after the enemy swing began, inside 90u.
+#define NEWBOTAI_COUNTER_SWING_DELAY_MS 100
+#define NEWBOTAI_COUNTER_SWING_WINDOW_MS 250
+#define NEWBOTAI_COUNTER_SWING_RANGE 90.0f
+
+static inline int NewBotAI_EnemySwingAdvances(int roll)
+{
+	return (roll > 0 && roll <= NEWBOTAI_ENEMY_SWING_ADVANCE_PERCENT) ? 1 : 0;
+}
+
+static inline int NewBotAI_CounterSwingReady(int msSinceEnemySwingStart, float range2D,
+	int alreadyCountered)
+{
+	if (alreadyCountered || range2D > NEWBOTAI_COUNTER_SWING_RANGE)
+		return 0;
+	return (msSinceEnemySwingStart >= NEWBOTAI_COUNTER_SWING_DELAY_MS &&
+		msSinceEnemySwingStart <= NEWBOTAI_COUNTER_SWING_DELAY_MS + NEWBOTAI_COUNTER_SWING_WINDOW_MS) ? 1 : 0;
+}
+
 // Range with a buffer: once inside `threshold`, the bot stays inside until the range
 // exceeds threshold + band. Returns the range to plan with (clamped to the threshold).
 static inline float NewBotAI_SaberRangeWithHysteresis(float range, float threshold, float band, int wasInside)
@@ -123,6 +218,10 @@ typedef struct
 	int selfBlocked;
 	int counterReady;
 	int saberCombat;
+	int closingKnown;	// closingSpeed/currentDistance are valid (zero-initialized: unknown)
+	float closingSpeed;	// 2D radial speed, > 0 while closing on the enemy
+	float currentDistance;	// 2D range now (enemyDistance is the predicted peak range)
+	int fanStance;		// yellow/staff: favour R2L<->L2R, T2B only as a finisher
 } newbotai_saber_tactic_context_t;
 
 typedef struct
@@ -516,6 +615,53 @@ static inline void NewBotAI_SaberSelectionInputs(newbotai_saber_family_t family,
 	}
 }
 
+// jundon (dueltracks3) yellow/staff swings: R2L 271, L2R 225, T2B 41; chained
+// R2L->L2R 101, L2R->R2L 67. Yellow/staff alternate horizontals and keep T2B for the
+// finisher (stage >= NEWBOTAI_SABER_FAN_FINISH_STAGE of a FINISH sequence).
+#define NEWBOTAI_JUNDON_R2L_SWINGS 271
+#define NEWBOTAI_JUNDON_L2R_SWINGS 225
+#define NEWBOTAI_JUNDON_R2L_TO_L2R 101
+#define NEWBOTAI_JUNDON_L2R_TO_R2L 67
+#define NEWBOTAI_SABER_FAN_FINISH_STAGE 2
+
+static inline void NewBotAI_SaberFanStanceInputs(int fanStance, newbotai_saber_family_t family,
+	int stage, int direction, int *forward, int *right)
+{
+	if (!fanStance)
+		return;
+	if (family == NEWBOTAI_SABER_FINISH)
+	{
+		if (stage >= NEWBOTAI_SABER_FAN_FINISH_STAGE)
+		{
+			*forward = 1;
+			*right = 0;
+		}
+		return;
+	}
+	if (*forward > 0 && !*right)
+	{
+		*forward = 0;
+		*right = direction < 0 ? -1 : 1;
+	}
+}
+
+// Chain start direction (1 = L2R, -1 = R2L) weighted by jundon's swing counts; roll 1-100.
+static inline int NewBotAI_FanStartDirection(int roll)
+{
+	const int r2lPercent = (NEWBOTAI_JUNDON_R2L_SWINGS * 100) /
+		(NEWBOTAI_JUNDON_R2L_SWINGS + NEWBOTAI_JUNDON_L2R_SWINGS);
+	return roll <= r2lPercent ? -1 : 1;
+}
+
+// Chance (percent) to link the next opposite horizontal when the chain is not landing hits,
+// relative to jundon's most common link (R2L->L2R = 100%). finishedDir: 1 = L2R, -1 = R2L.
+static inline int NewBotAI_FanLinkChance(int finishedDir)
+{
+	if (finishedDir > 0)
+		return (NEWBOTAI_JUNDON_L2R_TO_R2L * 100) / NEWBOTAI_JUNDON_R2L_TO_L2R;
+	return 100;
+}
+
 static inline int NewBotAI_SaberPreparationInputs(int attackIndex, int *forward, int *right)
 {
 	// Basic attack order: TL2BR, L2R, BL2TR, BR2TL, R2L, TR2BL, T2B.
@@ -560,6 +706,8 @@ static inline int NewBotAI_SaberCanEscapeJump(int grounded, int jumpReleased,
 }
 
 static inline int NewBotAI_SaberTacticAllowsSwingStart(newbotai_saber_tactic_t tactic, float enemyDistance);
+static inline int NewBotAI_SaberFreshSwingWindowAllows(newbotai_saber_tactic_context_t context,
+	newbotai_saber_tactic_t tactic);
 
 // Forward input while attacking: commit toward ~40-55u at the swing peak. STAND_SWING
 // (mediocre timing) commits less deep; BACK_SWING is the low-skill backpedal mistake.
@@ -601,7 +749,8 @@ static inline newbotai_saber_command_t NewBotAI_PlanSaberCommand(
 		command.forward = -1;
 
 	command.attack = grounded && attackLegal &&
-		NewBotAI_SaberTacticAllowsSwingStart(tactic, context.enemyDistance);
+		NewBotAI_SaberTacticAllowsSwingStart(tactic, context.enemyDistance) &&
+		NewBotAI_SaberFreshSwingWindowAllows(context, tactic);
 	if (command.attack)
 	{
 		command.right = side;
@@ -609,7 +758,11 @@ static inline newbotai_saber_command_t NewBotAI_PlanSaberCommand(
 		// Starts and transitions can be much longer than 100ms (especially red).
 		// Hold the deliberate family/stage selection until an accepted attack owns pressure.
 		if (choosingMove)
+		{
 			NewBotAI_SaberSelectionInputs(family, stage, side, &command.forward, &command.right);
+			NewBotAI_SaberFanStanceInputs(context.fanStance, family, stage, side,
+				&command.forward, &command.right);
+		}
 	}
 	// Airborne footwork stays deliberate, but cannot accidentally start aerial specials.
 	if (!grounded)
@@ -1466,16 +1619,21 @@ static inline float NewBotAI_SaberStepYawOffsetScaled(float current, float targe
 	return current + delta;
 }
 
-// Footing (void/jundon hits land 41-53u at peak, +141u/s closing): start a swing when the
-// predicted distance ~150ms in is inside reach, or inside ~100u while stepping in with it;
-// step in first beyond that; never swing while backing away from 100u+.
+// Footing (dueltracks3: human hits start at a median 71u predicted range, p25-75 50-99u,
+// while closing at +170-250u/s; failed human swings started from 120-140u closing ~+30u/s):
+// start when the predicted distance ~150ms in is inside reach, or inside 70-100u while
+// closing faster than ~150u/s. Beyond ~130u keep stepping in (bait) rather than swing, and
+// never swing while backing away from 100u+.
 #define NEWBOTAI_SWING_PEAK_LEAD_MS 150
-#define NEWBOTAI_SWING_PEAK_RANGE 60.0f
+#define NEWBOTAI_SWING_PEAK_RANGE 70.0f
 #define NEWBOTAI_SWING_PEAK_RANGE_STAFF 70.0f
 #define NEWBOTAI_SWING_LINK_RANGE 85.0f
 #define NEWBOTAI_SWING_STEP_IN_RANGE 85.0f
 #define NEWBOTAI_SWING_BACKING_BLOCK_RANGE 100.0f
 #define NEWBOTAI_SWING_BACKING_SPEED 40.0f
+#define NEWBOTAI_SWING_START_WINDOW_MAX 100.0f
+#define NEWBOTAI_SWING_START_CLOSING_SPEED 150.0f
+#define NEWBOTAI_SWING_BAIT_RANGE 130.0f
 
 typedef enum
 {
@@ -1494,6 +1652,19 @@ static inline float NewBotAI_PredictRange2D(float dx, float dy, float relVx, flo
 	return sqrtf(px * px + py * py);
 }
 
+// Fresh (non-linked) swing start window: inside the peak range always, 70-100u only while
+// closing faster than NEWBOTAI_SWING_START_CLOSING_SPEED, never from beyond ~130u.
+static inline int NewBotAI_SwingStartWindowAllows(float currentRange, float predictedRange,
+	float radialSpeed, float peakRange)
+{
+	if (currentRange > NEWBOTAI_SWING_BAIT_RANGE)
+		return 0;
+	if (predictedRange <= peakRange)
+		return 1;
+	return (predictedRange <= NEWBOTAI_SWING_START_WINDOW_MAX &&
+		radialSpeed >= NEWBOTAI_SWING_START_CLOSING_SPEED) ? 1 : 0;
+}
+
 // radialSpeed > 0 means we are closing on the enemy. linkedSwing relaxes the peak range for
 // a chain continuation that is already committed.
 static inline newbotai_swing_footing_t NewBotAI_GetSwingFooting(float currentRange, float predictedRange,
@@ -1504,13 +1675,31 @@ static inline newbotai_swing_footing_t NewBotAI_GetSwingFooting(float currentRan
 
 	if (currentRange >= NEWBOTAI_SWING_BACKING_BLOCK_RANGE && radialSpeed < -NEWBOTAI_SWING_BACKING_SPEED)
 		return NEWBOTAI_SWING_FOOTING_HOLD;
-	if (predictedRange <= peakRange)
-		return NEWBOTAI_SWING_FOOTING_START;
-	// Inside ~100u and not backing off: step in and swing together (the caller adds
-	// forward input until the peak is inside NEWBOTAI_SABER_COMMIT_PEAK_RANGE).
-	if (predictedRange <= NEWBOTAI_SABER_STEP_IN_SWING_RANGE && radialSpeed >= -NEWBOTAI_SWING_BACKING_SPEED)
-		return NEWBOTAI_SWING_FOOTING_START;
-	return NEWBOTAI_SWING_FOOTING_STEP_IN;
+	if (linkedSwing)
+		return predictedRange <= peakRange ? NEWBOTAI_SWING_FOOTING_START : NEWBOTAI_SWING_FOOTING_STEP_IN;
+	// Otherwise keep stepping in (the caller adds forward input) until the window opens.
+	return NewBotAI_SwingStartWindowAllows(currentRange, predictedRange, radialSpeed, peakRange) ?
+		NEWBOTAI_SWING_FOOTING_START : NEWBOTAI_SWING_FOOTING_STEP_IN;
+}
+
+// Fresh swing starts (ATTACK/STAND_SWING/STEP_IN) follow the human start window when the
+// closing speed is known: inside 70u, or 70-100u while closing >150u/s, never beyond 130u.
+// Chains, counters and deliberate mistakes keep their own range limits.
+static inline int NewBotAI_SaberFreshSwingWindowAllows(newbotai_saber_tactic_context_t context,
+	newbotai_saber_tactic_t tactic)
+{
+	if (!context.closingKnown || context.enemyVulnerable)
+		return 1;
+	switch (tactic)
+	{
+	case NEWBOTAI_SABER_TACTIC_ATTACK:
+	case NEWBOTAI_SABER_TACTIC_STAND_SWING:
+	case NEWBOTAI_SABER_TACTIC_STEP_IN:
+		return NewBotAI_SwingStartWindowAllows(context.currentDistance, context.enemyDistance,
+			context.closingSpeed, NEWBOTAI_SWING_PEAK_RANGE);
+	default:
+		return 1;
+	}
 }
 
 // Dodging an enemy swing that starts within 130u: stationary/backpedal defenders were hit
@@ -1522,7 +1711,8 @@ typedef enum
 	NEWBOTAI_SWING_DODGE_NONE = 0,
 	NEWBOTAI_SWING_DODGE_LATERAL,
 	NEWBOTAI_SWING_DODGE_JUMP,
-	NEWBOTAI_SWING_DODGE_BACKPEDAL
+	NEWBOTAI_SWING_DODGE_BACKPEDAL,
+	NEWBOTAI_SWING_DODGE_ADVANCE	// step into the enemy swing (see NewBotAI_EnemySwingAdvances)
 } newbotai_swing_dodge_t;
 
 static inline newbotai_swing_dodge_t NewBotAI_GetSwingDodgeChoice(float enemyDistance2D, int grounded,

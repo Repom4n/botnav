@@ -1476,8 +1476,9 @@ void SetTeam( gentity_t *ent, char *s, qboolean forcedToJoin ) {//JAPRO - Modifi
 		oldTeam == TEAM_SPECTATOR)
 	{
 		const qboolean alreadyQueued = (level.arcadeParticipant[clientNum] || level.arcadeQueued[clientNum]);
+		//New players may join any time during level 1 (before or during the round); they enter
+		//on the next round start. Once level 1 is cleared the run is locked.
 		const qboolean canNewPlayerJoin = (!level.arcadeGameOverTime &&
-			level.arcadeRoundStartTime <= 0 &&
 			level.arcadeLevel == 1) ? qtrue : qfalse;
 
 		if (!alreadyQueued && !canNewPlayerJoin)
@@ -1488,7 +1489,7 @@ void SetTeam( gentity_t *ent, char *s, qboolean forcedToJoin ) {//JAPRO - Modifi
 			}
 			else
 			{
-				trap->SendServerCommand(ent-g_entities, "print \"Arcade: new players can only join before level 1 starts.\n\"");
+				trap->SendServerCommand(ent-g_entities, "print \"Arcade: the run is locked; new players can only join during level 1.\n\"");
 			}
 			return;
 		}

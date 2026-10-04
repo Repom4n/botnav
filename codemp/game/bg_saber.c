@@ -3256,10 +3256,13 @@ void PM_WeaponLightsaber(void)
 					&& pm->ps->saberBlocked == BLOCKED_NONE//not interacting with any other saber
 					&& !(pm->cmd.buttons&BUTTON_ATTACK) )//not trying to swing the saber
 				{
-					if ( (pm->cmd.forwardmove||pm->cmd.rightmove)//trying to kick in a specific direction
-						&& PM_CheckAltKickAttack() )//trying to do a kick
+					if ( PM_CheckAltKickAttack() )//staff +altattack always means kick
 					{//allow them to do the kick now!
 						int kickMove = PM_KickMoveForConditions();
+						if (kickMove == -1)
+						{//no direction held: staff alt attack defaults to a forward kick
+							kickMove = LS_KICK_F;
+						}
 						if (kickMove != -1)
 						{
 							pm->ps->weaponTime = 0;
@@ -3729,6 +3732,10 @@ weapChecks:
 			)//&& pm->ps->groundEntityNum != ENTITYNUM_NONE)
 		{//player kicks
 			kickMove = PM_KickMoveForConditions();
+			if (kickMove == -1)
+			{//no direction held: staff alt attack always initiates a forward kick
+				kickMove = LS_KICK_F;
+			}
 		}
 
 		if (kickMove != -1)

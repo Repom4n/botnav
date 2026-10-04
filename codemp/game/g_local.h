@@ -1909,6 +1909,7 @@ void G_BotLearnCacheAdd(int contextKey, int stimulus, int response, int follow1,
 int G_BotLearnLiveContextKey(gentity_t *self, gentity_t *enemy);
 int G_BotLearnBonus(gentity_t *self, gentity_t *enemy, int stimulus, int response, int follow1, float skill);
 void G_BotLearnDebugPrint(int maxLines);
+void Svcmd_BotLearn_f(void);
 
 //
 // g_cmds.c

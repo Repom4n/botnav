@@ -1046,13 +1046,95 @@ BOOST_AUTO_TEST_CASE( swing_footing_uses_predicted_peak_range )
 
 	BOOST_CHECK_CLOSE( predicted, 45.0f, 0.01f );
 	BOOST_CHECK_EQUAL( NewBotAI_GetSwingFooting( 90.0f, predicted, 300.0f, 0, 0 ), NEWBOTAI_SWING_FOOTING_START );
-	// Inside ~100u and not backing off: step in and swing together.
-	BOOST_CHECK_EQUAL( NewBotAI_GetSwingFooting( 90.0f, 90.0f, 0.0f, 0, 0 ), NEWBOTAI_SWING_FOOTING_START );
+	// 70-100u only starts while closing faster than ~150u/s; otherwise keep stepping in.
+	BOOST_CHECK_EQUAL( NewBotAI_GetSwingFooting( 90.0f, 90.0f, 0.0f, 0, 0 ), NEWBOTAI_SWING_FOOTING_STEP_IN );
+	BOOST_CHECK_EQUAL( NewBotAI_GetSwingFooting( 110.0f, 90.0f, 200.0f, 0, 0 ), NEWBOTAI_SWING_FOOTING_START );
+	BOOST_CHECK_EQUAL( NewBotAI_GetSwingFooting( 68.0f, 68.0f, 0.0f, 0, 0 ), NEWBOTAI_SWING_FOOTING_START );
+	// Beyond ~130u: bait/step in even when the fast close predicts reach.
+	BOOST_CHECK_EQUAL( NewBotAI_GetSwingFooting( 140.0f, 60.0f, 500.0f, 0, 0 ), NEWBOTAI_SWING_FOOTING_STEP_IN );
 	BOOST_CHECK_EQUAL( NewBotAI_GetSwingFooting( 90.0f, 90.0f, -120.0f, 0, 0 ), NEWBOTAI_SWING_FOOTING_STEP_IN );
 	BOOST_CHECK_EQUAL( NewBotAI_GetSwingFooting( 120.0f, 120.0f, 0.0f, 0, 0 ), NEWBOTAI_SWING_FOOTING_STEP_IN );
 	BOOST_CHECK_EQUAL( NewBotAI_GetSwingFooting( 66.0f, 66.0f, 0.0f, 0, 1 ), NEWBOTAI_SWING_FOOTING_START );
 	BOOST_CHECK_EQUAL( NewBotAI_GetSwingFooting( 80.0f, 80.0f, 0.0f, 1, 0 ), NEWBOTAI_SWING_FOOTING_START );
 	BOOST_CHECK_EQUAL( NewBotAI_GetSwingFooting( 110.0f, 50.0f, -120.0f, 0, 0 ), NEWBOTAI_SWING_FOOTING_HOLD );
+}
+
+BOOST_AUTO_TEST_CASE( saber_planner_fresh_swing_follows_start_window )
+{
+	newbotai_saber_tactic_context_t context = MakeSaberDuelContext( 90.0f );
+
+	// Unknown closing speed keeps the old range-only behaviour.
+	BOOST_CHECK( NewBotAI_SaberFreshSwingWindowAllows( context, NEWBOTAI_SABER_TACTIC_STEP_IN ) );
+	context.closingKnown = 1;
+	context.currentDistance = 105.0f;
+	context.closingSpeed = 40.0f;
+	BOOST_CHECK( !NewBotAI_SaberFreshSwingWindowAllows( context, NEWBOTAI_SABER_TACTIC_STEP_IN ) );
+	BOOST_CHECK( !NewBotAI_SaberFreshSwingWindowAllows( context, NEWBOTAI_SABER_TACTIC_ATTACK ) );
+	// Chains and counters are not fresh starts.
+	BOOST_CHECK( NewBotAI_SaberFreshSwingWindowAllows( context, NEWBOTAI_SABER_TACTIC_CHAIN ) );
+	BOOST_CHECK( NewBotAI_SaberFreshSwingWindowAllows( context, NEWBOTAI_SABER_TACTIC_COUNTER ) );
+	context.closingSpeed = 200.0f;
+	BOOST_CHECK( NewBotAI_SaberFreshSwingWindowAllows( context, NEWBOTAI_SABER_TACTIC_STEP_IN ) );
+	context.currentDistance = 140.0f;
+	BOOST_CHECK( !NewBotAI_SaberFreshSwingWindowAllows( context, NEWBOTAI_SABER_TACTIC_STEP_IN ) );
+	context.currentDistance = 80.0f;
+	context.enemyDistance = 60.0f;
+	context.closingSpeed = 0.0f;
+	BOOST_CHECK( NewBotAI_SaberFreshSwingWindowAllows( context, NEWBOTAI_SABER_TACTIC_ATTACK ) );
+}
+
+BOOST_AUTO_TEST_CASE( fan_stances_alternate_horizontals_and_keep_t2b_for_finisher )
+{
+	for ( int family : { NEWBOTAI_SABER_BASIC, NEWBOTAI_SABER_DIAGONAL_VERTICAL, NEWBOTAI_SABER_HORIZONTAL } )
+		for ( int stage = 0; stage < 6; stage++ )
+		{
+			int forward, right;
+			NewBotAI_SaberSelectionInputs( (newbotai_saber_family_t)family, stage, -1, &forward, &right );
+			NewBotAI_SaberFanStanceInputs( 1, (newbotai_saber_family_t)family, stage, -1, &forward, &right );
+			// Never a T2B (forward only) outside the finisher.
+			BOOST_CHECK( !(forward > 0 && right == 0) );
+		}
+	int forward = 0, right = -1;
+	NewBotAI_SaberFanStanceInputs( 1, NEWBOTAI_SABER_FINISH, 0, -1, &forward, &right );
+	BOOST_CHECK_EQUAL( forward, 0 );
+	BOOST_CHECK_EQUAL( right, -1 );
+	NewBotAI_SaberFanStanceInputs( 1, NEWBOTAI_SABER_FINISH, NEWBOTAI_SABER_FAN_FINISH_STAGE, -1, &forward, &right );
+	BOOST_CHECK_EQUAL( forward, 1 );
+	BOOST_CHECK_EQUAL( right, 0 );
+	// Other stances are unchanged.
+	forward = 1; right = 0;
+	NewBotAI_SaberFanStanceInputs( 0, NEWBOTAI_SABER_BASIC, 1, -1, &forward, &right );
+	BOOST_CHECK_EQUAL( forward, 1 );
+	BOOST_CHECK_EQUAL( right, 0 );
+	// jundon: R2L opens ~54%, L2R->R2L links ~2/3 as often as R2L->L2R.
+	BOOST_CHECK_EQUAL( NewBotAI_FanStartDirection( 54 ), -1 );
+	BOOST_CHECK_EQUAL( NewBotAI_FanStartDirection( 55 ), 1 );
+	BOOST_CHECK_EQUAL( NewBotAI_FanLinkChance( -1 ), 100 );
+	BOOST_CHECK_EQUAL( NewBotAI_FanLinkChance( 1 ), 66 );
+}
+
+BOOST_AUTO_TEST_CASE( swing_end_sidestep_and_enemy_swing_reactions )
+{
+	// Unproductive, unchained swing return: sidestep back.
+	BOOST_CHECK( NewBotAI_ShouldSidestepAfterSwing( 1, 0, -1, 0 ) );
+	BOOST_CHECK( NewBotAI_ShouldSidestepAfterSwing( 1, 0, 900, 0 ) );
+	// Landing hits, chaining, escaping or not in a return: keep the current footwork.
+	BOOST_CHECK( !NewBotAI_ShouldSidestepAfterSwing( 1, 0, 300, 0 ) );
+	BOOST_CHECK( !NewBotAI_ShouldSidestepAfterSwing( 1, 1, -1, 0 ) );
+	BOOST_CHECK( !NewBotAI_ShouldSidestepAfterSwing( 1, 0, -1, 1 ) );
+	BOOST_CHECK( !NewBotAI_ShouldSidestepAfterSwing( 0, 0, -1, 0 ) );
+
+	int advances = 0;
+	for ( int roll = 1; roll <= 100; roll++ )
+		advances += NewBotAI_EnemySwingAdvances( roll );
+	BOOST_CHECK_EQUAL( advances, NEWBOTAI_ENEMY_SWING_ADVANCE_PERCENT );
+
+	BOOST_CHECK( !NewBotAI_CounterSwingReady( 50, 80.0f, 0 ) );
+	BOOST_CHECK( NewBotAI_CounterSwingReady( 100, 80.0f, 0 ) );
+	BOOST_CHECK( NewBotAI_CounterSwingReady( 300, 90.0f, 0 ) );
+	BOOST_CHECK( !NewBotAI_CounterSwingReady( 400, 80.0f, 0 ) );
+	BOOST_CHECK( !NewBotAI_CounterSwingReady( 120, 95.0f, 0 ) );
+	BOOST_CHECK( !NewBotAI_CounterSwingReady( 120, 80.0f, 1 ) );
 }
 
 BOOST_AUTO_TEST_CASE( swing_dodge_prefers_lateral_or_jump_over_backpedal )
@@ -1155,6 +1237,27 @@ BOOST_AUTO_TEST_CASE( saber_attacks_commit_forward_and_handover_keeps_intent )
 	BOOST_CHECK_EQUAL( NewBotAI_SaberSwingStartForward( 8, 1, -1, 1 ), -1 );
 	BOOST_CHECK_EQUAL( NewBotAI_SaberSwingStartForward( 8, 0, -1, 0 ), -1 );
 	BOOST_CHECK_EQUAL( NewBotAI_SaberSwingStartForward( 4, 1, -1, 0 ), -1 );
+}
+
+BOOST_AUTO_TEST_CASE( saber_advance_through_swing_phases )
+{
+	// Walk in through windup / apex / cooldown when out of reach.
+	BOOST_CHECK_EQUAL( NewBotAI_SaberAdvanceForward( NEWBOTAI_SABER_PHASE_WINDUP, 90.0f, 0, 0, 300, 0, 0, 0 ), 1 );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberAdvanceForward( NEWBOTAI_SABER_PHASE_APEX, 80.0f, -1, 0, 200, 0, 0, 0 ), 1 );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberAdvanceForward( NEWBOTAI_SABER_PHASE_COOLDOWN, 75.0f, 0, 0, 200, 0, 0, 0 ), 1 );
+	// Already on top of the target: keep the planned input.
+	BOOST_CHECK_EQUAL( NewBotAI_SaberAdvanceForward( NEWBOTAI_SABER_PHASE_APEX, 44.0f, 0, 0, 200, 0, 0, 0 ), 0 );
+	// Hand the stick back before the chained swing direction is read.
+	BOOST_CHECK_EQUAL( NewBotAI_SaberAdvanceForward( NEWBOTAI_SABER_PHASE_COOLDOWN, 90.0f, 0, 1, NEWBOTAI_SABER_ADVANCE_RELINK_MS, 0, 0, 0 ), 0 );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberAdvanceForward( NEWBOTAI_SABER_PHASE_COOLDOWN, 90.0f, 0, 1, NEWBOTAI_SABER_ADVANCE_RELINK_MS + 1, 0, 0, 0 ), 1 );
+	// Swing-start frame and deliberate escapes are never overridden.
+	BOOST_CHECK_EQUAL( NewBotAI_SaberAdvanceForward( NEWBOTAI_SABER_PHASE_IDLE, 120.0f, 0, 0, 0, 1, 0, 0 ), 0 );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberAdvanceForward( NEWBOTAI_SABER_PHASE_WINDUP, 120.0f, -1, 0, 300, 0, 0, 1 ), -1 );
+	// Between swings: close to swing range, but keep a dodge back from an incoming swing.
+	BOOST_CHECK_EQUAL( NewBotAI_SaberAdvanceForward( NEWBOTAI_SABER_PHASE_IDLE, 150.0f, 0, 0, 0, 0, 0, 0 ), 1 );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberAdvanceForward( NEWBOTAI_SABER_PHASE_IDLE, 150.0f, -1, 0, 0, 0, 1, 0 ), -1 );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberAdvanceForward( NEWBOTAI_SABER_PHASE_IDLE, 60.0f, 0, 0, 0, 0, 0, 0 ), 0 );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberAdvanceForward( NEWBOTAI_SABER_PHASE_IDLE, NEWBOTAI_SABER_ADVANCE_MAX_RANGE + 1.0f, 0, 0, 0, 0, 0, 0 ), 0 );
 }
 
 BOOST_AUTO_TEST_CASE( fan_chain_drives_on_while_landing_hits )

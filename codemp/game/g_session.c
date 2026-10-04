@@ -223,6 +223,10 @@ void G_InitSessionData( gclient_t *client, char *userinfo, qboolean isBot ) {
 			sess->sessionTeam = TEAM_SPECTATOR;
 		} else {
 			switch ( level.gametype ) {
+			case GT_ARCADE:
+				//arcade: humans start spectating and choose to join; managed bots join the free team
+				sess->sessionTeam = isBot ? TEAM_FREE : TEAM_SPECTATOR;
+				break;
 			default:
 			case GT_FFA:
 			case GT_HOLOCRON:

@@ -393,6 +393,13 @@ typedef struct bot_state_s
 	int					swingDodgeEnemyMove; // enemy saberMove the current dodge was rolled for
 	int					swingDodgeStyle; // NEWBOTAI_SWING_DODGE_* rolled for that enemy swing
 	int					swingDodgeDir; // lateral dodge direction (+1 right, -1 left)
+	qboolean			enemySwingActive; // enemy is in a saber start/attack move
+	int					enemySwingStartTime; // level.time the current enemy swing began
+	int					swingDodgeRolledFor; // enemySwingStartTime the dodge/advance was rolled for
+	int					counterSwingFor; // enemySwingStartTime a counter-swing was pressed for
+	int					saberSidestepUntil; // post-swing sidestep-back window end
+	int					saberSidestepDir; // +1 right, -1 left
+	int					saberSidestepMove; // our return saberMove the sidestep was rolled for
 	int					airSwingRollTime; // level.time we last rolled whether an airborne swing is allowed
 	int					airSwingAllowed; // result of that roll for the current jump
 	int					counterThrowRollKey; // enemy throw (its start time) the counter-throw mistake was rolled for
@@ -504,6 +511,7 @@ typedef struct bot_state_s
 	int					wallAvoidNextTime; // gates repeat wall-avoidance jump/turn attempts so we don't spam them every think
 
 	int					gripMistakeDelayUntil; // level.time until which bot_mistakebias holds us from correctly breaking an opponent's grip (see NewBotAI_GetGripEscapeDelayMs) - rolled once per grip session
+	qboolean			gripSpeedOffPressed; // alternates the force button while gripped with speed active so the speed-off toggle is spammed (press/release) instead of held
 	int					gripReactLastCallTime; // level.time of the last NewBotAI_ReactToBeingGripped call, used to detect a fresh grip session (a gap since the last call) so the escape delay above is only rolled once per grip
 	int					gripMistakeNeverEscape; // nonzero (expiry time) when bot_mistakebias rolled that this grip session is never escaped by a pull/push - the bot just kicks and waits the grip out; -1 = rolled, not never-escape (see NewBotAI_GetGripNeverEscapeChance)
 	int					gripMistakeReverseUntil; // level.time until which a confused bot flips its grip escape to push instead of pull, shoving the opponent away instead of pulling free (see NewBotAI_GetGripPushInsteadChance)

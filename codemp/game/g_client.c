@@ -2995,9 +2995,12 @@ char *ClientConnect( int clientNum, qboolean firstTime, qboolean isBot ) {
 	else if (level.gametype == GT_ARCADE &&
 		!isBot &&
 		client->sess.sessionTeam == TEAM_FREE)
-	{
+	{//arcade humans always (re)connect as spectators and must explicitly join the run
+		client->sess.sessionTeam = TEAM_SPECTATOR;
+		client->sess.spectatorState = SPECTATOR_FREE;
+		client->sess.spectatorClient = 0;
 		level.arcadeParticipant[clientNum] = qfalse;
-		level.arcadeQueued[clientNum] = qtrue;
+		level.arcadeQueued[clientNum] = qfalse;
 		level.arcadeEliminated[clientNum] = qfalse;
 	}
 

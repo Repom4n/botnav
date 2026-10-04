@@ -163,4 +163,23 @@ BOOST_AUTO_TEST_CASE( weight_bonus_needs_samples_and_is_capped )
 	BOOST_CHECK( BotLearn_SampleNoise( 2.0f ) > 0 );
 }
 
+
+BOOST_AUTO_TEST_CASE( similar_contexts_pool_neighbouring_buckets )
+{
+	const int key = BotLearn_ContextKey( 100, 60, 60, 30, 0, 2, 2 );
+
+	BOOST_CHECK_EQUAL( BotLearn_NeighborKey( key, 0, 0, 0, 0 ), key );
+	// One HP+armor step up for self lands on the 126+ bucket context.
+	BOOST_CHECK_EQUAL( BotLearn_NeighborKey( key, 1, 0, 0, 0 ), BotLearn_ContextKey( 150, 60, 60, 30, 0, 2, 2 ) );
+	// Leaving the bucket range is rejected; coarse keys are never neighbours.
+	BOOST_CHECK_EQUAL( BotLearn_NeighborKey( BotLearn_ContextKey( 20, 60, 60, 30, 0, 2, 2 ), -1, 0, 0, 0 ), -1 );
+	BOOST_CHECK_EQUAL( BotLearn_NeighborKey( BotLearn_CoarseKey( key ), 0, 0, 0, 0 ), -1 );
+	// Range and stance bits are untouched.
+	BOOST_CHECK_EQUAL( BotLearn_NeighborKey( key, 0, 1, -1, 1 ) & 0x3F00, key & 0x3F00 );
+	BOOST_CHECK_CLOSE( BotLearn_NeighborWeight( 0 ), 1.0f, 0.001f );
+	BOOST_CHECK_CLOSE( BotLearn_NeighborWeight( 1 ), 0.5f, 0.001f );
+	BOOST_CHECK_CLOSE( BotLearn_NeighborWeight( 2 ), 0.25f, 0.001f );
+	BOOST_CHECK_EQUAL( BotLearn_NeighborWeight( 3 ), 0.0f );
+}
+
 BOOST_AUTO_TEST_SUITE_END()
