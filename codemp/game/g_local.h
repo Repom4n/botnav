@@ -1910,6 +1910,8 @@ int G_BotLearnLiveContextKey(gentity_t *self, gentity_t *enemy);
 int G_BotLearnBonus(gentity_t *self, gentity_t *enemy, int stimulus, int response, int follow1, float skill);
 void G_BotLearnDecision(gentity_t *self, gentity_t *enemy, int stimulus, int response, int follow1, int learnedBonus);
 int G_BotLearnDuelMode(gentity_t *self);
+int G_BotLearnDefenseState(gentity_t *self);
+int G_BotLearnFooting(gentity_t *self, gentity_t *enemy);
 void G_RecordPublicLearningChat(gentity_t *speaker, const char *text);
 void G_BotLearnDebugPrint(int maxLines);
 void Svcmd_BotLearn_f(void);

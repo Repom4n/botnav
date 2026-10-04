@@ -904,8 +904,13 @@ void BotInputToUserCommand(bot_input_t *bi, usercmd_t *ucmd, int delta_angles[3]
 	//bot input speed is in the range [0, 400]
 	bi->speed = bi->speed * 127 / 400;
 	//set the view independent movement
-	f = DotProduct(forward, bi->dir);
-	r = DotProduct(right, bi->dir);
+	if (!bi->dir[2])
+		NewBotAI_ProjectWorldMovement(bi->dir[0], bi->dir[1], bi->viewangles[YAW], &f, &r);
+	else
+	{
+		f = DotProduct(forward, bi->dir);
+		r = DotProduct(right, bi->dir);
+	}
 	u = fabs(forward[2]) * bi->dir[2];
 	m = fabs(f);
 
@@ -9766,13 +9771,15 @@ void NewBotAI_SaberThrowing(bot_state_t* bs)
 	qboolean lethalDanger;
 	int heldMs;
 
+	if (NewBotAI_HasDroppedOwnSaber(bs))
+		return;
 	if (bs->saberThrowStartTime <= 0)
 		bs->saberThrowStartTime = bs->cur_ps.saberDidThrowTime > 0 ?
 			bs->cur_ps.saberDidThrowTime : level.time;
 
 	if (!NewBotAI_CanUseForcePowerNow(bs, FP_SABERTHROW) ||
 		bs->saberThrowPhase == NEWBOTAI_THROW_RECALL || !bs->frame_Enemy_Vis ||
-		BotGetAggressionBias(bs) <= 0.0f)
+		!bs->currentEnemy || !bs->currentEnemy->client || bs->currentEnemy->health <= 0)
 	{
 		bs->saberThrowPhase = NEWBOTAI_THROW_RECALL;
 		return;
@@ -14315,6 +14322,7 @@ static void NewBotAI_AdjustSaberThrowLead(bot_state_t *bs)
 	qboolean heading;
 
 	if (!bs->currentEnemy || !bs->currentEnemy->client || !ps->saberInFlight ||
+		NewBotAI_HasDroppedOwnSaber(bs) ||
 		ps->saberEntityNum <= 0 || ps->saberEntityNum >= ENTITYNUM_WORLD)
 		return;
 	saber = &g_entities[ps->saberEntityNum];
@@ -14394,14 +14402,29 @@ static void NewBotAI_ApplySaberThrowInput(bot_state_t *bs, bot_input_t *bi)
 	playerState_t *ps = &g_entities[bs->client].client->ps;
 	vec3_t endpoint;
 	int recall;
+	int hardRecall;
+	qboolean heading, passed;
+	int drainlock, lethal, returning, forceAllowed;
 
-	if (!g_newBotAI.integer || bi->weapon != WP_SABER || !ps->saberInFlight)
+	if (!g_newBotAI.integer || bi->weapon != WP_SABER || !ps->saberInFlight ||
+		NewBotAI_HasDroppedOwnSaber(bs))
 		return;
 	if (bs->saberThrowStartTime <= 0)
 		bs->saberThrowStartTime = ps->saberDidThrowTime > 0 ? ps->saberDidThrowTime : level.time;
-	recall = !bs->currentEnemy || !bs->currentEnemy->client || !bs->frame_Enemy_Vis ||
+	drainlock = NewBotAI_ShouldSuppressDrainlockSaberThrow(bs) || NewBotAI_WouldThrowInviteDrainlock(bs);
+	lethal = bs->currentEnemy && bs->currentEnemy->client &&
+		g_entities[bs->client].health + ps->stats[STAT_ARMOR] <= NEWBOTAI_SABER_CRITICAL_TOTAL_HEALTH &&
+		bs->currentEnemy->health > g_entities[bs->client].health;
+	returning = ps->saberEntityNum > 0 && ps->saberEntityNum < ENTITYNUM_WORLD &&
+		g_entities[ps->saberEntityNum].think == saberBackToOwner;
+	forceAllowed = NewBotAI_CanUseForcePowerNow(bs, FP_SABERTHROW);
+	hardRecall = !bs->currentEnemy || !bs->currentEnemy->client || !bs->frame_Enemy_Vis ||
 		bs->currentEnemy->health <= 0 || bs->saberThrowPhase == NEWBOTAI_THROW_RECALL ||
-		NewBotAI_ShouldSuppressDrainlockSaberThrow(bs) || NewBotAI_WouldThrowInviteDrainlock(bs) ||
+		ps->saberEntityNum <= 0 || ps->saberEntityNum >= ENTITYNUM_WORLD ||
+		!g_entities[ps->saberEntityNum].inuse ||
+		NewBotAI_SaberThrowRecallDue(ps->fd.forcePowerLevel[FP_SABERTHROW],
+			level.time - bs->saberThrowStartTime, 0, returning, forceAllowed);
+	recall = hardRecall || drainlock || lethal ||
 		BotGetAggressionBias(bs) <= 0.0f;
 	if (ps->fd.forcePowerLevel[FP_SABERTHROW] >= 2 && bs->saberThrowSteerTime > 0 &&
 		!recall && !NewBotAI_HasExclusiveFlipkickMovement(bs) && !bs->gripkickActive &&
@@ -14428,15 +14451,17 @@ static void NewBotAI_ApplySaberThrowInput(bot_state_t *bs, bot_input_t *bi)
 		VectorCopy(bs->saberThrowAim, bi->viewangles);
 		VectorCopy(bi->viewangles, bs->viewangles);
 	}
-	if (!recall && ps->fd.forcePowerLevel[FP_SABERTHROW] >= 2)
-		recall = !NewBotAI_SaberThrowTrace(bs, bi->viewangles,
+	if (!hardRecall && ps->fd.forcePowerLevel[FP_SABERTHROW] >= 2)
+		hardRecall = !NewBotAI_SaberThrowTrace(bs, bi->viewangles,
 			(newbotai_throw_phase_t)bs->saberThrowPhase, endpoint);
-	if (!recall)
-		recall = NewBotAI_SaberThrowRecallDue(ps->fd.forcePowerLevel[FP_SABERTHROW],
-			level.time - bs->saberThrowStartTime, 0,
-			ps->saberEntityNum > 0 && ps->saberEntityNum < ENTITYNUM_WORLD &&
-			g_entities[ps->saberEntityNum].think == saberBackToOwner,
-			NewBotAI_CanUseForcePowerNow(bs, FP_SABERTHROW));
+	recall = recall || hardRecall;
+	passed = NewBotAI_UpdateSaberThrowPass(bs, &heading);
+	if (NewBotAI_SaberThrowFinalHoldProtected(level.time - bs->saberThrowStartTime,
+		passed, heading, drainlock, lethal, returning, forceAllowed, hardRecall))
+	{
+		bi->actionflags |= ACTION_ALT_ATTACK;
+		return;
+	}
 	if (recall)
 	{
 		bs->saberThrowPhase = NEWBOTAI_THROW_RECALL;
@@ -17427,8 +17452,10 @@ static void NewBotAI_UpdateSaberDefense(bot_state_t *bs, int time)
 {
 	playerState_t *ps = &g_entities[bs->client].client->ps;
 	const int enemyNum = bs->currentEnemy ? bs->currentEnemy->s.number : ENTITYNUM_NONE;
-	const int broken = ps->saberBlocked == BLOCKED_PARRY_BROKEN ||
-		PM_SaberInBrokenParry(ps->saberMove);
+	const int broken = NewBotAI_SaberDefenseCategory(
+		ps->saberBlocked == BLOCKED_PARRY_BROKEN || PM_SaberInBrokenParry(ps->saberMove),
+		ps->saberBlocked == BLOCKED_ATK_BOUNCE, ps->saberBlocked != BLOCKED_NONE) ==
+		NEWBOTAI_SABER_DEFENSE_BROKEN;
 	int enemyAttacking = 0;
 
 	if (!g_newBotAI.integer || ps->weapon != WP_SABER || ps->pm_type != PM_NORMAL ||

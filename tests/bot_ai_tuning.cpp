@@ -1339,6 +1339,19 @@ BOOST_AUTO_TEST_CASE( broken_parry_reentry_waits_for_engine_and_enemy_followup )
 	BOOST_CHECK( NewBotAI_SaberDefenseReady( 1000, 0, 0, 0, 0 ) );
 }
 
+BOOST_AUTO_TEST_CASE( saber_defense_categories_do_not_conflate_bounce_or_normal_recovery )
+{
+	BOOST_CHECK_EQUAL( NewBotAI_SaberDefenseCategory( 0, 0, 0 ), NEWBOTAI_SABER_DEFENSE_NONE );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberDefenseCategory( 0, 0, 1 ), NEWBOTAI_SABER_DEFENSE_PARRY );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberDefenseCategory( 0, 1, 1 ), NEWBOTAI_SABER_DEFENSE_BOUNCE );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberDefenseCategory( 1, 1, 1 ), NEWBOTAI_SABER_DEFENSE_BROKEN );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberDefenseState( 1, 1, 1, 1, 0 ), NEWBOTAI_SABER_DEFENSE_KNOCKDOWN );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberDefenseState( 1, 1, 1, 1, 1 ), NEWBOTAI_SABER_DEFENSE_LOST );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberDefenseState( 0, 0, 0, 0, 1 ), NEWBOTAI_SABER_DEFENSE_LOST );
+	// A normal saber return is tracked separately; it is not a defensive block.
+	BOOST_CHECK_EQUAL( NewBotAI_SaberDefenseCategory( 0, 0, 0 ), NEWBOTAI_SABER_DEFENSE_NONE );
+}
+
 BOOST_AUTO_TEST_CASE( saber_footing_world_direction_survives_final_aim_rotation )
 {
 	float x, y;
@@ -1346,14 +1359,19 @@ BOOST_AUTO_TEST_CASE( saber_footing_world_direction_survives_final_aim_rotation 
 	BOOST_CHECK_CLOSE( x, -sqrtf( 0.5f ), 0.001f );
 	BOOST_CHECK_CLOSE( y, -sqrtf( 0.5f ), 0.001f );
 	// With the view turned 90 degrees, the same world lane becomes back-left.
-	const float forward = y;
-	const float right = x;
+	float forward, right;
+	NewBotAI_ProjectWorldMovement( x, y, 90.0f, &forward, &right );
 	BOOST_CHECK_CLOSE( forward, -sqrtf( 0.5f ), 0.001f );
 	BOOST_CHECK_CLOSE( right, -sqrtf( 0.5f ), 0.001f );
 	float oppositeX, oppositeY;
 	NewBotAI_SaberWorldDirection( 90.0f, -1, -1, &oppositeX, &oppositeY );
 	BOOST_CHECK_CLOSE( oppositeX, x, 0.001f );
 	BOOST_CHECK_CLOSE( oppositeY, y, 0.001f );
+	// Projection retains analog proportions, not just the signs of movement keys.
+	NewBotAI_ProjectWorldMovement( 1.0f, 0.0f, 20.0f, &forward, &right );
+	BOOST_CHECK_CLOSE( forward, cosf( 20.0f * 0.017453292519943295f ), 0.001f );
+	BOOST_CHECK_CLOSE( right, sinf( 20.0f * 0.017453292519943295f ), 0.001f );
+	BOOST_CHECK_LT( right, forward * 0.5f );
 	NewBotAI_SaberWorldDirection( 359.0f, 0, 0, &x, &y );
 	BOOST_CHECK_SMALL( x, 0.001f );
 	BOOST_CHECK_SMALL( y, 0.001f );
@@ -1381,8 +1399,15 @@ BOOST_AUTO_TEST_CASE( saber_poke_counteryaw_is_phase_aware_and_bounded )
 	BOOST_CHECK_SMALL( NewBotAI_SaberPokeCounterYaw( NEWBOTAI_SABER_YAW_PREPARE, 0.475f, 1 ), 0.001f );
 	BOOST_CHECK_SMALL( NewBotAI_SaberPokeCounterYaw( NEWBOTAI_SABER_YAW_RECOVER, 0.475f, 1 ), 0.001f );
 	BOOST_CHECK_SMALL( NewBotAI_SaberPokeCounterYaw( NEWBOTAI_SABER_YAW_NEXT, 0.9f, 1 ), 0.001f );
-	BOOST_CHECK_CLOSE( NewBotAI_SaberPokeCounterYaw( NEWBOTAI_SABER_YAW_ACTIVE, 0.475f, 1 ), -6.0f, 0.001f );
-	BOOST_CHECK_CLOSE( NewBotAI_SaberPokeCounterYaw( NEWBOTAI_SABER_YAW_ACTIVE, 0.475f, -1 ), 6.0f, 0.001f );
+	BOOST_CHECK_CLOSE( NewBotAI_SaberPokeCounterYaw( NEWBOTAI_SABER_YAW_ACTIVE, 0.475f, 1 ), 6.0f, 0.001f );
+	BOOST_CHECK_CLOSE( NewBotAI_SaberPokeCounterYaw( NEWBOTAI_SABER_YAW_ACTIVE, 0.475f, -1 ), -6.0f, 0.001f );
+	BOOST_CHECK_SMALL( NewBotAI_SaberPokeCounterYaw( NEWBOTAI_SABER_YAW_ACTIVE, 0.475f, 0 ), 0.001f );
+	for (int direction : { -1, 1 })
+	{
+		BOOST_CHECK_LT(
+			NewBotAI_SaberPokeCounterYaw( NEWBOTAI_SABER_YAW_ACTIVE, 0.7f, direction ) *
+			NewBotAI_SaberYawOffset( NEWBOTAI_SABER_YAW_ACTIVE, 0.7f, direction, direction, 1 ), 0.0f );
+	}
 	BOOST_CHECK_SMALL( NewBotAI_SaberPokeCounterYaw( NEWBOTAI_SABER_YAW_ACTIVE, 1.0f, 1 ), 0.001f );
 }
 
@@ -1440,7 +1465,7 @@ BOOST_AUTO_TEST_CASE( saber_throw_traces_reject_obstructions_and_front_bypass )
 	BOOST_CHECK( !NewBotAI_SaberThrowTraceSafe( 0, 0, 0, 0, NEWBOTAI_THROW_RECALL ) );
 }
 
-BOOST_AUTO_TEST_CASE( saber_throw_recall_is_level_bounded_and_safety_overrides_hold )
+BOOST_AUTO_TEST_CASE( saber_throw_recall_request_is_level_bounded_and_safety_sensitive )
 {
 	BOOST_CHECK( !NewBotAI_SaberThrowRecallDue( 1, 749, 0, 0, 1 ) );
 	BOOST_CHECK( NewBotAI_SaberThrowRecallDue( 1, 750, 0, 0, 1 ) );
@@ -1451,6 +1476,33 @@ BOOST_AUTO_TEST_CASE( saber_throw_recall_is_level_bounded_and_safety_overrides_h
 	BOOST_CHECK( NewBotAI_SaberThrowRecallDue( 3, 50, 1, 0, 1 ) );
 	BOOST_CHECK( NewBotAI_SaberThrowRecallDue( 3, 50, 0, 1, 1 ) );
 	BOOST_CHECK( NewBotAI_SaberThrowRecallDue( 3, 50, 0, 0, 0 ) );
+}
+
+BOOST_AUTO_TEST_CASE( saber_throw_final_hold_keeps_minimum_and_drainlock_polarity )
+{
+	BOOST_CHECK( NewBotAI_SaberThrowFinalHoldProtected( 50, 1, 0, 0, 0, 0, 1, 0 ) );
+	BOOST_CHECK( NewBotAI_SaberThrowFinalHoldProtected( 599, 1, 0, 0, 0, 0, 1, 0 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowFinalHoldProtected( 50, 0, 1, 1, 0, 0, 1, 0 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowFinalHoldProtected( 50, 0, 1, 0, 1, 0, 1, 0 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowFinalHoldProtected( 50, 0, 1, 0, 0, 1, 1, 0 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowFinalHoldProtected( 50, 0, 1, 0, 0, 0, 0, 0 ) );
+	BOOST_CHECK( NewBotAI_SaberThrowFinalHoldProtected( 600, 0, 1, 0, 0, 0, 1, 0 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowFinalHoldProtected( 600, 1, 1, 0, 0, 0, 1, 0 ) );
+}
+
+BOOST_AUTO_TEST_CASE( saber_throw_hard_recall_overrides_protected_hold )
+{
+	const int levelOneDeadline = NewBotAI_SaberThrowRecallDue( 1, 800, 0, 0, 1 );
+	BOOST_CHECK( NewBotAI_SaberThrowHoldProtected( 800, 0, 1 ) );
+	BOOST_CHECK( levelOneDeadline );
+	BOOST_CHECK( !NewBotAI_SaberThrowFinalHoldProtected( 800, 0, 1, 0, 0, 0, 1, levelOneDeadline ) );
+	// The minimum hold still protects policy recalls, never an unsafe traced route.
+	BOOST_CHECK( NewBotAI_SaberThrowHoldProtected( 550, 0, 1 ) );
+	const int unsafeRoute = !NewBotAI_SaberThrowTraceSafe( 0, 0, 1, 0, NEWBOTAI_THROW_BYPASS );
+	BOOST_CHECK( !NewBotAI_SaberThrowFinalHoldProtected( 550, 0, 1, 0, 0, 0, 1, unsafeRoute ) );
+	// Lost/invalid targets are hard recalls even while the old heading is positive.
+	BOOST_CHECK( !NewBotAI_SaberThrowFinalHoldProtected( 550, 0, 1, 0, 0, 0, 1, 1 ) );
+	BOOST_CHECK( NewBotAI_SaberThrowFinalHoldProtected( 550, 0, 1, 0, 0, 0, 1, 0 ) );
 }
 
 BOOST_AUTO_TEST_SUITE_END()

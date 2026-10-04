@@ -485,6 +485,32 @@ typedef enum
 #define NEWBOTAI_SABER_BROKEN_RECOVERY_MS 250
 #define NEWBOTAI_SABER_FOLLOWUP_CLEAR_MS 180
 
+typedef enum
+{
+	NEWBOTAI_SABER_DEFENSE_NONE = 0,
+	NEWBOTAI_SABER_DEFENSE_PARRY,
+	NEWBOTAI_SABER_DEFENSE_BOUNCE,
+	NEWBOTAI_SABER_DEFENSE_BROKEN,
+	NEWBOTAI_SABER_DEFENSE_KNOCKDOWN,
+	NEWBOTAI_SABER_DEFENSE_LOST
+} newbotai_saber_defense_t;
+
+static inline newbotai_saber_defense_t NewBotAI_SaberDefenseState(
+	int brokenParry, int attackBounce, int ordinaryParry, int knockedDown, int saberLost)
+{
+	if (saberLost) return NEWBOTAI_SABER_DEFENSE_LOST;
+	if (knockedDown) return NEWBOTAI_SABER_DEFENSE_KNOCKDOWN;
+	if (brokenParry) return NEWBOTAI_SABER_DEFENSE_BROKEN;
+	if (attackBounce) return NEWBOTAI_SABER_DEFENSE_BOUNCE;
+	return ordinaryParry ? NEWBOTAI_SABER_DEFENSE_PARRY : NEWBOTAI_SABER_DEFENSE_NONE;
+}
+
+static inline newbotai_saber_defense_t NewBotAI_SaberDefenseCategory(
+	int brokenParry, int attackBounce, int ordinaryParry)
+{
+	return NewBotAI_SaberDefenseState(brokenParry, attackBounce, ordinaryParry, 0, 0);
+}
+
 static inline int NewBotAI_SaberDefenseReady(int now, int recoveryUntil, int followupUntil,
 	int brokenParry, int weaponTime)
 {
@@ -500,6 +526,14 @@ static inline void NewBotAI_SaberWorldDirection(float yaw, int forward, int righ
 	*y = length > 0.0f ? (sinf(radians) * forward - cosf(radians) * right) / length : 0.0f;
 }
 
+static inline void NewBotAI_ProjectWorldMovement(float x, float y, float finalYaw,
+	float *forward, float *right)
+{
+	const float radians = finalYaw * 0.017453292519943295f;
+	*forward = cosf(radians) * x + sinf(radians) * y;
+	*right = sinf(radians) * x - cosf(radians) * y;
+}
+
 static inline int NewBotAI_SaberFootingNeedsUpdate(int valid, int previousPhase, int phase,
 	int previousMove, int move, int previousTactic, int tactic)
 {
@@ -507,14 +541,15 @@ static inline int NewBotAI_SaberFootingNeedsUpdate(int valid, int previousPhase,
 }
 
 static inline float NewBotAI_SaberPokeCounterYaw(newbotai_saber_yaw_phase_t phase,
-	float progress, int side)
+	float progress, int swingDirection)
 {
 	float envelope;
-	if (phase != NEWBOTAI_SABER_YAW_ACTIVE)
+	if (phase != NEWBOTAI_SABER_YAW_ACTIVE || !swingDirection)
 		return 0.0f;
 	envelope = 1.0f - fabsf((progress - 0.475f) / 0.325f);
 	if (envelope < 0.0f) envelope = 0.0f;
-	return (side < 0 ? 1.0f : -1.0f) * 6.0f * envelope;
+	// L2R (+1) sweeps toward decreasing yaw; counter-yaw goes the other way.
+	return (swingDirection < 0 ? -1.0f : 1.0f) * 6.0f * envelope;
 }
 
 // Conservative control envelopes, not measured human animation templates.
@@ -1983,6 +2018,14 @@ static inline int NewBotAI_SaberThrowMayRelease(int heldMs, int passedTarget, in
 	if (drainlockRule || lethalDanger)
 		return 1;
 	return !NewBotAI_SaberThrowHoldProtected(heldMs, passedTarget, headingToTarget);
+}
+
+static inline int NewBotAI_SaberThrowFinalHoldProtected(int heldMs, int passedTarget,
+	int headingToTarget, int drainlockRule, int lethalDanger, int returning, int forceAllowed,
+	int hardRecall)
+{
+	return !hardRecall && !returning && forceAllowed &&
+		!NewBotAI_SaberThrowMayRelease(heldMs, passedTarget, headingToTarget, drainlockRule, lethalDanger);
 }
 
 // Yaw offset (degrees, positive toward the target's lateral motion) for a thrown saber:
