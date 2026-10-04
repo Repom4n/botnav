@@ -252,7 +252,10 @@ static void G_ArcadeForceSpectateFreeHumans(qboolean forceAll)
 		level.arcadeParticipant[i] = qfalse;
 		level.arcadeQueued[i] = qfalse;
 		SetTeam(ent, "spectator", qtrue);
-		trap->SendServerCommand(i, "print \"Arcade: use /team free during level 1 to join the run.\n\"");
+		if (!level.arcadeGameOverTime && level.arcadeLevel == ARCADE_START_LEVEL)
+			trap->SendServerCommand(i, "print \"Arcade: use /team free during level 1 to join the run.\n\"");
+		else
+			trap->SendServerCommand(i, "print \"Arcade: the run is locked; wait for the next level 1 to join.\n\"");
 	}
 }
 
