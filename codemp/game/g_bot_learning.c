@@ -11,8 +11,59 @@
 
 #include "g_local.h"
 #include "g_bot_learning.h"
+#include "ai_combat_tuning.h"
 
 extern qboolean BG_InKnockDown(int anim);
+extern qboolean PM_SaberInReturn(int move);
+extern qboolean PM_SaberInParry(int move);
+extern qboolean PM_SaberInReflect(int move);
+extern qboolean PM_SaberInKnockaway(int move);
+extern qboolean PM_SaberInBounce(int move);
+extern qboolean PM_SaberInBrokenParry(int move);
+extern void DownedSaberThink(gentity_t *saberent);
+
+int G_BotLearnDefenseState(gentity_t *self)
+{
+	playerState_t *ps;
+	int lost = 0;
+	if (!self || !self->client || !self->inuse)
+		return BOTLEARN_DEFENSE_UNKNOWN;
+	ps = &self->client->ps;
+	if (ps->weapon != WP_SABER && ps->weapon != WP_MELEE)
+		return BOTLEARN_DEFENSE_UNKNOWN;
+	/* Physical loss includes the cooldown before the saber becomes retrievable. */
+	if (self->client->saberKnockedTime > level.time ||
+		(self->client->saberKnockedTime > 0 && ps->saberEntityNum <= 0))
+	{
+		int blade = self->client->saberStoredIndex;
+		gentity_t *saber;
+		if (blade <= 0 || blade >= ENTITYNUM_WORLD || !g_entities[blade].inuse)
+			return BOTLEARN_DEFENSE_UNKNOWN;
+		saber = &g_entities[blade];
+		if (!BotLearn_ValidatedDroppedBlade(self->client->saberKnockedTime > 0,
+			saber->think == DownedSaberThink, saber->r.contents == CONTENTS_TRIGGER,
+			saber->s.weapon == WP_SABER, saber->s.eType == ET_MISSILE,
+			(ps->stats[STAT_WEAPONS] & (1 << WP_SABER)) &&
+				(saber->r.ownerNum == self->s.number || saber->parent == self),
+			saber->s.pos.trType == TR_GRAVITY || saber->s.pos.trType == TR_STATIONARY ||
+				saber->s.pos.trType == TR_INTERPOLATE))
+			return BOTLEARN_DEFENSE_UNKNOWN;
+		lost = 1;
+	}
+	else if (ps->saberInFlight && (ps->saberEntityNum <= 0 || ps->saberEntityNum >= ENTITYNUM_WORLD ||
+		!g_entities[ps->saberEntityNum].inuse || g_entities[ps->saberEntityNum].r.ownerNum != self->s.number ||
+		g_entities[ps->saberEntityNum].s.weapon != WP_SABER))
+		return BOTLEARN_DEFENSE_UNKNOWN;
+	if (ps->weapon != WP_SABER && !lost)
+		return BOTLEARN_DEFENSE_UNKNOWN;
+	return NewBotAI_SaberDefenseState(
+		ps->saberBlocked == BLOCKED_PARRY_BROKEN || PM_SaberInBrokenParry(ps->saberMove),
+		ps->saberBlocked == BLOCKED_ATK_BOUNCE || PM_SaberInBounce(ps->saberMove),
+		ps->saberBlocked != BLOCKED_NONE || PM_SaberInParry(ps->saberMove) ||
+			PM_SaberInReflect(ps->saberMove) || PM_SaberInKnockaway(ps->saberMove),
+		BG_InKnockDown(ps->legsAnim) ||
+			(ps->forceHandExtend == HANDEXTEND_KNOCKDOWN && ps->forceHandExtendTime > level.time), lost);
+}
 
 typedef struct
 {
@@ -258,6 +309,16 @@ static int G_BotLearnMinSamples(void)
 	return (bot_learningminsamples.integer > 0) ? bot_learningminsamples.integer : BOTLEARN_DEFAULT_MIN_SAMPLES;
 }
 
+int G_BotLearnFooting(gentity_t *self, gentity_t *enemy)
+{
+	if (!self || !self->client || !enemy || !enemy->client)
+		return -1;
+	return BotLearn_FootingCategory(self->client->ps.velocity[0], self->client->ps.velocity[1],
+		enemy->client->ps.origin[0] - self->client->ps.origin[0],
+		enemy->client->ps.origin[1] - self->client->ps.origin[1],
+		self->client->ps.groundEntityNum != ENTITYNUM_NONE);
+}
+
 int G_BotLearnLiveContextKey(gentity_t *self, gentity_t *enemy)
 {
 	vec3_t diff;
@@ -265,11 +326,16 @@ int G_BotLearnLiveContextKey(gentity_t *self, gentity_t *enemy)
 	if (!self || !self->client || !enemy || !enemy->client)
 		return -1;
 	VectorSubtract(enemy->client->ps.origin, self->client->ps.origin, diff);
-	return BotLearn_ContextKey(self->health + self->client->ps.stats[STAT_ARMOR],
+	return BotLearn_ContextFooting(BotLearn_ContextSafety(BotLearn_ContextKey(self->health + self->client->ps.stats[STAT_ARMOR],
 		enemy->health + enemy->client->ps.stats[STAT_ARMOR],
 		self->client->ps.fd.forcePower, enemy->client->ps.fd.forcePower,
 		BotLearn_RangeBucket(VectorLength(diff)),
-		self->client->ps.fd.saberAnimLevel, enemy->client->ps.fd.saberAnimLevel);
+		self->client->ps.fd.saberAnimLevel, enemy->client->ps.fd.saberAnimLevel),
+		G_BotLearnDuelMode(self),
+		G_BotLearnDefenseState(self), G_BotLearnDefenseState(enemy),
+		PM_SaberInReturn(self->client->ps.saberMove), PM_SaberInReturn(enemy->client->ps.saberMove),
+		self->client->ps.groundEntityNum == ENTITYNUM_NONE,
+		enemy->client->ps.groundEntityNum == ENTITYNUM_NONE), G_BotLearnFooting(self, enemy));
 }
 
 // Pool the live context with similar contexts (BotLearn_NeighborKey/BotLearn_NeighborWeight)
@@ -323,6 +389,8 @@ int G_BotLearnBonus(gentity_t *self, gentity_t *enemy, int stimulus, int respons
 	contextKey = G_BotLearnLiveContextKey(self, enemy);
 	if (contextKey < 0)
 		return 0;
+	if (((contextKey >> 16) & 3) >= 2)
+		return 0;
 
 	e = G_BotLearnCacheFind(contextKey, stimulus, response, followKey, qfalse);
 	if ((!e || e->samples < minSamples) &&
@@ -339,7 +407,7 @@ int G_BotLearnBonus(gentity_t *self, gentity_t *enemy, int stimulus, int respons
 	noise = BotLearn_SampleNoise(skill);
 	if (noise > 0)
 		bonus += Q_irand(-noise, noise);
-	return bonus;
+	return Com_Clampi(-BOTLEARN_BONUS_CAP, BOTLEARN_BONUS_CAP, bonus);
 }
 
 // Debug: best scoring responses per (coarse context, stimulus) with enough samples.

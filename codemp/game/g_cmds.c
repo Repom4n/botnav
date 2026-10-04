@@ -23,6 +23,7 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
 */
 
 #include "g_local.h"
+#include "g_duel_capture.h"
 #include "bg_saga.h"
 
 #include "ui/menudef.h"			// for the voice chats
@@ -2319,6 +2320,8 @@ void G_Say( gentity_t *ent, gentity_t *target, int mode, const char *chatText ) 
 	Q_strncpyz( text, chatText, sizeof(text) );
 
 	Q_strstrip( text, "\n\r", "  " );
+	if (G_DuelCapturePublicChat(mode, SAY_ALL, target != NULL))
+		G_RecordPublicLearningChat(ent, text);
 
 
 	//Check chatText to see if it has a filtered word in it

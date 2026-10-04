@@ -380,6 +380,7 @@ XCVAR_DEF( bot_learningstrength,		"1",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_learninghumansonly,		"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_learningminsamples,		"4",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_learning_debug,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
+XCVAR_DEF( bot_learninglog,				"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 // Percentage scaler (10-300) for the Gripkick aim-down/hold phase: how long the bot
 // holds the gripped target and aims down toward it (forward-only movement) before the
 // flipkick approach, and how long a failed kick attempt dwells before retrying.

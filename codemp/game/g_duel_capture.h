@@ -4,6 +4,50 @@
 #include <string.h>
 #include <stdlib.h>
 
+#define DUEL_CAPTURE_SAMPLE_MS 50
+#define DUEL_CAPTURE_RECENT_CHAT_MS 15000
+
+static inline int G_DuelCapturePublicChat(int mode, int publicMode, int targeted)
+{
+	return mode == publicMode && !targeted;
+}
+
+static inline int G_DuelCaptureRecoveryReentry(int damage, int recovery,
+	int radialSpeed, int forwardmove, int rightmove)
+{
+	return damage > 0 && recovery && radialSpeed >= 40 && forwardmove > 0 && !rightmove;
+}
+
+static inline int G_DuelCaptureSampleDue(int now, int lastSample, int activeWindow)
+{
+	return activeWindow && (lastSample < 0 || now - lastSample >= DUEL_CAPTURE_SAMPLE_MS);
+}
+
+static inline int G_DuelCaptureRecentChat(int now, int finishedAt, int sameIdentity)
+{
+	return sameIdentity && finishedAt >= 0 && now >= finishedAt &&
+		now - finishedAt <= DUEL_CAPTURE_RECENT_CHAT_MS;
+}
+
+/* Retain all public text up to the chat protocol limit; never interpret it as commands. */
+static inline void G_DuelCaptureSanitizeText(const char *input, char *output, size_t size)
+{
+	size_t n = 0;
+	if (!size)
+		return;
+	if (input)
+	{
+		while (*input && n + 1 < size)
+		{
+			unsigned char c = (unsigned char)*input++;
+			if (c < 32 || c == 127)
+				c = ' ';
+			output[n++] = (char)c;
+		}
+	}
+	output[n] = '\0';
+}
+
 typedef struct
 {
 	int capacity;

@@ -1,5 +1,6 @@
 #ifndef G_BOT_LEARNING_H
 #define G_BOT_LEARNING_H
+#include <math.h>
 
 /*
  * Pure (engine-free) helpers for the bot sequence-learning system.
@@ -51,6 +52,83 @@ typedef enum
 #define BOTLEARN_DEFAULT_MIN_SAMPLES 4
 #define BOTLEARN_BONUS_CAP 30
 #define BOTLEARN_COARSE_KEY_FLAG 0x8000
+#define BOTLEARN_CONTEXT_VERSION_FLAG (1 << 29)
+#define BOTLEARN_FOOTING_CONTEXT_FLAG (1 << 30)
+#define BOTLEARN_FOOTING_MASK ((1 << 14) | (1 << 28))
+#define BOTLEARN_CONTEXT_SAFETY_MASK 0x7FFF4000
+
+typedef enum {
+	BOTLEARN_FOOTING_STILL = 0,
+	BOTLEARN_FOOTING_ADVANCE,
+	BOTLEARN_FOOTING_RETREAT,
+	BOTLEARN_FOOTING_LATERAL
+} botlearn_footing_t;
+
+static inline int BotLearn_FootingCategory(float vx, float vy, float towardX, float towardY, int grounded)
+{
+	const float distance = sqrtf(towardX * towardX + towardY * towardY);
+	const float ownTowardSpeed = distance > 1.0f ? (vx * towardX + vy * towardY) / distance : 0.0f;
+	if (!grounded) return BOTLEARN_FOOTING_STILL;
+	if (ownTowardSpeed >= 40.0f) return BOTLEARN_FOOTING_ADVANCE;
+	if (ownTowardSpeed <= -40.0f) return BOTLEARN_FOOTING_RETREAT;
+	return vx * vx + vy * vy >= 1600.0f ? BOTLEARN_FOOTING_LATERAL : BOTLEARN_FOOTING_STILL;
+}
+
+static inline int BotLearn_ContextFooting(int key, int footing)
+{
+	if (key < 0 || footing < BOTLEARN_FOOTING_STILL || footing > BOTLEARN_FOOTING_LATERAL)
+		return -1;
+	return (key & ~BOTLEARN_FOOTING_MASK) | BOTLEARN_FOOTING_CONTEXT_FLAG |
+		((footing & 1) << 14) | ((footing & 2) << 27);
+}
+
+static inline int BotLearn_FootingFromKey(int key)
+{
+	if (key < 0 || !(key & BOTLEARN_FOOTING_CONTEXT_FLAG))
+		return -1;
+	return ((key >> 14) & 1) | (((key >> 28) & 1) << 1);
+}
+
+typedef enum {
+	BOTLEARN_DEFENSE_NONE = 0,
+	BOTLEARN_DEFENSE_PARRY,
+	BOTLEARN_DEFENSE_BOUNCE,
+	BOTLEARN_DEFENSE_BROKEN,
+	BOTLEARN_DEFENSE_KNOCKDOWN,
+	BOTLEARN_DEFENSE_LOST,
+	BOTLEARN_DEFENSE_UNKNOWN = 7
+} botlearn_defense_t;
+
+static inline int BotLearn_DefenseState(int lost, int knockedDown, int broken, int bounce, int parry)
+{
+	if (lost) return BOTLEARN_DEFENSE_LOST;
+	if (knockedDown) return BOTLEARN_DEFENSE_KNOCKDOWN;
+	if (broken) return BOTLEARN_DEFENSE_BROKEN;
+	if (bounce) return BOTLEARN_DEFENSE_BOUNCE;
+	return parry ? BOTLEARN_DEFENSE_PARRY : BOTLEARN_DEFENSE_NONE;
+}
+
+static inline int BotLearn_ValidatedDroppedBlade(int positiveKnockTime, int downedThink, int triggerOnly,
+	int saberWeapon, int missile, int owned, int downedTrajectory)
+{
+	return positiveKnockTime && downedThink && triggerOnly && saberWeapon && missile && owned && downedTrajectory;
+}
+
+static inline int BotLearn_IsBrokenOrBouncedDefense(int state)
+{
+	return state == BOTLEARN_DEFENSE_BROKEN || state == BOTLEARN_DEFENSE_BOUNCE;
+}
+
+/* Safety dimensions survive exact, neighbor and coarse lookup. Mode 0 is saber,
+ * 1 is full force, 2 is arcade, 3 is unclassified (never pooled with duels). */
+static inline int BotLearn_ContextSafety(int key, int mode, int selfDefense,
+	int enemyDefense, int selfRecovery, int enemyRecovery, int selfAir, int enemyAir)
+{
+	return key | BOTLEARN_CONTEXT_VERSION_FLAG | ((mode & 3) << 16) |
+		((selfDefense & 7) << 18) | ((enemyDefense & 7) << 21) |
+		((selfRecovery != 0) << 24) | ((enemyRecovery != 0) << 25) |
+		((selfAir != 0) << 26) | ((enemyAir != 0) << 27);
+}
 
 typedef enum
 {
@@ -71,6 +149,12 @@ typedef struct
 	int rangeBucket;	/* 0 = <128u, 1 = <384u, 2 = beyond */
 	int selfStance;
 	int enemyStance;
+	int mode;
+	int selfDefense, enemyDefense;
+	int selfRecovery, enemyRecovery;
+	int selfAir, enemyAir;
+	int selfFooting;
+	unsigned long long actionIndex;
 } botlearn_event_t;
 
 typedef struct
@@ -83,6 +167,9 @@ typedef struct
 	int responseDelayMs;
 	int netDamage;
 	int won;
+	int startTime, endTime;
+	int selfFooting;
+	unsigned long long actionIndex;
 } botlearn_sequence_t;
 
 static inline const char *BotLearn_TokenName(int token)
@@ -157,11 +244,11 @@ static inline int BotLearn_ContextKey(int selfHealthArmor, int enemyHealthArmor,
 		(BotLearn_StanceBucket(enemyStance) << 12);
 }
 
-/* Coarse context keeps only both force buckets and range: used when the fine context has
- * not collected enough samples yet. */
+/* Coarse lookup drops health but retains force, range, stances and all safety dimensions. */
 static inline int BotLearn_CoarseKey(int contextKey)
 {
-	return BOTLEARN_COARSE_KEY_FLAG | ((contextKey >> 4) & 0x3F);
+	return BOTLEARN_COARSE_KEY_FLAG | (contextKey & BOTLEARN_CONTEXT_SAFETY_MASK) |
+		(contextKey & 0x3C00) | ((contextKey >> 4) & 0x3F);
 }
 
 /* Similar contexts: a context whose HP+armor / force buckets (both sides) differ from the
@@ -315,6 +402,16 @@ static inline int BotLearn_ExtractSequences(const botlearn_event_t *events, int 
 
 		seq.contextKey = BotLearn_ContextKey(resp->selfHealthArmor, resp->enemyHealthArmor,
 			resp->selfForce, resp->enemyForce, resp->rangeBucket, resp->selfStance, resp->enemyStance);
+		seq.contextKey = BotLearn_ContextSafety(seq.contextKey, resp->mode,
+			resp->selfDefense, resp->enemyDefense, resp->selfRecovery, resp->enemyRecovery,
+			resp->selfAir, resp->enemyAir);
+		seq.selfFooting = resp->selfFooting;
+		seq.contextKey = BotLearn_ContextFooting(seq.contextKey, resp->selfFooting);
+		if (seq.contextKey < 0)
+			continue;
+		seq.startTime = resp->time;
+		seq.endTime = resp->time + BOTLEARN_OUTCOME_WINDOW_MS;
+		seq.actionIndex = resp->actionIndex;
 		seq.stimulus = stimulus;
 		seq.response = resp->token;
 		seq.follow1 = BOTLEARN_TOK_NONE;
