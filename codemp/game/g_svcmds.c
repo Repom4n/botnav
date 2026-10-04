@@ -1666,6 +1666,7 @@ svcmd_t svcmds[] = {
 	{ "bot_eloreset",				SV_BotEloReset_f,					qfalse },
 	{ "bot_eloseed",				SV_BotEloSeed_f,					qfalse },
 #endif
+	{ "botlearn",					Svcmd_BotLearn_f,					qfalse },
 	{ "botlist",					Svcmd_BotList_f,					qfalse },
 
 	{ "changepassword",				Svcmd_ChangePass_f,					qfalse },

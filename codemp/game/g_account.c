@@ -3553,6 +3553,46 @@ static void G_BotLearnLoadCache(sqlite3 *db)
 		G_BotLearnDebugPrint(60);
 }
 
+// Server command: "botlearn [print [lines]]" prints the learned table, "botlearn reload"
+// re-reads LocalBotLearnedSequence (picking up duels finished since map load) without a
+// map restart.
+void Svcmd_BotLearn_f(void)
+{
+	char arg[MAX_STRING_CHARS] = { 0 };
+	int lines = 60;
+
+	if (trap->Argc() > 1)
+		trap->Argv(1, arg, sizeof(arg));
+	if (!Q_stricmp(arg, "reload"))
+	{
+		sqlite3 *db = NULL;
+
+		if (!G_OpenTrackedLocalDB(&db, NULL, 0))
+		{
+			trap->Print("Bot learning: could not open the duel tracking database.\n");
+			if (db)
+				sqlite3_close(db);
+			return;
+		}
+		G_BotLearnLoadCache(db);
+		sqlite3_close(db);
+		return;
+	}
+	if (arg[0] && Q_stricmp(arg, "print"))
+	{
+		trap->Print("usage: botlearn [print [lines]] | botlearn reload\n");
+		return;
+	}
+	if (trap->Argc() > 2)
+	{
+		trap->Argv(2, arg, sizeof(arg));
+		lines = Com_Clampi(1, 1000, atoi(arg));
+	}
+	if (!bot_learning.integer)
+		trap->Print("Bot learning is disabled (bot_learning 0).\n");
+	G_BotLearnDebugPrint(lines);
+}
+
 static void G_PersistTrackedDuel(tracked_duel_runtime_t *winnerRuntime, tracked_duel_runtime_t *loserRuntime, int duelType, qboolean draw)
 {
 	sqlite3 *db;

@@ -272,12 +272,44 @@ int G_BotLearnLiveContextKey(gentity_t *self, gentity_t *enemy)
 		self->client->ps.fd.saberAnimLevel, enemy->client->ps.fd.saberAnimLevel);
 }
 
+// Pool the live context with similar contexts (BotLearn_NeighborKey/BotLearn_NeighborWeight)
+// into *out. Returns qfalse when nothing similar has been recorded.
+static qboolean G_BotLearnPoolSimilar(int contextKey, int stimulus, int response, int followKey,
+	botlearn_cache_entry_t *out)
+{
+	int a, b, c, d;
+
+	memset(out, 0, sizeof(*out));
+	for (a = -1; a <= 1; a++)
+		for (b = -1; b <= 1; b++)
+			for (c = -1; c <= 1; c++)
+				for (d = -1; d <= 1; d++)
+				{
+					const int steps = abs(a) + abs(b) + abs(c) + abs(d);
+					const float weight = BotLearn_NeighborWeight(steps);
+					const int key = BotLearn_NeighborKey(contextKey, a, b, c, d);
+					const botlearn_cache_entry_t *e;
+
+					if (weight <= 0.0f || key < 0)
+						continue;
+					e = G_BotLearnCacheFind(key, stimulus, response, followKey, qfalse);
+					if (!e)
+						continue;
+					out->samples += e->samples * weight;
+					out->excessWins += e->excessWins * weight;
+					out->netDamage += e->netDamage * weight;
+				}
+	out->used = out->samples > 0.0f;
+	return out->used ? qtrue : qfalse;
+}
+
 // Additive learned weight for choosing `response` (and optionally `follow1`, or
 // BOTLEARN_TOK_NONE for any follow-up) after the opponent's `stimulus` in the live context.
 // Returns 0 when learning is off or the data is too thin.
 int G_BotLearnBonus(gentity_t *self, gentity_t *enemy, int stimulus, int response, int follow1, float skill)
 {
 	const botlearn_cache_entry_t *e;
+	botlearn_cache_entry_t pooled;
 	const int followKey = (follow1 > BOTLEARN_TOK_NONE && follow1 < BOTLEARN_TOK_COUNT) ? follow1 : BOTLEARN_FOLLOW_ANY;
 	const int minSamples = G_BotLearnMinSamples();
 	int contextKey;
@@ -293,6 +325,10 @@ int G_BotLearnBonus(gentity_t *self, gentity_t *enemy, int stimulus, int respons
 		return 0;
 
 	e = G_BotLearnCacheFind(contextKey, stimulus, response, followKey, qfalse);
+	if ((!e || e->samples < minSamples) &&
+		G_BotLearnPoolSimilar(contextKey, stimulus, response, followKey, &pooled) &&
+		pooled.samples >= minSamples)
+		e = &pooled;
 	if (!e || e->samples < minSamples)
 		e = G_BotLearnCacheFind(BotLearn_CoarseKey(contextKey), stimulus, response, followKey, qfalse);
 	if (!e || e->samples < minSamples)
