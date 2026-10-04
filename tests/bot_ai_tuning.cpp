@@ -1083,6 +1083,36 @@ BOOST_AUTO_TEST_CASE( saber_planner_fresh_swing_follows_start_window )
 	BOOST_CHECK( NewBotAI_SaberFreshSwingWindowAllows( context, NEWBOTAI_SABER_TACTIC_ATTACK ) );
 }
 
+BOOST_AUTO_TEST_CASE( fan_stances_alternate_horizontals_and_keep_t2b_for_finisher )
+{
+	for ( int family : { NEWBOTAI_SABER_BASIC, NEWBOTAI_SABER_DIAGONAL_VERTICAL, NEWBOTAI_SABER_HORIZONTAL } )
+		for ( int stage = 0; stage < 6; stage++ )
+		{
+			int forward, right;
+			NewBotAI_SaberSelectionInputs( (newbotai_saber_family_t)family, stage, -1, &forward, &right );
+			NewBotAI_SaberFanStanceInputs( 1, (newbotai_saber_family_t)family, stage, -1, &forward, &right );
+			// Never a T2B (forward only) outside the finisher.
+			BOOST_CHECK( !(forward > 0 && right == 0) );
+		}
+	int forward = 0, right = -1;
+	NewBotAI_SaberFanStanceInputs( 1, NEWBOTAI_SABER_FINISH, 0, -1, &forward, &right );
+	BOOST_CHECK_EQUAL( forward, 0 );
+	BOOST_CHECK_EQUAL( right, -1 );
+	NewBotAI_SaberFanStanceInputs( 1, NEWBOTAI_SABER_FINISH, NEWBOTAI_SABER_FAN_FINISH_STAGE, -1, &forward, &right );
+	BOOST_CHECK_EQUAL( forward, 1 );
+	BOOST_CHECK_EQUAL( right, 0 );
+	// Other stances are unchanged.
+	forward = 1; right = 0;
+	NewBotAI_SaberFanStanceInputs( 0, NEWBOTAI_SABER_BASIC, 1, -1, &forward, &right );
+	BOOST_CHECK_EQUAL( forward, 1 );
+	BOOST_CHECK_EQUAL( right, 0 );
+	// jundon: R2L opens ~54%, L2R->R2L links ~2/3 as often as R2L->L2R.
+	BOOST_CHECK_EQUAL( NewBotAI_FanStartDirection( 54 ), -1 );
+	BOOST_CHECK_EQUAL( NewBotAI_FanStartDirection( 55 ), 1 );
+	BOOST_CHECK_EQUAL( NewBotAI_FanLinkChance( -1 ), 100 );
+	BOOST_CHECK_EQUAL( NewBotAI_FanLinkChance( 1 ), 66 );
+}
+
 BOOST_AUTO_TEST_CASE( swing_dodge_prefers_lateral_or_jump_over_backpedal )
 {
 	BOOST_CHECK_EQUAL( NewBotAI_GetSwingDodgeChoice( 200.0f, 1, 1, 0, 50, 50 ), NEWBOTAI_SWING_DODGE_NONE );

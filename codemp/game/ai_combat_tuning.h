@@ -186,6 +186,7 @@ typedef struct
 	int closingKnown;	// closingSpeed/currentDistance are valid (zero-initialized: unknown)
 	float closingSpeed;	// 2D radial speed, > 0 while closing on the enemy
 	float currentDistance;	// 2D range now (enemyDistance is the predicted peak range)
+	int fanStance;		// yellow/staff: favour R2L<->L2R, T2B only as a finisher
 } newbotai_saber_tactic_context_t;
 
 typedef struct
@@ -579,6 +580,53 @@ static inline void NewBotAI_SaberSelectionInputs(newbotai_saber_family_t family,
 	}
 }
 
+// jundon (dueltracks3) yellow/staff swings: R2L 271, L2R 225, T2B 41; chained
+// R2L->L2R 101, L2R->R2L 67. Yellow/staff alternate horizontals and keep T2B for the
+// finisher (stage >= NEWBOTAI_SABER_FAN_FINISH_STAGE of a FINISH sequence).
+#define NEWBOTAI_JUNDON_R2L_SWINGS 271
+#define NEWBOTAI_JUNDON_L2R_SWINGS 225
+#define NEWBOTAI_JUNDON_R2L_TO_L2R 101
+#define NEWBOTAI_JUNDON_L2R_TO_R2L 67
+#define NEWBOTAI_SABER_FAN_FINISH_STAGE 2
+
+static inline void NewBotAI_SaberFanStanceInputs(int fanStance, newbotai_saber_family_t family,
+	int stage, int direction, int *forward, int *right)
+{
+	if (!fanStance)
+		return;
+	if (family == NEWBOTAI_SABER_FINISH)
+	{
+		if (stage >= NEWBOTAI_SABER_FAN_FINISH_STAGE)
+		{
+			*forward = 1;
+			*right = 0;
+		}
+		return;
+	}
+	if (*forward > 0 && !*right)
+	{
+		*forward = 0;
+		*right = direction < 0 ? -1 : 1;
+	}
+}
+
+// Chain start direction (1 = L2R, -1 = R2L) weighted by jundon's swing counts; roll 1-100.
+static inline int NewBotAI_FanStartDirection(int roll)
+{
+	const int r2lPercent = (NEWBOTAI_JUNDON_R2L_SWINGS * 100) /
+		(NEWBOTAI_JUNDON_R2L_SWINGS + NEWBOTAI_JUNDON_L2R_SWINGS);
+	return roll <= r2lPercent ? -1 : 1;
+}
+
+// Chance (percent) to link the next opposite horizontal when the chain is not landing hits,
+// relative to jundon's most common link (R2L->L2R = 100%). finishedDir: 1 = L2R, -1 = R2L.
+static inline int NewBotAI_FanLinkChance(int finishedDir)
+{
+	if (finishedDir > 0)
+		return (NEWBOTAI_JUNDON_L2R_TO_R2L * 100) / NEWBOTAI_JUNDON_R2L_TO_L2R;
+	return 100;
+}
+
 static inline int NewBotAI_SaberPreparationInputs(int attackIndex, int *forward, int *right)
 {
 	// Basic attack order: TL2BR, L2R, BL2TR, BR2TL, R2L, TR2BL, T2B.
@@ -675,7 +723,11 @@ static inline newbotai_saber_command_t NewBotAI_PlanSaberCommand(
 		// Starts and transitions can be much longer than 100ms (especially red).
 		// Hold the deliberate family/stage selection until an accepted attack owns pressure.
 		if (choosingMove)
+		{
 			NewBotAI_SaberSelectionInputs(family, stage, side, &command.forward, &command.right);
+			NewBotAI_SaberFanStanceInputs(context.fanStance, family, stage, side,
+				&command.forward, &command.right);
+		}
 	}
 	// Airborne footwork stays deliberate, but cannot accidentally start aerial specials.
 	if (!grounded)

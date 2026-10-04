@@ -13975,6 +13975,14 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 
 		if (bs->fanSwingStarted && (!inHorizontalSwingWindow || linkNow))
 		{
+			//Weight the next link by jundon's transitions (R2L->L2R 101, L2R->R2L 67)
+			//unless the chain is still landing hits.
+			if (!NewBotAI_FanChainIsLanding(msSinceHit) &&
+				Q_irand(1, 100) > NewBotAI_FanLinkChance(bs->fanAttackDir))
+			{
+				NewBotAI_ResetFanChain(bs);
+				break;
+			}
 			bs->fanSwingCount++;
 			bs->fanSwingStarted = 0;
 			if (nextDwellMs <= 0)
@@ -14057,7 +14065,7 @@ static void NewBotAI_PrepareHorizontalSwingStart(bot_state_t *bs)
 				NewBotAI_GetEnemyStimulusToken(bs), BOTLEARN_TOK_SWING, BOTLEARN_TOK_NONE, bs->settings.skill);
 
 			if (Q_irand(1, 100) <= (int)fanBias + learnedEntry)
-				startDir = Q_irand(0, 1) ? 1 : -1;
+				startDir = NewBotAI_FanStartDirection(Q_irand(1, 100));
 		}
 
 		if (startDir)
@@ -17411,11 +17419,12 @@ static void NewBotAI_RunSaberTechniques(bot_state_t *bs)
 		bs->saberTechniqueYawTime = 0;
 	}
 	if (!bs->saberTacticStrafeDir)
-		bs->saberTacticStrafeDir = Q_irand(0, 1) ? 1 : -1;
+		bs->saberTacticStrafeDir = NewBotAI_FanStartDirection(Q_irand(1, 100));
 	phase = NewBotAI_ObserveSaberAnimation(bs, ps);
 	memset(&context, 0, sizeof(context));
 	context.saberOnlyDuel = NewBotAI_IsSaberOnlyDuel(bs);
 	context.saberCombat = 1;
+	context.fanStance = ps->fd.saberAnimLevel == SS_MEDIUM || ps->fd.saberAnimLevel == SS_STAFF;
 	context.skill = Com_Clampi(1, 10, (int)bs->settings.skill);
 	context.ourTotalHealth = g_entities[bs->client].health + ps->stats[STAT_ARMOR];
 	context.enemyTotalHealth = bs->currentEnemy->health + enemy->stats[STAT_ARMOR];
@@ -17606,6 +17615,9 @@ static void NewBotAI_ApplySaberTechniqueInput(bot_state_t *bs, bot_input_t *bi, 
 		ps->saberMove >= LS_A_TL2BR && ps->saberMove <= LS_A_T2B, ps->weaponTime);
 	NewBotAI_SaberSelectionInputs((newbotai_saber_family_t)bs->saberTechniqueFamily,
 		bs->saberTacticChainLength, bs->saberTacticStrafeDir, &selectedForward, &selectedRight);
+	NewBotAI_SaberFanStanceInputs(ps->fd.saberAnimLevel == SS_MEDIUM || ps->fd.saberAnimLevel == SS_STAFF,
+		(newbotai_saber_family_t)bs->saberTechniqueFamily, bs->saberTacticChainLength,
+		bs->saberTacticStrafeDir, &selectedForward, &selectedRight);
 	if (PM_SaberInStart(ps->saberMove))
 		NewBotAI_SaberPreparationInputs(ps->saberMove - LS_S_TL2BR, &selectedForward, &selectedRight);
 	else if (PM_SaberInTransition(ps->saberMove))
