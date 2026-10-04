@@ -38,11 +38,12 @@ BOOST_AUTO_TEST_CASE( buckets_and_context_keys )
 	BOOST_CHECK_EQUAL( ( key >> 4 ) & 3, 3 );
 	BOOST_CHECK_EQUAL( ( key >> 6 ) & 3, 0 );
 	BOOST_CHECK_EQUAL( ( key >> 8 ) & 3, 1 );
-	// The coarse key keeps force and range only and never collides with a fine key.
+	// The coarse key drops health but preserves force, range and stance.
 	const int coarse = BotLearn_CoarseKey( key );
 	BOOST_CHECK( coarse & BOTLEARN_COARSE_KEY_FLAG );
 	BOOST_CHECK_EQUAL( coarse & 0x3F, ( key >> 4 ) & 0x3F );
-	BOOST_CHECK_EQUAL( BotLearn_CoarseKey( BotLearn_ContextKey( 10, 10, 100, 10, 1, 0, 0 ) ), coarse );
+	BOOST_CHECK_EQUAL( BotLearn_CoarseKey( BotLearn_ContextKey( 10, 10, 100, 10, 1, 4, 2 ) ), coarse );
+	BOOST_CHECK_NE( BotLearn_CoarseKey( BotLearn_ContextKey( 10, 10, 100, 10, 1, 0, 0 ) ), coarse );
 }
 
 BOOST_AUTO_TEST_CASE( skill_bands_split_humans_and_bot_levels )
@@ -180,6 +181,60 @@ BOOST_AUTO_TEST_CASE( similar_contexts_pool_neighbouring_buckets )
 	BOOST_CHECK_CLOSE( BotLearn_NeighborWeight( 1 ), 0.5f, 0.001f );
 	BOOST_CHECK_CLOSE( BotLearn_NeighborWeight( 2 ), 0.25f, 0.001f );
 	BOOST_CHECK_EQUAL( BotLearn_NeighborWeight( 3 ), 0.0f );
+}
+
+BOOST_AUTO_TEST_CASE( safety_dimensions_survive_all_cache_lookup_keys )
+{
+	const int base = BotLearn_ContextKey(100, 100, 60, 60, 1, 2, 2);
+	const int saber = BotLearn_ContextSafety(base, 0, 0, 0, 0, 0, 0, 0);
+	const int force = BotLearn_ContextSafety(base, 1, 0, 0, 0, 0, 0, 0);
+	const int protectedEnemy = BotLearn_ContextSafety(base, 1, 0, 2, 0, 0, 0, 0);
+	const int returningEnemy = BotLearn_ContextSafety(base, 1, 0, 0, 0, 1, 0, 0);
+	const int airborne = BotLearn_ContextSafety(base, 1, 0, 0, 0, 0, 1, 0);
+	BOOST_CHECK_NE(saber, force);
+	BOOST_CHECK_NE(BotLearn_CoarseKey(saber), BotLearn_CoarseKey(force));
+	BOOST_CHECK_NE(BotLearn_CoarseKey(force), BotLearn_CoarseKey(protectedEnemy));
+	BOOST_CHECK_NE(BotLearn_CoarseKey(force), BotLearn_CoarseKey(returningEnemy));
+	BOOST_CHECK_NE(BotLearn_CoarseKey(force), BotLearn_CoarseKey(airborne));
+	BOOST_CHECK_EQUAL(BotLearn_NeighborKey(protectedEnemy, -1, 1, 0, 0) &
+		BOTLEARN_CONTEXT_SAFETY_MASK, protectedEnemy & BOTLEARN_CONTEXT_SAFETY_MASK);
+	BOOST_CHECK(saber & BOTLEARN_CONTEXT_VERSION_FLAG);
+	BOOST_CHECK_NE(BotLearn_CoarseKey(base), BotLearn_CoarseKey(saber));
+}
+
+BOOST_AUTO_TEST_CASE( extracts_verified_context_and_action_window_provenance )
+{
+	botlearn_event_t events[] = {
+		MakeEvent(1000, 1, BOTLEARN_TOK_THROW),
+		MakeEvent(1200, 0, BOTLEARN_TOK_SWING),
+		MakeEvent(1300, 0, BOTLEARN_TOK_NONE, 40),
+	};
+	events[1].mode = 1;
+	events[1].enemyDefense = 2;
+	events[1].enemyRecovery = 1;
+	events[1].selfAir = 1;
+	events[1].actionIndex = 70001;
+	botlearn_sequence_t sequences[4] = {};
+	BOOST_REQUIRE_EQUAL(BotLearn_ExtractSequences(events, 3, 1, sequences, 4), 1);
+	BOOST_CHECK_EQUAL((sequences[0].contextKey >> 16) & 3, 1);
+	BOOST_CHECK_EQUAL((sequences[0].contextKey >> 20) & 3, 2);
+	BOOST_CHECK_EQUAL((sequences[0].contextKey >> 23) & 1, 1);
+	BOOST_CHECK_EQUAL((sequences[0].contextKey >> 24) & 1, 1);
+	BOOST_CHECK_EQUAL(sequences[0].actionIndex, 70001);
+	BOOST_CHECK_EQUAL(sequences[0].startTime, 1200);
+	BOOST_CHECK_EQUAL(sequences[0].endTime, 3200);
+	BOOST_CHECK_EQUAL(sequences[0].netDamage, 40);
+}
+
+BOOST_AUTO_TEST_CASE( commentary_and_decision_rows_are_not_combat_responses )
+{
+	botlearn_event_t events[] = {
+		MakeEvent(1000, 0, BOTLEARN_TOK_NONE),
+		MakeEvent(1100, 1, BOTLEARN_TOK_NONE),
+	};
+	botlearn_sequence_t sequences[4] = {};
+	BOOST_CHECK_EQUAL(BotLearn_ExtractSequences(events, 2, 1, sequences, 4), 0);
+	BOOST_CHECK_EQUAL(BotLearn_Score(0, 1, 100), 0.0f);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

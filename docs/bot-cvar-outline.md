@@ -150,6 +150,7 @@ Notes:
 |------|---------|-------------|
 | `bot_nochat` | `0` | Disable bot chat. |
 | `bot_tutorial` | `0` | Enable concise trainer tells from bots after tracked duels; at `1` tells are private, at `2+` tells may broadcast publicly. Messages are capped to 3 per burst with a 7s cooldown between sends, and unregistered reminders are sent once per session. |
+| `bot_learninglog` | `0` | Opt-in recording of accepted public chat in the existing events export, independently of tutorial chat and learned weight consumption. Private tells, team, clan and admin chat are excluded. Human explanations remain untrusted annotations, not automatic behavior rules. |
 | `bot_dueltracking` | `0` | Record duel summaries, per-player force-spend stats, and sequential duel events for human-vs-human and human-vs-bot duels only (bot-vs-bot excluded). |
 | `bot_dueltracking_geometry` | `0` | Optional geometry capture for tracked duel events. `1` logs only key spatial events (damage/range/air/knockdown), `2` logs all tracked events. Off by default to keep overhead low. |
 | `bot_yawswitch` | `10` | Legacy/unused cvar; current wall-escape yaw behavior is hardcoded in `ai_main.c`. |
@@ -175,6 +176,7 @@ Tracked duel data access:
   - `LocalDuelTrackGeometry` (when `bot_dueltracking_geometry` is enabled)
   - `LocalDuelTrackAggregate`
   - `LocalBotLearnedSequence` (`learned` CSV: source kind, skill band, context key, stimulus, response, follow-ups, samples, wins, net damage, average response time)
+  - `LocalBotLearnedEvidence` (`learned_evidence` CSV: individual extracted examples with source duel, participant, action index, outcome window and recording provenance)
 - Every exported CSV is capped below 25MB so it can be uploaded to GitHub. A larger export is split into `<name>.csv`, `<name>_part2.csv`, `<name>_part3.csv`, ...; each part repeats the header row and whole rows are never split across files. Leftover parts from an earlier, larger export are removed.
 - `capture_version` and `capture_revision` identify the recording implementation and build revision for each session, also included in event and participant exports. Imported/historical sessions without provenance remain `0`/blank; an export schema version alone does not establish recording provenance.
 - `input_start` records an attack-button request, not a successful swing; historical `attack_start` records retain their original meaning. `swing_start` records an accepted saber attack animation, and `attack_chain` marks accepted continuations through legal transitions, including same-direction links, already counted by `swing_start`. `swing_end` preserves measured signed yaw sweep, and `swing_damage` records confirmed in-hand saber damage. Count distinct swings containing hits, not raw hit events. `damage_dealt`/`damage` record actual attributed resource loss; `damage_source` is the engine means-of-death value (`MOD_*`), and `damage_attacker_key` identifies the actual attacker. Environmental damage must not be credited as opponent saber damage.
@@ -190,6 +192,11 @@ Saber combat verification:
 - Capture version 8 grows event storage on demand, up to 8,192 records per participant, instead of stopping at 128. At the bound (or after a growth allocation failure), compaction prioritizes damage/knockdown events, preserves the opening record and recent tail, and samples older records. Capture continues through later exchanges; it is not unlimited or lossless.
 - Participant exports expose `event_total`, `event_retained`, `event_dropped`, `event_critical_dropped`, `event_compactions` and `event_allocation_failures`. Event indices remain monotonic across compaction, so gaps identify missing records. Any capture loss disables outcome/sequence ranking for that participant: attack quality becomes `unknown` and good/bad sequence coaching is withheld. Do not compute complete-match event rates from compacted samples. Aggregate damage/force totals remain independent of retained events. Migrated old records have unknown coverage counters (`-1`), and old version-7 recordings remain truncated at their original limit.
 - Confirm the deployed build with fresh `capture_revision` values before comparing results. Old rows can be re-exported by a newer build without acquiring movement measurements or proving that build was deployed.
+- Compare defense resets separately from ordinary retreats: measure damage taken after a broken parry, whether the bot leaves immediate swing reach, and whether its next entry happens after recovery rather than while the opponent is still following up.
+- Verify pursuit during offset aim with world-space displacement, not `forwardmove` alone. Local movement commands can change when the view turns even though the intended path stays the same. Starts and transitions must still preserve the movement inputs that select the accepted swing.
+- Test poke and wiggle separately: counter-yaw should improve early contact; alternating yaw/pitch should be evaluated by repeated contact and net damage, not by visual oscillation or the largest recorded sweep.
+- Test throw routing against guarded opponents near walls and under low ceilings, with both throw levels 2 and 3. Check the actual view-trace endpoint and saber route; a successful wide release alone does not prove that the saber passed behind the block.
+- Use matched stance, skill, map, opponent and duel mode for baseline comparisons. Record first-hit timing, damage per accepted swing, recovery damage, safe re-entry and throw hit rate; do not combine duplicate damage summaries or treat aggregate sequence samples as independent duels.
 
 Technique evidence and limitations:
 - Sugar Kane's saber-only duel 162 includes L2R at 25.377s, R2L at 25.707s, another L2R at 26.763s, and a recorded 40-damage finishing punish at 26.994s. This supports alternating horizontal pressure and finishing continuation, not a universal instruction to hold attack forever.
@@ -210,12 +217,19 @@ At the end of every tracked duel, each participant's events are broken into shor
 - In game: the same lookup feeds force reactions, combo follow-ups (e.g. pull→kick), the saber-throw decision and fan entry. Skill 7+ follows the best-scoring entry; lower skills see a smaller, noisier bonus and keep their mistake bias.
 
 Duel capture version 9:
-- `throw_start` is logged when a saber throw is released: amount = 2D distance to the opponent at release, `throw_yaw_offset` = aim offset from the opponent. (Older builds required a saber state the engine never set at release, so no `throw_start` rows were exported.) `throw_end` is logged when the saber is back in hand: amount = damage the throw dealt in flight, note `hit` or `miss`.
+- `throw_start` is logged when a saber throw is released: amount = 2D distance to the opponent at release. In version 9, `throw_yaw_offset` uses saber flight direction when available and can be reused on subsequent rows; it is not a continuous camera-steering measurement. (Older builds required a saber state the engine never set at release, so no `throw_start` rows were exported.) `throw_end` is logged when the saber is back in hand: amount = damage the throw dealt in flight, note `hit` or `miss`. The interval includes return flight and is not necessarily the duration of held alt attack.
 - `dodge` is logged for the defender when an enemy swing ends within close range without damaging them (note `air`, `blocked` or `evaded`).
 - Knockdown notes record `knockdown_by_opponent` or `knockdown_self`, and the damage attacker key identifies who caused it.
 - Duel winners no longer get `low_force` as their primary issue for deliberately spending force.
 - `force` events whose power could only be guessed from the selected power (force lost to an enemy drain, or the cost of a saber throw) carry the note `selected_fallback`. Leaving the ground with jump held and upward velocity is noted `jump` instead of `airborne`. Learning ignores both guessed force spends and non-jump launches, so victims are not credited with actions they never took.
 - `LocalDuelTrackAggregate` rows carry `capture_version` and `capture_revision` of the latest update (aggregate export format 3).
+
+Interpreting historical recordings:
+- `yaw_delta` compares the participants' facing directions, not aim against the bearing to the opponent.
+- `yaw_sweep` is accumulated signed rotation since swing start. Opposing rotations can cancel; this field alone cannot establish wiggle frequency or sustained saber contact.
+- `radial_speed` is relative closing speed, including both participants' velocities. It cannot by itself establish which participant deliberately advanced.
+- Event-sampled geometry cannot establish continuous pitch motion, a throw's overhead/rear path, or the steering trace endpoint when those fields were not captured. Do not treat successful damage as proof of a particular bypass technique.
+- Learned rows are cumulative sequence samples. `wins` describes the containing duel's outcome, not an independent action success; `avg_response_ms = 0` with stimulus `idle` means initiative, not zero reaction latency.
 
 Recommended data: record duels against bots at skill 6+ so the skill gradient can be checked against data; the dueltracks2 set had no bots above skill 5.
 

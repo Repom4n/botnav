@@ -3,6 +3,64 @@
 
 BOOST_AUTO_TEST_SUITE(duel_capture)
 
+BOOST_AUTO_TEST_CASE(public_chat_excludes_private_channels_and_targeted_copies)
+{
+	BOOST_CHECK(G_DuelCapturePublicChat(0, 0, 0));
+	for (int mode = 1; mode <= 4; mode++)
+		BOOST_CHECK(!G_DuelCapturePublicChat(mode, 0, 0));
+	BOOST_CHECK(!G_DuelCapturePublicChat(0, 0, 1));
+}
+
+BOOST_AUTO_TEST_CASE(recovery_advice_requires_damage_and_verified_linear_reentry)
+{
+	BOOST_CHECK(G_DuelCaptureRecoveryReentry(10, 1, 50, 127, 0));
+	BOOST_CHECK(!G_DuelCaptureRecoveryReentry(0, 1, 50, 127, 0));
+	BOOST_CHECK(!G_DuelCaptureRecoveryReentry(10, 0, 50, 127, 0));
+	BOOST_CHECK(!G_DuelCaptureRecoveryReentry(10, 1, 0, 127, 0));
+	BOOST_CHECK(!G_DuelCaptureRecoveryReentry(10, 1, 50, -127, 0));
+	BOOST_CHECK(!G_DuelCaptureRecoveryReentry(10, 1, 50, 127, 127));
+}
+
+BOOST_AUTO_TEST_CASE(public_text_preserves_full_message_and_neutralizes_controls)
+{
+	const char *message = "My plan: recover, then re-enter from a different angle; don't repeat a straight rush.\n\"quoted\", SQL'); --\tend";
+	char text[256] = {};
+	G_DuelCaptureSanitizeText(message, text, sizeof(text));
+	BOOST_CHECK(strlen(text) > 32);
+	BOOST_CHECK(strstr(text, "\"quoted\", SQL'); -- end") != NULL);
+	BOOST_CHECK(strchr(text, '\n') == NULL);
+	char bounded[8] = {};
+	G_DuelCaptureSanitizeText(message, bounded, sizeof(bounded));
+	BOOST_CHECK_EQUAL(strlen(bounded), 7);
+	BOOST_CHECK_EQUAL(bounded[7], '\0');
+	G_DuelCaptureSanitizeText(NULL, bounded, sizeof(bounded));
+	BOOST_CHECK_EQUAL(bounded[0], '\0');
+	G_DuelCaptureSanitizeText(message, NULL, 0);
+}
+
+BOOST_AUTO_TEST_CASE(recent_duel_association_is_bounded_and_identity_specific)
+{
+	BOOST_CHECK(G_DuelCaptureRecentChat(20000, 5000, 1));
+	BOOST_CHECK(!G_DuelCaptureRecentChat(20001, 5000, 1));
+	BOOST_CHECK(!G_DuelCaptureRecentChat(10000, 5000, 0));
+	BOOST_CHECK(!G_DuelCaptureRecentChat(1000, 5000, 1));
+	BOOST_CHECK(!G_DuelCaptureRecentChat(1000, -1, 1));
+}
+
+BOOST_AUTO_TEST_CASE(attack_window_sampling_is_cadenced_not_every_frame)
+{
+	int last = -1, samples = 0;
+	for (int now = 0; now <= 1000; now += 10)
+		if (G_DuelCaptureSampleDue(now, last, 1))
+		{
+			last = now;
+			samples++;
+		}
+	BOOST_CHECK_EQUAL(samples, 21);
+	BOOST_CHECK(!G_DuelCaptureSampleDue(2000, last, 0));
+	BOOST_CHECK(!G_DuelCaptureSampleDue(900, last, 1));
+}
+
 struct capture_test_record
 {
 	unsigned long long index;
@@ -13,6 +71,29 @@ struct capture_test_record
 static int CaptureTestPriority(const void *record)
 {
 	return static_cast<const capture_test_record *>(record)->priority;
+}
+
+BOOST_AUTO_TEST_CASE(subsample_contacts_and_defense_edges_survive_sample_compaction)
+{
+	capture_test_record records[16] = {};
+	for (int i = 0; i < 16; i++)
+		records[i] = { static_cast<unsigned long long>(i + 1), i * 50, 0 };
+	records[1].time = 33;
+	records[1].priority = 2;
+	records[3].time = 127;
+	records[3].priority = 2;
+	BOOST_CHECK(!G_DuelCaptureSampleDue(33, 0, 1));
+	duel_capture_storage_t storage = {};
+	const int count = G_DuelCaptureCompact(records, 16, sizeof(records[0]), &storage, CaptureTestPriority);
+	bool contact = false, defense = false;
+	for (int i = 0; i < count; i++)
+	{
+		contact |= records[i].time == 33 && records[i].priority == 2;
+		defense |= records[i].time == 127 && records[i].priority == 2;
+	}
+	BOOST_CHECK(contact);
+	BOOST_CHECK(defense);
+	BOOST_CHECK_EQUAL(storage.criticalDropped, 0);
 }
 
 static void *CaptureTestFailedAllocation(void *, size_t)

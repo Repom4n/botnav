@@ -51,6 +51,19 @@ typedef enum
 #define BOTLEARN_DEFAULT_MIN_SAMPLES 4
 #define BOTLEARN_BONUS_CAP 30
 #define BOTLEARN_COARSE_KEY_FLAG 0x8000
+#define BOTLEARN_CONTEXT_VERSION_FLAG (1 << 28)
+#define BOTLEARN_CONTEXT_SAFETY_MASK 0x1FFF0000
+
+/* Safety dimensions survive exact, neighbor and coarse lookup. Mode 0 is saber,
+ * 1 is full force, 2 is arcade, 3 is unclassified (never pooled with duels). */
+static inline int BotLearn_ContextSafety(int key, int mode, int selfDefense,
+	int enemyDefense, int selfRecovery, int enemyRecovery, int selfAir, int enemyAir)
+{
+	return key | BOTLEARN_CONTEXT_VERSION_FLAG | ((mode & 3) << 16) |
+		((selfDefense & 3) << 18) | ((enemyDefense & 3) << 20) |
+		((selfRecovery != 0) << 22) | ((enemyRecovery != 0) << 23) |
+		((selfAir != 0) << 24) | ((enemyAir != 0) << 25);
+}
 
 typedef enum
 {
@@ -71,6 +84,11 @@ typedef struct
 	int rangeBucket;	/* 0 = <128u, 1 = <384u, 2 = beyond */
 	int selfStance;
 	int enemyStance;
+	int mode;
+	int selfDefense, enemyDefense;
+	int selfRecovery, enemyRecovery;
+	int selfAir, enemyAir;
+	unsigned long long actionIndex;
 } botlearn_event_t;
 
 typedef struct
@@ -83,6 +101,8 @@ typedef struct
 	int responseDelayMs;
 	int netDamage;
 	int won;
+	int startTime, endTime;
+	unsigned long long actionIndex;
 } botlearn_sequence_t;
 
 static inline const char *BotLearn_TokenName(int token)
@@ -161,7 +181,8 @@ static inline int BotLearn_ContextKey(int selfHealthArmor, int enemyHealthArmor,
  * not collected enough samples yet. */
 static inline int BotLearn_CoarseKey(int contextKey)
 {
-	return BOTLEARN_COARSE_KEY_FLAG | ((contextKey >> 4) & 0x3F);
+	return BOTLEARN_COARSE_KEY_FLAG | (contextKey & BOTLEARN_CONTEXT_SAFETY_MASK) |
+		(contextKey & 0x3C00) | ((contextKey >> 4) & 0x3F);
 }
 
 /* Similar contexts: a context whose HP+armor / force buckets (both sides) differ from the
@@ -315,6 +336,12 @@ static inline int BotLearn_ExtractSequences(const botlearn_event_t *events, int 
 
 		seq.contextKey = BotLearn_ContextKey(resp->selfHealthArmor, resp->enemyHealthArmor,
 			resp->selfForce, resp->enemyForce, resp->rangeBucket, resp->selfStance, resp->enemyStance);
+		seq.contextKey = BotLearn_ContextSafety(seq.contextKey, resp->mode,
+			resp->selfDefense, resp->enemyDefense, resp->selfRecovery, resp->enemyRecovery,
+			resp->selfAir, resp->enemyAir);
+		seq.startTime = resp->time;
+		seq.endTime = resp->time + BOTLEARN_OUTCOME_WINDOW_MS;
+		seq.actionIndex = resp->actionIndex;
 		seq.stimulus = stimulus;
 		seq.response = resp->token;
 		seq.follow1 = BOTLEARN_TOK_NONE;

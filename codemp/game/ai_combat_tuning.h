@@ -458,6 +458,12 @@ static inline int NewBotAI_SaberMoveAccepted(int move, int lastMove, int basicAt
 	return basicAttack && move != lastMove;
 }
 
+static inline int NewBotAI_SaberCommittedLearningDecision(int accepted, int requestedAttack,
+	int defenseActive)
+{
+	return accepted && requestedAttack && !defenseActive;
+}
+
 static inline int NewBotAI_SaberHorizontalDirection(int move, int leftToRight, int rightToLeft)
 {
 	return move == leftToRight ? 1 : move == rightToLeft ? -1 : 0;
@@ -475,6 +481,41 @@ typedef enum
 	NEWBOTAI_SABER_YAW_RECOVER,
 	NEWBOTAI_SABER_YAW_NEXT
 } newbotai_saber_yaw_phase_t;
+
+#define NEWBOTAI_SABER_BROKEN_RECOVERY_MS 250
+#define NEWBOTAI_SABER_FOLLOWUP_CLEAR_MS 180
+
+static inline int NewBotAI_SaberDefenseReady(int now, int recoveryUntil, int followupUntil,
+	int brokenParry, int weaponTime)
+{
+	return !brokenParry && weaponTime <= 0 && now >= recoveryUntil && now >= followupUntil;
+}
+
+static inline void NewBotAI_SaberWorldDirection(float yaw, int forward, int right,
+	float *x, float *y)
+{
+	const float radians = yaw * 0.017453292519943295f;
+	const float length = sqrtf((float)(forward * forward + right * right));
+	*x = length > 0.0f ? (cosf(radians) * forward + sinf(radians) * right) / length : 0.0f;
+	*y = length > 0.0f ? (sinf(radians) * forward - cosf(radians) * right) / length : 0.0f;
+}
+
+static inline int NewBotAI_SaberFootingNeedsUpdate(int valid, int previousPhase, int phase,
+	int previousMove, int move, int previousTactic, int tactic)
+{
+	return !valid || previousPhase != phase || previousMove != move || previousTactic != tactic;
+}
+
+static inline float NewBotAI_SaberPokeCounterYaw(newbotai_saber_yaw_phase_t phase,
+	float progress, int side)
+{
+	float envelope;
+	if (phase != NEWBOTAI_SABER_YAW_ACTIVE)
+		return 0.0f;
+	envelope = 1.0f - fabsf((progress - 0.475f) / 0.325f);
+	if (envelope < 0.0f) envelope = 0.0f;
+	return (side < 0 ? 1.0f : -1.0f) * 6.0f * envelope;
+}
 
 // Conservative control envelopes, not measured human animation templates.
 #define NEWBOTAI_SABER_SWEEP_DEGREES 18.0f
@@ -1388,10 +1429,27 @@ static inline void NewBotAI_GetFanWobbleOffsets(
 	{
 		*yawOffset = (yawAmplitude > 0.0f) ? cosf(phase) * yawAmplitude : 0.0f;
 	}
+
 	if (pitchOffset)
 	{
 		*pitchOffset = (pitchAmplitude > 0.0f) ? -sinf(phase) * pitchAmplitude : 0.0f;
 	}
+}
+
+static inline void NewBotAI_GetSaberActiveWiggle(newbotai_saber_yaw_phase_t phase,
+	int elapsedMs, int delayMs, float yawAmplitude, float pitchAmplitude, float speed,
+	float *yaw, float *pitch)
+{
+	*yaw = *pitch = 0.0f;
+	if (phase != NEWBOTAI_SABER_YAW_ACTIVE || elapsedMs < delayMs || speed <= 0.0f)
+		return;
+	if (yawAmplitude < 0.0f) yawAmplitude = 0.0f;
+	if (yawAmplitude > 8.0f) yawAmplitude = 8.0f;
+	if (pitchAmplitude < 0.0f) pitchAmplitude = 0.0f;
+	if (pitchAmplitude > 4.0f) pitchAmplitude = 4.0f;
+	if (speed > 20.0f) speed = 20.0f;
+	NewBotAI_GetFanWobbleOffsets((float)(elapsedMs - delayMs),
+		yawAmplitude, pitchAmplitude, speed, yaw, pitch);
 }
 
 static inline int NewBotAI_ShouldForceImmediateSaberThrowHop(
@@ -1864,6 +1922,52 @@ static inline int NewBotAI_GetSaberThrowSituationBonus(int ourForce, float enemy
 #define NEWBOTAI_THROW_TRAIL_MAX_DEG 10.0f
 #define NEWBOTAI_THROW_PASS_SWITCH_DEG 9.0f
 #define NEWBOTAI_THROW_TRAIL_RANGE 400.0f
+
+typedef enum
+{
+	NEWBOTAI_THROW_LAUNCH = 0,
+	NEWBOTAI_THROW_BYPASS,
+	NEWBOTAI_THROW_REAR,
+	NEWBOTAI_THROW_CUT_THROUGH,
+	NEWBOTAI_THROW_RECALL
+} newbotai_throw_phase_t;
+
+static inline int NewBotAI_SaberThrowSteerCadence(int throwLevel)
+{
+	return throwLevel >= 3 ? 100 : throwLevel == 2 ? 400 : 0;
+}
+
+static inline newbotai_throw_phase_t NewBotAI_SaberThrowNextPhase(newbotai_throw_phase_t phase,
+	int elapsedMs, int cadenceMs, float targetFacingProjection)
+{
+	if (!cadenceMs || phase == NEWBOTAI_THROW_RECALL)
+		return phase;
+	if (phase == NEWBOTAI_THROW_LAUNCH && elapsedMs >= cadenceMs)
+		return NEWBOTAI_THROW_BYPASS;
+	if (phase == NEWBOTAI_THROW_BYPASS && targetFacingProjection < 24.0f)
+		return NEWBOTAI_THROW_REAR;
+	if (phase == NEWBOTAI_THROW_REAR && targetFacingProjection < -48.0f)
+		return NEWBOTAI_THROW_CUT_THROUGH;
+	return phase;
+}
+
+static inline int NewBotAI_SaberThrowRecallDue(int throwLevel, int heldMs, int unsafe,
+	int returning, int forceAllowed)
+{
+	const int maximum = throwLevel >= 3 ? 1500 : throwLevel == 2 ? 1800 : 750;
+	return unsafe || returning || !forceAllowed || heldMs < 0 || heldMs >= maximum;
+}
+
+static inline int NewBotAI_SaberThrowTraceSafe(int viewSolid, int flightSolid,
+	int flightBlocked, int flightHitTarget, newbotai_throw_phase_t phase)
+{
+	if (viewSolid || flightSolid || phase == NEWBOTAI_THROW_RECALL)
+		return 0;
+	if (!flightBlocked)
+		return 1;
+	return flightHitTarget && (phase == NEWBOTAI_THROW_LAUNCH ||
+		phase == NEWBOTAI_THROW_CUT_THROUGH);
+}
 
 static inline int NewBotAI_SaberThrowHoldProtected(int heldMs, int passedTarget, int headingToTarget)
 {

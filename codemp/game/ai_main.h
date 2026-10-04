@@ -351,6 +351,12 @@ typedef struct bot_state_s
 	int					saberThrowTime;
 	int					saberThrowStartTime;
 	qboolean			saberThrowPassedTarget; // current throw has flown past the target once
+	int					saberThrowPhase;
+	int					saberThrowPhaseTime;
+	int					saberThrowSteerTime;
+	int					saberThrowTargetNum;
+	int					saberThrowLane;
+	vec3_t				saberThrowAim;
 
 	qboolean			saberPower;
 	int					saberPowerTime;
@@ -448,6 +454,22 @@ typedef struct bot_state_s
 	int					saberTechniqueAnimRemaining;
 	int					saberTechniqueYawTime;
 	float				saberTechniqueYawOffset; // bounded offset; never fed back into base aim smoothing
+	float				saberTechniqueAppliedYaw;
+	float				saberTechniqueAppliedPitch;
+	qboolean			saberDefenseActive;
+	int					saberDefenseEnemyNum;
+	int					saberDefenseRecoveryUntil;
+	int					saberDefenseFollowupUntil;
+	int					saberFootingPhase;
+	int					saberFootingMove;
+	int					saberFootingTactic;
+	int					saberFootingForward;
+	int					saberFootingRight;
+	qboolean			saberFootingValid;
+	vec3_t				saberFootingWorldDir;
+	int					saberLearnedPreference;
+	int					saberLearnedStimulus;
+	int					saberLearnedFollow;
 	int					saberTechniqueReentryUntil;
 	int					saberTechniqueAirExitUntil;
 	int					saberTechniqueJumpTime;

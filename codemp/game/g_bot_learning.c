@@ -13,6 +13,7 @@
 #include "g_bot_learning.h"
 
 extern qboolean BG_InKnockDown(int anim);
+extern qboolean PM_SaberInReturn(int move);
 
 typedef struct
 {
@@ -265,11 +266,19 @@ int G_BotLearnLiveContextKey(gentity_t *self, gentity_t *enemy)
 	if (!self || !self->client || !enemy || !enemy->client)
 		return -1;
 	VectorSubtract(enemy->client->ps.origin, self->client->ps.origin, diff);
-	return BotLearn_ContextKey(self->health + self->client->ps.stats[STAT_ARMOR],
+	return BotLearn_ContextSafety(BotLearn_ContextKey(self->health + self->client->ps.stats[STAT_ARMOR],
 		enemy->health + enemy->client->ps.stats[STAT_ARMOR],
 		self->client->ps.fd.forcePower, enemy->client->ps.fd.forcePower,
 		BotLearn_RangeBucket(VectorLength(diff)),
-		self->client->ps.fd.saberAnimLevel, enemy->client->ps.fd.saberAnimLevel);
+		self->client->ps.fd.saberAnimLevel, enemy->client->ps.fd.saberAnimLevel),
+		G_BotLearnDuelMode(self),
+		((self->client->ps.fd.forcePowersActive & (1 << FP_ABSORB)) ? 1 : 0) |
+			((self->client->ps.fd.forcePowersActive & (1 << FP_PROTECT)) ? 2 : 0),
+		((enemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB)) ? 1 : 0) |
+			((enemy->client->ps.fd.forcePowersActive & (1 << FP_PROTECT)) ? 2 : 0),
+		PM_SaberInReturn(self->client->ps.saberMove), PM_SaberInReturn(enemy->client->ps.saberMove),
+		self->client->ps.groundEntityNum == ENTITYNUM_NONE,
+		enemy->client->ps.groundEntityNum == ENTITYNUM_NONE);
 }
 
 // Pool the live context with similar contexts (BotLearn_NeighborKey/BotLearn_NeighborWeight)
@@ -323,6 +332,8 @@ int G_BotLearnBonus(gentity_t *self, gentity_t *enemy, int stimulus, int respons
 	contextKey = G_BotLearnLiveContextKey(self, enemy);
 	if (contextKey < 0)
 		return 0;
+	if (((contextKey >> 16) & 3) >= 2)
+		return 0;
 
 	e = G_BotLearnCacheFind(contextKey, stimulus, response, followKey, qfalse);
 	if ((!e || e->samples < minSamples) &&
@@ -339,7 +350,7 @@ int G_BotLearnBonus(gentity_t *self, gentity_t *enemy, int stimulus, int respons
 	noise = BotLearn_SampleNoise(skill);
 	if (noise > 0)
 		bonus += Q_irand(-noise, noise);
-	return bonus;
+	return Com_Clampi(-BOTLEARN_BONUS_CAP, BOTLEARN_BONUS_CAP, bonus);
 }
 
 // Debug: best scoring responses per (coarse context, stimulus) with enough samples.
