@@ -61,6 +61,66 @@ typedef enum
 // Movement intent carried across controller <-> force/fan code ownership changes.
 #define NEWBOTAI_SABER_HANDOVER_MS 200
 
+// Saber advance footwork (dueltracks3, capture 15a44a555): human saber hits landed at a
+// median 73u while still closing at +170-250u/s (jundon: windup hits 101u at +249u/s, apex
+// 44u at +42u/s, cooldown 75u at +358u/s); failed human swings started at 120-140u closing
+// only ~+30u/s. Current bots released swings while backing off (-57u/s) and their damage per
+// duel fell 204 -> 131. Bots therefore keep walking in through windup, apex and cooldown and
+// between swings, and only hand the stick back to the planned direction in the last
+// NEWBOTAI_SABER_ADVANCE_RELINK_MS before a chained swing is chosen, so the next swing's
+// direction (which the engine reads from the movement keys) is not corrupted.
+#define NEWBOTAI_SABER_ADVANCE_RELINK_MS 150
+#define NEWBOTAI_SABER_ADVANCE_WINDUP_MIN_RANGE 40.0f
+#define NEWBOTAI_SABER_ADVANCE_APEX_MIN_RANGE 60.0f
+#define NEWBOTAI_SABER_ADVANCE_COOLDOWN_MIN_RANGE 48.0f
+#define NEWBOTAI_SABER_ADVANCE_IDLE_MIN_RANGE 70.0f
+#define NEWBOTAI_SABER_ADVANCE_MAX_RANGE 400.0f
+
+typedef enum
+{
+	NEWBOTAI_SABER_PHASE_IDLE = 0,	// ready, between swings
+	NEWBOTAI_SABER_PHASE_WINDUP,	// start move
+	NEWBOTAI_SABER_PHASE_APEX,		// attack move
+	NEWBOTAI_SABER_PHASE_COOLDOWN	// return / transition move
+} newbotai_saber_phase_t;
+
+// Longitudinal input (-1/0/1) for the final saber-duel input. plannedForward is what the
+// planner already chose; chaining is set while attack is held for the next swing and
+// msToChain is the time until the engine picks that swing (weaponTime).
+static inline int NewBotAI_SaberAdvanceForward(newbotai_saber_phase_t phase, float range,
+	int plannedForward, int chaining, int msToChain, int startingSwing, int enemyAttacking,
+	int deliberateEscape)
+{
+	float minRange;
+
+	if (deliberateEscape || plannedForward > 0 || startingSwing)
+		return plannedForward;
+	if (range > NEWBOTAI_SABER_ADVANCE_MAX_RANGE)
+		return plannedForward;
+	if (chaining && phase != NEWBOTAI_SABER_PHASE_IDLE && msToChain <= NEWBOTAI_SABER_ADVANCE_RELINK_MS)
+		return plannedForward;
+	switch (phase)
+	{
+	case NEWBOTAI_SABER_PHASE_WINDUP:
+		minRange = NEWBOTAI_SABER_ADVANCE_WINDUP_MIN_RANGE;
+		break;
+	case NEWBOTAI_SABER_PHASE_APEX:
+		minRange = NEWBOTAI_SABER_ADVANCE_APEX_MIN_RANGE;
+		break;
+	case NEWBOTAI_SABER_PHASE_COOLDOWN:
+		minRange = NEWBOTAI_SABER_ADVANCE_COOLDOWN_MIN_RANGE;
+		break;
+	default:
+		//Between swings humans advanced on ~64% of enemy swings and dodged back otherwise:
+		//keep a planned dodge back from an incoming swing, otherwise close to swing range.
+		if (enemyAttacking && plannedForward < 0)
+			return plannedForward;
+		minRange = NEWBOTAI_SABER_ADVANCE_IDLE_MIN_RANGE;
+		break;
+	}
+	return range > minRange ? 1 : plannedForward;
+}
+
 // Range with a buffer: once inside `threshold`, the bot stays inside until the range
 // exceeds threshold + band. Returns the range to plan with (clamped to the threshold).
 static inline float NewBotAI_SaberRangeWithHysteresis(float range, float threshold, float band, int wasInside)

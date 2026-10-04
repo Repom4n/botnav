@@ -105,6 +105,7 @@ vmCvar_t bot_wp_visconnect;
 
 static int BotGetNewBotAITargetMode(void);
 qboolean PM_SaberInStart( int move );
+qboolean PM_SaberInReturn( int move );
 qboolean PM_SaberInTransition( int move );
 static qboolean BotTargetModeAllowsBotEnemies(int targetMode);
 static qboolean BotTargetModePassesScanFilter(int targetMode, gentity_t *ent, qboolean preferredHumansOnly);
@@ -234,6 +235,7 @@ static qboolean NewBotAI_CanControlSaber(bot_state_t *bs);
 static void NewBotAI_RunSaberTechniques(bot_state_t *bs);
 static void NewBotAI_ApplySaberTechniqueInput(bot_state_t *bs, bot_input_t *bi, int time);
 static void NewBotAI_ApplySaberHandover(bot_state_t *bs, bot_input_t *bi, int time);
+static void NewBotAI_ApplySaberAdvance(bot_state_t *bs, bot_input_t *bi);
 static int NewBotAI_GetWallStrafeAwayDir(bot_state_t *bs);
 static qboolean NewBotAI_ShouldPursueTargetThroughWaypoints(bot_state_t *bs, gentity_t *enemy);
 static float NewBotAI_GetRecoveryYawSpeedDegPerSec(void);
@@ -982,6 +984,7 @@ void BotUpdateInput(bot_state_t *bs, int time, int elapsed_time) {
 	NewBotAI_FilterDefensiveRollInput(bs, &bi);
 	NewBotAI_ApplySaberTechniqueInput(bs, &bi, time);
 	NewBotAI_ApplySaberHandover(bs, &bi, time);
+	NewBotAI_ApplySaberAdvance(bs, &bi);
 	if (g_newBotAI.integer && bs->saberTechniqueCandidate && NewBotAI_IsDuelStrafeSuppressed(bs))
 	{
 		vec3_t right, angles;
@@ -8907,17 +8910,24 @@ void NewBotAI_ReactToBeingGripped(bot_state_t *bs) //Test this more, does it pus
 	{
 		currentEnemyGripThreat = qtrue;
 	}
-	//If speed is active while gripped, turn it off immediately so FP regen resumes and
-	//follow-up escape powers (push/pull) become available again.
+	//If speed is active while gripped (by anyone), turn it off immediately so FP regen resumes
+	//and follow-up escape powers (push/pull) become available again. Spam the force button
+	//(press on one think, release on the next) like a human mashing the key: the engine only
+	//toggles on a fresh press (forceButtonNeedRelease), so a held button can miss the toggle.
 	if ((bs->cur_ps.fd.forcePowersActive & (1 << FP_SPEED)) &&
 		(bs->cur_ps.fd.forcePowersKnown & (1 << FP_SPEED)) &&
-		currentEnemyGripThreat)
+		(currentEnemyGripThreat || bs->cur_ps.fd.forceGripBeingGripped > level.time))
 	{
 		bs->cur_ps.fd.forcePowerSelected = FP_SPEED;
 		level.clients[bs->client].ps.fd.forcePowerSelected = FP_SPEED;
-		trap->EA_ForcePower(bs->client);
+		bs->gripSpeedOffPressed = !bs->gripSpeedOffPressed;
+		if (bs->gripSpeedOffPressed)
+		{
+			trap->EA_ForcePower(bs->client);
+		}
 		return;
 	}
+	bs->gripSpeedOffPressed = qfalse;
 
 	//Item 4: a fresh grip session is detected by a gap since the last think we were
 	//reacting to being gripped (a continuous grip calls this every think). Roll the
@@ -16139,6 +16149,25 @@ int NewBotAI_GetWait(bot_state_t *bs) { //Sometimes the best attack is nothing, 
 }
 */
 
+//Weight returned by NewBotAI_GetGrip when the enemy is speeding or mid force-jump: those
+//opponents are the most exposed to a gripkick, so it must outrank every other force choice.
+#define NEWBOTAI_GRIPKICK_PRIORITY_WEIGHT 400
+
+static qboolean NewBotAI_IsEnemySpeedingOrForceJumping(bot_state_t *bs)
+{
+	const playerState_t *eps;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+		return qfalse;
+	eps = &bs->currentEnemy->client->ps;
+	if (eps->fd.forcePowersActive & (1 << FP_SPEED))
+		return qtrue;
+	if ((eps->fd.forcePowersActive & (1 << FP_LEVITATION)) &&
+		eps->groundEntityNum == ENTITYNUM_NONE)
+		return qtrue;
+	return qfalse;
+}
+
 int NewBotAI_GetGrip(bot_state_t *bs) {
 	//Dominant-position thresholds: a bot this healthy with this much of a force lead
 	//should heavily favor gripkicking over trading swings.
@@ -16173,9 +16202,19 @@ int NewBotAI_GetGrip(bot_state_t *bs) {
 		return 0;
 	if (bs->currentEnemy->client->ps.fd.forcePowersActive & (1 << FP_ABSORB))
 		return 0;
-	if (ourForce < saberThrowCounterMinForce || ourForce <= gripForceRequired)
+	if (ourForce <= gripForceRequired)
 		return 0;
 	if (NewBotAI_IsStandingRoll(bs->cur_ps.legsAnim) && !NewBotAI_ShouldEmergencyDrainRollSaberThrow(bs))
+		return 0;
+
+	//A speeding or force-jumping opponent can't dodge or answer a grip well (speed bleeds their
+	//force and a mid-air target can't block or roll out): gripkick is the top choice.
+	if (NewBotAI_IsEnemySpeedingOrForceJumping(bs) &&
+		!BG_InKnockDown(bs->currentEnemy->client->ps.legsAnim) &&
+		!bs->cur_ps.saberInFlight)
+		return NEWBOTAI_GRIPKICK_PRIORITY_WEIGHT + aggressionBonus;
+
+	if (ourForce < saberThrowCounterMinForce)
 		return 0;
 
 	if (ourHealth <= healthBiasThreshold &&
@@ -16661,7 +16700,15 @@ void NewBotAI_GetDSForcepower(bot_state_t *bs)
 			drainWeight += NewBotAI_GetForceDecisionBonus(bs, BOTLEARN_TOK_DRAIN);
 	}
 
-	if (!longRangeLightningOnly && bs->currentEnemy && bs->currentEnemy->client)
+	//Gripkick against a speeding / force-jumping enemy outranks every other force choice,
+	//including the drainlock pull/drain package.
+	if (!longRangeLightningOnly && gripWeight >= NEWBOTAI_GRIPKICK_PRIORITY_WEIGHT)
+	{
+		level.clients[bs->client].ps.fd.forcePowerSelected = FP_GRIP;
+		useTheForce = qtrue;
+	}
+
+	if (!useTheForce && !longRangeLightningOnly && bs->currentEnemy && bs->currentEnemy->client)
 	{
 		newbotai_drainlock_force_context_t drainlockForceContext;
 
@@ -17721,6 +17768,57 @@ static void NewBotAI_ApplySaberHandover(bot_state_t *bs, bot_input_t *bi, int ti
 	if (adjusted > forward)
 		NewBotAI_SetInputForward(bi);
 	bs->saberLastForward = adjusted;
+}
+
+// Final saber footwork: keep closing on a saber opponent through our own windup, apex and
+// cooldown and between swings (see NewBotAI_SaberAdvanceForward), handing the stick back to
+// the planned direction just before a chained swing is picked so the swing direction holds.
+static void NewBotAI_ApplySaberAdvance(bot_state_t *bs, bot_input_t *bi)
+{
+	playerState_t *ps;
+	const playerState_t *eps;
+	newbotai_saber_phase_t phase;
+	float range, predicted, radial;
+	int planned, adjusted;
+	qboolean escape, startingSwing, chaining, enemyAttacking;
+
+	if (!g_newBotAI.integer || bi->weapon != WP_SABER || !bs->currentEnemy ||
+		!bs->currentEnemy->client || bs->currentEnemy->health <= 0 ||
+		bs->currentEnemy->client->ps.weapon != WP_SABER ||
+		NewBotAI_HasExclusiveFlipkickMovement(bs) || bs->gripkickActive)
+		return;
+	ps = &g_entities[bs->client].client->ps;
+	eps = &bs->currentEnemy->client->ps;
+	if (ps->saberInFlight || ps->groundEntityNum == ENTITYNUM_NONE ||
+		(ps->fd.forcePowersActive & ((1 << FP_GRIP) | (1 << FP_DRAIN) | (1 << FP_LIGHTNING))) ||
+		ps->fd.forceGripBeingGripped > level.time || BG_InRoll(ps, ps->legsAnim) ||
+		BG_InSpecialJump(ps->legsAnim) || ps->saberLockTime > level.time ||
+		(bi->actionflags & (ACTION_JUMP | ACTION_CROUCH | ACTION_ALT_ATTACK)))
+		return;
+	if (!NewBotAI_GetEnemyRangeKinematics(bs, &range, &predicted, &radial))
+		return;
+
+	if (PM_SaberInStart(ps->saberMove))
+		phase = NEWBOTAI_SABER_PHASE_WINDUP;
+	else if (BG_SaberInAttack(ps->saberMove))
+		phase = NEWBOTAI_SABER_PHASE_APEX;
+	else if (PM_SaberInReturn(ps->saberMove) || PM_SaberInTransition(ps->saberMove))
+		phase = NEWBOTAI_SABER_PHASE_COOLDOWN;
+	else
+		phase = NEWBOTAI_SABER_PHASE_IDLE;
+
+	escape = (bs->combatAction == BOT_COMBAT_ACTION_RETREAT_DEFENSE || bs->runningLikeASissy ||
+		bs->conserveUntil > level.time ||
+		ps->forceHandExtend != HANDEXTEND_NONE || BG_InKnockDown(ps->legsAnim) ||
+		NewBotAI_IsEnemySaberThreatImminent(bs)) ? qtrue : qfalse;
+	chaining = (bi->actionflags & ACTION_ATTACK) ? qtrue : qfalse;
+	startingSwing = (chaining && phase == NEWBOTAI_SABER_PHASE_IDLE && ps->weaponTime <= 0) ? qtrue : qfalse;
+	enemyAttacking = (BG_SaberInAttack(eps->saberMove) || PM_SaberInStart(eps->saberMove)) ? qtrue : qfalse;
+	planned = NewBotAI_GetInputForward(bi);
+	adjusted = NewBotAI_SaberAdvanceForward(phase, range, planned, chaining, ps->weaponTime,
+		startingSwing, enemyAttacking, escape);
+	if (adjusted > planned)
+		NewBotAI_SetInputForward(bi);
 }
 
 void NewBotAI_NF(bot_state_t *bs)

@@ -1157,6 +1157,27 @@ BOOST_AUTO_TEST_CASE( saber_attacks_commit_forward_and_handover_keeps_intent )
 	BOOST_CHECK_EQUAL( NewBotAI_SaberSwingStartForward( 4, 1, -1, 0 ), -1 );
 }
 
+BOOST_AUTO_TEST_CASE( saber_advance_through_swing_phases )
+{
+	// Walk in through windup / apex / cooldown when out of reach.
+	BOOST_CHECK_EQUAL( NewBotAI_SaberAdvanceForward( NEWBOTAI_SABER_PHASE_WINDUP, 90.0f, 0, 0, 300, 0, 0, 0 ), 1 );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberAdvanceForward( NEWBOTAI_SABER_PHASE_APEX, 80.0f, -1, 0, 200, 0, 0, 0 ), 1 );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberAdvanceForward( NEWBOTAI_SABER_PHASE_COOLDOWN, 75.0f, 0, 0, 200, 0, 0, 0 ), 1 );
+	// Already on top of the target: keep the planned input.
+	BOOST_CHECK_EQUAL( NewBotAI_SaberAdvanceForward( NEWBOTAI_SABER_PHASE_APEX, 44.0f, 0, 0, 200, 0, 0, 0 ), 0 );
+	// Hand the stick back before the chained swing direction is read.
+	BOOST_CHECK_EQUAL( NewBotAI_SaberAdvanceForward( NEWBOTAI_SABER_PHASE_COOLDOWN, 90.0f, 0, 1, NEWBOTAI_SABER_ADVANCE_RELINK_MS, 0, 0, 0 ), 0 );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberAdvanceForward( NEWBOTAI_SABER_PHASE_COOLDOWN, 90.0f, 0, 1, NEWBOTAI_SABER_ADVANCE_RELINK_MS + 1, 0, 0, 0 ), 1 );
+	// Swing-start frame and deliberate escapes are never overridden.
+	BOOST_CHECK_EQUAL( NewBotAI_SaberAdvanceForward( NEWBOTAI_SABER_PHASE_IDLE, 120.0f, 0, 0, 0, 1, 0, 0 ), 0 );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberAdvanceForward( NEWBOTAI_SABER_PHASE_WINDUP, 120.0f, -1, 0, 300, 0, 0, 1 ), -1 );
+	// Between swings: close to swing range, but keep a dodge back from an incoming swing.
+	BOOST_CHECK_EQUAL( NewBotAI_SaberAdvanceForward( NEWBOTAI_SABER_PHASE_IDLE, 150.0f, 0, 0, 0, 0, 0, 0 ), 1 );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberAdvanceForward( NEWBOTAI_SABER_PHASE_IDLE, 150.0f, -1, 0, 0, 0, 1, 0 ), -1 );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberAdvanceForward( NEWBOTAI_SABER_PHASE_IDLE, 60.0f, 0, 0, 0, 0, 0, 0 ), 0 );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberAdvanceForward( NEWBOTAI_SABER_PHASE_IDLE, NEWBOTAI_SABER_ADVANCE_MAX_RANGE + 1.0f, 0, 0, 0, 0, 0, 0 ), 0 );
+}
+
 BOOST_AUTO_TEST_CASE( fan_chain_drives_on_while_landing_hits )
 {
 	BOOST_CHECK_EQUAL( NewBotAI_GetFanLinkDwellMs( 200, 300 ), 0 );
