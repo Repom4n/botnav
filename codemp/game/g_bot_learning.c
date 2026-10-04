@@ -280,10 +280,10 @@ static qboolean G_BotLearnPoolSimilar(int contextKey, int stimulus, int response
 	int a, b, c, d;
 
 	memset(out, 0, sizeof(*out));
-	for (a = -1; a <= 1; a++)
-		for (b = -1; b <= 1; b++)
-			for (c = -1; c <= 1; c++)
-				for (d = -1; d <= 1; d++)
+	for (a = -BOTLEARN_NEIGHBOR_MAX_DISTANCE; a <= BOTLEARN_NEIGHBOR_MAX_DISTANCE; a++)
+		for (b = -BOTLEARN_NEIGHBOR_MAX_DISTANCE; b <= BOTLEARN_NEIGHBOR_MAX_DISTANCE; b++)
+			for (c = -BOTLEARN_NEIGHBOR_MAX_DISTANCE; c <= BOTLEARN_NEIGHBOR_MAX_DISTANCE; c++)
+				for (d = -BOTLEARN_NEIGHBOR_MAX_DISTANCE; d <= BOTLEARN_NEIGHBOR_MAX_DISTANCE; d++)
 				{
 					const int steps = abs(a) + abs(b) + abs(c) + abs(d);
 					const float weight = BotLearn_NeighborWeight(steps);
