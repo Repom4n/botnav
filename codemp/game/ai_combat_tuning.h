@@ -121,6 +121,41 @@ static inline int NewBotAI_SaberAdvanceForward(newbotai_saber_phase_t phase, flo
 	return range > minRange ? 1 : plannedForward;
 }
 
+// jundon swing ends (dueltracks3) usually stepped back and aside (radial -58u/s, rightmove
+// +/-127) when the swing had not landed and no chain followed. One short sidestep-back per
+// unproductive swing return; a landed hit or a held chain keeps advancing instead.
+#define NEWBOTAI_SABER_SIDESTEP_MS 200
+
+static inline int NewBotAI_ShouldSidestepAfterSwing(int inReturn, int chaining, int msSinceHit,
+	int deliberateEscape)
+{
+	if (!inReturn || chaining || deliberateEscape)
+		return 0;
+	return (msSinceHit < 0 || msSinceHit > NEWBOTAI_SABER_LANDED_HIT_WINDOW_MS) ? 1 : 0;
+}
+
+// Reaction to an enemy swing (humans within 700ms: advance 240 + dodge-advance 59 vs retreat
+// 137 + dodge-retreat 53, ~61-65% advance): roll once per enemy swing.
+#define NEWBOTAI_ENEMY_SWING_ADVANCE_PERCENT 65
+// Counter-swings (jundon 34) started a median ~100ms after the enemy swing began, inside 90u.
+#define NEWBOTAI_COUNTER_SWING_DELAY_MS 100
+#define NEWBOTAI_COUNTER_SWING_WINDOW_MS 250
+#define NEWBOTAI_COUNTER_SWING_RANGE 90.0f
+
+static inline int NewBotAI_EnemySwingAdvances(int roll)
+{
+	return (roll > 0 && roll <= NEWBOTAI_ENEMY_SWING_ADVANCE_PERCENT) ? 1 : 0;
+}
+
+static inline int NewBotAI_CounterSwingReady(int msSinceEnemySwingStart, float range2D,
+	int alreadyCountered)
+{
+	if (alreadyCountered || range2D > NEWBOTAI_COUNTER_SWING_RANGE)
+		return 0;
+	return (msSinceEnemySwingStart >= NEWBOTAI_COUNTER_SWING_DELAY_MS &&
+		msSinceEnemySwingStart <= NEWBOTAI_COUNTER_SWING_DELAY_MS + NEWBOTAI_COUNTER_SWING_WINDOW_MS) ? 1 : 0;
+}
+
 // Range with a buffer: once inside `threshold`, the bot stays inside until the range
 // exceeds threshold + band. Returns the range to plan with (clamped to the threshold).
 static inline float NewBotAI_SaberRangeWithHysteresis(float range, float threshold, float band, int wasInside)
@@ -1676,7 +1711,8 @@ typedef enum
 	NEWBOTAI_SWING_DODGE_NONE = 0,
 	NEWBOTAI_SWING_DODGE_LATERAL,
 	NEWBOTAI_SWING_DODGE_JUMP,
-	NEWBOTAI_SWING_DODGE_BACKPEDAL
+	NEWBOTAI_SWING_DODGE_BACKPEDAL,
+	NEWBOTAI_SWING_DODGE_ADVANCE	// step into the enemy swing (see NewBotAI_EnemySwingAdvances)
 } newbotai_swing_dodge_t;
 
 static inline newbotai_swing_dodge_t NewBotAI_GetSwingDodgeChoice(float enemyDistance2D, int grounded,

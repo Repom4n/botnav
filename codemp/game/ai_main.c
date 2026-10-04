@@ -164,6 +164,7 @@ static qboolean NewBotAI_FanHoldMayStartSwing(bot_state_t *bs);
 static void NewBotAI_ResetFanChain(bot_state_t *bs);
 static void NewBotAI_ApplyFanDwellYaw(bot_state_t *bs, qboolean aimRewritten);
 static float NewBotAI_GetEnemyDistance2D(bot_state_t *bs);
+static qboolean NewBotAI_ShouldCounterSwing(bot_state_t *bs);
 static qboolean NewBotAI_SwingStartFootingAllows(bot_state_t *bs);
 static qboolean NewBotAI_SwingChainFootingAllows(bot_state_t *bs);
 static int NewBotAI_GetDecisionMistakeChance(bot_state_t *bs);
@@ -10426,6 +10427,12 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 			return;
 		}
 
+		if (!suppressSaberAttack && !bs->hitSpotted && NewBotAI_ShouldCounterSwing(bs))
+		{
+			trap->EA_Attack(bs->client);
+			return;
+		}
+
 		const qboolean preferDrainlockFan = (NewBotAI_IsDrainlockAdvantage(bs) &&
 			bs->cur_ps.fd.saberAnimLevel != SS_STAFF &&
 			bs->cur_ps.fd.saberAnimLevel != SS_DUAL) ? qtrue : qfalse;
@@ -11235,21 +11242,52 @@ static qboolean NewBotAI_ShouldConserveForce(bot_state_t *bs)
 	return (Q_flrand(0.0f, 100.0f) < chance) ? qtrue : qfalse;
 }
 
-// Enemy swing starting within ~130u: winners side-stepped fast or jumped; backpedalling got
-// caught by the swing's reach. Backpedal stays as a low-skill mistake roll. Returns qtrue
-// when the dodge drove movement this frame.
-static qboolean NewBotAI_UpdateSwingDodge(bot_state_t *bs)
+// Track when the enemy's current saber swing (start or attack move) began.
+static void NewBotAI_TrackEnemySwing(bot_state_t *bs)
 {
 	const playerState_t *enemyPs;
+	qboolean swinging;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		bs->enemySwingActive = qfalse;
+		return;
+	}
+	enemyPs = &bs->currentEnemy->client->ps;
+	swinging = (enemyPs->weapon == WP_SABER && !enemyPs->saberInFlight &&
+		(PM_SaberInStart(enemyPs->saberMove) || BG_SaberInAttack(enemyPs->saberMove))) ? qtrue : qfalse;
+	if (swinging && !bs->enemySwingActive)
+		bs->enemySwingStartTime = level.time;
+	bs->enemySwingActive = swinging;
+}
+
+// Counter-swing ~100ms into an enemy swing when inside 90u (jundon's counter timing).
+static qboolean NewBotAI_ShouldCounterSwing(bot_state_t *bs)
+{
+	NewBotAI_TrackEnemySwing(bs);
+	if (!bs->enemySwingActive || bs->cur_ps.groundEntityNum == ENTITYNUM_NONE ||
+		bs->cur_ps.weaponTime > 0 || bs->cur_ps.saberBlocked != BLOCKED_NONE ||
+		bs->cur_ps.saberInFlight ||
+		(bs->cur_ps.saberMove != LS_NONE && bs->cur_ps.saberMove != LS_READY))
+		return qfalse;
+	if (!NewBotAI_CounterSwingReady(level.time - bs->enemySwingStartTime,
+		NewBotAI_GetEnemyDistance2D(bs), bs->counterSwingFor == bs->enemySwingStartTime))
+		return qfalse;
+	bs->counterSwingFor = bs->enemySwingStartTime;
+	return qtrue;
+}
+
+// Enemy swing starting within ~130u: humans advanced into ~65% of them and dodged back
+// otherwise (fast lateral-back or a jump; plain backpedal stays a low-skill mistake roll).
+// Rolled once per enemy swing. Returns qtrue when the reaction drove movement this frame.
+static qboolean NewBotAI_UpdateSwingDodge(bot_state_t *bs)
+{
 	float dist2D;
-	int enemyMove;
 
 	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client || bs->cur_ps.weapon != WP_SABER)
 		return qfalse;
-	enemyPs = &bs->currentEnemy->client->ps;
-	enemyMove = enemyPs->saberMove;
-	if (enemyPs->weapon != WP_SABER || enemyPs->saberInFlight ||
-		!(PM_SaberInStart(enemyMove) || BG_SaberInAttack(enemyMove)))
+	NewBotAI_TrackEnemySwing(bs);
+	if (!bs->enemySwingActive)
 	{
 		bs->swingDodgeEnemyMove = 0;
 		return qfalse;
@@ -11260,15 +11298,20 @@ static qboolean NewBotAI_UpdateSwingDodge(bot_state_t *bs)
 		return qfalse;
 
 	dist2D = NewBotAI_GetEnemyDistance2D(bs);
-	if (enemyMove != bs->swingDodgeEnemyMove)
+	if (bs->swingDodgeRolledFor != bs->enemySwingStartTime)
 	{
 		const int mistakeChance = (bs->settings.skill < 7.0f) ? NewBotAI_GetDecisionMistakeChance(bs) / 2 : 0;
 
-		bs->swingDodgeEnemyMove = enemyMove;
+		bs->swingDodgeRolledFor = bs->enemySwingStartTime;
+		bs->swingDodgeEnemyMove = bs->currentEnemy->client->ps.saberMove;
 		bs->swingDodgeStyle = NewBotAI_GetSwingDodgeChoice(dist2D,
 			bs->cur_ps.groundEntityNum != ENTITYNUM_NONE ? 1 : 0,
 			(bs->cur_ps.fd.forcePowersKnown & (1 << FP_LEVITATION)) ? 1 : 0,
 			mistakeChance, Q_irand(1, 100), Q_irand(1, 100));
+		if (bs->swingDodgeStyle != NEWBOTAI_SWING_DODGE_NONE &&
+			bs->swingDodgeStyle != NEWBOTAI_SWING_DODGE_BACKPEDAL &&
+			NewBotAI_EnemySwingAdvances(Q_irand(1, 100)))
+			bs->swingDodgeStyle = NEWBOTAI_SWING_DODGE_ADVANCE;
 		bs->swingDodgeDir = Q_irand(0, 1) ? 1 : -1;
 		if (bs->swingDodgeStyle == NEWBOTAI_SWING_DODGE_JUMP)
 			trap->EA_Jump(bs->client);
@@ -11276,6 +11319,11 @@ static qboolean NewBotAI_UpdateSwingDodge(bot_state_t *bs)
 	if (bs->swingDodgeStyle == NEWBOTAI_SWING_DODGE_NONE)
 		return qfalse;
 
+	if (bs->swingDodgeStyle == NEWBOTAI_SWING_DODGE_ADVANCE)
+	{
+		trap->EA_MoveForward(bs->client);
+		return qtrue;
+	}
 	if (bs->swingDodgeStyle == NEWBOTAI_SWING_DODGE_BACKPEDAL)
 	{
 		trap->EA_MoveBack(bs->client);
@@ -11285,6 +11333,9 @@ static qboolean NewBotAI_UpdateSwingDodge(bot_state_t *bs)
 		trap->EA_MoveRight(bs->client);
 	else
 		trap->EA_MoveLeft(bs->client);
+	//Dodge back out of reach as well as aside while the swing can still connect.
+	if (bs->swingDodgeStyle == NEWBOTAI_SWING_DODGE_LATERAL && dist2D < NEWBOTAI_SWING_DODGE_RANGE)
+		trap->EA_MoveBack(bs->client);
 	return qtrue;
 }
 
@@ -17829,6 +17880,33 @@ static void NewBotAI_ApplySaberAdvance(bot_state_t *bs, bot_input_t *bi)
 		ps->forceHandExtend != HANDEXTEND_NONE || BG_InKnockDown(ps->legsAnim) ||
 		NewBotAI_IsEnemySaberThreatImminent(bs)) ? qtrue : qfalse;
 	chaining = (bi->actionflags & ACTION_ATTACK) ? qtrue : qfalse;
+	//Short sidestep-back at the end of an unproductive, unchained swing (jundon's pattern).
+	if (PM_SaberInReturn(ps->saberMove) && ps->saberMove != bs->saberSidestepMove)
+	{
+		bs->saberSidestepMove = ps->saberMove;
+		if (!NewBotAI_IsDuelStrafeSuppressed(bs) &&
+			NewBotAI_ShouldSidestepAfterSwing(1, chaining, NewBotAI_GetMsSinceSaberContactOnEnemy(bs), escape))
+		{
+			bs->saberSidestepUntil = level.time + NEWBOTAI_SABER_SIDESTEP_MS;
+			bs->saberSidestepDir = Q_irand(0, 1) ? 1 : -1;
+		}
+	}
+	else if (!PM_SaberInReturn(ps->saberMove))
+		bs->saberSidestepMove = 0;
+	if (bs->saberSidestepUntil > level.time)
+	{
+		if (chaining || escape)
+		{
+			bs->saberSidestepUntil = 0;
+			return;
+		}
+		bi->speed = 0;
+		VectorClear(bi->dir);
+		bi->actionflags &= ~(ACTION_MOVEFORWARD | ACTION_MOVELEFT | ACTION_MOVERIGHT);
+		bi->actionflags |= ACTION_MOVEBACK |
+			(bs->saberSidestepDir > 0 ? ACTION_MOVERIGHT : ACTION_MOVELEFT);
+		return;
+	}
 	startingSwing = (chaining && phase == NEWBOTAI_SABER_PHASE_IDLE && ps->weaponTime <= 0) ? qtrue : qfalse;
 	enemyAttacking = (BG_SaberInAttack(eps->saberMove) || PM_SaberInStart(eps->saberMove)) ? qtrue : qfalse;
 	planned = NewBotAI_GetInputForward(bi);

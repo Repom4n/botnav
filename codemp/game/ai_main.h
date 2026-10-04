@@ -393,6 +393,13 @@ typedef struct bot_state_s
 	int					swingDodgeEnemyMove; // enemy saberMove the current dodge was rolled for
 	int					swingDodgeStyle; // NEWBOTAI_SWING_DODGE_* rolled for that enemy swing
 	int					swingDodgeDir; // lateral dodge direction (+1 right, -1 left)
+	qboolean			enemySwingActive; // enemy is in a saber start/attack move
+	int					enemySwingStartTime; // level.time the current enemy swing began
+	int					swingDodgeRolledFor; // enemySwingStartTime the dodge/advance was rolled for
+	int					counterSwingFor; // enemySwingStartTime a counter-swing was pressed for
+	int					saberSidestepUntil; // post-swing sidestep-back window end
+	int					saberSidestepDir; // +1 right, -1 left
+	int					saberSidestepMove; // our return saberMove the sidestep was rolled for
 	int					airSwingRollTime; // level.time we last rolled whether an airborne swing is allowed
 	int					airSwingAllowed; // result of that roll for the current jump
 	int					counterThrowRollKey; // enemy throw (its start time) the counter-throw mistake was rolled for

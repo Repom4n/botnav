@@ -1113,6 +1113,30 @@ BOOST_AUTO_TEST_CASE( fan_stances_alternate_horizontals_and_keep_t2b_for_finishe
 	BOOST_CHECK_EQUAL( NewBotAI_FanLinkChance( 1 ), 66 );
 }
 
+BOOST_AUTO_TEST_CASE( swing_end_sidestep_and_enemy_swing_reactions )
+{
+	// Unproductive, unchained swing return: sidestep back.
+	BOOST_CHECK( NewBotAI_ShouldSidestepAfterSwing( 1, 0, -1, 0 ) );
+	BOOST_CHECK( NewBotAI_ShouldSidestepAfterSwing( 1, 0, 900, 0 ) );
+	// Landing hits, chaining, escaping or not in a return: keep the current footwork.
+	BOOST_CHECK( !NewBotAI_ShouldSidestepAfterSwing( 1, 0, 300, 0 ) );
+	BOOST_CHECK( !NewBotAI_ShouldSidestepAfterSwing( 1, 1, -1, 0 ) );
+	BOOST_CHECK( !NewBotAI_ShouldSidestepAfterSwing( 1, 0, -1, 1 ) );
+	BOOST_CHECK( !NewBotAI_ShouldSidestepAfterSwing( 0, 0, -1, 0 ) );
+
+	int advances = 0;
+	for ( int roll = 1; roll <= 100; roll++ )
+		advances += NewBotAI_EnemySwingAdvances( roll );
+	BOOST_CHECK_EQUAL( advances, NEWBOTAI_ENEMY_SWING_ADVANCE_PERCENT );
+
+	BOOST_CHECK( !NewBotAI_CounterSwingReady( 50, 80.0f, 0 ) );
+	BOOST_CHECK( NewBotAI_CounterSwingReady( 100, 80.0f, 0 ) );
+	BOOST_CHECK( NewBotAI_CounterSwingReady( 300, 90.0f, 0 ) );
+	BOOST_CHECK( !NewBotAI_CounterSwingReady( 400, 80.0f, 0 ) );
+	BOOST_CHECK( !NewBotAI_CounterSwingReady( 120, 95.0f, 0 ) );
+	BOOST_CHECK( !NewBotAI_CounterSwingReady( 120, 80.0f, 1 ) );
+}
+
 BOOST_AUTO_TEST_CASE( swing_dodge_prefers_lateral_or_jump_over_backpedal )
 {
 	BOOST_CHECK_EQUAL( NewBotAI_GetSwingDodgeChoice( 200.0f, 1, 1, 0, 50, 50 ), NEWBOTAI_SWING_DODGE_NONE );
