@@ -7846,8 +7846,14 @@ static gentity_t *G_KickTrace( gentity_t *ent, vec3_t kickDir, float kickDist, v
 	vec3_t	traceOrg, traceEnd, kickMins, kickMaxs;
 	trace_t	trace;
 	gentity_t	*hitEnt = NULL;
+	//Staff kicks (saber in staff stance) always knock down on a successful hit.
+	const qboolean staffKick =
+		(ent->client->ps.weapon == WP_SABER &&
+		 ent->client->ps.fd.saberAnimLevel == SS_STAFF &&
+		 (BG_KickingAnim(ent->client->ps.legsAnim) || BG_KickingAnim(ent->client->ps.torsoAnim))) ? qtrue : qfalse;
 	const qboolean forceKickKnockdown =
-		(ent->client->ps.torsoAnim == BOTH_A7_HILT ||
+		(staffKick ||
+		 ent->client->ps.torsoAnim == BOTH_A7_HILT ||
 		 ent->client->ps.legsAnim == BOTH_A7_HILT ||
 		 ent->client->ps.torsoAnim == BOTH_JUMPATTACK7 ||
 		 ent->client->ps.legsAnim == BOTH_JUMPATTACK7 ||
@@ -7933,7 +7939,7 @@ static gentity_t *G_KickTrace( gentity_t *ent, vec3_t kickDir, float kickDist, v
 				}
 			}
 			if ( hitEnt->client
-				&& !(hitEnt->client->ps.pm_flags&PMF_TIME_KNOCKBACK) //not already flying through air?  Intended to stop multiple hits, but...
+				&& (staffKick || !(hitEnt->client->ps.pm_flags&PMF_TIME_KNOCKBACK)) //not already flying through air?  Intended to stop multiple hits, but... (staff kicks always land)
 				&& G_CanBeEnemy(ent, hitEnt) )
 			{//FIXME: this should not always work
 				if ( hitEnt->health <= 0 )
