@@ -26,6 +26,7 @@ set(TestFiles
 	"bot_ai_tuning.cpp"
 	"bot_learning.cpp"
 	"duel_identity.cpp"
+	"duel_elo.cpp"
 	"duel_capture.cpp"
 	"safe/string.cpp"
 	"safe/limited_vector.cpp"
