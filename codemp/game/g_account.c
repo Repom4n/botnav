@@ -1,5 +1,6 @@
 #include "g_local.h"
 #include "g_duel_identity.h"
+#include "g_duel_elo.h"
 #include "g_duel_capture.h"
 #include <ctype.h>
 #include <stdio.h>
@@ -5776,8 +5777,8 @@ void G_AddDuelToDB(char *winner, char *loser, int type, int duration, int winner
 }
 
 void G_AddDuelElo(char *winner, char *loser, int type, int duration, int winner_hp, int winner_shield, int id, int end_time, sqlite3 *db) { //id and end_time are passed through if its a /rebuildElo 
-	int winnerDuelCount, loserDuelCount, winnerType, loserType, winnerK, loserK;
-	float expectedScoreWinner, expectedScoreLoser, WA, LA, loserElo, winnerElo, newWinnerElo, newLoserElo;
+	int winnerDuelCount, loserDuelCount, winnerType, loserType;
+	float winnerK, loserK, expectedScoreWinner, expectedScoreLoser, loserElo, winnerElo, newWinnerElo, newLoserElo;
 	const int NEWUSER = 0, PROVISIONAL = 1, NORMAL = 2;
 
 	int newUserCutoff = g_eloNewUserCutoff.integer;
@@ -5816,18 +5817,12 @@ void G_AddDuelElo(char *winner, char *loser, int type, int duration, int winner_
 	else
 		loserType = NORMAL;
 
-	if (winnerType == NEWUSER)
-		winnerElo = 1000; //always have newusers kept at 1k elo until they get enough duels?
-	else 
-		winnerElo = GetDuelElo(winner, type, end_time, db);
+	winnerElo = GetDuelElo(winner, type, end_time, db);
 
 	if (winnerElo == -999.0f) //Error i guess
 		return; 
 
-	if (loserType == NEWUSER)
-		loserElo = 1000; //loda fixme
-	else
-		loserElo = GetDuelElo(loser, type, end_time, db);
+	loserElo = GetDuelElo(loser, type, end_time, db);
 
 	if (loserElo == -999.0f) //Error i guess
 		return; 
@@ -5849,29 +5844,16 @@ void G_AddDuelElo(char *winner, char *loser, int type, int duration, int winner_
 			loserK *= provisionalChangeBig;
 	}
 
-	WA = pow(10, winnerElo / 400.0f);
-	LA = pow(10, loserElo / 400.0f);
-
-	expectedScoreWinner = WA / (WA + LA);
+	expectedScoreWinner = G_CalculateDuelElo(winnerElo, loserElo, winnerK, loserK, &newWinnerElo, &newLoserElo);
 	expectedScoreLoser = 1 - expectedScoreWinner;
-	//Round to.. 5th digit? or..
-	//expectedScoreLoser = LA / (LA + WA); //This is just 1 - expected score winner..?
-
-	//if (winnerType == PROVISIONAL || winnerType == NORMAL) //Nvm about this.. rank their first duels i guess.
-		newWinnerElo = winnerElo + winnerK * (1 - expectedScoreWinner);
-
-	//if (loserType == PROVISIONAL || loserType == NORMAL)
-		newLoserElo = loserElo + loserK * (0 - expectedScoreLoser);
 
 	if (!id) { //We are not doing a rebuild, so add the duel here after we get the needed info
 		 G_AddDuelToDB(winner, loser, type, duration, winner_hp, winner_shield, end_time);
 	}
 
-	if (newWinnerElo != winnerElo) //Update winner elo
-		UpdatePlayerRating(winner, type, qtrue, newWinnerElo, expectedScoreWinner, id, db);
-
-	if (newLoserElo != loserElo) //Update loser elo
-		UpdatePlayerRating(loser, type, qfalse, newLoserElo, expectedScoreLoser, id, db);
+	//Even an unchanged rating must replace the inserted row's unranked sentinel.
+	UpdatePlayerRating(winner, type, qtrue, newWinnerElo, expectedScoreWinner, id, db);
+	UpdatePlayerRating(loser, type, qfalse, newLoserElo, expectedScoreLoser, id, db);
 
 	//Com_Printf("Adding duel: odds = %.2f, %s [%.2f -> %.2f (c=%i) (t=%i)] > %s [%.2f -> %.2f (c=%i) (t=%i)] {%i}\n", 
 		//expectedScoreWinner, winner, winnerElo, newWinnerElo, winnerDuelCount, winnerType, loser, loserElo, newLoserElo, loserDuelCount, loserType, type);
