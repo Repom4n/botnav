@@ -7846,11 +7846,14 @@ static gentity_t *G_KickTrace( gentity_t *ent, vec3_t kickDir, float kickDist, v
 	vec3_t	traceOrg, traceEnd, kickMins, kickMaxs;
 	trace_t	trace;
 	gentity_t	*hitEnt = NULL;
-	//Staff kicks (saber in staff stance) always knock down on a successful hit.
+	//Staff kicks (staff stance or a staff saber, including the staff BDFA kick) always knock down on a successful hit.
 	const qboolean staffKick =
 		(ent->client->ps.weapon == WP_SABER &&
-		 ent->client->ps.fd.saberAnimLevel == SS_STAFF &&
-		 (BG_KickingAnim(ent->client->ps.legsAnim) || BG_KickingAnim(ent->client->ps.torsoAnim))) ? qtrue : qfalse;
+		 (ent->client->ps.fd.saberAnimLevel == SS_STAFF ||
+		  ent->client->saber[0].type == SABER_STAFF ||
+		  (ent->client->saber[0].numBlades > 1 && !ent->client->saber[1].model[0])) &&
+		 (BG_KickingAnim(ent->client->ps.legsAnim) || BG_KickingAnim(ent->client->ps.torsoAnim) ||
+		  ent->client->ps.legsAnim == BOTH_JUMPATTACK7 || ent->client->ps.torsoAnim == BOTH_JUMPATTACK7)) ? qtrue : qfalse;
 	const qboolean forceKickKnockdown =
 		(staffKick ||
 		 ent->client->ps.torsoAnim == BOTH_A7_HILT ||
