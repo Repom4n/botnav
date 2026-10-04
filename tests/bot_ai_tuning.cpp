@@ -1046,13 +1046,41 @@ BOOST_AUTO_TEST_CASE( swing_footing_uses_predicted_peak_range )
 
 	BOOST_CHECK_CLOSE( predicted, 45.0f, 0.01f );
 	BOOST_CHECK_EQUAL( NewBotAI_GetSwingFooting( 90.0f, predicted, 300.0f, 0, 0 ), NEWBOTAI_SWING_FOOTING_START );
-	// Inside ~100u and not backing off: step in and swing together.
-	BOOST_CHECK_EQUAL( NewBotAI_GetSwingFooting( 90.0f, 90.0f, 0.0f, 0, 0 ), NEWBOTAI_SWING_FOOTING_START );
+	// 70-100u only starts while closing faster than ~150u/s; otherwise keep stepping in.
+	BOOST_CHECK_EQUAL( NewBotAI_GetSwingFooting( 90.0f, 90.0f, 0.0f, 0, 0 ), NEWBOTAI_SWING_FOOTING_STEP_IN );
+	BOOST_CHECK_EQUAL( NewBotAI_GetSwingFooting( 110.0f, 90.0f, 200.0f, 0, 0 ), NEWBOTAI_SWING_FOOTING_START );
+	BOOST_CHECK_EQUAL( NewBotAI_GetSwingFooting( 68.0f, 68.0f, 0.0f, 0, 0 ), NEWBOTAI_SWING_FOOTING_START );
+	// Beyond ~130u: bait/step in even when the fast close predicts reach.
+	BOOST_CHECK_EQUAL( NewBotAI_GetSwingFooting( 140.0f, 60.0f, 500.0f, 0, 0 ), NEWBOTAI_SWING_FOOTING_STEP_IN );
 	BOOST_CHECK_EQUAL( NewBotAI_GetSwingFooting( 90.0f, 90.0f, -120.0f, 0, 0 ), NEWBOTAI_SWING_FOOTING_STEP_IN );
 	BOOST_CHECK_EQUAL( NewBotAI_GetSwingFooting( 120.0f, 120.0f, 0.0f, 0, 0 ), NEWBOTAI_SWING_FOOTING_STEP_IN );
 	BOOST_CHECK_EQUAL( NewBotAI_GetSwingFooting( 66.0f, 66.0f, 0.0f, 0, 1 ), NEWBOTAI_SWING_FOOTING_START );
 	BOOST_CHECK_EQUAL( NewBotAI_GetSwingFooting( 80.0f, 80.0f, 0.0f, 1, 0 ), NEWBOTAI_SWING_FOOTING_START );
 	BOOST_CHECK_EQUAL( NewBotAI_GetSwingFooting( 110.0f, 50.0f, -120.0f, 0, 0 ), NEWBOTAI_SWING_FOOTING_HOLD );
+}
+
+BOOST_AUTO_TEST_CASE( saber_planner_fresh_swing_follows_start_window )
+{
+	newbotai_saber_tactic_context_t context = MakeSaberDuelContext( 90.0f );
+
+	// Unknown closing speed keeps the old range-only behaviour.
+	BOOST_CHECK( NewBotAI_SaberFreshSwingWindowAllows( context, NEWBOTAI_SABER_TACTIC_STEP_IN ) );
+	context.closingKnown = 1;
+	context.currentDistance = 105.0f;
+	context.closingSpeed = 40.0f;
+	BOOST_CHECK( !NewBotAI_SaberFreshSwingWindowAllows( context, NEWBOTAI_SABER_TACTIC_STEP_IN ) );
+	BOOST_CHECK( !NewBotAI_SaberFreshSwingWindowAllows( context, NEWBOTAI_SABER_TACTIC_ATTACK ) );
+	// Chains and counters are not fresh starts.
+	BOOST_CHECK( NewBotAI_SaberFreshSwingWindowAllows( context, NEWBOTAI_SABER_TACTIC_CHAIN ) );
+	BOOST_CHECK( NewBotAI_SaberFreshSwingWindowAllows( context, NEWBOTAI_SABER_TACTIC_COUNTER ) );
+	context.closingSpeed = 200.0f;
+	BOOST_CHECK( NewBotAI_SaberFreshSwingWindowAllows( context, NEWBOTAI_SABER_TACTIC_STEP_IN ) );
+	context.currentDistance = 140.0f;
+	BOOST_CHECK( !NewBotAI_SaberFreshSwingWindowAllows( context, NEWBOTAI_SABER_TACTIC_STEP_IN ) );
+	context.currentDistance = 80.0f;
+	context.enemyDistance = 60.0f;
+	context.closingSpeed = 0.0f;
+	BOOST_CHECK( NewBotAI_SaberFreshSwingWindowAllows( context, NEWBOTAI_SABER_TACTIC_ATTACK ) );
 }
 
 BOOST_AUTO_TEST_CASE( swing_dodge_prefers_lateral_or_jump_over_backpedal )

@@ -183,6 +183,9 @@ typedef struct
 	int selfBlocked;
 	int counterReady;
 	int saberCombat;
+	int closingKnown;	// closingSpeed/currentDistance are valid (zero-initialized: unknown)
+	float closingSpeed;	// 2D radial speed, > 0 while closing on the enemy
+	float currentDistance;	// 2D range now (enemyDistance is the predicted peak range)
 } newbotai_saber_tactic_context_t;
 
 typedef struct
@@ -620,6 +623,8 @@ static inline int NewBotAI_SaberCanEscapeJump(int grounded, int jumpReleased,
 }
 
 static inline int NewBotAI_SaberTacticAllowsSwingStart(newbotai_saber_tactic_t tactic, float enemyDistance);
+static inline int NewBotAI_SaberFreshSwingWindowAllows(newbotai_saber_tactic_context_t context,
+	newbotai_saber_tactic_t tactic);
 
 // Forward input while attacking: commit toward ~40-55u at the swing peak. STAND_SWING
 // (mediocre timing) commits less deep; BACK_SWING is the low-skill backpedal mistake.
@@ -661,7 +666,8 @@ static inline newbotai_saber_command_t NewBotAI_PlanSaberCommand(
 		command.forward = -1;
 
 	command.attack = grounded && attackLegal &&
-		NewBotAI_SaberTacticAllowsSwingStart(tactic, context.enemyDistance);
+		NewBotAI_SaberTacticAllowsSwingStart(tactic, context.enemyDistance) &&
+		NewBotAI_SaberFreshSwingWindowAllows(context, tactic);
 	if (command.attack)
 	{
 		command.right = side;
@@ -1526,16 +1532,21 @@ static inline float NewBotAI_SaberStepYawOffsetScaled(float current, float targe
 	return current + delta;
 }
 
-// Footing (void/jundon hits land 41-53u at peak, +141u/s closing): start a swing when the
-// predicted distance ~150ms in is inside reach, or inside ~100u while stepping in with it;
-// step in first beyond that; never swing while backing away from 100u+.
+// Footing (dueltracks3: human hits start at a median 71u predicted range, p25-75 50-99u,
+// while closing at +170-250u/s; failed human swings started from 120-140u closing ~+30u/s):
+// start when the predicted distance ~150ms in is inside reach, or inside 70-100u while
+// closing faster than ~150u/s. Beyond ~130u keep stepping in (bait) rather than swing, and
+// never swing while backing away from 100u+.
 #define NEWBOTAI_SWING_PEAK_LEAD_MS 150
-#define NEWBOTAI_SWING_PEAK_RANGE 60.0f
+#define NEWBOTAI_SWING_PEAK_RANGE 70.0f
 #define NEWBOTAI_SWING_PEAK_RANGE_STAFF 70.0f
 #define NEWBOTAI_SWING_LINK_RANGE 85.0f
 #define NEWBOTAI_SWING_STEP_IN_RANGE 85.0f
 #define NEWBOTAI_SWING_BACKING_BLOCK_RANGE 100.0f
 #define NEWBOTAI_SWING_BACKING_SPEED 40.0f
+#define NEWBOTAI_SWING_START_WINDOW_MAX 100.0f
+#define NEWBOTAI_SWING_START_CLOSING_SPEED 150.0f
+#define NEWBOTAI_SWING_BAIT_RANGE 130.0f
 
 typedef enum
 {
@@ -1554,6 +1565,19 @@ static inline float NewBotAI_PredictRange2D(float dx, float dy, float relVx, flo
 	return sqrtf(px * px + py * py);
 }
 
+// Fresh (non-linked) swing start window: inside the peak range always, 70-100u only while
+// closing faster than NEWBOTAI_SWING_START_CLOSING_SPEED, never from beyond ~130u.
+static inline int NewBotAI_SwingStartWindowAllows(float currentRange, float predictedRange,
+	float radialSpeed, float peakRange)
+{
+	if (currentRange > NEWBOTAI_SWING_BAIT_RANGE)
+		return 0;
+	if (predictedRange <= peakRange)
+		return 1;
+	return (predictedRange <= NEWBOTAI_SWING_START_WINDOW_MAX &&
+		radialSpeed >= NEWBOTAI_SWING_START_CLOSING_SPEED) ? 1 : 0;
+}
+
 // radialSpeed > 0 means we are closing on the enemy. linkedSwing relaxes the peak range for
 // a chain continuation that is already committed.
 static inline newbotai_swing_footing_t NewBotAI_GetSwingFooting(float currentRange, float predictedRange,
@@ -1564,13 +1588,31 @@ static inline newbotai_swing_footing_t NewBotAI_GetSwingFooting(float currentRan
 
 	if (currentRange >= NEWBOTAI_SWING_BACKING_BLOCK_RANGE && radialSpeed < -NEWBOTAI_SWING_BACKING_SPEED)
 		return NEWBOTAI_SWING_FOOTING_HOLD;
-	if (predictedRange <= peakRange)
-		return NEWBOTAI_SWING_FOOTING_START;
-	// Inside ~100u and not backing off: step in and swing together (the caller adds
-	// forward input until the peak is inside NEWBOTAI_SABER_COMMIT_PEAK_RANGE).
-	if (predictedRange <= NEWBOTAI_SABER_STEP_IN_SWING_RANGE && radialSpeed >= -NEWBOTAI_SWING_BACKING_SPEED)
-		return NEWBOTAI_SWING_FOOTING_START;
-	return NEWBOTAI_SWING_FOOTING_STEP_IN;
+	if (linkedSwing)
+		return predictedRange <= peakRange ? NEWBOTAI_SWING_FOOTING_START : NEWBOTAI_SWING_FOOTING_STEP_IN;
+	// Otherwise keep stepping in (the caller adds forward input) until the window opens.
+	return NewBotAI_SwingStartWindowAllows(currentRange, predictedRange, radialSpeed, peakRange) ?
+		NEWBOTAI_SWING_FOOTING_START : NEWBOTAI_SWING_FOOTING_STEP_IN;
+}
+
+// Fresh swing starts (ATTACK/STAND_SWING/STEP_IN) follow the human start window when the
+// closing speed is known: inside 70u, or 70-100u while closing >150u/s, never beyond 130u.
+// Chains, counters and deliberate mistakes keep their own range limits.
+static inline int NewBotAI_SaberFreshSwingWindowAllows(newbotai_saber_tactic_context_t context,
+	newbotai_saber_tactic_t tactic)
+{
+	if (!context.closingKnown || context.enemyVulnerable)
+		return 1;
+	switch (tactic)
+	{
+	case NEWBOTAI_SABER_TACTIC_ATTACK:
+	case NEWBOTAI_SABER_TACTIC_STAND_SWING:
+	case NEWBOTAI_SABER_TACTIC_STEP_IN:
+		return NewBotAI_SwingStartWindowAllows(context.currentDistance, context.enemyDistance,
+			context.closingSpeed, NEWBOTAI_SWING_PEAK_RANGE);
+	default:
+		return 1;
+	}
 }
 
 // Dodging an enemy swing that starts within 130u: stationary/backpedal defenders were hit

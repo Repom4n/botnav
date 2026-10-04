@@ -13679,8 +13679,8 @@ static int NewBotAI_GetDecisionMistakeChance(bot_state_t *bs)
 
 // Gate for starting a NEW saber swing (chain holds use NewBotAI_SwingChainFootingAllows).
 // Humans that landed swings started them when the range predicted at the swing peak was
-// 60u or less (or inside ~100u while still closing), stepped in first when further, and
-// never swung while backing off from 100u+.
+// 70u or less (or 70-100u while closing faster than ~150u/s), stepped in first when further
+// (always beyond ~130u), and never swung while backing off from 100u+.
 // Returns qtrue when attack may be pressed; on STEP_IN it walks forward instead.
 static qboolean NewBotAI_SwingStartFootingAllows(bot_state_t *bs)
 {
@@ -17444,7 +17444,12 @@ static void NewBotAI_RunSaberTechniques(bot_state_t *bs)
 		//Plan on the 2D range predicted at the swing peak; humans that landed swings started
 		//them when the peak range would be 60u or less.
 		if (NewBotAI_GetEnemyRangeKinematics(bs, &range2D, &predicted2D, &radial2D))
+		{
 			context.enemyDistance = predicted2D;
+			context.closingKnown = 1;
+			context.closingSpeed = radial2D;
+			context.currentDistance = range2D;
+		}
 		else
 			context.enemyDistance = bs->frame_Enemy_Len;
 		context.enemyDistance = NewBotAI_SaberRangeWithHysteresis(context.enemyDistance,
