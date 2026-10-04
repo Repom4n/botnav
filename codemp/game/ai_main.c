@@ -7649,7 +7649,14 @@ static qboolean NewBotAI_CanAttemptFlipkick(bot_state_t *bs)
 // grip a short, human-like window to build up speed before any bot mistake-bias escape
 // weighting applies.
 #define NEWBOTAI_GRIP_NO_ESCAPE_WINDOW_MS 100
-#define NEWBOTAI_GRIPKICK_LOOKDOWN_SETTLE_MS 220
+// Gripkick timing (dueltracks3 2026-10-03): jundon kept forwardmove > 0 on 84% of the
+// frames in the 300ms before a kick (bots 55% - they stood still through the look-down
+// settle) and spaced retries ~875ms+ apart (p25; bots 363ms). The settle is shorter and
+// keeps walking in, and unconfirmed attempts dwell longer before the next try.
+#define NEWBOTAI_GRIPKICK_LOOKDOWN_SETTLE_MS 120
+#define NEWBOTAI_GRIPKICK_SETTLE_MIN_RANGE 40.0f
+#define NEWBOTAI_GRIPKICK_RETRY_DWELL_MIN_MS 450
+#define NEWBOTAI_GRIPKICK_RETRY_DWELL_MAX_MS 700
 #define NEWBOTAI_RECOVERY_YAW_SPEED_DEG_PER_SEC 50.0f
 #define NEWBOTAI_RECOVERY_YAW_INTERVAL_MS 800
 #define NEWBOTAI_RECOVERY_STUCK_TIMEOUT_MS 5000
@@ -9379,6 +9386,9 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 			bs->ideal_viewangles[YAW] = a_fo[YAW];
 			bs->ideal_viewangles[PITCH] = 89;
 			trap->EA_Move(bs->client, vec3_origin, 0);
+			//Keep walking in through the settle like jundon instead of standing still.
+			if (bs->frame_Enemy_Len > NEWBOTAI_GRIPKICK_SETTLE_MIN_RANGE)
+				trap->EA_MoveForward(bs->client);
 			if (bs->gripkickLookDownUntil <= 0)
 			{
 				bs->gripkickLookDownUntil = level.time + NEWBOTAI_GRIPKICK_LOOKDOWN_SETTLE_MS;
@@ -9408,7 +9418,8 @@ void NewBotAI_Gripkick(bot_state_t *bs)
 					//dwells run the same length as the upward jerks for the same
 					//bot_gripkickdwell setting.
 					bs->gripkickAttemptTime = level.time;
-					bs->gripkickDwellUntil = level.time + (Q_irand(220, 360) * dwellPercent) / 100;
+					bs->gripkickDwellUntil = level.time + (Q_irand(NEWBOTAI_GRIPKICK_RETRY_DWELL_MIN_MS,
+						NEWBOTAI_GRIPKICK_RETRY_DWELL_MAX_MS) * dwellPercent) / 100;
 					bs->gripkickLookDownUntil = 0;
 				}
 			}
