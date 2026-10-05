@@ -50,7 +50,7 @@ endif()
 find_package( Boost COMPONENTS unit_test_framework REQUIRED )
 
 set(TestTarget "UnitTests")
-set(TestLibraries "${Boost_UNIT_TEST_FRAMEWORK_LIBRARY}")
+set(TestLibraries "${Boost_UNIT_TEST_FRAMEWORK_LIBRARY}" ${CMAKE_DL_LIBS})
 if(WIN32)
 	list(APPEND TestLibraries "winmm")
 endif()
