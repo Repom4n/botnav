@@ -517,6 +517,12 @@ static inline int NewBotAI_SaberDefenseReady(int now, int recoveryUntil, int fol
 	return !brokenParry && weaponTime <= 0 && now >= recoveryUntil && now >= followupUntil;
 }
 
+static inline int NewBotAI_SaberDefenseFollowupThreat(int attacking, float range, float predictedRange)
+{
+	return attacking && (range <= NEWBOTAI_SABER_LONG_SWING_RANGE ||
+		predictedRange <= NEWBOTAI_SABER_LONG_SWING_RANGE);
+}
+
 static inline void NewBotAI_SaberWorldDirection(float yaw, int forward, int right,
 	float *x, float *y)
 {
@@ -1972,6 +1978,35 @@ static inline int NewBotAI_SaberThrowSteerCadence(int throwLevel)
 	return throwLevel >= 3 ? 100 : throwLevel == 2 ? 400 : 0;
 }
 
+static inline int NewBotAI_SaberThrowTargetGuarded(int saberEquipped, int bladeAvailable,
+	int saberInFlight, int brokenParry, int knockedDown)
+{
+	return saberEquipped && bladeAvailable && !saberInFlight && !brokenParry && !knockedDown;
+}
+
+static inline newbotai_throw_phase_t NewBotAI_SaberThrowTargetPhase(
+	newbotai_throw_phase_t phase, int guarded, int steerable)
+{
+	if (!steerable || phase == NEWBOTAI_THROW_RECALL)
+		return phase;
+	if (!guarded)
+		return NEWBOTAI_THROW_CUT_THROUGH;
+	return phase == NEWBOTAI_THROW_LAUNCH ? NEWBOTAI_THROW_BYPASS : phase;
+}
+
+static inline void NewBotAI_SaberThrowLaneOffsets(newbotai_throw_phase_t phase,
+	int lane, int overhead, float *rear, float *side, float *height)
+{
+	*rear = *side = *height = 0.0f;
+	if (phase == NEWBOTAI_THROW_BYPASS || phase == NEWBOTAI_THROW_REAR)
+	{
+		*rear = phase == NEWBOTAI_THROW_BYPASS ? -48.0f : -128.0f;
+		*side = (lane < 0 ? -1.0f : 1.0f) *
+			(overhead ? 32.0f : phase == NEWBOTAI_THROW_BYPASS ? 112.0f : 72.0f);
+		*height = overhead ? (phase == NEWBOTAI_THROW_BYPASS ? 128.0f : 96.0f) : 0.0f;
+	}
+}
+
 static inline newbotai_throw_phase_t NewBotAI_SaberThrowNextPhase(newbotai_throw_phase_t phase,
 	int elapsedMs, int cadenceMs, float targetFacingProjection)
 {
@@ -1991,6 +2026,13 @@ static inline int NewBotAI_SaberThrowRecallDue(int throwLevel, int heldMs, int u
 {
 	const int maximum = throwLevel >= 3 ? 1500 : throwLevel == 2 ? 1800 : 750;
 	return unsafe || returning || !forceAllowed || heldMs < 0 || heldMs >= maximum;
+}
+
+static inline int NewBotAI_SaberThrowRoutingHold(int throwLevel, newbotai_throw_phase_t phase,
+	int heldMs)
+{
+	return throwLevel >= 2 && (phase == NEWBOTAI_THROW_BYPASS || phase == NEWBOTAI_THROW_REAR) &&
+		!NewBotAI_SaberThrowRecallDue(throwLevel, heldMs, 0, 0, 1);
 }
 
 static inline int NewBotAI_SaberThrowTraceSafe(int viewSolid, int flightSolid,

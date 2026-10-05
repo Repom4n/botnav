@@ -1352,6 +1352,24 @@ BOOST_AUTO_TEST_CASE( saber_defense_categories_do_not_conflate_bounce_or_normal_
 	BOOST_CHECK_EQUAL( NewBotAI_SaberDefenseCategory( 0, 0, 0 ), NEWBOTAI_SABER_DEFENSE_NONE );
 }
 
+BOOST_AUTO_TEST_CASE( broken_defense_followup_ends_after_leaving_reach_not_distant_swings )
+{
+	BOOST_CHECK( NewBotAI_SaberDefenseFollowupThreat( 1, 90.0f, 200.0f ) );
+	BOOST_CHECK( NewBotAI_SaberDefenseFollowupThreat( 1, 240.0f, 100.0f ) );
+	BOOST_CHECK( NewBotAI_SaberDefenseFollowupThreat( 1, 150.0f, 200.0f ) );
+	BOOST_CHECK( !NewBotAI_SaberDefenseFollowupThreat( 1, 240.0f, 200.0f ) );
+	BOOST_CHECK( !NewBotAI_SaberDefenseFollowupThreat( 0, 90.0f, 50.0f ) );
+	int followupUntil = 1180;
+	for (int now = 1000; now <= 1500; now += 50)
+	{
+		if (NewBotAI_SaberDefenseFollowupThreat( 1, 400.0f, 400.0f ))
+			followupUntil = now + NEWBOTAI_SABER_FOLLOWUP_CLEAR_MS;
+	}
+	BOOST_CHECK( NewBotAI_SaberDefenseReady( 1500, 1250, followupUntil, 0, 0 ) );
+	BOOST_CHECK( !NewBotAI_SaberDefenseReady( 1500, 1250, followupUntil, 1, 0 ) );
+	BOOST_CHECK( !NewBotAI_SaberDefenseReady( 1500, 1250, followupUntil, 0, 100 ) );
+}
+
 BOOST_AUTO_TEST_CASE( saber_footing_world_direction_survives_final_aim_rotation )
 {
 	float x, y;
@@ -1450,6 +1468,65 @@ BOOST_AUTO_TEST_CASE( saber_throw_phase_uses_target_facing_and_engine_cadence )
 	BOOST_CHECK_EQUAL( NewBotAI_SaberThrowNextPhase( NEWBOTAI_THROW_REAR, 500, 100, -49.0f ), NEWBOTAI_THROW_CUT_THROUGH );
 	BOOST_CHECK_EQUAL( NewBotAI_SaberThrowNextPhase( NEWBOTAI_THROW_RECALL, 500, 100, -100.0f ), NEWBOTAI_THROW_RECALL );
 	BOOST_CHECK_EQUAL( NewBotAI_SaberThrowNextPhase( NEWBOTAI_THROW_LAUNCH, 500, 0, -100.0f ), NEWBOTAI_THROW_LAUNCH );
+}
+
+BOOST_AUTO_TEST_CASE( saber_throw_bypasses_ready_defense_but_intercepts_exposed_targets )
+{
+	BOOST_CHECK( NewBotAI_SaberThrowTargetGuarded( 1, 1, 0, 0, 0 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowTargetGuarded( 0, 1, 0, 0, 0 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowTargetGuarded( 1, 0, 0, 0, 0 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowTargetGuarded( 1, 1, 1, 0, 0 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowTargetGuarded( 1, 1, 0, 1, 0 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowTargetGuarded( 1, 1, 0, 0, 1 ) );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberThrowTargetPhase( NEWBOTAI_THROW_LAUNCH, 1, 1 ), NEWBOTAI_THROW_BYPASS );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberThrowTargetPhase( NEWBOTAI_THROW_LAUNCH, 0, 1 ), NEWBOTAI_THROW_CUT_THROUGH );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberThrowTargetPhase( NEWBOTAI_THROW_REAR, 0, 1 ), NEWBOTAI_THROW_CUT_THROUGH );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberThrowTargetPhase( NEWBOTAI_THROW_REAR, 1, 1 ), NEWBOTAI_THROW_REAR );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberThrowTargetPhase( NEWBOTAI_THROW_RECALL, 0, 1 ), NEWBOTAI_THROW_RECALL );
+	BOOST_CHECK_EQUAL( NewBotAI_SaberThrowTargetPhase( NEWBOTAI_THROW_LAUNCH, 1, 0 ), NEWBOTAI_THROW_LAUNCH );
+}
+
+BOOST_AUTO_TEST_CASE( saber_throw_overhead_fallback_preserves_rear_placement_and_cut_through )
+{
+	float rear, side, height;
+	for (int lane : { -1, 1 })
+	{
+		NewBotAI_SaberThrowLaneOffsets( NEWBOTAI_THROW_BYPASS, lane, 0, &rear, &side, &height );
+		BOOST_CHECK_EQUAL( rear, -48.0f );
+		BOOST_CHECK_EQUAL( side, lane * 112.0f );
+		BOOST_CHECK_SMALL( height, 0.001f );
+		NewBotAI_SaberThrowLaneOffsets( NEWBOTAI_THROW_BYPASS, lane, 1, &rear, &side, &height );
+		BOOST_CHECK_EQUAL( rear, -48.0f );
+		BOOST_CHECK_EQUAL( side, lane * 32.0f );
+		BOOST_CHECK_EQUAL( height, 128.0f );
+		NewBotAI_SaberThrowLaneOffsets( NEWBOTAI_THROW_REAR, lane, 1, &rear, &side, &height );
+		BOOST_CHECK_EQUAL( rear, -128.0f );
+		BOOST_CHECK_EQUAL( side, lane * 32.0f );
+		BOOST_CHECK_EQUAL( height, 96.0f );
+		// Once behind, redirect through the opponent instead of steering farther away.
+		NewBotAI_SaberThrowLaneOffsets( NEWBOTAI_THROW_CUT_THROUGH, lane, 1, &rear, &side, &height );
+		BOOST_CHECK_SMALL( rear, 0.001f );
+		BOOST_CHECK_SMALL( side, 0.001f );
+		BOOST_CHECK_SMALL( height, 0.001f );
+	}
+	// Overhead candidates still obey the same solid/obstruction checks as side lanes.
+	BOOST_CHECK( !NewBotAI_SaberThrowTraceSafe( 1, 0, 0, 0, NEWBOTAI_THROW_BYPASS ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowTraceSafe( 0, 0, 1, 0, NEWBOTAI_THROW_REAR ) );
+}
+
+BOOST_AUTO_TEST_CASE( saber_throw_routing_hold_survives_lateral_motion_but_is_bounded )
+{
+	// A planned detour can point away from the target after the legacy first-pass hold.
+	BOOST_CHECK( !NewBotAI_SaberThrowHoldProtected( 800, 1, 0 ) );
+	BOOST_CHECK( NewBotAI_SaberThrowRoutingHold( 2, NEWBOTAI_THROW_BYPASS, 800 ) );
+	BOOST_CHECK( NewBotAI_SaberThrowRoutingHold( 3, NEWBOTAI_THROW_REAR, 800 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowRoutingHold( 1, NEWBOTAI_THROW_BYPASS, 600 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowRoutingHold( 2, NEWBOTAI_THROW_BYPASS, 1800 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowRoutingHold( 3, NEWBOTAI_THROW_REAR, 1500 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowRoutingHold( 3, NEWBOTAI_THROW_REAR, -1 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowRoutingHold( 3, NEWBOTAI_THROW_LAUNCH, 800 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowRoutingHold( 3, NEWBOTAI_THROW_CUT_THROUGH, 800 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowRoutingHold( 3, NEWBOTAI_THROW_RECALL, 800 ) );
 }
 
 BOOST_AUTO_TEST_CASE( saber_throw_traces_reject_obstructions_and_front_bypass )

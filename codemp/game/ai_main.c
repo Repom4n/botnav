@@ -9797,9 +9797,11 @@ void NewBotAI_SaberThrowing(bot_state_t* bs)
 		bs->saberThrowPhase = NEWBOTAI_THROW_RECALL;
 		return;
 	}
-	//Hold through the first pass like humans; only the drain-lock and lethal-danger rules
-	//may cut a throw short before then.
-	if (!NewBotAI_SaberThrowMayRelease(heldMs, passedTarget, headingToTarget, drainlockRule, lethalDanger))
+	// A deliberate bypass can point away from the target before the cut-through.
+	if (!NewBotAI_SaberThrowMayRelease(heldMs, passedTarget, headingToTarget, drainlockRule, lethalDanger) ||
+		(NewBotAI_SaberThrowRoutingHold(bs->cur_ps.fd.forcePowerLevel[FP_SABERTHROW],
+			(newbotai_throw_phase_t)bs->saberThrowPhase, heldMs) &&
+			!drainlockRule && !lethalDanger && ourHealth >= enemyHealth && BotGetAggressionBias(bs) > 0.0f))
 	{
 		trap->EA_Alt_Attack(bs->client);
 		NewBotAI_TrySaberThrowDefenseBreak(bs);
@@ -14319,6 +14321,7 @@ static void NewBotAI_AdjustSaberThrowLead(bot_state_t *bs)
 	vec3_t facing, right, angles, aim, eye, direction, relative, endpoint;
 	int cadence, i;
 	int phase;
+	int guarded;
 	qboolean heading;
 
 	if (!bs->currentEnemy || !bs->currentEnemy->client || !ps->saberInFlight ||
@@ -14334,10 +14337,15 @@ static void NewBotAI_AdjustSaberThrowLead(bot_state_t *bs)
 	if (bs->saberThrowPhase == NEWBOTAI_THROW_RECALL)
 		return;
 	enemy = &bs->currentEnemy->client->ps;
+	cadence = NewBotAI_SaberThrowSteerCadence(ps->fd.forcePowerLevel[FP_SABERTHROW]);
+	guarded = NewBotAI_SaberThrowTargetGuarded(enemy->weapon == WP_SABER,
+		NewBotAI_SaberPrimaryBladeAvailable(enemy->saberHolstered), enemy->saberInFlight,
+		enemy->saberBlocked == BLOCKED_PARRY_BROKEN || PM_SaberInBrokenParry(enemy->saberMove),
+		BG_InKnockDown(enemy->legsAnim) || enemy->forceHandExtend == HANDEXTEND_KNOCKDOWN);
 	if (bs->saberThrowTargetNum != bs->currentEnemy->s.number || !bs->saberThrowPhaseTime)
 	{
 		bs->saberThrowTargetNum = bs->currentEnemy->s.number;
-		bs->saberThrowPhase = NEWBOTAI_THROW_LAUNCH;
+		bs->saberThrowPhase = NewBotAI_SaberThrowTargetPhase(NEWBOTAI_THROW_LAUNCH, guarded, cadence);
 		bs->saberThrowPhaseTime = level.time;
 		bs->saberThrowSteerTime = 0;
 		bs->saberThrowPassedTarget = qfalse;
@@ -14346,7 +14354,6 @@ static void NewBotAI_AdjustSaberThrowLead(bot_state_t *bs)
 		VectorSubtract(saber->r.currentOrigin, enemy->origin, relative);
 		bs->saberThrowLane = DotProduct(relative, right) < 0.0f ? -1 : 1;
 	}
-	cadence = NewBotAI_SaberThrowSteerCadence(ps->fd.forcePowerLevel[FP_SABERTHROW]);
 	if (!cadence)
 		return; // Level one has no engine steering.
 	if (bs->saberThrowSteerTime > level.time)
@@ -14360,6 +14367,7 @@ static void NewBotAI_AdjustSaberThrowLead(bot_state_t *bs)
 	NewBotAI_UpdateSaberThrowPass(bs, &heading);
 	phase = NewBotAI_SaberThrowNextPhase((newbotai_throw_phase_t)bs->saberThrowPhase,
 		level.time - bs->saberThrowPhaseTime, cadence, DotProduct(relative, facing));
+	phase = NewBotAI_SaberThrowTargetPhase((newbotai_throw_phase_t)phase, guarded, cadence);
 	if (phase != bs->saberThrowPhase)
 	{
 		bs->saberThrowPhase = phase;
@@ -14367,22 +14375,18 @@ static void NewBotAI_AdjustSaberThrowLead(bot_state_t *bs)
 	}
 	VectorCopy(ps->origin, eye);
 	eye[2] += ps->viewheight;
-	for (i = 0; i < 2; ++i)
+	for (i = 0; i < 4; ++i)
 	{
-		const int side = i ? -bs->saberThrowLane : bs->saberThrowLane;
+		const int side = i % 2 ? -bs->saberThrowLane : bs->saberThrowLane;
+		float rearOffset, sideOffset, heightOffset;
 		VectorCopy(enemy->origin, aim);
 		aim[2] += enemy->viewheight * 0.55f;
 		VectorMA(aim, cadence * 0.001f, enemy->velocity, aim);
-		if (phase == NEWBOTAI_THROW_BYPASS)
-		{
-			VectorMA(aim, side * 112.0f, right, aim);
-			VectorMA(aim, -48.0f, facing, aim);
-		}
-		else if (phase == NEWBOTAI_THROW_REAR)
-		{
-			VectorMA(aim, -128.0f, facing, aim);
-			VectorMA(aim, side * 72.0f, right, aim);
-		}
+		NewBotAI_SaberThrowLaneOffsets((newbotai_throw_phase_t)phase, side, i >= 2,
+			&rearOffset, &sideOffset, &heightOffset);
+		VectorMA(aim, sideOffset, right, aim);
+		VectorMA(aim, rearOffset, facing, aim);
+		aim[2] += heightOffset;
 		VectorSubtract(aim, eye, direction);
 		vectoangles(direction, angles);
 		if (NewBotAI_SaberThrowTrace(bs, angles, (newbotai_throw_phase_t)phase, endpoint))
@@ -14457,7 +14461,10 @@ static void NewBotAI_ApplySaberThrowInput(bot_state_t *bs, bot_input_t *bi)
 	recall = recall || hardRecall;
 	passed = NewBotAI_UpdateSaberThrowPass(bs, &heading);
 	if (NewBotAI_SaberThrowFinalHoldProtected(level.time - bs->saberThrowStartTime,
-		passed, heading, drainlock, lethal, returning, forceAllowed, hardRecall))
+		passed, heading, drainlock, lethal, returning, forceAllowed, hardRecall) ||
+		(!recall && g_entities[bs->client].health >= bs->currentEnemy->health &&
+			NewBotAI_SaberThrowRoutingHold(ps->fd.forcePowerLevel[FP_SABERTHROW],
+				(newbotai_throw_phase_t)bs->saberThrowPhase, level.time - bs->saberThrowStartTime)))
 	{
 		bi->actionflags |= ACTION_ALT_ATTACK;
 		return;
@@ -17477,6 +17484,7 @@ static void NewBotAI_UpdateSaberDefense(bot_state_t *bs, int time)
 		if (!bs->saberDefenseActive)
 		{
 			bs->saberFootingValid = qfalse;
+			bs->saberTechniqueJumpTime = 0;
 			bs->saberDefenseFollowupUntil = time + NEWBOTAI_SABER_FOLLOWUP_CLEAR_MS;
 		}
 		bs->saberDefenseActive = qtrue;
@@ -17490,7 +17498,15 @@ static void NewBotAI_UpdateSaberDefense(bot_state_t *bs, int time)
 		PM_SaberInStart(bs->currentEnemy->client->ps.saberMove) ||
 		PM_SaberInTransition(bs->currentEnemy->client->ps.saberMove);
 	if (enemyAttacking)
-		bs->saberDefenseFollowupUntil = time + NEWBOTAI_SABER_FOLLOWUP_CLEAR_MS;
+	{
+		vec3_t relative, velocity, predicted;
+		VectorSubtract(bs->currentEnemy->client->ps.origin, ps->origin, relative);
+		VectorSubtract(bs->currentEnemy->client->ps.velocity, ps->velocity, velocity);
+		relative[2] = velocity[2] = 0.0f;
+		VectorMA(relative, NEWBOTAI_SABER_FOLLOWUP_CLEAR_MS * 0.001f, velocity, predicted);
+		if (NewBotAI_SaberDefenseFollowupThreat(enemyAttacking, VectorLength(relative), VectorLength(predicted)))
+			bs->saberDefenseFollowupUntil = time + NEWBOTAI_SABER_FOLLOWUP_CLEAR_MS;
+	}
 	if (NewBotAI_SaberDefenseReady(time, bs->saberDefenseRecoveryUntil,
 		bs->saberDefenseFollowupUntil, broken, ps->weaponTime))
 	{
@@ -17504,7 +17520,6 @@ static void NewBotAI_UpdateSaberDefense(bot_state_t *bs, int time)
 		bs->saberTacticChainLength = 0;
 		bs->saberTacticUntil = 0;
 		bs->saberTechniqueReentryUntil = 0;
-		bs->saberTechniqueJumpTime = 0;
 		bs->saberTechniqueYawTime = 0;
 		bs->saberTechniqueYawOffset = 0.0f;
 		bs->saberTechniqueFamilyUntil = 0;
@@ -17841,10 +17856,11 @@ static void NewBotAI_RunSaberTechniques(bot_state_t *bs)
 			&bs->saberTechniqueCommand.forward, &bs->saberTechniqueCommand.right);
 	}
 	NewBotAI_SaberSuppressStrafe(&bs->saberTechniqueCommand, NewBotAI_IsDuelStrafeSuppressed(bs));
-	if (!bs->saberDefenseActive && escapePhase < 0 && bs->saberTechniqueCommand.forward < 0 &&
+	if (escapePhase < 0 && bs->saberTechniqueCommand.forward < 0 &&
 		NewBotAI_SaberCanEscapeJump(ps->groundEntityNum != ENTITYNUM_NONE,
 			!(ps->pm_flags & PMF_JUMP_HELD) && bs->lastucmd.upmove <= 0,
 			!context.selfAttacking && ps->weaponTime <= 0 && !context.selfBlocked &&
+			!PM_SaberInBrokenParry(ps->saberMove) &&
 			!NewBotAI_TouchingWallNotEnemy(bs), ps->fd.forceJumpCharge == 0 &&
 			ps->fd.forcePower >= 10 && !(ps->fd.forcePowersActive & ((1 << FP_SPEED) | (1 << FP_LEVITATION))) &&
 			ps->velocity[0] * ps->velocity[0] + ps->velocity[1] * ps->velocity[1] <= 160000.0f,
@@ -17955,6 +17971,7 @@ static void NewBotAI_ApplySaberTechniqueInput(bot_state_t *bs, bot_input_t *bi, 
 	int selectedForward, selectedRight;
 	int selecting;
 	float offset;
+	float pokeYaw = 0.0f;
 	float wiggleYaw = 0.0f, wigglePitch = 0.0f;
 	newbotai_saber_final_context_t finalContext;
 
@@ -18009,7 +18026,7 @@ static void NewBotAI_ApplySaberTechniqueInput(bot_state_t *bs, bot_input_t *bi, 
 	command = bs->saberTechniqueCommand;
 	if (bs->saberDefenseActive)
 	{
-		command.attack = command.jump = 0;
+		command.attack = 0;
 		command.forward = -1;
 		command.right = bs->saberTacticStrafeDir < 0 ? -1 : 1;
 	}
@@ -18077,16 +18094,15 @@ static void NewBotAI_ApplySaberTechniqueInput(bot_state_t *bs, bot_input_t *bi, 
 		ps->groundEntityNum != ENTITYNUM_NONE &&
 		ps->saberMove >= LS_A_TL2BR && ps->saberMove <= LS_A_T2B)
 	{
-		if (ps->saberMove == LS_A_T2B)
-			bs->saberTechniqueYawOffset = NewBotAI_SaberPokeCounterYaw(phase,
-				NewBotAI_SaberAnimationProgress(ps->torsoTimer, bs->saberTechniqueAnimDuration),
-				bs->saberTacticStrafeDir);
+		pokeYaw = NewBotAI_SaberPokeCounterYaw(phase,
+			NewBotAI_SaberAnimationProgress(ps->torsoTimer, bs->saberTechniqueAnimDuration),
+			actualDirection);
 		NewBotAI_GetSaberActiveWiggle(phase, time - bs->saberTechniqueAcceptedTime,
 			Com_Clampi(0, 2000, bot_wobbledelay.integer), bot_wobbleyaw.value,
 			bot_wobblepitch.value, bot_wobblespeed.value, &wiggleYaw, &wigglePitch);
 	}
 	bs->saberTechniqueAppliedYaw = Com_Clamp(-60.0f, 60.0f,
-		bs->saberTechniqueYawOffset + wiggleYaw);
+		bs->saberTechniqueYawOffset + pokeYaw + wiggleYaw);
 	bs->saberTechniqueAppliedPitch = Com_Clamp(-89.0f, 89.0f,
 		AngleNormalize180(bi->viewangles[PITCH]) + wigglePitch) - AngleNormalize180(bi->viewangles[PITCH]);
 	bi->viewangles[YAW] = NewBotAI_SaberApplyYawOffset(bi->viewangles[YAW],
