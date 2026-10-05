@@ -2,6 +2,7 @@
 #include "g_duel_identity.h"
 #include "g_duel_elo.h"
 #include "g_duel_capture.h"
+#include "g_duel_session.h"
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -433,13 +434,22 @@ static struct {
 	int finishedAt, startTime;
 	char identityKey[64];
 } g_recentLearningDuels[MAX_CLIENTS];
-static void G_BeginLearningSession(void)
+static qboolean G_BeginLearningSession(void)
 {
 	unsigned char nonce[16];
 	char hex[33];
 	static const char digits[] = "0123456789abcdef";
 	int i;
-	sqlite3_randomness(sizeof(nonce), nonce);
+	int result;
+	g_learningSession[0] = '\0';
+	memset(g_recentLearningDuels, 0, sizeof(g_recentLearningDuels));
+	g_learningCacheDirty = qfalse;
+	result = G_GenerateLearningSessionNonce(nonce);
+	if (result != SQLITE_OK)
+	{
+		trap->Print("ERROR: SQLite initialization failed (%i), accounts/elo and duel tracking unavailable this map.\n", result);
+		return qfalse;
+	}
 	for (i = 0; i < (int)sizeof(nonce); i++)
 	{
 		hex[i * 2] = digits[nonce[i] >> 4];
@@ -448,8 +458,7 @@ static void G_BeginLearningSession(void)
 	hex[32] = '\0';
 	Com_sprintf(g_learningSession, sizeof(g_learningSession), "%s:%s:%lld:%i",
 		hex, level.rawmapname, (long long)time(NULL), level.time);
-	memset(g_recentLearningDuels, 0, sizeof(g_recentLearningDuels));
-	g_learningCacheDirty = qfalse;
+	return qtrue;
 }
 static tracked_arcade_runtime_t g_trackedArcadeCombats[MAX_CLIENTS];
 static bot_tutorial_queue_t g_botTutorialQueues[MAX_CLIENTS];
@@ -15101,7 +15110,6 @@ void InitGameAccountStuff( void ) { //Called every mapload , move the create tab
 	char effectiveDuelTrackPath[MAX_OSPATH];
 	int s;
 
-	G_BeginLearningSession();
 	for (s = 0; s < MAX_CLIENTS; s++)
 	{
 		G_ClearTrackedDuelRuntime(s);
@@ -15109,6 +15117,8 @@ void InitGameAccountStuff( void ) { //Called every mapload , move the create tab
 	}
 	memset(g_botTutorialQueues, 0, sizeof(g_botTutorialQueues));
 	memset(g_duelAdviceSessions, 0, sizeof(g_duelAdviceSessions));
+	if (!G_BeginLearningSession())
+		return;
 
 	//ok build DB file path from fs_game and fs_homepath
 	char fs_game[MAX_QPATH];

@@ -27,10 +27,12 @@ set(TestFiles
 	"bot_learning.cpp"
 	"duel_identity.cpp"
 	"duel_elo.cpp"
+	"duel_session.cpp"
 	"duel_capture.cpp"
 	"safe/string.cpp"
 	"safe/limited_vector.cpp"
 	"${SharedDir}/qcommon/safe/string.cpp"
+	"${CMAKE_SOURCE_DIR}/codemp/game/sqlite3.c"
 	)
 if(MSVC)
 	set(TestFiles
@@ -48,7 +50,10 @@ endif()
 find_package( Boost COMPONENTS unit_test_framework REQUIRED )
 
 set(TestTarget "UnitTests")
-set(TestLibraries "${Boost_UNIT_TEST_FRAMEWORK_LIBRARY}")
+set(TestLibraries "${Boost_UNIT_TEST_FRAMEWORK_LIBRARY}" ${CMAKE_DL_LIBS})
+if(WIN32)
+	list(APPEND TestLibraries "winmm")
+endif()
 set(TestIncludeDirectories
 	"${Boost_INCLUDE_DIRS}"
 	"${SharedDir}"
