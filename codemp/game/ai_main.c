@@ -14904,14 +14904,17 @@ static qboolean NewBotAI_ShouldEmergencyDrainRollSaberThrow(bot_state_t *bs)
 	float saberSpeed;
 	float timeToImpactMs;
 	qboolean isReturning;
-	const int ourHealth = g_entities[bs->client].health;
-	const int ourTotalHealth = ourHealth + bs->cur_ps.stats[STAT_ARMOR];
+	int ourHealth;
+	int ourTotalHealth;
 	qboolean canEmergencyDrainRoll;
 
-	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	if (!bs || bs->client < 0 || bs->client >= MAX_CLIENTS ||
+		!bs->currentEnemy || !bs->currentEnemy->client)
 	{
 		return qfalse;
 	}
+	ourHealth = g_entities[bs->client].health;
+	ourTotalHealth = ourHealth + bs->cur_ps.stats[STAT_ARMOR];
 	canEmergencyDrainRoll = (bs->currentEnemy->client->ps.saberInFlight &&
 		NewBotAI_IsEnemySaberThreatImminent(bs) &&
 		ourHealth < 25 &&
