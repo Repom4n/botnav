@@ -195,4 +195,9 @@ compile_commands.json
 #############
 [Bb]uild*/
 cmake-build-*
+/CMakeCache.txt
+/CMakeFiles/
+/CPackConfig.cmake
+/CPackSourceConfig.cmake
+/Testing/
 codemp/rd-vulkan/shaders/tools/compile_threaded.exe
