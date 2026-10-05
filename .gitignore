@@ -200,4 +200,5 @@ cmake-build-*
 /CPackConfig.cmake
 /CPackSourceConfig.cmake
 /Testing/
+/shared/qcommon/q_version.h
 codemp/rd-vulkan/shaders/tools/compile_threaded.exe
