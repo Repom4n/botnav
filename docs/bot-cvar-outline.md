@@ -123,9 +123,23 @@ During the temporary duel no-strafe gate, free selection boundaries deliberately
 | `bot_strafefrequency` | `0` | Percentage chance (0-100) per think tick to enter a random strafe. 0 = disabled. |
 | `bot_strafeduration` | `50` | Duration scale (0-100) for random strafes. 50 = 80-2500ms range. |
 | `bot_strafeOffset` | `0` | Legacy strafe offset. |
+| `bot_strafejumps` | `0` | Enables conservative forward-only strafe jumping on validated, open waypoint corridors. The controller may accelerate normal navigation or an already-nominated waypoint-routed retreat/pursuit. It is disabled by default. |
 | `bot_hopfrequency` | `0` | Scales how often the bot schedules its next hop while close to a saber enemy, covering both random ambient hops and non-emergency combat hops such as saber-throw counter jumps. The interval is only re-rolled once the bot lands from its previous hop, and is a random 0.5-8 second wait divided by this value as a percentage (100 = 0.5-8s; higher = longer/less frequent hops, lower = shorter/more frequent, 0 = disables discretionary hops). The wide range makes most hops occasional singles while an occasional short roll chains one hop straight into the next, keeping the bot unpredictable. |
 | `bot_waypointskip` | `2` | Max number of same-direction waypoints the linear navigation helper may look ahead to avoid immediate backtrack ping-pong when wandering without an active combat/objective target. |
 | `bot_redirectcooldown` | `800` | Cooldown (ms) after a wall-triggered redirect reaction. During this window the bot keeps the chosen redirect heading instead of immediately rerolling another wall reaction, reducing tight-space spin loops and repeated reaction hopping. |
+
+`bot_strafejumps` supports only the effective JKA/co-op-JKA physics selected by `PM_GetMovePhysics`; special/ramp/super-jump styles and force-speed/rage modifiers fall back to normal AI movement. Its conservative predictor uses live speed/gravity, the command's actual pmove slicing, JKA air acceleration, and the level 0-3 levitation launch adjustment made by the second `PM_CheckJump` call in the takeoff slice. It approximates future released-command air movement; it does not run pmove, inject velocity, or change shared physics. Close combat, attacks, deliberate use, force use/jumps, saber techniques/defense, flipkicks, knockdowns, rolls, mounted/water/use states, forced movement, special jumps, steep or moving launch surfaces, and map-required interaction/jump/duck waypoint segments retain priority. Opportunistic random-use presses are suppressed only while this controller owns the command. Airborne jump is released and each landing gets a release command before a fresh press.
+
+Arc validation performs bounded swept player-hull integration until a real static, walkable contact; unresolved falls are rejected rather than vertically probing for a floor. Walls, ceilings, dynamic blockers, lava, slime, no-drop/void areas, and instant-kill `trigger_hurt` volumes along the full arc reject the intent. Prediction is confined to the corridor leading to the current, not-yet-touched waypoint and cannot land past that route endpoint, so it does not advance waypoint corners, interactions, or goals. Selection and final command ownership both require the navigation system's effective queued movement to be aligned with that corridor. Retreat acceleration is therefore intentionally waypoint-routed only; direct non-waypoint escape remains ordinary AI movement.
+
+Live-map validation checklist:
+- Test long, level waypoint corridors at low and high accumulated speed and with variable server frame times.
+- Confirm jump is released during flight and for one command after landing; verify no force jump or flipkick occurs.
+- Place doors, movers, players, low ceilings, walls, ledges, lava/slime, death triggers, and voids along or below the predicted arc and confirm immediate abort.
+- Exercise navigation, retreat, and increasing-separation pursuit; confirm direct close combat and an enemy off the routed corridor never start a jump.
+- Toggle `bot_strafejumps` off during each phase and confirm ordinary movement/jumps resume without yaw or input ownership.
+
+Optional future work may use dedicated, opt-in strafe-jump demonstrations for tuning. Dueltrack CSV capture and runtime database logging are deliberately outside this feature.
 
 ## Gripkick Tuning
 
@@ -308,6 +322,7 @@ g_newBotAI (master switch)
   |
   +-- Movement
   |     +-- bot_strafefrequency / bot_strafeduration
+  |     +-- bot_strafejumps
   |     +-- bot_hopfrequency
   |     +-- bot_navigation
   |     +-- bot_waypointskip

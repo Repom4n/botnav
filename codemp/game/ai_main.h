@@ -25,6 +25,7 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
 
 #include "bg_saga.h"
 #include "ai_combat_tuning.h"
+#include "ai_strafejump.h"
 
 //#define FORCEJUMP_INSTANTMETHOD 1
 
@@ -531,6 +532,22 @@ typedef struct bot_state_s
 	qboolean			hopWasGrounded;   // groundEntityNum state as of the last hop-frequency update - used to detect a fresh landing (from a flipkick/knockdown/etc, not our own hop) so we re-roll instead of firing immediately
 	int					pullKickJumpTime; // level.time a scheduled pk/ptk flipkick jump should fire (0 = none pending)
 	int					wallAvoidNextTime; // gates repeat wall-avoidance jump/turn attempts so we don't spam them every think
+
+	bot_sfj_phase_t	sfjPhase;
+	bot_sfj_intent_t	sfjIntent;
+	vec3_t				sfjIntentDirection;
+	vec3_t				sfjIntentDestination;
+	int					sfjIntentTime;
+	int					sfjSafetyUntil;
+	int					sfjPhaseTime;
+	int					sfjCooldownUntil;
+	int					sfjStrafeSide;
+	qboolean			sfjOwnsInput;
+	qboolean			sfjLastRandomUse;
+	qboolean			sfjPursuitLatched;
+	float				sfjLastEnemyDistance;
+	int					sfjLastEnemyDistanceTime;
+	int					sfjLastEnemyTargetNum;
 
 	int					gripMistakeDelayUntil; // level.time until which bot_mistakebias holds us from correctly breaking an opponent's grip (see NewBotAI_GetGripEscapeDelayMs) - rolled once per grip session
 	qboolean			gripSpeedOffPressed; // alternates the force button while gripped with speed active so the speed-off toggle is spammed (press/release) instead of held
