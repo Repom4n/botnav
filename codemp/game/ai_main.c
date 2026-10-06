@@ -286,6 +286,7 @@ static qboolean NewBotAI_SaberThrowTrace(bot_state_t *bs, const vec3_t angles,
 	newbotai_throw_phase_t phase, vec3_t endpoint);
 static qboolean NewBotAI_UpdateSaberThrowPass(bot_state_t *bs, qboolean *headingToTarget);
 static qboolean NewBotAI_SaberThrowShouldHold(bot_state_t *bs, int heldMs, qboolean hardRecall);
+static void NewBotAI_RecordSaberThrowDecision(bot_state_t *bs, int heldMs, qboolean hold, const char *reason);
 static void NewBotAI_ConfigureSaberThrow(bot_state_t *bs);
 static void NewBotAI_TrySaberThrowDefenseBreak(bot_state_t *bs);
 static void NewBotAI_ApplyPullMistake(bot_state_t *bs);
@@ -15941,8 +15942,13 @@ static void NewBotAI_AdjustSaberThrowLead(bot_state_t *bs)
 		ps->saberEntityNum <= 0 || ps->saberEntityNum >= ENTITYNUM_WORLD)
 		return;
 	saber = &g_entities[ps->saberEntityNum];
+	if (bs->saberThrowStartTime <= 0)
+		bs->saberThrowStartTime = ps->saberDidThrowTime > 0 ? ps->saberDidThrowTime : level.time;
 	if (!saber->inuse || saber->think == saberBackToOwner)
 	{
+		if (bs->saberThrowPhase != NEWBOTAI_THROW_RECALL)
+			NewBotAI_RecordSaberThrowDecision(bs, level.time - bs->saberThrowStartTime, qfalse,
+				saber->inuse ? "return" : "target");
 		bs->saberThrowPhase = NEWBOTAI_THROW_RECALL;
 		return;
 	}
@@ -16018,6 +16024,7 @@ static void NewBotAI_AdjustSaberThrowLead(bot_state_t *bs)
 			return;
 		}
 	}
+	NewBotAI_RecordSaberThrowDecision(bs, level.time - bs->saberThrowStartTime, qfalse, "route");
 	bs->saberThrowPhase = NEWBOTAI_THROW_RECALL;
 }
 
@@ -16030,27 +16037,35 @@ static qboolean NewBotAI_SaberThrowShouldHold(bot_state_t *bs, int heldMs, qbool
 	playerState_t *enemy;
 	qboolean heading, passed;
 	int ourHealth, enemyHealth, safetyRecall, softRecall, learnedWeight = 0;
+	int drainlock, lethal, forceAllowed, returning, hold;
 	int safeLearnedContext;
 	float aggression;
+	const char *reason;
 
-	if (hardRecall || !bs->currentEnemy || !bs->currentEnemy->client ||
+	if (hardRecall || bs->saberThrowPhase == NEWBOTAI_THROW_RECALL ||
+		!bs->currentEnemy || !bs->currentEnemy->client ||
 		!bs->frame_Enemy_Vis || bs->currentEnemy->health <= 0 ||
 		ps->saberEntityNum <= 0 || ps->saberEntityNum >= ENTITYNUM_WORLD ||
 		!g_entities[ps->saberEntityNum].inuse)
+	{
+		if (bs->saberThrowPhase != NEWBOTAI_THROW_RECALL)
+			NewBotAI_RecordSaberThrowDecision(bs, heldMs, qfalse, "target");
 		return qfalse;
+	}
 	enemy = &bs->currentEnemy->client->ps;
 	ourHealth = g_entities[bs->client].health;
 	enemyHealth = bs->currentEnemy->health;
 	aggression = BotGetAggressionBias(bs);
-	safetyRecall = (g_forcePowerDisable.integer & (1 << FP_SABERTHROW)) ||
-		!(ps->fd.forcePowersKnown & (1 << FP_SABERTHROW)) ||
-		ps->fd.forcePowerLevel[FP_SABERTHROW] <= 0 ||
-		!NewBotAI_CanUseForcePowerNow(bs, FP_SABERTHROW) ||
-		g_entities[ps->saberEntityNum].think == saberBackToOwner ||
-		NewBotAI_ShouldSuppressDrainlockSaberThrow(bs) || NewBotAI_WouldThrowInviteDrainlock(bs) ||
-		NewBotAI_IsIncomingSaberThrowLethal(bs) || NewBotAI_IsLethalEnemySwingImminent(bs) ||
+	forceAllowed = !(g_forcePowerDisable.integer & (1 << FP_SABERTHROW)) &&
+		(ps->fd.forcePowersKnown & (1 << FP_SABERTHROW)) &&
+		ps->fd.forcePowerLevel[FP_SABERTHROW] > 0 &&
+		NewBotAI_CanUseForcePowerNow(bs, FP_SABERTHROW);
+	returning = g_entities[ps->saberEntityNum].think == saberBackToOwner;
+	drainlock = NewBotAI_ShouldSuppressDrainlockSaberThrow(bs) || NewBotAI_WouldThrowInviteDrainlock(bs);
+	lethal = NewBotAI_IsIncomingSaberThrowLethal(bs) || NewBotAI_IsLethalEnemySwingImminent(bs) ||
 		(ourHealth + ps->stats[STAT_ARMOR] <= NEWBOTAI_SABER_CRITICAL_TOTAL_HEALTH &&
 			enemyHealth > ourHealth);
+	safetyRecall = !forceAllowed || returning || drainlock || lethal;
 	softRecall = ourHealth < enemyHealth || aggression <= 0.0f ||
 		(enemyHealth > 30 && enemy->fd.forcePower >= ps->fd.forcePower + 50);
 	passed = NewBotAI_UpdateSaberThrowPass(bs, &heading);
@@ -16076,9 +16091,48 @@ static qboolean NewBotAI_SaberThrowShouldHold(bot_state_t *bs, int heldMs, qbool
 		}
 		learnedWeight = learnedBonus[bs->client];
 	}
-	return NewBotAI_SaberThrowWantsHold(ps->fd.forcePowerLevel[FP_SABERTHROW],
+	hold = NewBotAI_SaberThrowWantsHold(ps->fd.forcePowerLevel[FP_SABERTHROW],
 		(newbotai_throw_phase_t)bs->saberThrowPhase, heldMs, passed, heading,
-		safetyRecall, softRecall, learnedWeight, safeLearnedContext) ? qtrue : qfalse;
+		safetyRecall, softRecall, learnedWeight, safeLearnedContext);
+	if (!hold)
+		reason = !forceAllowed ? "force" : returning ? "return" : drainlock ? "drain" :
+			lethal ? "lethal" : NewBotAI_SaberThrowRecallDue(ps->fd.forcePowerLevel[FP_SABERTHROW],
+				heldMs, 0, 0, 1) ? "limit" : "soft";
+	else
+		reason = heldMs < NEWBOTAI_THROW_MIN_HOLD_MS ? "min" :
+			NewBotAI_SaberThrowRoutingHold(ps->fd.forcePowerLevel[FP_SABERTHROW],
+				(newbotai_throw_phase_t)bs->saberThrowPhase, heldMs) ? "lane" :
+			NewBotAI_SaberThrowHoldProtected(heldMs, passed, heading) ? "pass" :
+			softRecall ? "learn" : "press";
+	NewBotAI_RecordSaberThrowDecision(bs, heldMs, hold ? qtrue : qfalse, reason);
+	return hold ? qtrue : qfalse;
+}
+
+static void NewBotAI_RecordSaberThrowDecision(bot_state_t *bs, int heldMs, qboolean hold, const char *reason)
+{
+	static struct
+	{
+		int throwStart, enemy, at;
+		char note[32];
+	} recorded[MAX_CLIENTS];
+	char note[32];
+	qboolean heading;
+	const qboolean passed = NewBotAI_UpdateSaberThrowPass(bs, &heading);
+
+	Com_sprintf(note, sizeof(note), "st:%s:%s:p%i:x%i:h%i", hold ? "H" : "R", reason,
+		bs->saberThrowPhase, passed ? 1 : 0, heading ? 1 : 0);
+	if (!bs->currentEnemy || !bs->currentEnemy->client)
+		return;
+	if (!NewBotAI_SaberThrowDecisionSampleDue(
+		recorded[bs->client].throwStart == bs->saberThrowStartTime &&
+			recorded[bs->client].enemy == bs->currentEnemy->s.number,
+		!strcmp(recorded[bs->client].note, note), level.time - recorded[bs->client].at))
+		return;
+	recorded[bs->client].throwStart = bs->saberThrowStartTime;
+	recorded[bs->client].enemy = bs->currentEnemy->s.number;
+	recorded[bs->client].at = level.time;
+	Q_strncpyz(recorded[bs->client].note, note, sizeof(recorded[bs->client].note));
+	G_RecordTrackedDuelDecision(&g_entities[bs->client], bs->currentEnemy, heldMs, note);
 }
 
 static void NewBotAI_ApplySaberThrowInput(bot_state_t *bs, bot_input_t *bi)
@@ -16126,6 +16180,8 @@ static void NewBotAI_ApplySaberThrowInput(bot_state_t *bs, bot_input_t *bi)
 	if (wantsHold && ps->fd.forcePowerLevel[FP_SABERTHROW] >= 2)
 		hardRecall = !NewBotAI_SaberThrowTrace(bs, bi->viewangles,
 			(newbotai_throw_phase_t)bs->saberThrowPhase, endpoint);
+	if (wantsHold && hardRecall)
+		NewBotAI_RecordSaberThrowDecision(bs, level.time - bs->saberThrowStartTime, qfalse, "route");
 	if (wantsHold && !hardRecall)
 	{
 		bi->actionflags |= ACTION_ALT_ATTACK;

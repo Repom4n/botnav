@@ -1822,6 +1822,16 @@ BOOST_AUTO_TEST_CASE( saber_throw_detours_do_not_count_as_target_passes )
 	BOOST_CHECK( NewBotAI_SaberThrowMayMarkPass( NEWBOTAI_THROW_CUT_THROUGH, 800, 400, 400 ) );
 }
 
+BOOST_AUTO_TEST_CASE( saber_throw_hold_telemetry_records_transitions_and_bounded_samples )
+{
+	BOOST_CHECK( NewBotAI_SaberThrowDecisionSampleDue( 0, 1, 0 ) );
+	BOOST_CHECK( NewBotAI_SaberThrowDecisionSampleDue( 1, 0, 0 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowDecisionSampleDue( 1, 1, 0 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowDecisionSampleDue( 1, 1, 249 ) );
+	BOOST_CHECK( NewBotAI_SaberThrowDecisionSampleDue( 1, 1, 250 ) );
+	BOOST_CHECK( NewBotAI_SaberThrowDecisionSampleDue( 1, 1, -1 ) );
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 BOOST_AUTO_TEST_SUITE_END()

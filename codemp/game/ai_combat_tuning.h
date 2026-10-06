@@ -2091,6 +2091,11 @@ static inline int NewBotAI_SaberThrowLearnedHold(int heldMs, int learnedWeight, 
 		heldMs >= NEWBOTAI_THROW_MIN_HOLD_MS && heldMs < 900;
 }
 
+static inline int NewBotAI_SaberThrowDecisionSampleDue(int sameThrow, int sameNote, int elapsedMs)
+{
+	return !sameThrow || !sameNote || elapsedMs < 0 || elapsedMs >= 250;
+}
+
 static inline int NewBotAI_SaberThrowWantsHold(int throwLevel, newbotai_throw_phase_t phase,
 	int heldMs, int passedTarget, int headingToTarget, int safetyRecall, int softRecall,
 	int learnedWeight, int safeLearnedContext)

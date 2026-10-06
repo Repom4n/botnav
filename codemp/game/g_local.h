@@ -1892,6 +1892,7 @@ void G_TrackedPersistShutdown(void);
 void G_PerfWarn(const char *context, int elapsedMs);
 void G_TrackedDuelRecordDeath(gentity_t *self);
 void G_TrackedDuelRecordDamage(gentity_t *target, gentity_t *attacker, int amount, int mod);
+void G_RecordTrackedDuelDecision(gentity_t *self, gentity_t *enemy, int amount, const char *note);
 void G_ClearTrackedDuelIfMismatched(gentity_t *ent, gentity_t *opponent);
 void G_ClearTrackedDuelClientState(int clientNum);
 void G_StartTrackedArcadeCombat(gentity_t *ent);

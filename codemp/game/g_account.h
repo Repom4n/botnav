@@ -3,6 +3,38 @@
 
 #include "sqlite3.h"
 
+static inline int G_TrackedPersistRetryable(int status)
+{
+	const int primary = status & 0xff;
+	return primary == SQLITE_BUSY || primary == SQLITE_LOCKED;
+}
+
+static inline int G_BeginTrackedPersistTransaction(sqlite3 *db)
+{
+	if (!sqlite3_get_autocommit(db))
+		return SQLITE_BUSY;
+	return sqlite3_exec(db, "BEGIN IMMEDIATE", NULL, NULL, NULL);
+}
+
+static inline int G_FinishTrackedPersistTransaction(sqlite3 *db, int status,
+	int *stage, int *cursor, sqlite3_int64 *summaryId,
+	int savedStage, int savedCursor, sqlite3_int64 savedSummaryId)
+{
+	if (status == SQLITE_OK)
+		status = sqlite3_exec(db, "COMMIT", NULL, NULL, NULL);
+	if (status != SQLITE_OK)
+	{
+		const int rollback = sqlite3_get_autocommit(db) ? SQLITE_OK :
+			sqlite3_exec(db, "ROLLBACK", NULL, NULL, NULL);
+		*stage = savedStage;
+		*cursor = savedCursor;
+		*summaryId = savedSummaryId;
+		if (rollback != SQLITE_OK)
+			return SQLITE_ERROR;
+	}
+	return status;
+}
+
 static const char *const g_trackedDuelTableNames[] = {
 	"LocalDuelTrackSummary",
 	"LocalDuelTrackParticipant",

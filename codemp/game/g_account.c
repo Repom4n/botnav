@@ -481,8 +481,12 @@ static void G_QueueBotTutorialMessage(int botClientNum, int targetClientNum, con
 //The CALL_SQLITE macro only writes to stderr, which is invisible on a hosted dedicated
 //server. Duel tracking used to fail silently because of that, so route the tracking
 //failures through trap->Print where the operator can actually see them.
+static int g_trackedPersistRetryStatus;
 static void G_TrackedDBError(const char *context, sqlite3 *db, int status)
 {
+	//Finalizing another statement can overwrite SQLite's connection error code.
+	if (G_TrackedPersistRetryable(status))
+		g_trackedPersistRetryStatus = status;
 	trap->Print("Duel tracking: %s failed (%i: %s)\n",
 		context ? context : "sqlite operation", status,
 		db ? sqlite3_errmsg(db) : "no database handle");
@@ -2284,6 +2288,20 @@ int G_BotLearnDuelMode(gentity_t *self)
 	return g_trackedArcadeCombats[clientNum].active ? 2 : 3;
 }
 
+void G_RecordTrackedDuelDecision(gentity_t *self, gentity_t *enemy, int amount, const char *note)
+{
+	tracked_duel_runtime_t *runtime;
+	if (!self || !self->client || !(self->r.svFlags & SVF_BOT) ||
+		self->s.number < 0 || self->s.number >= MAX_CLIENTS)
+		return;
+	runtime = &g_trackedDuels[self->s.number];
+	if (!runtime->active || !enemy || !enemy->client || enemy->s.number != runtime->opponentClientNum)
+		return;
+	G_AddTrackedDuelEvent(runtime, DUEL_TRACK_EVENT_DECISION, level.time - runtime->duelStartTime,
+		amount, DUEL_TRACK_POWER_UNKNOWN, G_InferTrackedForceState(self, enemy),
+		G_GetTrackedRangeBucket(self, enemy), note, self, enemy);
+}
+
 void G_BotLearnDecision(gentity_t *self, gentity_t *enemy, int stimulus, int response,
 	int follow1, int learnedBonus)
 {
@@ -3694,7 +3712,13 @@ static qboolean G_UpdateTrackedAggregate(sqlite3 *db, tracked_duel_runtime_t *ru
 
 	matchup = G_GetTrackedMatchup(runtime->side, runtime->opponentSide);
 	sql = "INSERT OR IGNORE INTO LocalDuelTrackAggregate(participant_key, participant_kind, side, matchup, duels, wins, losses, total_force_spent, total_force_regen, low_force_deaths, grip_cripples, saber_throw_punishes, force_push, force_pull, force_grip, force_drain, force_rage, force_absorb, force_protect, force_heal, force_speed, force_seeing, force_unknown) VALUES (?, ?, ?, ?, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)";
-	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
+	s = sqlite3_prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL);
+	if (s != SQLITE_OK)
+	{
+		G_TrackedDBError("prepare LocalDuelTrackAggregate init", db, s);
+		sqlite3_finalize(stmt);
+		return qfalse;
+	}
 	CALL_SQLITE(bind_text(stmt, 1, runtime->identityKey, -1, SQLITE_STATIC));
 	CALL_SQLITE(bind_int(stmt, 2, runtime->identityKind));
 	CALL_SQLITE(bind_int(stmt, 3, runtime->side));
@@ -3710,7 +3734,14 @@ static qboolean G_UpdateTrackedAggregate(sqlite3 *db, tracked_duel_runtime_t *ru
 	CALL_SQLITE(finalize(stmt));
 
 	sql = "UPDATE LocalDuelTrackAggregate SET duels = duels + 1, wins = wins + ?, losses = losses + ?, total_force_spent = total_force_spent + ?, total_force_regen = total_force_regen + ?, low_force_deaths = low_force_deaths + ?, grip_cripples = grip_cripples + ?, saber_throw_punishes = saber_throw_punishes + ?, force_push = force_push + ?, force_pull = force_pull + ?, force_grip = force_grip + ?, force_drain = force_drain + ?, force_rage = force_rage + ?, force_absorb = force_absorb + ?, force_protect = force_protect + ?, force_heal = force_heal + ?, force_speed = force_speed + ?, force_seeing = force_seeing + ?, force_unknown = force_unknown + ? WHERE participant_key = ? AND participant_kind = ? AND side = ? AND matchup = ?";
-	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
+	stmt = NULL;
+	s = sqlite3_prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL);
+	if (s != SQLITE_OK)
+	{
+		G_TrackedDBError("prepare LocalDuelTrackAggregate update", db, s);
+		sqlite3_finalize(stmt);
+		return qfalse;
+	}
 	CALL_SQLITE(bind_int(stmt, 1, (won && !draw) ? 1 : 0));
 	CALL_SQLITE(bind_int(stmt, 2, (!won && !draw) ? 1 : 0));
 	CALL_SQLITE(bind_int(stmt, 3, runtime->totalForceSpent));
@@ -4183,7 +4214,7 @@ typedef struct
 	int endTimestamp;
 	int durationSeconds;
 	int finishedAt;
-	tracked_persist_stage_t stage;
+	int stage;
 	int eventCursor;
 	sqlite3_int64 summaryId;
 } tracked_persist_job_t;
@@ -4393,6 +4424,9 @@ static qboolean G_TrackedPersistStep(tracked_persist_job_t *job)
 {
 	sqlite3 *db = G_GetTrackedPersistDB();
 	qboolean ok = qtrue;
+	const int savedStage = job->stage;
+	const int savedCursor = job->eventCursor;
+	const sqlite3_int64 savedSummaryId = job->summaryId;
 	int s;
 
 	if (!db)
@@ -4400,11 +4434,12 @@ static qboolean G_TrackedPersistStep(tracked_persist_job_t *job)
 		G_TrackedPersistFinishJob(job, qfalse);
 		return qfalse;
 	}
-	s = sqlite3_exec(db, "BEGIN TRANSACTION", NULL, NULL, NULL);
+	g_trackedPersistRetryStatus = SQLITE_OK;
+	s = G_BeginTrackedPersistTransaction(db);
 	if (s != SQLITE_OK)
 	{
 		//Another connection holds the write lock - retry this step next frame.
-		if (s == SQLITE_BUSY || s == SQLITE_LOCKED)
+		if (G_TrackedPersistRetryable(s))
 			return qtrue;
 		G_TrackedDBError("begin LocalDuelTrack persist step", db, s);
 		G_TrackedPersistFinishJob(job, qfalse);
@@ -4457,17 +4492,18 @@ static qboolean G_TrackedPersistStep(tracked_persist_job_t *job)
 		break;
 	}
 
-	s = sqlite3_exec(db, ok ? "COMMIT" : "ROLLBACK", NULL, NULL, NULL);
+	s = ok ? SQLITE_OK : sqlite3_errcode(db);
+	if (g_trackedPersistRetryStatus != SQLITE_OK)
+		s = g_trackedPersistRetryStatus;
+	else if (!ok && s == SQLITE_OK)
+		s = SQLITE_ERROR;
+	s = G_FinishTrackedPersistTransaction(db, s, &job->stage, &job->eventCursor,
+		&job->summaryId, savedStage, savedCursor, savedSummaryId);
 	if (s != SQLITE_OK)
 	{
-		G_ErrorPrint(ok ? "ERROR: SQL Commit Failed (LocalDuelTrack persist)" :
-			"ERROR: SQL Rollback Failed (LocalDuelTrack persist)", s);
-		if (ok)
-			sqlite3_exec(db, "ROLLBACK", NULL, NULL, NULL);
-		ok = qfalse;
-	}
-	if (!ok)
-	{
+		if (G_TrackedPersistRetryable(s))
+			return qtrue;
+		G_TrackedDBError("LocalDuelTrack persist transaction", db, s);
 		G_TrackedPersistDiscardPartial(db, job);
 		G_TrackedPersistFinishJob(job, qfalse);
 		return qfalse;
