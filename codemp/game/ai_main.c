@@ -269,6 +269,7 @@ static void NewBotAI_FaceEntityImmediately(bot_state_t *bs, gentity_t *target);
 static qboolean NewBotAI_HasSafeSaberThrowClearance(bot_state_t *bs);
 static qboolean NewBotAI_IsEnemyReadyToBlockFreshSaberThrow(bot_state_t *bs);
 static gentity_t *NewBotAI_GetPendingDuelChallenger(bot_state_t *bs, int targetMode, int *duelTypeOut);
+static qboolean NewBotAI_IsUnavailableDuelBot(bot_state_t *bs, gentity_t *ent, int targetMode);
 
 #define NEWBOTAI_DRAIN_TICK_MSEC 100
 #define NEWBOTAI_COMBAT_DISENGAGE_COOLDOWN_MS 2500
@@ -13478,9 +13479,12 @@ static qboolean BotTargetModeAllowsBotDuelChallenges(int targetMode)
 		targetMode == NEWBOTAI_TARGET_PREFER_HUMANS_DUEL);
 }
 
+//The long bot-vs-bot cooldown only exists to keep bots available for humans; with no
+//humans around, bots go back to the normal cooldown so force-duel Elo keeps building.
 static qboolean BotTargetModeUsesExtendedBotDuelCooldown(int targetMode)
 {
-	return BotTargetModeAllowsBotDuelChallenges(targetMode);
+	return (BotTargetModeAllowsBotDuelChallenges(targetMode) &&
+		BotHasActiveHumanPlayers()) ? qtrue : qfalse;
 }
 
 static qboolean BotTargetModeIsForceDuelOnly(int targetMode)
@@ -13563,6 +13567,13 @@ static qboolean NewBotAI_InFFAExploreWindow(bot_state_t *bs, int targetMode)
 #define NEWBOTAI_DUEL_REQUEST_COOLDOWN_MS 7000
 #define NEWBOTAI_DUEL_REQUEST_BOT_VS_BOT_COOLDOWN_MS 120000
 #define NEWBOTAI_DUEL_REQUEST_MIN_INTERVAL_MS 1000
+#define NEWBOTAI_DUEL_OFFER_HOLD_MS 3000
+#define NEWBOTAI_DUEL_OFFER_HOLD_DAMAGE_CANCEL 30
+#define NEWBOTAI_DUEL_ACCEPT_RANGE 224.0f
+#define NEWBOTAI_DUEL_STALEMATE_MS 4000
+#define NEWBOTAI_DUEL_STALEMATE_RADIUS 320.0f
+#define NEWBOTAI_DUEL_STALEMATE_BLACKLIST_MS 20000
+#define NEWBOTAI_DUEL_STALEMATE_ROAM_MS 6000
 
 static qboolean NewBotAI_ShouldIssueBotDuelChallenge(bot_state_t *bs, int targetMode)
 {
@@ -13615,9 +13626,14 @@ static qboolean NewBotAI_TryIssueBotDuelChallenge(bot_state_t *bs, int targetMod
 	VectorCopy(toEnemy, g_entities[bs->client].client->ps.viewangles);
 	VectorCopy(toEnemy, bs->ideal_viewangles);
 
-	// NewBotAI target modes -3 and -4 only offer full-force duels. In
-	// particular, never randomly issue a saber duel from these modes.
+	// Bot-vs-bot offers in -3/-4 are always full-force duels so the force Elo keeps
+	// building. Offers to humans use the last duel type a human offered this bot
+	// (saber or force), defaulting to force.
 	duelType = 1;
+	if (!(bs->currentEnemy->r.svFlags & SVF_BOT) && bs->humanDuelTypePref == 1)
+	{
+		duelType = 0;
+	}
 	Cmd_EngageDuel_f(&g_entities[bs->client], duelType);
 
 	VectorCopy(oldViewAngles, g_entities[bs->client].client->ps.viewangles);
@@ -13632,6 +13648,10 @@ static qboolean NewBotAI_TryIssueBotDuelChallenge(bot_state_t *bs, int targetMod
 	bs->beStill = level.time + 250;
 	bs->doAttack = 0;
 	bs->doAltAttack = 0;
+	//Stay passive and targetable for a few seconds so the offer can be accepted.
+	bs->duelOfferHoldUntil = level.time + NEWBOTAI_DUEL_OFFER_HOLD_MS;
+	bs->duelOfferTargetNum = bs->currentEnemy->s.number;
+	bs->duelOfferHoldHealth = g_entities[bs->client].health;
 	return qtrue;
 }
 
@@ -19795,6 +19815,11 @@ int NewBotAI_ScanForEnemies(bot_state_t* bs) {
 					continue;
 				}
 
+				if (NewBotAI_IsUnavailableDuelBot(bs, ent, targetMode))
+				{
+					continue;
+				}
+
 				if (ent->client->ps.fd.forceGripEntityNum == bs->cur_ps.clientNum) { //always aim at whos gripping us
 					return i;
 				}
@@ -19881,18 +19906,24 @@ int NewBotAI_ScanForEnemies(bot_state_t* bs) {
 
 #define _ADVANCEDBOTSHIT 1
 
+//Returns a client currently challenging this bot. Human challenges win over bot
+//challenges and use the engine's full acceptance window (the challenger's duelTime
+//plus 2s, see Cmd_EngageDuel_f); they also ignore the request throttle and the FFA
+//explore window so a human offer is never missed. Bot challenges in -3/-4 must be
+//force duels.
 static gentity_t *NewBotAI_GetPendingDuelChallenger(bot_state_t *bs, int targetMode, int *duelTypeOut)
 {
+	gentity_t *botChallenger = NULL;
+	int botChallengerType = -1;
+	qboolean botGated;
 	int i;
 
 	if (duelTypeOut)
 		*duelTypeOut = -1;
 	if (!bot_honorableduelacceptance.integer || !g_privateDuel.integer || !bs || bs->cur_ps.duelInProgress)
 		return NULL;
-	if (bs->botDuelRequestThrottleUntil > level.time)
-		return NULL;
-	if (NewBotAI_InFFAExploreWindow(bs, targetMode))
-		return NULL;
+	botGated = (bs->botDuelRequestThrottleUntil > level.time ||
+		NewBotAI_InFFAExploreWindow(bs, targetMode)) ? qtrue : qfalse;
 
 	for (i = 0; i < MAX_CLIENTS; i++)
 	{
@@ -19902,21 +19933,98 @@ static gentity_t *NewBotAI_GetPendingDuelChallenger(bot_state_t *bs, int targetM
 
 		if (!challenger->inuse || !challenger->client || i == bs->client)
 			continue;
-		if (challenger->health < 1 || challenger->client->ps.duelIndex != bs->client || challenger->client->ps.duelTime <= level.time)
+		if (challenger->health < 1 || challenger->client->ps.duelInProgress ||
+			challenger->client->ps.duelIndex != bs->client ||
+			challenger->client->ps.duelTime <= 0 ||
+			challenger->client->ps.duelTime + 2000 < level.time)
 			continue;
 
 		duelType = dueltypes[challenger->client->ps.clientNum];
-		if (challengerIsBot && !BotTargetModeAllowsBotDuelChallenges(targetMode))
+		if (!challengerIsBot)
+		{
+			if (duelTypeOut)
+				*duelTypeOut = duelType;
+			return challenger;
+		}
+		if (botGated || botChallenger || challenger->client->ps.duelTime <= level.time)
 			continue;
-		if (challengerIsBot && BotTargetModeIsForceDuelOnly(targetMode) && duelType != 1)
+		if (!BotTargetModeAllowsBotDuelChallenges(targetMode))
 			continue;
-
-		if (duelTypeOut)
-			*duelTypeOut = duelType;
-		return challenger;
+		if (duelType != 1)
+			continue;
+		botChallenger = challenger;
+		botChallengerType = duelType;
 	}
 
-	return NULL;
+	if (botChallenger && duelTypeOut)
+		*duelTypeOut = botChallengerType;
+	return botChallenger;
+}
+
+static void NewBotAI_RememberHumanDuelType(bot_state_t *bs, gentity_t *challenger, int duelType)
+{
+	if (!bs || !challenger || (challenger->r.svFlags & SVF_BOT))
+		return;
+	if (duelType == 0)
+		bs->humanDuelTypePref = 1;
+	else if (duelType == 1)
+		bs->humanDuelTypePref = 2;
+}
+
+//Accepts (or walks into range to accept) a pending duel challenge. Returns qtrue when
+//the bot spent this think on the challenge.
+static qboolean NewBotAI_AcceptDuelFrom(bot_state_t *bs, gentity_t *challenger, int duelType)
+{
+	gentity_t *self;
+	const qboolean human = (challenger && !(challenger->r.svFlags & SVF_BOT)) ? qtrue : qfalse;
+	vec3_t toChallenger;
+
+	if (!bs || !challenger || !challenger->client)
+		return qfalse;
+	self = &g_entities[bs->client];
+	NewBotAI_RememberHumanDuelType(bs, challenger, duelType);
+
+	bs->currentEnemy = challenger;
+	bs->doAttack = 0;
+	bs->doAltAttack = 0;
+	bs->duelOfferHoldUntil = 0;
+	NewBotAI_FaceEntityImmediately(bs, challenger);
+	if (duelType <= 1 && bs->cur_ps.weapon == WP_SABER && bs->cur_ps.saberHolstered)
+	{
+		if (!bs->cur_ps.saberInFlight && self->client->ps.weaponTime < 1)
+		{
+			Cmd_ToggleSaber_f(self);
+			if (!human)
+				bs->botDuelRequestThrottleUntil = level.time + NEWBOTAI_DUEL_REQUEST_MIN_INTERVAL_MS;
+			bs->duelNoStrafeUntil = level.time + Com_Clampi(0, 10000, bot_duel_nostrafetime.integer);
+			bs->beStill = level.time + (human ? 200 : 2500);
+		}
+		return human;
+	}
+
+	//Cmd_EngageDuel_f traces 256 units along the view: walk into range first.
+	VectorSubtract(challenger->client->ps.origin, self->client->ps.origin, toChallenger);
+	if (VectorLength(toChallenger) > NEWBOTAI_DUEL_ACCEPT_RANGE ||
+		!OrgVisible(bs->eye, challenger->client->ps.origin, bs->client))
+	{
+		if (!human)
+			return qfalse;
+		trap->EA_MoveForward(bs->client);
+		return qtrue;
+	}
+
+	//Our own pending offer blocks Cmd_EngageDuel_f; a human's offer takes priority.
+	if (human && self->client->ps.duelTime >= level.time)
+		self->client->ps.duelTime = 0;
+
+	Cmd_EngageDuel_f(self, duelType);
+
+	if (!human)
+		bs->timeToReact = level.time + BotGetReflexScaledResponseDelayMs(bs);
+	bs->botDuelRequestThrottleUntil = level.time + NEWBOTAI_DUEL_REQUEST_MIN_INTERVAL_MS;
+	bs->duelNoStrafeUntil = level.time + Com_Clampi(0, 10000, bot_duel_nostrafetime.integer);
+	bs->beStill = level.time + (human ? 500 : 2500);
+	return qtrue;
 }
 
 static qboolean BotTryAcceptAnyDuelChallenge(bot_state_t *bs, int targetMode)
@@ -19928,6 +20036,10 @@ static qboolean BotTryAcceptAnyDuelChallenge(bot_state_t *bs, int targetMode)
 	if (!challenger)
 	{
 		return qfalse;
+	}
+	if (!(challenger->r.svFlags & SVF_BOT))
+	{
+		return NewBotAI_AcceptDuelFrom(bs, challenger, duelType);
 	}
 
 	bs->currentEnemy = challenger;
@@ -19952,6 +20064,124 @@ static qboolean BotTryAcceptAnyDuelChallenge(bot_state_t *bs, int targetMode)
 	bs->duelNoStrafeUntil = level.time + Com_Clampi(0, 10000, bot_duel_nostrafetime.integer);
 	bs->beStill = level.time + 2500;
 	return qtrue;
+}
+
+//After issuing a duel offer, stay passive (still, facing the target, no attacks) for
+//NEWBOTAI_DUEL_OFFER_HOLD_MS so the target can accept. Draining is still allowed when
+//recently hurt or low on health. Returns qtrue while the hold owns this think.
+static qboolean NewBotAI_RunDuelOfferHold(bot_state_t *bs)
+{
+	gentity_t *self;
+	gentity_t *target;
+
+	if (!bs || bs->duelOfferHoldUntil <= level.time)
+		return qfalse;
+	self = &g_entities[bs->client];
+	target = (bs->duelOfferTargetNum >= 0 && bs->duelOfferTargetNum < MAX_CLIENTS) ?
+		&g_entities[bs->duelOfferTargetNum] : NULL;
+	if (bs->cur_ps.duelInProgress || !target || !target->inuse || !target->client ||
+		target->health < 1 || target->client->ps.duelInProgress ||
+		self->health <= bs->duelOfferHoldHealth - NEWBOTAI_DUEL_OFFER_HOLD_DAMAGE_CANCEL)
+	{
+		bs->duelOfferHoldUntil = 0;
+		return qfalse;
+	}
+
+	bs->currentEnemy = target;
+	bs->doAttack = 0;
+	bs->doAltAttack = 0;
+	bs->beStill = level.time + 100;
+	NewBotAI_FaceEntityImmediately(bs, target);
+	if ((bs->lastHurtTime > level.time - 1000 || self->health < 40) &&
+		bot_forcepowers.integer &&
+		!(g_forcePowerDisable.integer & (1 << FP_DRAIN)) &&
+		(bs->cur_ps.fd.forcePowersKnown & (1 << FP_DRAIN)))
+	{
+		level.clients[bs->client].ps.fd.forcePowerSelected = FP_DRAIN;
+		trap->EA_ForcePower(bs->client);
+	}
+	return qtrue;
+}
+
+static qboolean NewBotAI_BotCanChallengeNow(bot_state_t *bs, int targetMode)
+{
+	return (bs && bs->botChallengingTime <= level.time &&
+		!NewBotAI_InFFAExploreWindow(bs, targetMode)) ? qtrue : qfalse;
+}
+
+//-4 scan filter: skip a bot that neither of us can currently challenge, so arriving
+//bots look for a free partner instead of joining a pile of idle bots.
+static qboolean NewBotAI_IsUnavailableDuelBot(bot_state_t *bs, gentity_t *ent, int targetMode)
+{
+	bot_state_t *otherBS;
+
+	if (!BotTargetModeIsForceDuelOnly(targetMode) || !ent || !ent->client ||
+		!(ent->r.svFlags & SVF_BOT) || ent->s.number < 0 || ent->s.number >= MAX_CLIENTS)
+		return qfalse;
+	if (ent->client->ps.duelInProgress)
+		return qtrue;
+	otherBS = botstates[ent->s.number];
+	if (!otherBS)
+		return qfalse;
+	if (otherBS->duelBlacklistUntil > level.time && otherBS->duelBlacklistIndex == bs->client)
+		return qtrue;
+	return (!NewBotAI_BotCanChallengeNow(bs, targetMode) &&
+		!NewBotAI_BotCanChallengeNow(otherBS, targetMode)) ? qtrue : qfalse;
+}
+
+//-4 stalemate watchdog: two bots idling next to each other without a duel or offer
+//for NEWBOTAI_DUEL_STALEMATE_MS blacklist each other and roam apart.
+static void NewBotAI_UpdateDuelStalemate(bot_state_t *bs, int targetMode)
+{
+	gentity_t *enemy = bs->currentEnemy;
+	bot_state_t *otherBS;
+	qboolean pending;
+
+	if (!BotTargetModeIsForceDuelOnly(targetMode) || bs->cur_ps.duelInProgress ||
+		!enemy || !enemy->client || !(enemy->r.svFlags & SVF_BOT) ||
+		bs->frame_Enemy_Len > NEWBOTAI_DUEL_STALEMATE_RADIUS ||
+		enemy->s.number < 0 || enemy->s.number >= MAX_CLIENTS)
+	{
+		bs->duelStalemateOtherNum = -1;
+		bs->duelStalemateSince = 0;
+		return;
+	}
+	pending = ((g_entities[bs->client].client->ps.duelIndex == enemy->s.number &&
+			g_entities[bs->client].client->ps.duelTime + 2000 >= level.time) ||
+		(enemy->client->ps.duelIndex == bs->client &&
+			enemy->client->ps.duelTime + 2000 >= level.time)) ? qtrue : qfalse;
+	if (pending || bs->duelStalemateOtherNum != enemy->s.number || bs->duelStalemateSince <= 0 ||
+		bs->duelStalemateSince > level.time)
+	{
+		bs->duelStalemateOtherNum = enemy->s.number;
+		bs->duelStalemateSince = level.time;
+		return;
+	}
+	if (level.time - bs->duelStalemateSince < NEWBOTAI_DUEL_STALEMATE_MS)
+		return;
+
+	otherBS = botstates[enemy->s.number];
+	bs->duelBlacklistIndex = enemy->s.number;
+	bs->duelBlacklistUntil = level.time + NEWBOTAI_DUEL_STALEMATE_BLACKLIST_MS;
+	bs->duelRoamUntil = level.time + NEWBOTAI_DUEL_STALEMATE_ROAM_MS;
+	bs->duelStalemateOtherNum = -1;
+	bs->duelStalemateSince = 0;
+	NewBotAI_ClearCurrentEnemyLock(bs);
+	if (otherBS)
+	{
+		otherBS->duelBlacklistIndex = bs->client;
+		otherBS->duelBlacklistUntil = bs->duelBlacklistUntil;
+		otherBS->duelRoamUntil = bs->duelRoamUntil;
+		otherBS->duelStalemateOtherNum = -1;
+		otherBS->duelStalemateSince = 0;
+		if (otherBS->currentEnemy == &g_entities[bs->client])
+			NewBotAI_ClearCurrentEnemyLock(otherBS);
+	}
+	if (bot_learning_debug.integer)
+	{
+		Com_Printf("^3[duel]^7 %s and %s stalemated; roaming apart\n",
+			g_entities[bs->client].client->pers.netname, enemy->client->pers.netname);
+	}
 }
 
 static void NewBotAI_RunForceDuelOnly(bot_state_t *bs)
@@ -20410,6 +20640,18 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	}
 	pendingDuelChallenger = NewBotAI_GetPendingDuelChallenger(bs, targetMode, &pendingDuelType);
 
+	//Human duel offers are accepted right away, ahead of the reaction delay and any
+	//pending offer of our own.
+	if (pendingDuelChallenger && !(pendingDuelChallenger->r.svFlags & SVF_BOT) &&
+		NewBotAI_AcceptDuelFrom(bs, pendingDuelChallenger, pendingDuelType))
+	{
+		return;
+	}
+	if (NewBotAI_RunDuelOfferHold(bs))
+	{
+		return;
+	}
+
 	responseDelay = BotGetReflexScaledResponseDelayMs(bs);
 	if (responseDelay > 0 && bs->currentEnemy && bs->currentEnemy->client)
 	{
@@ -20454,6 +20696,23 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	}
 	if (BotTargetModeIsForceDuelOnly(targetMode) && !bs->cur_ps.duelInProgress)
 	{
+		//Exploring for a new partner, or breaking up a stalemate: roam instead of
+		//walking up to the current target and idling in front of it.
+		if (NewBotAI_InFFAExploreWindow(bs, targetMode) || bs->duelRoamUntil > level.time)
+		{
+			bs->doAttack = 0;
+			bs->doAltAttack = 0;
+			NewBotAI_RunNavigationOrAlone(bs, thinktime);
+			return;
+		}
+		NewBotAI_UpdateDuelStalemate(bs, targetMode);
+		if (bs->duelRoamUntil > level.time)
+		{
+			bs->doAttack = 0;
+			bs->doAltAttack = 0;
+			NewBotAI_RunNavigationOrAlone(bs, thinktime);
+			return;
+		}
 		NewBotAI_RunForceDuelOnly(bs);
 		return;
 	}
