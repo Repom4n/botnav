@@ -2525,55 +2525,103 @@ static void BotSFJ_Abort(bot_state_t *bs, int time)
 	bs->sfjCorridorForwardGoal = qfalse;
 }
 
-static qboolean BotSFJ_HasInputConflict(bot_state_t *bs, playerState_t *ps,
-	const bot_input_t *bi)
+#define BOT_SFJ_HARD(text) do { *reason = (text); return BOT_SFJ_CONFLICT_HARD; } while (0)
+#define BOT_SFJ_SOFT(text) do { *reason = (text); return BOT_SFJ_CONFLICT_SOFT; } while (0)
+
+/*
+ * Classify why the bot cannot strafe jump this frame. Hard conflicts always
+ * abort; soft conflicts only block initiation (see BotSFJ_ConflictBlocks).
+ * Hard checks run first so the reported reason is the most severe one.
+ */
+static bot_sfj_conflict_t BotSFJ_GetInputConflict(bot_state_t *bs, playerState_t *ps,
+	const bot_input_t *bi, const char **reason)
 {
 	const int forceMovementPowers = (1 << FP_GRIP) | (1 << FP_DRAIN) |
 		(1 << FP_LIGHTNING) | (1 << FP_SPEED) | (1 << FP_RAGE);
-	const int blockedActions = ACTION_ATTACK | ACTION_ALT_ATTACK | ACTION_FORCEPOWER |
-		ACTION_USE | ACTION_CROUCH | ACTION_JUMP | ACTION_DELAYEDJUMP |
-		ACTION_WALK | ACTION_SKI;
+	const int hardActions = ACTION_FORCEPOWER | ACTION_SKI;
+	const int softActions = ACTION_ATTACK | ACTION_ALT_ATTACK | ACTION_CROUCH |
+		ACTION_JUMP | ACTION_DELAYEDJUMP | ACTION_WALK;
+	const char *unused;
+	gclient_t *client;
 
-	if (!bs || !ps || !bi || g_entities[bs->client].health <= 0 ||
-		ps->pm_type != PM_NORMAL || ps->m_iVehicleNum ||
-		g_entities[bs->client].waterlevel > 0 ||
-		!BotSFJ_SupportedMovementStyle(ps) ||
-		fabsf(ps->speed - ps->basespeed) > 0.5f ||
-		ps->forceHandExtend != HANDEXTEND_NONE ||
-		(ps->fd.forcePowersActive & forceMovementPowers) ||
-		((ps->fd.forcePowersActive & (1 << FP_LEVITATION)) &&
-			bs->sfjPhase == BOT_SFJ_PHASE_OFF) ||
-		ps->fd.forceRageRecoveryTime > level.time || ps->fd.forceGripCripple ||
-		ps->fd.forceJumpCharge > 0 || ps->forceJumpFlip ||
-		ps->fd.forcePowerLevel[FP_LEVITATION] < FORCE_LEVEL_0 ||
+	if (!reason)
+		reason = &unused;
+	*reason = NULL;
+	if (!bs || !ps || !bi)
+		BOT_SFJ_HARD("missing state");
+	client = g_entities[bs->client].client;
+	if (!client || g_entities[bs->client].health <= 0)
+		BOT_SFJ_HARD("dead");
+	if (ps->pm_type != PM_NORMAL || ps->m_iVehicleNum)
+		BOT_SFJ_HARD("not in normal movement (pm_type/vehicle)");
+	if (g_entities[bs->client].waterlevel > 0)
+		BOT_SFJ_HARD("in water");
+	if (!BotSFJ_SupportedMovementStyle(ps))
+		BOT_SFJ_HARD("unsupported movement style");
+	/* ps->speed is post-pmove (backpedal/saber scaling); test the real causes. */
+	if (ps->basespeed <= 0 || client->bodyGrabIndex != ENTITYNUM_NONE)
+		BOT_SFJ_HARD("base speed modified (zero or dragging body)");
+	if (ps->forceHandExtend != HANDEXTEND_NONE)
+		BOT_SFJ_HARD("force hand extend (push/pull/throw/knockdown)");
+	if ((ps->fd.forcePowersActive & forceMovementPowers) ||
+		ps->fd.forceRageRecoveryTime > level.time || ps->fd.forceGripCripple)
+		BOT_SFJ_HARD("force power active (grip/drain/lightning/speed/rage)");
+	if ((ps->fd.forcePowersActive & (1 << FP_LEVITATION)) &&
+		bs->sfjPhase == BOT_SFJ_PHASE_OFF)
+		BOT_SFJ_HARD("levitation already active");
+	if (ps->fd.forceJumpCharge > 0 || ps->forceJumpFlip || bs->forceJumping > level.time)
+		BOT_SFJ_HARD("force jump charge/flip");
+	if (ps->fd.forcePowerLevel[FP_LEVITATION] < FORCE_LEVEL_0 ||
 		ps->fd.forcePowerLevel[FP_LEVITATION] > FORCE_LEVEL_3 ||
-		(ps->stats[STAT_RESTRICTIONS] & JAPRO_RESTRICT_SUPERJUMP) ||
-		(ps->pm_flags & (PMF_TIME_WATERJUMP | PMF_STUCK_TO_WALL | PMF_RESPAWNED)) ||
-		BG_InKnockDown(ps->legsAnim) || BG_InRoll(ps, ps->legsAnim) ||
-		BG_InSpecialJump(ps->legsAnim) || BG_InReboundJump(ps->legsAnim) ||
-		BG_SaberInSpecialAttack(ps->legsAnim) || BG_SaberInSpecialAttack(ps->torsoAnim) ||
-		BG_SaberInSpecial(ps->saberMove) || ps->saberLockTime > level.time ||
-		ps->weaponTime > 0 || bs->state_Forced ||
-		bs->forceMove_Forward || bs->forceMove_Right || bs->forceMove_Up ||
-		bs->forceJumping > level.time || bs->jumpTime > level.time ||
-		bs->jumpHoldTime > level.time || bs->jumpPrep > level.time ||
-		(bs->sfjPhase == BOT_SFJ_PHASE_OFF &&
-			((ps->pm_flags & PMF_JUMP_HELD) || bs->lastucmd.upmove > 0)) ||
-		bs->pullKickJumpTime > 0 || bs->flipkickInputTime > level.time ||
-		bs->gripkickActive || bs->saberDefenseActive ||
-		bs->escapeYawOverrideUntil > level.time ||
-		bs->beStill >= level.time || WaitingForNow(bs, bs->goalPosition) ||
-		bs->isCamping > level.time || bs->wpCamping ||
-		NewBotAI_HasExclusiveFlipkickMovement(bs) ||
-		(bi->actionflags & blockedActions) || fabsf(bi->dir[2]) > 0.001f ||
-		BotSFJ_UseIsConflict(bi->actionflags & ACTION_USE,
-			g_entities[bs->client].client->pers.cmd.buttons & BUTTON_USE,
-			bs->sfjLastRandomUse))
-	{
-		return qtrue;
-	}
-	return qfalse;
+		(ps->stats[STAT_RESTRICTIONS] & JAPRO_RESTRICT_SUPERJUMP))
+		BOT_SFJ_HARD("jump level restricted");
+	if (ps->pm_flags & (PMF_TIME_WATERJUMP | PMF_STUCK_TO_WALL | PMF_RESPAWNED))
+		BOT_SFJ_HARD("waterjump/wall-stuck/respawn flags");
+	if (BG_InKnockDown(ps->legsAnim) || BG_InRoll(ps, ps->legsAnim))
+		BOT_SFJ_HARD("knockdown or roll");
+	if (BG_InSpecialJump(ps->legsAnim) || BG_InReboundJump(ps->legsAnim))
+		BOT_SFJ_HARD("special/rebound jump anim");
+	if (ps->saberLockTime > level.time)
+		BOT_SFJ_HARD("saber lock");
+	if (bs->state_Forced || bs->forceMove_Forward || bs->forceMove_Right ||
+		bs->forceMove_Up)
+		BOT_SFJ_HARD("forced movement state");
+	if (bs->pullKickJumpTime > 0 || bs->flipkickInputTime > level.time ||
+		bs->gripkickActive || NewBotAI_HasExclusiveFlipkickMovement(bs))
+		BOT_SFJ_HARD("kick technique owns movement");
+	if (bs->escapeYawOverrideUntil > level.time)
+		BOT_SFJ_HARD("escape yaw override");
+	if (bs->beStill >= level.time || WaitingForNow(bs, bs->goalPosition) ||
+		bs->isCamping > level.time || bs->wpCamping)
+		BOT_SFJ_HARD("holding position (beStill/waiting/camping)");
+	if (bi->actionflags & hardActions)
+		BOT_SFJ_HARD("queued force power or ski");
+	if (BotSFJ_UseIsConflict(bi->actionflags & ACTION_USE,
+		client->pers.cmd.buttons & BUTTON_USE, bs->sfjLastRandomUse))
+		BOT_SFJ_HARD("queued use");
+
+	if (bi->actionflags & (ACTION_ATTACK | ACTION_ALT_ATTACK))
+		BOT_SFJ_SOFT("queued attack");
+	if (bi->actionflags & (softActions & ~(ACTION_ATTACK | ACTION_ALT_ATTACK)))
+		BOT_SFJ_SOFT("queued jump/crouch/walk");
+	if (ps->weaponTime > 0)
+		BOT_SFJ_SOFT("weaponTime active");
+	if (BG_SaberInSpecialAttack(ps->legsAnim) || BG_SaberInSpecialAttack(ps->torsoAnim) ||
+		BG_SaberInSpecial(ps->saberMove))
+		BOT_SFJ_SOFT("saber special anim");
+	if (bs->saberDefenseActive)
+		BOT_SFJ_SOFT("saber defense active");
+	if (bs->jumpTime > level.time || bs->jumpHoldTime > level.time ||
+		bs->jumpPrep > level.time)
+		BOT_SFJ_SOFT("navigation jump timer");
+	if (bs->sfjPhase == BOT_SFJ_PHASE_OFF &&
+		((ps->pm_flags & PMF_JUMP_HELD) || bs->lastucmd.upmove > 0))
+		BOT_SFJ_SOFT("jump still held");
+	return BOT_SFJ_CONFLICT_NONE;
 }
+
+#undef BOT_SFJ_HARD
+#undef BOT_SFJ_SOFT
 
 #define BOT_SFJ_CORRIDOR_LOOKAHEAD 1024.0f
 #define BOT_SFJ_CORRIDOR_STEER_DISTANCE 512.0f
@@ -3436,6 +3484,8 @@ static void BotSFJ_SelectIntent(bot_state_t *bs)
 	qboolean retreating;
 	qboolean haveRoute;
 	qboolean airborneJump;
+	bot_sfj_conflict_t conflict;
+	const char *conflictReason = NULL;
 	int commandMsec;
 	int sliceMsec;
 	int fallbackMsec;
@@ -3451,9 +3501,10 @@ static void BotSFJ_SelectIntent(bot_state_t *bs)
 	ps = &g_entities[bs->client].client->ps;
 	BotSFJ_UpdatePursuit(bs);
 	trap->EA_GetInput(bs->client, (float)level.time / 1000.0f, &queued);
-	if (BotSFJ_HasInputConflict(bs, ps, &queued))
+	conflict = BotSFJ_GetInputConflict(bs, ps, &queued, &conflictReason);
+	if (BotSFJ_ConflictBlocks(conflict, bs->sfjPhase))
 	{
-		BotSFJ_Reject(bs, "input/state conflict (attacking, force power, special move, etc)");
+		BotSFJ_Reject(bs, va("input/state conflict: %s", conflictReason));
 		return;
 	}
 	if (!BotSFJ_EffectiveInputDirection(&queued, effectiveDirection))
@@ -3597,8 +3648,11 @@ static void BotSFJ_SelectIntent(bot_state_t *bs)
 static void BotSFJ_ApplyInput(bot_state_t *bs, bot_input_t *bi, int time, int elapsedTime)
 {
 	bot_input_t candidate;
+	bot_input_t masked;
 	playerState_t *ps;
 	bot_sfj_phase_t nextPhase;
+	bot_sfj_conflict_t conflict;
+	const char *conflictReason = NULL;
 	qboolean grounded;
 	qboolean fresh;
 	qboolean eligible;
@@ -3626,10 +3680,26 @@ static void BotSFJ_ApplyInput(bot_state_t *bs, bot_input_t *bi, int time, int el
 	grounded = ps->groundEntityNum != ENTITYNUM_NONE ? qtrue : qfalse;
 	fresh = (BotSFJ_IntentIsFresh(time, bs->sfjIntentTime) &&
 		bs->sfjSafetyUntil >= time) ? qtrue : qfalse;
-	eligible = BotSFJ_HasInputConflict(bs, ps, bi) ? qfalse : qtrue;
-	if (eligible && (!BotSFJ_EffectiveInputDirection(bi, effectiveDirection) ||
+	/*
+	 * The controller owns jump timing once a strafe jump is underway, so
+	 * navigation jump/crouch/walk requests and vertical trail input are
+	 * masked out before checking eligibility.
+	 */
+	masked = *bi;
+	if (bs->sfjPhase != BOT_SFJ_PHASE_OFF && bs->sfjPhase != BOT_SFJ_PHASE_ABORT)
+	{
+		masked.actionflags &= ~(ACTION_JUMP | ACTION_DELAYEDJUMP | ACTION_CROUCH |
+			ACTION_WALK);
+		masked.dir[2] = 0.0f;
+	}
+	conflict = BotSFJ_GetInputConflict(bs, ps, &masked, &conflictReason);
+	eligible = BotSFJ_ConflictBlocks(conflict, bs->sfjPhase) ? qfalse : qtrue;
+	if (eligible && (!BotSFJ_EffectiveInputDirection(&masked, effectiveDirection) ||
 		DotProduct(effectiveDirection, bs->sfjIntentDirection) < 0.5f))
+	{
 		eligible = qfalse;
+		conflictReason = "movement misaligned with corridor";
+	}
 	if (eligible && bs->currentEnemy && bs->currentEnemy->client)
 	{
 		vec3_t liveSeparation;
@@ -3642,17 +3712,23 @@ static void BotSFJ_ApplyInput(bot_state_t *bs, bot_input_t *bi, int time, int el
 			/* Hand control back to combat when an enemy gets into saber range. */
 			if (bs->frame_Enemy_Vis && separation < BOT_SFJ_NAV_ENEMY_GUARD * 0.5f &&
 				!BotSFJ_ClientCarriesFlag(g_entities[bs->client].client))
+			{
 				eligible = qfalse;
+				conflictReason = "visible enemy in saber range";
+			}
 		}
 		else if (separation < BotSFJ_StopDistanceFor(BotSFJ_MinStrafeDistance()))
+		{
 			eligible = qfalse;
+			conflictReason = "enemy inside stop distance";
+		}
 	}
 	if (!BotSFJ_CanOwnInput(bot_strafejumps.integer, fresh, eligible, bs->sfjPhase))
 	{
 		if (bs->sfjPhase != BOT_SFJ_PHASE_OFF && bs->sfjPhase != BOT_SFJ_PHASE_ABORT)
 		{
 			BotSFJ_DebugReject(bs, !fresh ? "final input: expired corridor intent" :
-				"final input: state conflict, enemy proximity, or movement misalignment");
+				va("final input: %s", conflictReason ? conflictReason : "not eligible"));
 			BotSFJ_Abort(bs, time);
 		}
 		bs->sfjOwnsInput = qfalse;
@@ -3736,7 +3812,7 @@ static void BotSFJ_ApplyInput(bot_state_t *bs, bot_input_t *bi, int time, int el
 	VectorClear(candidate.dir);
 	candidate.speed = 400.0f;
 	candidate.actionflags &= ~(ACTION_MOVEFORWARD | ACTION_MOVEBACK | ACTION_MOVELEFT |
-		ACTION_MOVERIGHT | ACTION_CROUCH | ACTION_JUMP | ACTION_DELAYEDJUMP);
+		ACTION_MOVERIGHT | ACTION_CROUCH | ACTION_JUMP | ACTION_DELAYEDJUMP | ACTION_WALK);
 	candidate.actionflags |= ACTION_MOVEFORWARD;
 	if (BotSFJ_JumpPressed(bs->sfjPhase, grounded))
 		candidate.actionflags |= ACTION_JUMP;

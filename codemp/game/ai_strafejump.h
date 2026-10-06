@@ -84,6 +84,34 @@ typedef enum
 	BOT_SFJ_INTENT_PURSUIT
 } bot_sfj_intent_t;
 
+/*
+ * Hard conflicts always block and abort a strafe jump. Soft conflicts (queued
+ * attack/jump/crouch/walk, weapon cooldown, saber specials, navigation jump
+ * timers) only block initiation; once the controller is mid-jump they are
+ * ignored and the navigation jump/crouch/walk inputs are masked.
+ */
+typedef enum
+{
+	BOT_SFJ_CONFLICT_NONE = 0,
+	BOT_SFJ_CONFLICT_SOFT,
+	BOT_SFJ_CONFLICT_HARD
+} bot_sfj_conflict_t;
+
+static inline int BotSFJ_PhaseInProgress(bot_sfj_phase_t phase)
+{
+	return phase == BOT_SFJ_PHASE_TAKEOFF || phase == BOT_SFJ_PHASE_AIR ||
+		phase == BOT_SFJ_PHASE_LANDING || phase == BOT_SFJ_PHASE_REJUMP;
+}
+
+static inline int BotSFJ_ConflictBlocks(bot_sfj_conflict_t conflict, bot_sfj_phase_t phase)
+{
+	if (conflict == BOT_SFJ_CONFLICT_HARD)
+		return 1;
+	if (conflict == BOT_SFJ_CONFLICT_SOFT)
+		return !BotSFJ_PhaseInProgress(phase);
+	return 0;
+}
+
 static inline int BotSFJ_IntentIsFresh(int now, int intentTime)
 {
 	return intentTime > 0 && now >= intentTime &&
