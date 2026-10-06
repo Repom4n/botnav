@@ -554,6 +554,8 @@ typedef struct bot_state_s
 	int					sfjSafetyUntil;
 	int					sfjPhaseTime;
 	int					sfjCooldownUntil;
+	int					sfjNextStartTime;
+	int					sfjStartFrequency;
 	int					sfjStrafeSide;
 	qboolean			sfjOwnsInput;
 	qboolean			sfjLastRandomUse;

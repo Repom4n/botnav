@@ -1616,6 +1616,7 @@ void Svcmd_ClearIP_f( void );
 void Svcmd_DBInfo_f( void );
 void Svcmd_ExportDuelTrack_f(void);
 void Svcmd_ResetDuelTrack_f(void);
+void Svcmd_ResetLearningTrack_f(void);
 void Svcmd_ImportDuelTrack_f(void);
 void Svcmd_DuelTrackInfo_f(void);
 #if _ELORANKING
@@ -1714,6 +1715,7 @@ svcmd_t svcmds[] = {
 	{ "renameAccount",				Svcmd_RenameAccount_f,				qfalse },
 	{ "resetdueltrack",				Svcmd_ResetDuelTrack_f,				qfalse },
 	{ "resetdueltracks",			Svcmd_ResetDuelTrack_f,				qfalse },
+	{ "resetlearningtrack",			Svcmd_ResetLearningTrack_f,			qfalse },
 	{ "resetScores",				Svcmd_ResetScores_f,				qfalse },
 
 	{ "saberDisable",				Svcmd_ToggleSaberDisable_f,			qfalse },

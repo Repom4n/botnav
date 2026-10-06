@@ -9,6 +9,20 @@ BOOST_AUTO_TEST_SUITE( bot_ai )
 
 BOOST_AUTO_TEST_SUITE( tuning )
 
+BOOST_AUTO_TEST_CASE( strafejump_frequency_and_waypoint_skip_safety )
+{
+	BOOST_CHECK_EQUAL( BotSFJ_StartIntervalMs( 0 ), 0 );
+	BOOST_CHECK_EQUAL( BotSFJ_StartIntervalMs( -1 ), 0 );
+	BOOST_CHECK_EQUAL( BotSFJ_StartIntervalMs( 100 ), 1000 );
+	BOOST_CHECK_EQUAL( BotSFJ_StartIntervalMs( 200 ), 500 );
+	BOOST_CHECK_EQUAL( BotSFJ_StartIntervalMs( 2000 ), 100 );
+	BOOST_CHECK( BotSFJ_WaypointSkipAllows( 0, 0.0f, 1.0f, 1 ) );
+	BOOST_CHECK( !BotSFJ_WaypointSkipAllows( 1, 0.0f, 1.0f, 1 ) );
+	BOOST_CHECK( !BotSFJ_WaypointSkipAllows( 0, 33.0f, 1.0f, 1 ) );
+	BOOST_CHECK( !BotSFJ_WaypointSkipAllows( 0, 0.0f, 0.8f, 1 ) );
+	BOOST_CHECK( !BotSFJ_WaypointSkipAllows( 0, 0.0f, 1.0f, 0 ) );
+}
+
 BOOST_AUTO_TEST_CASE( strafejump_state_machine_has_release_edges )
 {
 	BOOST_CHECK_EQUAL( BotSFJ_NextPhase( BOT_SFJ_PHASE_PREPARE, 1, 1, 1, 1, 0 ),
@@ -1640,12 +1654,13 @@ BOOST_AUTO_TEST_CASE( saber_throw_phase_uses_target_facing_and_engine_cadence )
 
 BOOST_AUTO_TEST_CASE( saber_throw_bypasses_ready_defense_but_intercepts_exposed_targets )
 {
-	BOOST_CHECK( NewBotAI_SaberThrowTargetGuarded( 1, 1, 0, 0, 0 ) );
-	BOOST_CHECK( !NewBotAI_SaberThrowTargetGuarded( 0, 1, 0, 0, 0 ) );
-	BOOST_CHECK( !NewBotAI_SaberThrowTargetGuarded( 1, 0, 0, 0, 0 ) );
-	BOOST_CHECK( !NewBotAI_SaberThrowTargetGuarded( 1, 1, 1, 0, 0 ) );
-	BOOST_CHECK( !NewBotAI_SaberThrowTargetGuarded( 1, 1, 0, 1, 0 ) );
-	BOOST_CHECK( !NewBotAI_SaberThrowTargetGuarded( 1, 1, 0, 0, 1 ) );
+	BOOST_CHECK( NewBotAI_SaberThrowTargetGuarded( 1, 1, 0, 0, 0, 0 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowTargetGuarded( 0, 1, 0, 0, 0, 0 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowTargetGuarded( 1, 0, 0, 0, 0, 0 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowTargetGuarded( 1, 1, 1, 0, 0, 0 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowTargetGuarded( 1, 1, 0, 1, 0, 0 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowTargetGuarded( 1, 1, 0, 0, 1, 0 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowTargetGuarded( 1, 1, 0, 0, 0, 1 ) );
 	BOOST_CHECK_EQUAL( NewBotAI_SaberThrowTargetPhase( NEWBOTAI_THROW_LAUNCH, 1, 1 ), NEWBOTAI_THROW_BYPASS );
 	BOOST_CHECK_EQUAL( NewBotAI_SaberThrowTargetPhase( NEWBOTAI_THROW_LAUNCH, 0, 1 ), NEWBOTAI_THROW_CUT_THROUGH );
 	BOOST_CHECK_EQUAL( NewBotAI_SaberThrowTargetPhase( NEWBOTAI_THROW_REAR, 0, 1 ), NEWBOTAI_THROW_CUT_THROUGH );
@@ -1748,6 +1763,63 @@ BOOST_AUTO_TEST_CASE( saber_throw_hard_recall_overrides_protected_hold )
 	// Lost/invalid targets are hard recalls even while the old heading is positive.
 	BOOST_CHECK( !NewBotAI_SaberThrowFinalHoldProtected( 550, 0, 1, 0, 0, 0, 1, 1 ) );
 	BOOST_CHECK( NewBotAI_SaberThrowFinalHoldProtected( 550, 0, 1, 0, 0, 0, 1, 0 ) );
+}
+
+BOOST_AUTO_TEST_CASE( saber_throw_skill_upgrade_preserves_restricted_and_low_skill_loadouts )
+{
+	for (int configured = 0; configured <= 3; ++configured)
+	{
+		BOOST_CHECK_EQUAL( NewBotAI_SaberThrowConfiguredLevel( 1.0f, configured, 0, 1 ), configured );
+		BOOST_CHECK_EQUAL( NewBotAI_SaberThrowConfiguredLevel( 2.0f, configured, 0, 1 ), configured );
+		BOOST_CHECK_EQUAL( NewBotAI_SaberThrowConfiguredLevel( 2.1f, configured, 0, 1 ), 3 );
+		BOOST_CHECK_EQUAL( NewBotAI_SaberThrowConfiguredLevel( 10.0f, configured, 1, 1 ), configured );
+		BOOST_CHECK_EQUAL( NewBotAI_SaberThrowConfiguredLevel( 10.0f, configured, 0, 0 ), configured );
+	}
+}
+
+BOOST_AUTO_TEST_CASE( saber_throw_shared_policy_keeps_soft_recall_out_of_protected_routes )
+{
+	BOOST_CHECK( NewBotAI_SaberThrowWantsHold( 3, NEWBOTAI_THROW_CUT_THROUGH, 599, 1, 0, 0, 1, -30, 0 ) );
+	BOOST_CHECK( NewBotAI_SaberThrowWantsHold( 3, NEWBOTAI_THROW_CUT_THROUGH, 1000, 0, 1, 0, 1, 0, 0 ) );
+	BOOST_CHECK( NewBotAI_SaberThrowWantsHold( 3, NEWBOTAI_THROW_BYPASS, 1000, 1, 0, 0, 1, -30, 0 ) );
+	BOOST_CHECK( NewBotAI_SaberThrowWantsHold( 2, NEWBOTAI_THROW_REAR, 1799, 1, 0, 0, 1, 0, 0 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowWantsHold( 2, NEWBOTAI_THROW_REAR, 1800, 1, 0, 0, 0, 30, 1 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowWantsHold( 3, NEWBOTAI_THROW_BYPASS, 1500, 0, 1, 0, 0, 30, 1 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowWantsHold( 1, NEWBOTAI_THROW_LAUNCH, 750, 0, 1, 0, 0, 30, 1 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowWantsHold( 3, NEWBOTAI_THROW_RECALL, 50, 0, 1, 0, 0, 30, 1 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowWantsHold( 3, NEWBOTAI_THROW_BYPASS, -1, 0, 1, 0, 0, 30, 1 ) );
+	// Drainlock, lethal danger, disallowed force, return and route obstruction
+	// all arrive as safetyRecall and override both base and learned holds.
+	BOOST_CHECK( !NewBotAI_SaberThrowWantsHold( 3, NEWBOTAI_THROW_BYPASS, 50, 0, 1, 1, 0, 30, 1 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowWantsHold( 3, NEWBOTAI_THROW_REAR, 800, 1, 0, 1, 0, 30, 1 ) );
+}
+
+BOOST_AUTO_TEST_CASE( saber_throw_learned_preference_is_context_gated_and_not_duration_learning )
+{
+	BOOST_CHECK( !NewBotAI_SaberThrowLearnedHold( 599, 30, 1 ) );
+	BOOST_CHECK( NewBotAI_SaberThrowLearnedHold( 600, 8, 1 ) );
+	BOOST_CHECK( NewBotAI_SaberThrowLearnedHold( 899, 30, 1 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowLearnedHold( 900, 30, 1 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowLearnedHold( 800, 7, 1 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowLearnedHold( 800, -30, 1 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowLearnedHold( 800, 30, 0 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowWantsHold( 3, NEWBOTAI_THROW_CUT_THROUGH, 800, 1, 0, 0, 1, 0, 1 ) );
+	BOOST_CHECK( NewBotAI_SaberThrowWantsHold( 3, NEWBOTAI_THROW_CUT_THROUGH, 800, 1, 0, 0, 1, 8, 1 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowWantsHold( 3, NEWBOTAI_THROW_CUT_THROUGH, 900, 1, 0, 0, 1, 30, 1 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowWantsHold( 3, NEWBOTAI_THROW_CUT_THROUGH, 800, 1, 0, 0, 1, 30, 0 ) );
+}
+
+BOOST_AUTO_TEST_CASE( saber_throw_detours_do_not_count_as_target_passes )
+{
+	BOOST_CHECK( !NewBotAI_SaberThrowMayMarkPass( NEWBOTAI_THROW_LAUNCH, 149, 149, 0 ) );
+	BOOST_CHECK( NewBotAI_SaberThrowMayMarkPass( NEWBOTAI_THROW_LAUNCH, 150, 150, 0 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowMayMarkPass( NEWBOTAI_THROW_BYPASS, 800, 400, 100 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowMayMarkPass( NEWBOTAI_THROW_REAR, 800, 400, 100 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowMayMarkPass( NEWBOTAI_THROW_RECALL, 800, 400, 100 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowMayMarkPass( NEWBOTAI_THROW_CUT_THROUGH, 800, 99, 100 ) );
+	BOOST_CHECK( NewBotAI_SaberThrowMayMarkPass( NEWBOTAI_THROW_CUT_THROUGH, 800, 100, 100 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowMayMarkPass( NEWBOTAI_THROW_CUT_THROUGH, 800, 399, 400 ) );
+	BOOST_CHECK( NewBotAI_SaberThrowMayMarkPass( NEWBOTAI_THROW_CUT_THROUGH, 800, 400, 400 ) );
 }
 
 BOOST_AUTO_TEST_SUITE_END()

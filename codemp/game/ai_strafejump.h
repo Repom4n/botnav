@@ -12,6 +12,22 @@
 #define BOT_SFJ_JUMP_VELOCITY 225.0f
 #define BOT_SFJ_MAX_ARC_STEPS 256
 
+static inline int BotSFJ_StartIntervalMs(int frequency)
+{
+	if (frequency <= 0)
+		return 0;
+	if (frequency > 1000)
+		frequency = 1000;
+	return 100000 / frequency;
+}
+
+static inline int BotSFJ_WaypointSkipAllows(int requiredFlags, float heightDelta,
+	float alignment, int clearPath)
+{
+	return !requiredFlags && fabsf(heightDelta) <= 32.0f &&
+		alignment >= 0.9f && clearPath;
+}
+
 typedef enum
 {
 	BOT_SFJ_PHASE_OFF = 0,

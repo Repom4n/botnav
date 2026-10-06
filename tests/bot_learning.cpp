@@ -1,5 +1,6 @@
 #include <string>
 #include "g_bot_learning.h"
+#include "g_account.h"
 #include "ai_combat_tuning.h"
 
 #include <boost/test/unit_test.hpp>
@@ -20,9 +21,168 @@ namespace
 		ev.rangeBucket = 1;
 		return ev;
 	}
+
+	struct LearningDatabase
+	{
+		sqlite3 *db = NULL;
+		LearningDatabase()
+		{
+			BOOST_REQUIRE_EQUAL(sqlite3_open(":memory:", &db), SQLITE_OK);
+			Execute("CREATE TABLE LocalBotLearnedSequence(samples INTEGER);"
+				"INSERT INTO LocalBotLearnedSequence VALUES(42);"
+				"CREATE TABLE LocalBotLearnedEvidence(id INTEGER PRIMARY KEY, "
+				"summary_id INTEGER, participant_key TEXT, session_id TEXT DEFAULT '');"
+				"INSERT INTO LocalBotLearnedEvidence(summary_id,participant_key) VALUES(1,'human');"
+				"CREATE TABLE LocalDuelTrackImport(source TEXT);"
+				"INSERT INTO LocalDuelTrackImport VALUES('legacy');"
+				"CREATE TABLE LocalAccount(id INTEGER PRIMARY KEY AUTOINCREMENT, value INTEGER);"
+				"INSERT INTO LocalAccount VALUES(1,123);");
+			for (const char *table : g_trackedDuelTableNames)
+				Execute("CREATE TABLE " + std::string(table) +
+					"(id INTEGER PRIMARY KEY, summary_id INTEGER, participant_key TEXT, session_id TEXT);"
+					"INSERT INTO " + table + " VALUES(1,1,'human','old-session');");
+		}
+		~LearningDatabase()
+		{
+			BOOST_CHECK_EQUAL(sqlite3_close(db), SQLITE_OK);
+		}
+		void Execute(const std::string &sql)
+		{
+			BOOST_REQUIRE_EQUAL(sqlite3_exec(db, sql.c_str(), NULL, NULL, NULL), SQLITE_OK);
+		}
+		int Scalar(const char *sql)
+		{
+			sqlite3_stmt *stmt = NULL;
+			BOOST_REQUIRE_EQUAL(sqlite3_prepare_v2(db, sql, -1, &stmt, NULL), SQLITE_OK);
+			BOOST_REQUIRE_EQUAL(sqlite3_step(stmt), SQLITE_ROW);
+			const int value = sqlite3_column_int(stmt, 0);
+			BOOST_REQUIRE_EQUAL(sqlite3_finalize(stmt), SQLITE_OK);
+			return value;
+		}
+	};
 }
 
 BOOST_AUTO_TEST_SUITE( bot_learning )
+
+BOOST_AUTO_TEST_CASE(duel_reset_preserves_learning_and_distinguishes_reused_summary_ids)
+{
+	LearningDatabase database;
+	int rows = -1;
+	BOOST_REQUIRE_EQUAL(G_ResetTrackingTables(database.db, 0, &rows), SQLITE_OK);
+	database.Execute("VACUUM;");
+	BOOST_CHECK_EQUAL(rows, 5);
+	for (const char *table : g_trackedDuelTableNames)
+		BOOST_CHECK_EQUAL(database.Scalar(("SELECT COUNT(*) FROM " + std::string(table)).c_str()), 0);
+	BOOST_CHECK_EQUAL(database.Scalar("SELECT samples FROM LocalBotLearnedSequence"), 42);
+	BOOST_CHECK_EQUAL(database.Scalar("SELECT COUNT(*) FROM LocalBotLearnedEvidence WHERE id=1 "
+		"AND summary_id=1 AND session_id='old-session'"), 1);
+	BOOST_CHECK_EQUAL(database.Scalar("SELECT COUNT(*) FROM LocalDuelTrackImport"), 0);
+	BOOST_CHECK_EQUAL(database.Scalar("SELECT value FROM LocalAccount"), 123);
+	BOOST_CHECK_EQUAL(database.Scalar("SELECT seq FROM sqlite_sequence WHERE name='LocalAccount'"), 1);
+	database.Execute("INSERT INTO LocalDuelTrackSummary VALUES(1,1,'human','new-session');"
+		"INSERT INTO LocalDuelTrackEvent VALUES(1,1,'human','new-session');"
+		"INSERT INTO LocalBotLearnedEvidence(summary_id,participant_key,session_id) "
+		"VALUES(1,'human','new-session');");
+	BOOST_CHECK_EQUAL(database.Scalar("SELECT COUNT(DISTINCT id) FROM LocalBotLearnedEvidence"), 2);
+	BOOST_CHECK_EQUAL(database.Scalar("SELECT COUNT(DISTINCT session_id) FROM LocalBotLearnedEvidence"), 2);
+	BOOST_CHECK_EQUAL(database.Scalar("SELECT id FROM LocalBotLearnedEvidence WHERE session_id='new-session'"), 2);
+	BOOST_REQUIRE_EQUAL(G_ResetTrackingTables(database.db, 0, &rows), SQLITE_OK);
+	BOOST_CHECK_EQUAL(database.Scalar("SELECT COUNT(DISTINCT session_id) FROM LocalBotLearnedEvidence"), 2);
+}
+
+BOOST_AUTO_TEST_CASE(legacy_learning_evidence_gets_stable_provenance_without_events)
+{
+	LearningDatabase database;
+	database.Execute("DELETE FROM LocalDuelTrackEvent;"
+		"INSERT INTO LocalBotLearnedEvidence(summary_id,participant_key) VALUES(2,'other');");
+	int rows;
+	BOOST_REQUIRE_EQUAL(G_ResetTrackingTables(database.db, 0, &rows), SQLITE_OK);
+	BOOST_CHECK_EQUAL(database.Scalar("SELECT COUNT(*) FROM LocalBotLearnedEvidence "
+		"WHERE session_id='legacy:' || summary_id"), 2);
+	BOOST_REQUIRE_EQUAL(G_ResetTrackingTables(database.db, 0, &rows), SQLITE_OK);
+	BOOST_CHECK_EQUAL(database.Scalar("SELECT COUNT(DISTINCT session_id) FROM LocalBotLearnedEvidence"), 2);
+}
+
+BOOST_AUTO_TEST_CASE(explicit_learning_reset_clears_only_learning_tables)
+{
+	LearningDatabase database;
+	int rows = -1;
+	BOOST_REQUIRE_EQUAL(G_ResetTrackingTables(database.db, 1, &rows), SQLITE_OK);
+	BOOST_CHECK_EQUAL(rows, 2);
+	BOOST_CHECK_EQUAL(database.Scalar("SELECT COUNT(*) FROM LocalBotLearnedSequence"), 0);
+	BOOST_CHECK_EQUAL(database.Scalar("SELECT COUNT(*) FROM LocalBotLearnedEvidence"), 0);
+	BOOST_CHECK_EQUAL(database.Scalar("SELECT value FROM LocalAccount"), 123);
+	BOOST_CHECK_EQUAL(database.Scalar("SELECT COUNT(*) FROM LocalDuelTrackImport"), 1);
+	for (const char *table : g_trackedDuelTableNames)
+		BOOST_CHECK_EQUAL(database.Scalar(("SELECT COUNT(*) FROM " + std::string(table)).c_str()), 1);
+	BOOST_REQUIRE_EQUAL(G_ResetTrackingTables(database.db, 1, &rows), SQLITE_OK);
+	BOOST_CHECK_EQUAL(rows, 0);
+}
+
+BOOST_AUTO_TEST_CASE(learning_reset_rolls_back_both_tables_on_failure)
+{
+	LearningDatabase database;
+	database.Execute("CREATE TRIGGER deny_evidence_reset BEFORE DELETE ON LocalBotLearnedEvidence "
+		"BEGIN SELECT RAISE(ABORT,'test failure'); END;");
+	int rows = -1;
+	BOOST_CHECK_NE(G_ResetTrackingTables(database.db, 1, &rows), SQLITE_OK);
+	BOOST_CHECK_EQUAL(rows, 0);
+	BOOST_CHECK_EQUAL(database.Scalar("SELECT samples FROM LocalBotLearnedSequence"), 42);
+	BOOST_CHECK_EQUAL(database.Scalar("SELECT COUNT(*) FROM LocalBotLearnedEvidence"), 1);
+	BOOST_CHECK(sqlite3_get_autocommit(database.db));
+}
+
+BOOST_AUTO_TEST_CASE(duel_reset_rolls_back_tracking_and_provenance_on_failure)
+{
+	LearningDatabase database;
+	database.Execute("CREATE TRIGGER deny_event_reset BEFORE DELETE ON LocalDuelTrackEvent "
+		"BEGIN SELECT RAISE(ABORT,'test failure'); END;");
+	int rows = -1;
+	BOOST_CHECK_NE(G_ResetTrackingTables(database.db, 0, &rows), SQLITE_OK);
+	BOOST_CHECK_EQUAL(rows, 0);
+	for (const char *table : g_trackedDuelTableNames)
+		BOOST_CHECK_EQUAL(database.Scalar(("SELECT COUNT(*) FROM " + std::string(table)).c_str()), 1);
+	BOOST_CHECK_EQUAL(database.Scalar("SELECT COUNT(*) FROM LocalBotLearnedEvidence WHERE session_id=''"), 1);
+	BOOST_CHECK_EQUAL(database.Scalar("SELECT samples FROM LocalBotLearnedSequence"), 42);
+}
+
+BOOST_AUTO_TEST_CASE(reset_refuses_to_interfere_with_an_existing_transaction)
+{
+	LearningDatabase database;
+	database.Execute("BEGIN IMMEDIATE; UPDATE LocalBotLearnedSequence SET samples=43;");
+	int rows = -1;
+	BOOST_CHECK_EQUAL(G_ResetTrackingTables(database.db, 1, &rows), SQLITE_BUSY);
+	BOOST_CHECK_EQUAL(rows, 0);
+	BOOST_CHECK(!sqlite3_get_autocommit(database.db));
+	BOOST_CHECK_EQUAL(database.Scalar("SELECT samples FROM LocalBotLearnedSequence"), 43);
+	database.Execute("ROLLBACK;");
+	BOOST_CHECK_EQUAL(database.Scalar("SELECT samples FROM LocalBotLearnedSequence"), 42);
+}
+
+BOOST_AUTO_TEST_CASE(learning_reset_handles_a_writer_lock_without_changing_data)
+{
+	sqlite3 *writer = NULL, *reset = NULL;
+	const int flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_URI;
+	const char *uri = "file:learning-reset-lock?mode=memory&cache=shared";
+	BOOST_REQUIRE_EQUAL(sqlite3_open_v2(uri, &writer, flags, NULL), SQLITE_OK);
+	BOOST_REQUIRE_EQUAL(sqlite3_open_v2(uri, &reset, flags, NULL), SQLITE_OK);
+	BOOST_REQUIRE_EQUAL(sqlite3_exec(writer,
+		"CREATE TABLE LocalBotLearnedSequence(samples INTEGER);"
+		"CREATE TABLE LocalBotLearnedEvidence(id INTEGER PRIMARY KEY);"
+		"INSERT INTO LocalBotLearnedSequence VALUES(42);"
+		"INSERT INTO LocalBotLearnedEvidence VALUES(1); BEGIN IMMEDIATE;",
+		NULL, NULL, NULL), SQLITE_OK);
+	int rows = -1;
+	const int result = G_ResetTrackingTables(reset, 1, &rows);
+	BOOST_CHECK(result == SQLITE_BUSY || result == SQLITE_LOCKED);
+	BOOST_CHECK_EQUAL(rows, 0);
+	BOOST_CHECK(sqlite3_get_autocommit(reset));
+	BOOST_REQUIRE_EQUAL(sqlite3_exec(writer, "COMMIT", NULL, NULL, NULL), SQLITE_OK);
+	BOOST_REQUIRE_EQUAL(G_ResetTrackingTables(reset, 1, &rows), SQLITE_OK);
+	BOOST_CHECK_EQUAL(rows, 2);
+	BOOST_CHECK_EQUAL(sqlite3_close(reset), SQLITE_OK);
+	BOOST_CHECK_EQUAL(sqlite3_close(writer), SQLITE_OK);
+}
 
 BOOST_AUTO_TEST_CASE( wall_escape_tokens_are_appended_responses )
 {
