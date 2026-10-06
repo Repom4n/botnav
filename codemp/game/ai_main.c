@@ -12389,6 +12389,370 @@ static qboolean NewBotAI_UpdateSwingDodge(bot_state_t *bs)
 	return qtrue;
 }
 
+//Retreat wall escapes: a retreating bot backpedals away from its enemy, so the normal
+//forward wall probe never sees the wall behind it. NewBotAI_RetreatWallImminent probes
+//along the actual movement direction a little ahead of contact; when a wall is coming
+//up the bot commits to one of several escapes, chosen at random and weighted by bot
+//learning (the decision is recorded so the outcomes can later be turned into fixed logic).
+enum
+{
+	NEWBOTAI_WALLESC_NONE = 0,
+	NEWBOTAI_WALLESC_WALLRUN,
+	NEWBOTAI_WALLESC_FLIPKICK_DRAIN,
+	NEWBOTAI_WALLESC_DRAIN_FLIPKICK,
+	NEWBOTAI_WALLESC_ROLL_AROUND,
+	NEWBOTAI_WALLESC_HOP_OVER,
+	NEWBOTAI_WALLESC_COUNT
+};
+
+#define NEWBOTAI_WALL_ESCAPE_COMMIT_MS 900
+#define NEWBOTAI_WALL_ESCAPE_RETRY_MS 1200
+#define NEWBOTAI_WALL_ESCAPE_BASE_WEIGHT 50
+#define NEWBOTAI_WALL_ESCAPE_MIN_WEIGHT 5
+#define NEWBOTAI_WALL_ESCAPE_ENGAGE_RANGE 220.0f
+
+static const char *NewBotAI_WallEscapeName(int option)
+{
+	switch (option)
+	{
+	case NEWBOTAI_WALLESC_WALLRUN: return "vertical wallrun";
+	case NEWBOTAI_WALLESC_FLIPKICK_DRAIN: return "flipkick -> drain";
+	case NEWBOTAI_WALLESC_DRAIN_FLIPKICK: return "drain -> flipkick";
+	case NEWBOTAI_WALLESC_ROLL_AROUND: return "roll around";
+	case NEWBOTAI_WALLESC_HOP_OVER: return "hop around/over";
+	default: return "none";
+	}
+}
+
+static void NewBotAI_WallEscapeTokens(int option, int *response, int *follow)
+{
+	*follow = BOTLEARN_TOK_NONE;
+	switch (option)
+	{
+	case NEWBOTAI_WALLESC_WALLRUN: *response = BOTLEARN_TOK_WALLRUN; break;
+	case NEWBOTAI_WALLESC_FLIPKICK_DRAIN: *response = BOTLEARN_TOK_KICK; *follow = BOTLEARN_TOK_DRAIN; break;
+	case NEWBOTAI_WALLESC_DRAIN_FLIPKICK: *response = BOTLEARN_TOK_DRAIN; *follow = BOTLEARN_TOK_KICK; break;
+	case NEWBOTAI_WALLESC_ROLL_AROUND: *response = BOTLEARN_TOK_ROLL; break;
+	case NEWBOTAI_WALLESC_HOP_OVER: *response = BOTLEARN_TOK_HOP; break;
+	default: *response = BOTLEARN_TOK_NONE; break;
+	}
+}
+
+static qboolean NewBotAI_RetreatWallImminent(bot_state_t *bs, vec3_t wallNormal)
+{
+	static vec3_t probeMins = {-15.0f, -15.0f, -8.0f};
+	static vec3_t probeMaxs = {15.0f, 15.0f, 8.0f};
+	vec3_t moveDir, start, end;
+	trace_t tr;
+	float speed;
+	float probeDistance;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+		return qfalse;
+	VectorSet(moveDir, bs->cur_ps.velocity[0], bs->cur_ps.velocity[1], 0.0f);
+	speed = VectorNormalize(moveDir);
+	if (speed < 80.0f)
+	{
+		//Barely moving: assume we are trying to back away from the enemy.
+		VectorSubtract(bs->cur_ps.origin, bs->currentEnemy->client->ps.origin, moveDir);
+		moveDir[2] = 0.0f;
+		if (VectorNormalize(moveDir) <= 0.0f)
+			return qfalse;
+	}
+	probeDistance = NEWBOTAI_WALL_CONTACT_PROBE_DISTANCE + speed * 0.3f;
+	if (probeDistance < 32.0f)
+		probeDistance = 32.0f;
+	else if (probeDistance > 112.0f)
+		probeDistance = 112.0f;
+	VectorCopy(bs->cur_ps.origin, start);
+	start[2] += 24.0f;
+	VectorMA(start, probeDistance, moveDir, end);
+	JP_Trace(&tr, start, probeMins, probeMaxs, end, bs->client,
+		MASK_PLAYERSOLID & ~CONTENTS_BODY, qfalse, 0, 0);
+	if (tr.startsolid || tr.allsolid || tr.fraction >= 1.0f)
+		return qfalse;
+	if (tr.entityNum < MAX_CLIENTS || tr.plane.normal[2] > 0.35f ||
+		DotProduct(moveDir, tr.plane.normal) > -0.25f)
+		return qfalse;
+	if (wallNormal)
+		VectorCopy(tr.plane.normal, wallNormal);
+	return qtrue;
+}
+
+static qboolean NewBotAI_WallEscapeCanDrain(bot_state_t *bs)
+{
+	return (bot_forcepowers.integer && !g_forcePowerDisable.integer &&
+		(bs->cur_ps.fd.forcePowersKnown & (1 << FP_DRAIN)) &&
+		bs->cur_ps.fd.forcePower >= 10 &&
+		bs->frame_Enemy_Len < MAX_DRAIN_DISTANCE - 100) ? qtrue : qfalse;
+}
+
+//True when a player-sized box can move sideways (side -1 left / 1 right, relative to
+//facing the enemy) far enough to get around them.
+static qboolean NewBotAI_WallEscapeSideOpen(bot_state_t *bs, int side, float height)
+{
+	static vec3_t mins = {-15.0f, -15.0f, 0.0f};
+	static vec3_t maxs = {15.0f, 15.0f, 32.0f};
+	vec3_t toEnemy, right, start, end;
+	trace_t tr;
+
+	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->cur_ps.origin, toEnemy);
+	toEnemy[2] = 0.0f;
+	if (VectorNormalize(toEnemy) <= 0.0f)
+		return qfalse;
+	VectorSet(right, toEnemy[1], -toEnemy[0], 0.0f);
+	VectorCopy(bs->cur_ps.origin, start);
+	start[2] += height;
+	VectorMA(start, 96.0f * (float)side, right, end);
+	VectorMA(end, 48.0f, toEnemy, end);
+	JP_Trace(&tr, start, mins, maxs, end, bs->client, MASK_PLAYERSOLID, qfalse, 0, 0);
+	return (!tr.startsolid && !tr.allsolid && tr.fraction >= 0.9f) ? qtrue : qfalse;
+}
+
+static qboolean NewBotAI_WallEscapeHeadroomOverEnemy(bot_state_t *bs)
+{
+	vec3_t start, end;
+	trace_t tr;
+
+	VectorCopy(bs->currentEnemy->client->ps.origin, start);
+	start[2] += DEFAULT_MAXS_2;
+	VectorCopy(start, end);
+	end[2] += 72.0f;
+	JP_Trace(&tr, start, NULL, NULL, end, bs->client, MASK_SOLID, qfalse, 0, 0);
+	return (!tr.startsolid && tr.fraction >= 1.0f) ? qtrue : qfalse;
+}
+
+static qboolean NewBotAI_WallEscapeOptionValid(bot_state_t *bs, int option, int *side)
+{
+	const qboolean grounded = (bs->cur_ps.groundEntityNum != ENTITYNUM_NONE) ? qtrue : qfalse;
+	const qboolean flipkickReady = (NewBotAI_CanAttemptFlipkick(bs) && !bs->cur_ps.saberInFlight &&
+		bs->frame_Enemy_Len < NEWBOTAI_WALL_ESCAPE_ENGAGE_RANGE) ? qtrue : qfalse;
+	const int preferredSide = (bs->wallEscapeSide < 0) ? -1 : 1;
+
+	switch (option)
+	{
+	case NEWBOTAI_WALLESC_WALLRUN:
+		return (grounded &&
+			bs->cur_ps.fd.forcePowerLevel[FP_LEVITATION] >= FORCE_LEVEL_1 &&
+			!(g_forcePowerDisable.integer & (1 << FP_LEVITATION))) ? qtrue : qfalse;
+	case NEWBOTAI_WALLESC_FLIPKICK_DRAIN:
+		return (grounded && flipkickReady) ? qtrue : qfalse;
+	case NEWBOTAI_WALLESC_DRAIN_FLIPKICK:
+		return (flipkickReady && NewBotAI_WallEscapeCanDrain(bs)) ? qtrue : qfalse;
+	case NEWBOTAI_WALLESC_ROLL_AROUND:
+	case NEWBOTAI_WALLESC_HOP_OVER:
+	{
+		const float height = (option == NEWBOTAI_WALLESC_HOP_OVER) ? 40.0f : 0.0f;
+		if (!grounded || bs->frame_Enemy_Len > NEWBOTAI_WALL_ESCAPE_ENGAGE_RANGE)
+			return qfalse;
+		if (NewBotAI_WallEscapeSideOpen(bs, preferredSide, height))
+		{
+			*side = preferredSide;
+			return qtrue;
+		}
+		if (NewBotAI_WallEscapeSideOpen(bs, -preferredSide, height))
+		{
+			*side = -preferredSide;
+			return qtrue;
+		}
+		if (option == NEWBOTAI_WALLESC_HOP_OVER && NewBotAI_WallEscapeHeadroomOverEnemy(bs))
+		{
+			*side = 0;
+			return qtrue;
+		}
+		return qfalse;
+	}
+	default:
+		return qfalse;
+	}
+}
+
+static int NewBotAI_ChooseWallEscape(bot_state_t *bs, const vec3_t wallNormal)
+{
+	int weights[NEWBOTAI_WALLESC_COUNT];
+	int sides[NEWBOTAI_WALLESC_COUNT];
+	int bonuses[NEWBOTAI_WALLESC_COUNT];
+	const int stimulus = NewBotAI_GetEnemyStimulusToken(bs);
+	int total = 0;
+	int option;
+	int roll;
+
+	bs->wallEscapeSide = Q_irand(0, 1) ? 1 : -1;
+	for (option = 0; option < NEWBOTAI_WALLESC_COUNT; option++)
+	{
+		int response, follow;
+
+		weights[option] = 0;
+		sides[option] = bs->wallEscapeSide;
+		bonuses[option] = 0;
+		if (option == NEWBOTAI_WALLESC_NONE ||
+			!NewBotAI_WallEscapeOptionValid(bs, option, &sides[option]))
+			continue;
+		NewBotAI_WallEscapeTokens(option, &response, &follow);
+		bonuses[option] = G_BotLearnBonus(&g_entities[bs->client], bs->currentEnemy,
+			stimulus, response, follow, bs->settings.skill);
+		weights[option] = NEWBOTAI_WALL_ESCAPE_BASE_WEIGHT + bonuses[option];
+		if (weights[option] < NEWBOTAI_WALL_ESCAPE_MIN_WEIGHT)
+			weights[option] = NEWBOTAI_WALL_ESCAPE_MIN_WEIGHT;
+		total += weights[option];
+	}
+	if (total <= 0)
+		return NEWBOTAI_WALLESC_NONE;
+
+	roll = Q_irand(0, total - 1);
+	for (option = 1; option < NEWBOTAI_WALLESC_COUNT; option++)
+	{
+		if (roll < weights[option])
+			break;
+		roll -= weights[option];
+	}
+	if (option >= NEWBOTAI_WALLESC_COUNT)
+		return NEWBOTAI_WALLESC_NONE;
+
+	{
+		int response, follow;
+		NewBotAI_WallEscapeTokens(option, &response, &follow);
+		G_BotLearnDecision(&g_entities[bs->client], bs->currentEnemy, stimulus, response,
+			follow, bonuses[option]);
+	}
+	bs->wallEscapeSide = sides[option];
+	bs->wallEscapeYaw = vectoyaw(wallNormal) + 180.0f;
+	if (bot_learning_debug.integer)
+	{
+		Com_Printf("^3[wall escape]^7 %s: %s (weight %d of %d, learned %+d)\n",
+			g_entities[bs->client].client->pers.netname, NewBotAI_WallEscapeName(option),
+			weights[option], total, bonuses[option]);
+	}
+	return option;
+}
+
+static void NewBotAI_WallEscapeFaceEnemy(bot_state_t *bs)
+{
+	vec3_t toEnemy, angles;
+
+	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->cur_ps.origin, toEnemy);
+	vectoangles(toEnemy, angles);
+	bs->ideal_viewangles[YAW] = angles[YAW];
+}
+
+static void NewBotAI_WallEscapeDrain(bot_state_t *bs)
+{
+	if (NewBotAI_WallEscapeCanDrain(bs))
+	{
+		level.clients[bs->client].ps.fd.forcePowerSelected = FP_DRAIN;
+		trap->EA_ForcePower(bs->client);
+	}
+}
+
+static void NewBotAI_WallEscapeSideMove(bot_state_t *bs)
+{
+	if (bs->wallEscapeSide < 0)
+		trap->EA_MoveLeft(bs->client);
+	else if (bs->wallEscapeSide > 0)
+		trap->EA_MoveRight(bs->client);
+}
+
+//Runs (and if needed picks) a retreat wall escape. Returns qtrue while an escape owns
+//this think's movement.
+static qboolean NewBotAI_RunRetreatWallEscape(bot_state_t *bs)
+{
+	vec3_t wallNormal;
+	int age;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		if (bs)
+			bs->wallEscapeOption = NEWBOTAI_WALLESC_NONE;
+		return qfalse;
+	}
+	if (bs->wallEscapeOption != NEWBOTAI_WALLESC_NONE &&
+		(bs->wallEscapeUntil <= level.time || bs->wallEscapeStart > level.time))
+	{
+		bs->wallEscapeOption = NEWBOTAI_WALLESC_NONE;
+		bs->wallEscapeNextTime = level.time + NEWBOTAI_WALL_ESCAPE_RETRY_MS;
+	}
+	if (bs->wallEscapeOption == NEWBOTAI_WALLESC_NONE)
+	{
+		if ((bs->wallEscapeNextTime > level.time &&
+				bs->wallEscapeNextTime - level.time <= NEWBOTAI_WALL_ESCAPE_RETRY_MS) ||
+			!NewBotAI_RetreatWallImminent(bs, wallNormal))
+			return qfalse;
+		bs->wallEscapeOption = NewBotAI_ChooseWallEscape(bs, wallNormal);
+		if (bs->wallEscapeOption == NEWBOTAI_WALLESC_NONE)
+		{
+			bs->wallEscapeNextTime = level.time + 250;
+			return qfalse;
+		}
+		bs->wallEscapeStart = level.time;
+		bs->wallEscapeUntil = level.time + NEWBOTAI_WALL_ESCAPE_COMMIT_MS;
+	}
+
+	age = level.time - bs->wallEscapeStart;
+	switch (bs->wallEscapeOption)
+	{
+	case NEWBOTAI_WALLESC_WALLRUN:
+		//Turn into the wall and run up it: forward + jump, then tap jump near the wall.
+		bs->ideal_viewangles[YAW] = AngleNormalize360(bs->wallEscapeYaw);
+		bs->ideal_viewangles[PITCH] = 0.0f;
+		NewBotAI_StartEscapeYawOverride(bs, 200);
+		trap->EA_MoveForward(bs->client);
+		if (age > 100 && bs->cur_ps.groundEntityNum != ENTITYNUM_NONE && age < 500)
+			trap->EA_Jump(bs->client);
+		else if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE)
+		{
+			const float groundDist = BS_GroundDistance(bs);
+			if (groundDist > 20 && groundDist < 40)
+				trap->EA_Jump(bs->client);
+		}
+		break;
+	case NEWBOTAI_WALLESC_FLIPKICK_DRAIN:
+		NewBotAI_WallEscapeFaceEnemy(bs);
+		if (age < 600)
+		{
+			trap->EA_MoveForward(bs->client);
+			NewBotAI_Flipkick(bs);
+		}
+		else
+		{
+			NewBotAI_WallEscapeDrain(bs);
+			NewBotAI_WallEscapeSideMove(bs);
+		}
+		break;
+	case NEWBOTAI_WALLESC_DRAIN_FLIPKICK:
+		NewBotAI_WallEscapeFaceEnemy(bs);
+		if (age < 350)
+		{
+			NewBotAI_WallEscapeDrain(bs);
+			trap->EA_MoveForward(bs->client);
+		}
+		else
+		{
+			trap->EA_MoveForward(bs->client);
+			NewBotAI_Flipkick(bs);
+		}
+		break;
+	case NEWBOTAI_WALLESC_ROLL_AROUND:
+		//A crouch while running on the ground starts a roll; aim it past the enemy.
+		NewBotAI_WallEscapeFaceEnemy(bs);
+		trap->EA_MoveForward(bs->client);
+		NewBotAI_WallEscapeSideMove(bs);
+		if (age > 50 && age < 400 && bs->cur_ps.groundEntityNum != ENTITYNUM_NONE)
+			trap->EA_Crouch(bs->client);
+		break;
+	case NEWBOTAI_WALLESC_HOP_OVER:
+		NewBotAI_WallEscapeFaceEnemy(bs);
+		trap->EA_MoveForward(bs->client);
+		NewBotAI_WallEscapeSideMove(bs);
+		if (age < 300 && bs->cur_ps.groundEntityNum != ENTITYNUM_NONE)
+			trap->EA_Jump(bs->client);
+		break;
+	default:
+		bs->wallEscapeOption = NEWBOTAI_WALLESC_NONE;
+		return qfalse;
+	}
+	return qtrue;
+}
+
 void NewBotAI_GetMovement(bot_state_t *bs)
 {
 	const int hisWeapon = bs->currentEnemy->client->ps.weapon;
@@ -12805,11 +13169,14 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 			//our normal forward approach. Attacks and jumps are unaffected -- they're decided by
 			//NewBotAI_GetAttack and this block, respectively -- only the forward/back choice changes.
 			bs->combatAction = BOT_COMBAT_ACTION_RETREAT_DEFENSE;
-			NewBotAI_RetreatDiagonal(bs, qtrue);
-			if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE - 1 &&
-				(!NewBotAI_TouchingWallNotEnemy(bs) || NewBotAI_ShouldWallrunAgainstWalls(bs)))
+			if (!NewBotAI_RunRetreatWallEscape(bs))
 			{
-				trap->EA_Jump(bs->client);
+				NewBotAI_RetreatDiagonal(bs, qtrue);
+				if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE - 1 &&
+					(!NewBotAI_TouchingWallNotEnemy(bs) || NewBotAI_ShouldWallrunAgainstWalls(bs)))
+				{
+					trap->EA_Jump(bs->client);
+				}
 			}
 		}
 		else if (!pressAdvantage && ((g_entities[bs->client].health < hardRetreatHealth) ||
@@ -12831,7 +13198,10 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 			//If we are touching a suitable wall, insta 180 and wallrun it
 			//stay in wallrun until end then jump
 
-			if (bs->frame_Enemy_Len > 200) {
+			if (NewBotAI_RunRetreatWallEscape(bs)) {
+				wallRun = qtrue; //a wall escape owns this think's movement
+			}
+			else if (bs->frame_Enemy_Len > 200) {
 				const float horizontalSpeedSquared = bs->cur_ps.velocity[0] * bs->cur_ps.velocity[0] +
 					bs->cur_ps.velocity[1] * bs->cur_ps.velocity[1];
 				//Only treat this as a real wall block (and worth a 180+jump escape) when we

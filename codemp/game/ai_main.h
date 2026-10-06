@@ -506,6 +506,12 @@ typedef struct bot_state_s
 	int					duelStalemateOtherNum; // -4: bot we are idling next to without a duel
 	int					duelStalemateSince; // level.time the stalemate started
 	int					duelRoamUntil; // -4: roam via waypoints after breaking a stalemate
+	int					wallEscapeOption; // retreat wall escape currently committed to (NEWBOTAI_WALLESC_*)
+	int					wallEscapeStart; // level.time the wall escape was chosen
+	int					wallEscapeUntil; // commit timer: no switching options before this
+	int					wallEscapeNextTime; // earliest time a new wall escape may be chosen
+	int					wallEscapeSide; // -1 left / 1 right for roll and hop escapes
+	float				wallEscapeYaw; // yaw facing the wall for the vertical wallrun escape
 
 	int					conserveUntil; // while > level.time, bot disengages (no force power use) to regen FP - see bot_conservation
 	int					conserveNextRollTime; // debounce between chances to start a new conservation window

@@ -39,6 +39,7 @@ static char LOCAL_DUELTRACK_DB_PATH[MAX_OSPATH];
 #define TRACKED_CAPTURE_VERSION 13
 #define TRACKED_FORCE_NOTE_SELECTED_FALLBACK "selected_fallback"
 #define TRACKED_AIR_NOTE_JUMP "jump"
+#define TRACKED_DECISION_NOTE_WALL_ESCAPE "wallescape"
 #define TRACKED_DUEL_MAX_EVENTS 8192
 #define TRACKED_DUEL_TUTORIAL_MAX_MESSAGES 3
 #define TRACKED_DUEL_TUTORIAL_COOLDOWN_MS 7000
@@ -2298,7 +2299,9 @@ void G_BotLearnDecision(gentity_t *self, gentity_t *enemy, int stimulus, int res
 		return;
 	G_AddTrackedDuelEvent(runtime, DUEL_TRACK_EVENT_DECISION, level.time - runtime->duelStartTime,
 		0, DUEL_TRACK_POWER_UNKNOWN, G_InferTrackedForceState(self, enemy),
-		G_GetTrackedRangeBucket(self, enemy), "selected", self, enemy);
+		G_GetTrackedRangeBucket(self, enemy),
+		(response >= BOTLEARN_TOK_WALLRUN && response <= BOTLEARN_TOK_HOP) ?
+			TRACKED_DECISION_NOTE_WALL_ESCAPE : "selected", self, enemy);
 	if (!runtime->eventCount)
 		return;
 	event = &runtime->events[runtime->eventCount - 1];
@@ -3785,6 +3788,14 @@ static int G_BotLearnTokenForTrackedEvent(const tracked_duel_event_t *event)
 		return (event->amount && !Q_stricmp(event->note, TRACKED_AIR_NOTE_JUMP)) ? BOTLEARN_TOK_JUMP : BOTLEARN_TOK_NONE;
 	case DUEL_TRACK_EVENT_KNOCKDOWN:
 		return BOTLEARN_TOK_KNOCKDOWN;
+	case DUEL_TRACK_EVENT_DECISION:
+		//Wall-escape choices (wallrun / roll / hop) have no engine event of their own, so
+		//the recorded decision stands in for the action in learned sequences.
+		if (!Q_stricmp(event->note, TRACKED_DECISION_NOTE_WALL_ESCAPE) &&
+			event->learnedResponse >= BOTLEARN_TOK_WALLRUN &&
+			event->learnedResponse <= BOTLEARN_TOK_HOP)
+			return event->learnedResponse;
+		return BOTLEARN_TOK_NONE;
 	default:
 		return BOTLEARN_TOK_NONE;
 	}

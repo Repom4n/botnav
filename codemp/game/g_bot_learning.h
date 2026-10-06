@@ -27,13 +27,18 @@ typedef enum
 	BOTLEARN_TOK_KICK,
 	BOTLEARN_TOK_JUMP,
 	BOTLEARN_TOK_KNOCKDOWN,
+	/* Wall-escape responses (appended so stored token ids keep their meaning). */
+	BOTLEARN_TOK_WALLRUN,
+	BOTLEARN_TOK_ROLL,
+	BOTLEARN_TOK_HOP,
 	BOTLEARN_TOK_COUNT
 } botlearn_token_t;
 
 /* SQL CASE arms mapping token ids to BotLearn_TokenName strings (keep in sync). */
 #define BOTLEARN_SQL_TOKEN_CASES \
 	"WHEN 1 THEN 'idle' WHEN 2 THEN 'push' WHEN 3 THEN 'pull' WHEN 4 THEN 'grip' WHEN 5 THEN 'drain' " \
-	"WHEN 6 THEN 'throw' WHEN 7 THEN 'swing' WHEN 8 THEN 'kick' WHEN 9 THEN 'jump' WHEN 10 THEN 'knockdown' ELSE 'none'"
+	"WHEN 6 THEN 'throw' WHEN 7 THEN 'swing' WHEN 8 THEN 'kick' WHEN 9 THEN 'jump' WHEN 10 THEN 'knockdown' " \
+	"WHEN 11 THEN 'wallrun' WHEN 12 THEN 'roll' WHEN 13 THEN 'hop' ELSE 'none'"
 
 #define BOTLEARN_RESPONSE_WINDOW_MS 700
 #define BOTLEARN_FOLLOWUP_WINDOW_MS 1000
@@ -175,7 +180,8 @@ typedef struct
 static inline const char *BotLearn_TokenName(int token)
 {
 	static const char *names[BOTLEARN_TOK_COUNT] = {
-		"none", "idle", "push", "pull", "grip", "drain", "throw", "swing", "kick", "jump", "knockdown"
+		"none", "idle", "push", "pull", "grip", "drain", "throw", "swing", "kick", "jump", "knockdown",
+		"wallrun", "roll", "hop"
 	};
 	if (token < 0 || token >= BOTLEARN_TOK_COUNT)
 		return "none";
@@ -184,7 +190,8 @@ static inline const char *BotLearn_TokenName(int token)
 
 static inline int BotLearn_IsResponseToken(int token)
 {
-	return (token >= BOTLEARN_TOK_PUSH && token <= BOTLEARN_TOK_JUMP) ? 1 : 0;
+	return ((token >= BOTLEARN_TOK_PUSH && token <= BOTLEARN_TOK_JUMP) ||
+		(token >= BOTLEARN_TOK_WALLRUN && token <= BOTLEARN_TOK_HOP)) ? 1 : 0;
 }
 
 static inline int BotLearn_HealthArmorBucket(int healthArmor)
