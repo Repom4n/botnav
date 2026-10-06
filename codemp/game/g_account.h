@@ -2,6 +2,45 @@
 #define G_ACCOUNT_H
 
 #include "sqlite3.h"
+#include <stdlib.h>
+#include <string.h>
+
+static inline void G_ReleaseTrackedPersistSnapshots(void *job, size_t jobSize,
+	void *winnerEvents, void *loserEvents)
+{
+	free(winnerEvents);
+	free(loserEvents);
+	memset(job, 0, jobSize);
+}
+
+static inline int G_TrackedPersistQueueSlot(int head, int count, int capacity)
+{
+	if (count < 0 || count >= capacity || head < 0 || head >= capacity)
+		return -1;
+	return (head + count) % capacity;
+}
+
+/* A blocked step must yield immediately, never spin or release the queued job. */
+static inline int G_DrainTrackedPersistJob(void *job, int (*step)(void *),
+	int *stage, int *cursor, sqlite3_int64 *summaryId, int maxSteps,
+	int (*milliseconds)(void), int budgetMs)
+{
+	const int start = milliseconds ? milliseconds() : 0;
+	int i;
+	for (i = 0; i < maxSteps; i++)
+	{
+		const int savedStage = *stage;
+		const int savedCursor = *cursor;
+		const sqlite3_int64 savedSummaryId = *summaryId;
+		if (milliseconds && milliseconds() - start >= budgetMs)
+			return 0;
+		if (!step(job))
+			return 1;
+		if (*stage == savedStage && *cursor == savedCursor && *summaryId == savedSummaryId)
+			return 0;
+	}
+	return 0;
+}
 
 static inline int G_TrackedPersistRetryable(int status)
 {

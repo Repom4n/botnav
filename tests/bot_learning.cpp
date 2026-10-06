@@ -61,6 +61,45 @@ namespace
 			return value;
 		}
 	};
+
+	struct DrainJob
+	{
+		int stage = 0, cursor = 0, attempts = 0, completed = 0;
+		sqlite3_int64 summaryId = 0;
+		sqlite3 *db = NULL;
+	};
+
+	int ProgressDrainStep(void *data)
+	{
+		DrainJob *job = static_cast<DrainJob *>(data);
+		job->attempts++;
+		job->cursor++;
+		return 1;
+	}
+
+	int SQLiteDrainStep(void *data)
+	{
+		DrainJob *job = static_cast<DrainJob *>(data);
+		job->attempts++;
+		const int status = G_BeginTrackedPersistTransaction(job->db);
+		if (G_TrackedPersistRetryable(status))
+			return 1;
+		BOOST_REQUIRE_EQUAL(status, SQLITE_OK);
+		BOOST_REQUIRE_EQUAL(sqlite3_exec(job->db, "INSERT INTO LocalDuelTrackSummary(id) VALUES(2)",
+			NULL, NULL, NULL), SQLITE_OK);
+		job->stage = 1;
+		job->summaryId = 2;
+		BOOST_REQUIRE_EQUAL(G_FinishTrackedPersistTransaction(job->db, SQLITE_OK,
+			&job->stage, &job->cursor, &job->summaryId, 0, 0, 0), SQLITE_OK);
+		job->completed = 1;
+		return 0;
+	}
+
+	int drainTestClock;
+	int DrainTestMilliseconds()
+	{
+		return drainTestClock++;
+	}
 }
 
 BOOST_AUTO_TEST_SUITE( bot_learning )
@@ -255,6 +294,83 @@ BOOST_AUTO_TEST_CASE(pending_save_recognizes_extended_retryable_status_codes)
 	BOOST_CHECK(G_TrackedPersistRetryable(SQLITE_BUSY | (1 << 8)));
 	BOOST_CHECK(G_TrackedPersistRetryable(SQLITE_LOCKED | (1 << 8)));
 	BOOST_CHECK(!G_TrackedPersistRetryable(SQLITE_CONSTRAINT));
+}
+
+BOOST_AUTO_TEST_CASE(blocked_drain_yields_after_one_attempt_and_retains_job_for_retry)
+{
+	const char *uri = "file:pending-save-drain?mode=memory&cache=shared";
+	LearningDatabase database(uri);
+	sqlite3 *writer = NULL;
+	BOOST_REQUIRE_EQUAL(sqlite3_open_v2(uri, &writer,
+		SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_URI, NULL), SQLITE_OK);
+	BOOST_REQUIRE_EQUAL(sqlite3_exec(writer, "BEGIN IMMEDIATE", NULL, NULL, NULL), SQLITE_OK);
+	DrainJob job;
+	job.db = database.db;
+	BOOST_CHECK_EQUAL(G_DrainTrackedPersistJob(&job, SQLiteDrainStep,
+		&job.stage, &job.cursor, &job.summaryId, 128, NULL, 0), 0);
+	BOOST_CHECK_EQUAL(job.attempts, 1);
+	BOOST_CHECK_EQUAL(job.completed, 0);
+	BOOST_CHECK_EQUAL(job.stage, 0);
+	BOOST_CHECK_EQUAL(job.cursor, 0);
+	BOOST_CHECK_EQUAL(job.summaryId, 0);
+	BOOST_REQUIRE_EQUAL(sqlite3_exec(writer, "COMMIT", NULL, NULL, NULL), SQLITE_OK);
+	BOOST_CHECK_EQUAL(G_DrainTrackedPersistJob(&job, SQLiteDrainStep,
+		&job.stage, &job.cursor, &job.summaryId, 128, NULL, 0), 1);
+	BOOST_CHECK_EQUAL(job.attempts, 2);
+	BOOST_CHECK_EQUAL(job.completed, 1);
+	BOOST_CHECK_EQUAL(database.Scalar("SELECT COUNT(*) FROM LocalDuelTrackSummary WHERE id=2"), 1);
+	BOOST_CHECK_EQUAL(sqlite3_close(writer), SQLITE_OK);
+}
+
+BOOST_AUTO_TEST_CASE(drain_step_budget_is_bounded_even_when_job_keeps_progressing)
+{
+	DrainJob job;
+	BOOST_CHECK_EQUAL(G_DrainTrackedPersistJob(&job, ProgressDrainStep,
+		&job.stage, &job.cursor, &job.summaryId, 4, NULL, 0), 0);
+	BOOST_CHECK_EQUAL(job.attempts, 4);
+	BOOST_CHECK_EQUAL(job.cursor, 4);
+	BOOST_CHECK_EQUAL(job.completed, 0);
+}
+
+BOOST_AUTO_TEST_CASE(drain_wall_clock_budget_retains_unfinished_work)
+{
+	DrainJob job;
+	drainTestClock = 0;
+	BOOST_CHECK_EQUAL(G_DrainTrackedPersistJob(&job, ProgressDrainStep,
+		&job.stage, &job.cursor, &job.summaryId, 128, DrainTestMilliseconds, 3), 0);
+	BOOST_CHECK_EQUAL(job.attempts, 2);
+	BOOST_CHECK_EQUAL(job.cursor, 2);
+	BOOST_CHECK_EQUAL(job.completed, 0);
+}
+
+BOOST_AUTO_TEST_CASE(full_queue_never_reuses_an_existing_job_slot)
+{
+	BOOST_CHECK_EQUAL(G_TrackedPersistQueueSlot(3, 8, 8), -1);
+	BOOST_CHECK_EQUAL(G_TrackedPersistQueueSlot(3, 9, 8), -1);
+	BOOST_CHECK_EQUAL(G_TrackedPersistQueueSlot(3, 7, 8), 2);
+	BOOST_CHECK_EQUAL(G_TrackedPersistQueueSlot(3, 0, 8), 3);
+	BOOST_CHECK_EQUAL(G_TrackedPersistQueueSlot(3, 0, 0), -1);
+}
+
+BOOST_AUTO_TEST_CASE(terminal_snapshot_cleanup_releases_both_buffers_without_changing_learning)
+{
+	LearningDatabase database;
+	struct Snapshot {
+		int stage;
+		char *winnerEvents, *loserEvents;
+	} job = { 5, static_cast<char *>(malloc(64)), static_cast<char *>(malloc(128)) };
+	BOOST_REQUIRE(job.winnerEvents != NULL);
+	BOOST_REQUIRE(job.loserEvents != NULL);
+	memset(job.winnerEvents, 1, 64);
+	memset(job.loserEvents, 2, 128);
+	G_ReleaseTrackedPersistSnapshots(&job, sizeof(job), job.winnerEvents, job.loserEvents);
+	BOOST_CHECK_EQUAL(job.stage, 0);
+	BOOST_CHECK(job.winnerEvents == NULL);
+	BOOST_CHECK(job.loserEvents == NULL);
+	G_ReleaseTrackedPersistSnapshots(&job, sizeof(job), job.winnerEvents, job.loserEvents);
+	BOOST_CHECK_EQUAL(database.Scalar("SELECT samples FROM LocalBotLearnedSequence"), 42);
+	BOOST_CHECK_EQUAL(database.Scalar("SELECT COUNT(*) FROM LocalBotLearnedEvidence"), 1);
+	BOOST_CHECK_EQUAL(database.Scalar("SELECT COUNT(*) FROM LocalDuelTrackSummary"), 1);
 }
 
 BOOST_AUTO_TEST_CASE( wall_escape_tokens_are_appended_responses )

@@ -4202,9 +4202,13 @@ void Svcmd_BotLearn_f(void)
 //check + thousands of row inserts + learning extraction + fsync), which showed up as a
 //lag spike on every recorded duel. Finished duels are now queued and written a small
 //step per server frame on one persistent WAL connection; anything still queued is
-//flushed synchronously at shutdown so no duel is lost.
+//flushed within a bounded shutdown budget; unflushed snapshots are reported and freed.
 #define TRACKED_PERSIST_QUEUE_SIZE 8
 #define TRACKED_PERSIST_EVENT_CHUNK 200
+#define TRACKED_PERSIST_OVERFLOW_STEPS 128
+#define TRACKED_PERSIST_OVERFLOW_BUDGET_MS 10
+#define TRACKED_PERSIST_SHUTDOWN_STEPS 128
+#define TRACKED_PERSIST_SHUTDOWN_BUDGET_MS 1000
 
 typedef enum
 {
@@ -4427,9 +4431,7 @@ static void G_TrackedPersistFinishJob(tracked_persist_job_t *job, qboolean ok)
 		}
 		g_learningCacheDirty = qtrue;
 	}
-	free(job->winner.events);
-	free(job->loser.events);
-	memset(job, 0, sizeof(*job));
+	G_ReleaseTrackedPersistSnapshots(job, sizeof(*job), job->winner.events, job->loser.events);
 }
 
 //Runs one bounded unit of work for the job. Returns qfalse once the job is finished
@@ -4536,39 +4538,48 @@ static void G_TrackedPersistPopHead(void)
 	g_trackedPersistCount--;
 }
 
-//Synchronously completes the oldest queued job (queue overflow / shutdown path).
-static void G_TrackedPersistDrainHead(void)
+static int G_TrackedPersistDrainStep(void *job)
+{
+	return G_TrackedPersistStep((tracked_persist_job_t *)job);
+}
+
+//Only pop a completed job; contention or exhausted budgets leave it queued.
+static qboolean G_TrackedPersistDrainHead(int maxSteps, int budgetMs)
 {
 	tracked_persist_job_t *job;
-	int guard = 0;
 
 	if (g_trackedPersistCount <= 0)
-		return;
+		return qtrue;
 	job = &g_trackedPersistQueue[g_trackedPersistHead];
-	//A BUSY begin returns qtrue without progress; bound the retries so shutdown never hangs.
-	while (G_TrackedPersistStep(job))
-	{
-		if (++guard > 100000)
-		{
-			G_TrackedPersistFinishJob(job, qfalse);
-			break;
-		}
-	}
+	if (!G_DrainTrackedPersistJob(job, G_TrackedPersistDrainStep,
+		&job->stage, &job->eventCursor, &job->summaryId, maxSteps, trap->Milliseconds, budgetMs))
+		return qfalse;
 	G_TrackedPersistPopHead();
+	return qtrue;
 }
 
 static void G_PersistTrackedDuel(tracked_duel_runtime_t *winnerRuntime, tracked_duel_runtime_t *loserRuntime, int duelType, qboolean draw)
 {
 	tracked_persist_job_t *job;
 	time_t rawtime;
+	int slot;
 	const int duration = (winnerRuntime && winnerRuntime->duelStartTime > 0) ? (level.time - winnerRuntime->duelStartTime) : 0;
 
 	if (!winnerRuntime || !loserRuntime)
 		return;
 	if (g_trackedPersistCount >= TRACKED_PERSIST_QUEUE_SIZE)
-		G_TrackedPersistDrainHead();
+		G_TrackedPersistDrainHead(TRACKED_PERSIST_OVERFLOW_STEPS, TRACKED_PERSIST_OVERFLOW_BUDGET_MS);
+	slot = G_TrackedPersistQueueSlot(g_trackedPersistHead, g_trackedPersistCount, TRACKED_PERSIST_QUEUE_SIZE);
+	if (slot < 0)
+	{
+		trap->Print("Duel tracking: save queue full (%i); incoming duel %s vs %s cannot be saved. Existing queued saves were retained.\n",
+			g_trackedPersistCount, winnerRuntime->identityKey, loserRuntime->identityKey);
+		G_DuelCaptureClearRuntime(winnerRuntime, sizeof(*winnerRuntime), winnerRuntime->events);
+		G_DuelCaptureClearRuntime(loserRuntime, sizeof(*loserRuntime), loserRuntime->events);
+		return;
+	}
 
-	job = &g_trackedPersistQueue[(g_trackedPersistHead + g_trackedPersistCount) % TRACKED_PERSIST_QUEUE_SIZE];
+	job = &g_trackedPersistQueue[slot];
 	memset(job, 0, sizeof(*job));
 	//Take ownership of the runtimes (including their event buffers).
 	G_DuelCaptureMoveRuntime(&job->winner, winnerRuntime, sizeof(job->winner));
@@ -4605,7 +4616,21 @@ void G_TrackedPersistShutdown(void)
 	const int pending = g_trackedPersistCount;
 
 	while (g_trackedPersistCount > 0)
-		G_TrackedPersistDrainHead();
+	{
+		const int remaining = TRACKED_PERSIST_SHUTDOWN_BUDGET_MS - (trap->Milliseconds() - start);
+		if (remaining <= 0 || !G_TrackedPersistDrainHead(TRACKED_PERSIST_SHUTDOWN_STEPS, remaining))
+			break;
+	}
+	if (g_trackedPersistCount > 0)
+	{
+		trap->Print("Duel tracking: shutdown could not finish %i queued saves; unsaved recordings are lost and their snapshots are being freed. Already committed tracking and learned data are unchanged.\n",
+			g_trackedPersistCount);
+		while (g_trackedPersistCount > 0)
+		{
+			G_TrackedPersistFinishJob(&g_trackedPersistQueue[g_trackedPersistHead], qfalse);
+			G_TrackedPersistPopHead();
+		}
+	}
 	if (pending > 0)
 		G_PerfWarn("duel persist shutdown flush", trap->Milliseconds() - start);
 	G_CloseTrackedPersistDB();
