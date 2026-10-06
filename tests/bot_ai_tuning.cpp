@@ -145,6 +145,37 @@ BOOST_AUTO_TEST_CASE( strafejump_route_safety_rejects_each_hazard_class )
 	BOOST_CHECK( !BotSFJ_RouteSafetyAllows( 1, 1, 1, 0.8f, 0.7f ) );
 }
 
+BOOST_AUTO_TEST_CASE( strafejump_route_hint_matches_start_and_route_body )
+{
+	const float start[3] = { 0.0f, 0.0f, 0.0f };
+	const float end[3] = { 1000.0f, 0.0f, 0.0f };
+	float progress = -1.0f;
+	const float nearStart[3] = { -50.0f, 30.0f, 10.0f };
+	const float alongside[3] = { 400.0f, 80.0f, 0.0f };
+	const float tooWide[3] = { 400.0f, 120.0f, 0.0f };
+	const float pastEnd[3] = { 900.0f, 0.0f, 0.0f };
+	const float farBehind[3] = { -200.0f, 0.0f, 0.0f };
+	const float tooHigh[3] = { 400.0f, 0.0f, 100.0f };
+
+	BOOST_CHECK( BotSFJ_RouteHintProgress( nearStart, start, end, 96.0f, 96.0f, 64.0f, 0.85f, &progress ) );
+	BOOST_CHECK( progress < 0.0f );
+	BOOST_CHECK( BotSFJ_RouteHintProgress( alongside, start, end, 96.0f, 96.0f, 64.0f, 0.85f, &progress ) );
+	BOOST_CHECK_CLOSE( progress, 0.4f, 0.01f );
+	BOOST_CHECK( !BotSFJ_RouteHintProgress( tooWide, start, end, 96.0f, 96.0f, 64.0f, 0.85f, &progress ) );
+	BOOST_CHECK( !BotSFJ_RouteHintProgress( pastEnd, start, end, 96.0f, 96.0f, 64.0f, 0.85f, &progress ) );
+	BOOST_CHECK( !BotSFJ_RouteHintProgress( farBehind, start, end, 96.0f, 96.0f, 64.0f, 0.85f, &progress ) );
+	BOOST_CHECK( !BotSFJ_RouteHintProgress( tooHigh, start, end, 96.0f, 96.0f, 64.0f, 0.85f, &progress ) );
+}
+
+BOOST_AUTO_TEST_CASE( strafejump_route_hint_min_speed_gates_late_takeoff )
+{
+	BOOST_CHECK( BotSFJ_RouteHintSpeedAllows( 0.2f, 1, 300.0f, 450.0f ) );
+	BOOST_CHECK( !BotSFJ_RouteHintSpeedAllows( 0.6f, 1, 300.0f, 450.0f ) );
+	BOOST_CHECK( BotSFJ_RouteHintSpeedAllows( 0.6f, 1, 460.0f, 450.0f ) );
+	BOOST_CHECK( BotSFJ_RouteHintSpeedAllows( 0.6f, 0, 300.0f, 450.0f ) );
+	BOOST_CHECK( BotSFJ_RouteHintSpeedAllows( 0.6f, 1, 300.0f, 0.0f ) );
+}
+
 BOOST_AUTO_TEST_CASE( ptk_armor_penalty_tracks_force_lead )
 {
 	BOOST_CHECK_EQUAL( NewBotAI_AdjustPTKWeightForArmor( 50, 0, 0 ), 50 );

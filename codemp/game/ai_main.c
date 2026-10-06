@@ -2746,6 +2746,203 @@ static qboolean BotSFJ_GetEnemyCorridor(bot_state_t *bs, const vec3_t moveDirect
 }
 
 /*
+ * Hand-authored strafe-jump routes, read once per map from
+ * botroutes/<map>.botroute (or routes/<map>.botroute):
+ *
+ *   strafejump
+ *   {
+ *       start_pos   1200.5 -450.0 128.0
+ *       end_pos     1850.0 -450.0 128.0
+ *       min_speed   450
+ *   }
+ *
+ * src_area/dest_area from AAS-based route files are accepted and ignored; these
+ * bots navigate by waypoints, so a hint is matched by position instead.
+ */
+#define BOT_SFJ_MAX_ROUTE_HINTS 64
+#define BOT_SFJ_ROUTE_FILE_MAX 65536
+
+typedef struct
+{
+	vec3_t start;
+	vec3_t end;
+	float minSpeed;
+} bot_sfj_route_hint_t;
+
+static bot_sfj_route_hint_t g_botSfjRouteHints[BOT_SFJ_MAX_ROUTE_HINTS];
+static int g_botSfjRouteHintCount;
+static qboolean g_botSfjRouteHintsLoaded; /* the game module is reloaded on map change */
+
+static qboolean BotSFJ_ParseRouteVector(const char **text, vec3_t out)
+{
+	int i;
+
+	for (i = 0; i < 3; i++)
+	{
+		if (COM_ParseFloat(text, &out[i]))
+			return qfalse;
+	}
+	return qtrue;
+}
+
+static void BotSFJ_ParseRouteHints(const char *buffer, const char *path)
+{
+	const char *text = buffer;
+	char *token;
+
+	COM_BeginParseSession(path);
+	while (1)
+	{
+		bot_sfj_route_hint_t hint;
+		qboolean haveStart = qfalse, haveEnd = qfalse, valid = qtrue;
+
+		token = COM_ParseExt(&text, qtrue);
+		if (!token[0])
+			break;
+		if (Q_stricmp(token, "strafejump"))
+		{
+			if (!strcmp(token, "{"))
+				SkipBracedSection(&text, 1);
+			continue;
+		}
+		token = COM_ParseExt(&text, qtrue);
+		if (strcmp(token, "{"))
+		{
+			trap->Print(S_COLOR_YELLOW "%s: expected { after strafejump\n", path);
+			break;
+		}
+		memset(&hint, 0, sizeof(hint));
+		while (1)
+		{
+			token = COM_ParseExt(&text, qtrue);
+			if (!token[0])
+			{
+				trap->Print(S_COLOR_YELLOW "%s: unexpected end of file\n", path);
+				valid = qfalse;
+				break;
+			}
+			if (!strcmp(token, "}"))
+				break;
+			if (!Q_stricmp(token, "start_pos"))
+			{
+				if (BotSFJ_ParseRouteVector(&text, hint.start))
+					haveStart = qtrue;
+				else
+					valid = qfalse;
+			}
+			else if (!Q_stricmp(token, "end_pos"))
+			{
+				if (BotSFJ_ParseRouteVector(&text, hint.end))
+					haveEnd = qtrue;
+				else
+					valid = qfalse;
+			}
+			else if (!Q_stricmp(token, "min_speed"))
+			{
+				if (COM_ParseFloat(&text, &hint.minSpeed))
+					valid = qfalse;
+			}
+			else
+				COM_ParseExt(&text, qfalse); /* src_area, dest_area, unknown keys */
+		}
+		if (!valid || !haveStart || !haveEnd)
+		{
+			trap->Print(S_COLOR_YELLOW "%s: skipping strafejump block without valid start_pos/end_pos\n", path);
+			continue;
+		}
+		if (g_botSfjRouteHintCount >= BOT_SFJ_MAX_ROUTE_HINTS)
+		{
+			trap->Print(S_COLOR_YELLOW "%s: more than %i strafejump routes, ignoring the rest\n",
+				path, BOT_SFJ_MAX_ROUTE_HINTS);
+			break;
+		}
+		g_botSfjRouteHints[g_botSfjRouteHintCount++] = hint;
+	}
+}
+
+static void BotSFJ_LoadRouteHints(void)
+{
+	static const char *folders[] = { "botroutes", "routes" };
+	char mapname[MAX_QPATH];
+	char path[MAX_QPATH];
+	fileHandle_t f;
+	char *buffer;
+	int len;
+	int i;
+
+	if (g_botSfjRouteHintsLoaded)
+		return;
+	g_botSfjRouteHintsLoaded = qtrue;
+	g_botSfjRouteHintCount = 0;
+	trap->Cvar_VariableStringBuffer("mapname", mapname, sizeof(mapname));
+	if (!mapname[0])
+		return;
+	for (i = 0; i < (int)ARRAY_LEN(folders); i++)
+	{
+		Com_sprintf(path, sizeof(path), "%s/%s.botroute", folders[i], mapname);
+		len = trap->FS_Open(path, &f, FS_READ);
+		if (!f)
+			continue;
+		if (len <= 0 || len >= BOT_SFJ_ROUTE_FILE_MAX)
+		{
+			trap->Print(S_COLOR_YELLOW "%s: empty or larger than %i bytes, ignored\n",
+				path, BOT_SFJ_ROUTE_FILE_MAX);
+			trap->FS_Close(f);
+			return;
+		}
+		buffer = (char *)B_TempAlloc(len + 1);
+		trap->FS_Read(buffer, len, f);
+		trap->FS_Close(f);
+		buffer[len] = '\0';
+		BotSFJ_ParseRouteHints(buffer, path);
+		B_TempFree(len + 1);
+		trap->Print("Loaded %i strafe-jump route hint(s) from %s\n", g_botSfjRouteHintCount, path);
+		return;
+	}
+}
+
+/*
+ * Corridor from a .botroute hint the bot is standing on (or at the start of)
+ * and moving along.  Takes priority over the waypoint corridor; the takeoff arc
+ * is still validated like any other strafe jump.
+ */
+static qboolean BotSFJ_GetRouteHintCorridor(bot_state_t *bs, const playerState_t *ps,
+	const vec3_t moveDirection, vec3_t direction, vec3_t destination)
+{
+	const qboolean grounded = ps->groundEntityNum != ENTITYNUM_NONE;
+	const float horizontalSpeed = sqrtf(ps->velocity[0] * ps->velocity[0] +
+		ps->velocity[1] * ps->velocity[1]);
+	int i;
+
+	BotSFJ_LoadRouteHints();
+	for (i = 0; i < g_botSfjRouteHintCount; i++)
+	{
+		const bot_sfj_route_hint_t *hint = &g_botSfjRouteHints[i];
+		vec3_t toEnd;
+		float progress;
+
+		if (!BotSFJ_RouteHintProgress(ps->origin, hint->start, hint->end,
+				BOT_SFJ_ROUTE_HINT_START_RADIUS, BOT_SFJ_ROUTE_HINT_HALF_WIDTH,
+				BOT_SFJ_ROUTE_HINT_HEIGHT_TOLERANCE, BOT_SFJ_ROUTE_HINT_MAX_PROGRESS,
+				&progress))
+			continue;
+		VectorSubtract(hint->end, ps->origin, toEnd);
+		toEnd[2] = 0.0f;
+		if (VectorNormalize(toEnd) <= 0.0f || DotProduct(toEnd, moveDirection) < 0.7f)
+			continue;
+		if (!BotSFJ_RouteHintSpeedAllows(progress, grounded, horizontalSpeed, hint->minSpeed))
+		{
+			BotSFJ_DebugReject(bs, "route hint: below min_speed past the speed gate");
+			continue;
+		}
+		VectorCopy(toEnd, direction);
+		VectorCopy(hint->end, destination);
+		return qtrue;
+	}
+	return qfalse;
+}
+
+/*
  * Cheap per-frame hazard look-ahead while airborne: one hull trace along the
  * predicted velocity.  A wall, liquid or kill volume coming up ends the strafe
  * cleanly instead of letting the bot slam into it.
@@ -3088,9 +3285,14 @@ static void BotSFJ_SelectIntent(bot_state_t *bs)
 	retreating = (bs->combatAction == BOT_COMBAT_ACTION_RETREAT_DEFENSE ||
 		bs->runningLikeASissy || bs->runningToEscapeThreat || carryingFlag) ? qtrue : qfalse;
 
-	haveRoute = BotSFJ_GetOpenCorridor(bs, routeDirection, routeDestination);
-	if (haveRoute && DotProduct(effectiveDirection, routeDirection) < 0.5f)
-		haveRoute = qfalse;
+	haveRoute = BotSFJ_GetRouteHintCorridor(bs, ps, effectiveDirection,
+		routeDirection, routeDestination);
+	if (!haveRoute)
+	{
+		haveRoute = BotSFJ_GetOpenCorridor(bs, routeDirection, routeDestination);
+		if (haveRoute && DotProduct(effectiveDirection, routeDirection) < 0.5f)
+			haveRoute = qfalse;
+	}
 	if (!haveRoute && enemyClient &&
 		(retreating || bs->sfjPursuitLatched || enemyCarriesFlag))
 	{

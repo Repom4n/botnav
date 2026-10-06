@@ -134,6 +134,20 @@ During the temporary duel no-strafe gate, free selection boundaries deliberately
 
 Arc validation performs bounded swept player-hull integration (coarse 50 ms steps after the jump command) until a real static, walkable contact; unresolved falls are rejected rather than vertically probing for a floor. Walls, ceilings, dynamic blockers, lava, slime, no-drop/void areas, and instant-kill `trigger_hurt` volumes along the full arc reject the intent. The landing must fall inside the look-ahead corridor (64 units either side, up to 96 units past its end). To keep the cost down, the full arc is simulated at most once per 100 ms per bot while deciding, and once per takeoff/rejump; while airborne a single hull trace along the predicted velocity watches for a wall, liquid, or kill volume and cleanly releases control if one comes up. Instant-kill triggers are cached per map instead of being queried with an area search for every sample. Selection and final command ownership both require the AI's own queued movement to be aligned with the corridor.
 
+Hand-authored strafe-jump routes: put a `botroutes/<map>.botroute` file next to the map's `.wnt` waypoint file (`routes/<map>.botroute` is also read), e.g. `botroutes/mp/ffa1.botroute`. Up to 64 routes are read once per map (64 KB max):
+
+```
+// comments are allowed
+strafejump
+{
+    start_pos   1200.5 -450.0 128.0
+    end_pos     1850.0 -450.0 128.0
+    min_speed   450
+}
+```
+
+A bot uses a route when it is within 96 units of `start_pos`, or alongside the route (within 96 units sideways, 64 units of the route's height) before 85% of its length, and is moving toward `end_pos`. Routes take priority over the waypoint corridor and do not need straight waypoints, but every takeoff still passes the same arc/landing/hazard checks and enemy rules. `min_speed` (optional): the first half of the route is for building speed; past halfway, a grounded bot slower than `min_speed` will not take off on the route. `src_area`/`dest_area` from AAS-based route files are accepted and ignored (these bots use waypoints, not AAS). Use `/viewpos` in-game to read coordinates. With `bot_strafejumps_debug 1`, a speed-gated route prints `route hint: below min_speed past the speed gate`.
+
 Live-map validation checklist:
 - Test long, level waypoint corridors at low and high accumulated speed and with variable server frame times.
 - Confirm jump is released during flight and for one command after landing; verify no force jump or flipkick occurs.
