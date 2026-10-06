@@ -499,6 +499,19 @@ typedef struct bot_state_s
 	int					ffaExploreUntil; // while > level.time, -3/-4 bots skip duel issue/accept and explore for a new opponent - see bot_ffaexploretime
 	int					duelBlacklistIndex; // recently-finished duel target to avoid reacquiring immediately during post-duel exploration
 	int					duelBlacklistUntil; // cooldown expiry for duelBlacklistIndex
+	int					duelOfferHoldUntil; // -3/-4: stay passive while a bot-issued duel offer is pending
+	int					duelOfferTargetNum; // client the pending offer was made to
+	int					duelOfferHoldHealth; // health when the offer was made (heavy damage cancels the hold)
+	int					humanDuelTypePref; // last duel type a human offered this bot: 0 none, 1 saber, 2 force
+	int					duelStalemateOtherNum; // -4: bot we are idling next to without a duel
+	int					duelStalemateSince; // level.time the stalemate started
+	int					duelRoamUntil; // -4: roam via waypoints after breaking a stalemate
+	int					wallEscapeOption; // retreat wall escape currently committed to (NEWBOTAI_WALLESC_*)
+	int					wallEscapeStart; // level.time the wall escape was chosen
+	int					wallEscapeUntil; // commit timer: no switching options before this
+	int					wallEscapeNextTime; // earliest time a new wall escape may be chosen
+	int					wallEscapeSide; // -1 left / 1 right for roll and hop escapes
+	float				wallEscapeYaw; // yaw facing the wall for the vertical wallrun escape
 
 	int					conserveUntil; // while > level.time, bot disengages (no force power use) to regen FP - see bot_conservation
 	int					conserveNextRollTime; // debounce between chances to start a new conservation window
@@ -548,6 +561,9 @@ typedef struct bot_state_s
 	float				sfjLastEnemyDistance;
 	int					sfjLastEnemyDistanceTime;
 	int					sfjLastEnemyTargetNum;
+	int					sfjArcCheckedTime;
+	qboolean			sfjArcSafe;
+	int					sfjDebugNextTime;
 
 	int					gripMistakeDelayUntil; // level.time until which bot_mistakebias holds us from correctly breaking an opponent's grip (see NewBotAI_GetGripEscapeDelayMs) - rolled once per grip session
 	qboolean			gripSpeedOffPressed; // alternates the force button while gripped with speed active so the speed-off toggle is spammed (press/release) instead of held

@@ -340,7 +340,15 @@ XCVAR_DEF( bot_tutorial,				"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_dueltracking,			"1",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_dueltracking_geometry,	"2",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_strafeOffset,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
-XCVAR_DEF( bot_strafejumps,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
+XCVAR_DEF( bot_strafejumps,			"1",			NULL,				CVAR_ARCHIVE,									qtrue )
+// 1: print why strafe-jump attempts are rejected (rate limited per bot).
+XCVAR_DEF( bot_strafejumps_debug,		"0",			NULL,				0,												qfalse )
+// Minimum enemy distance (units) before a chase/escape strafe jump may start. 0 lets bots
+// strafe away or give chase as soon as they land after an engagement.
+XCVAR_DEF( bot_minstrafe,				"320",			NULL,				CVAR_ARCHIVE,									qtrue )
+// >0: print a warning whenever a server frame, duel-persist step or bot-learning reload
+// takes at least this many milliseconds (lag diagnostics). 0 disables.
+XCVAR_DEF( bot_perfwarn,				"0",			NULL,				0,												qfalse )
 XCVAR_DEF( bot_navigation,				"1",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_waypointskip,			"2",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_yawswitch,				"10",			NULL,				CVAR_ARCHIVE,									qtrue )

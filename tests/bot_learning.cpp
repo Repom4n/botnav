@@ -1,3 +1,4 @@
+#include <string>
 #include "g_bot_learning.h"
 #include "ai_combat_tuning.h"
 
@@ -22,6 +23,19 @@ namespace
 }
 
 BOOST_AUTO_TEST_SUITE( bot_learning )
+
+BOOST_AUTO_TEST_CASE( wall_escape_tokens_are_appended_responses )
+{
+	BOOST_CHECK_EQUAL( (int)BOTLEARN_TOK_KNOCKDOWN, 10 );
+	BOOST_CHECK_EQUAL( (int)BOTLEARN_TOK_WALLRUN, 11 );
+	BOOST_CHECK_EQUAL( (int)BOTLEARN_TOK_HOP, 13 );
+	BOOST_CHECK_EQUAL( std::string( BotLearn_TokenName( BOTLEARN_TOK_ROLL ) ), "roll" );
+	BOOST_CHECK( BotLearn_IsResponseToken( BOTLEARN_TOK_WALLRUN ) );
+	BOOST_CHECK( BotLearn_IsResponseToken( BOTLEARN_TOK_HOP ) );
+	BOOST_CHECK( BotLearn_IsResponseToken( BOTLEARN_TOK_JUMP ) );
+	BOOST_CHECK( !BotLearn_IsResponseToken( BOTLEARN_TOK_KNOCKDOWN ) );
+	BOOST_CHECK( !BotLearn_IsResponseToken( BOTLEARN_TOK_COUNT ) );
+}
 
 BOOST_AUTO_TEST_CASE( buckets_and_context_keys )
 {

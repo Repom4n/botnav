@@ -269,6 +269,7 @@ static void NewBotAI_FaceEntityImmediately(bot_state_t *bs, gentity_t *target);
 static qboolean NewBotAI_HasSafeSaberThrowClearance(bot_state_t *bs);
 static qboolean NewBotAI_IsEnemyReadyToBlockFreshSaberThrow(bot_state_t *bs);
 static gentity_t *NewBotAI_GetPendingDuelChallenger(bot_state_t *bs, int targetMode, int *duelTypeOut);
+static qboolean NewBotAI_IsUnavailableDuelBot(bot_state_t *bs, gentity_t *ent, int targetMode);
 
 #define NEWBOTAI_DRAIN_TICK_MSEC 100
 #define NEWBOTAI_COMBAT_DISENGAGE_COOLDOWN_MS 2500
@@ -2223,41 +2224,119 @@ static qboolean BotNav_IsInstantKillTrigger(gentity_t *ent)
 	return (ent->damage == -1 || ent->damage >= 1000) ? qtrue : qfalse;
 }
 
-static qboolean BotNav_TouchesInstantKillTrigger(bot_state_t *bs, vec3_t origin)
+//Instant-kill trigger_hurt volumes rarely change, so they are collected into a small
+//list (refreshed every few seconds) instead of calling EntitiesInBox (a 4KB stack array
+//plus an engine area query) for every nav/strafe-jump hazard sample.
+#define BOTNAV_MAX_KILL_TRIGGERS 128
+#define BOTNAV_KILL_TRIGGER_REFRESH_MS 5000
+static int g_botNavKillTriggers[BOTNAV_MAX_KILL_TRIGGERS];
+static int g_botNavKillTriggerCount;
+static int g_botNavKillTriggerRefreshAt;
+static qboolean g_botNavKillTriggerOverflow;
+
+static void BotNav_RefreshKillTriggerCache(void)
+{
+	int i;
+
+	//level.time restarts on map change, so also refresh when the stamp is far ahead.
+	if (g_botNavKillTriggerRefreshAt > level.time &&
+		g_botNavKillTriggerRefreshAt - level.time <= BOTNAV_KILL_TRIGGER_REFRESH_MS)
+	{
+		return;
+	}
+	g_botNavKillTriggerRefreshAt = level.time + BOTNAV_KILL_TRIGGER_REFRESH_MS;
+	g_botNavKillTriggerCount = 0;
+	g_botNavKillTriggerOverflow = qfalse;
+	for (i = MAX_CLIENTS; i < level.num_entities; i++)
+	{
+		gentity_t *ent = &g_entities[i];
+
+		if (!ent->inuse || !ent->classname || Q_stricmp(ent->classname, "trigger_hurt") ||
+			!(ent->damage == -1 || ent->damage >= 1000))
+		{
+			continue;
+		}
+		if (g_botNavKillTriggerCount >= BOTNAV_MAX_KILL_TRIGGERS)
+		{
+			g_botNavKillTriggerOverflow = qtrue;
+			break;
+		}
+		g_botNavKillTriggers[g_botNavKillTriggerCount++] = i;
+	}
+}
+
+//True when a player box swept from start to end touches an instant-kill trigger.
+//Pass start == end for a single position.
+static qboolean BotNav_SweepTouchesInstantKillTrigger(const vec3_t start, const vec3_t end)
 {
 	static vec3_t playerMins = {-15.0f, -15.0f, DEFAULT_MINS_2};
 	static vec3_t playerMaxs = {15.0f, 15.0f, DEFAULT_MAXS_2};
-	int touch[MAX_GENTITIES];
-	vec3_t mins, maxs;
-	int num;
-	int i;
+	vec3_t sweepMins, sweepMaxs, delta, sample, mins, maxs;
+	int i, k;
 
+	BotNav_RefreshKillTriggerCache();
+	if (g_botNavKillTriggerOverflow)
+	{
+		//Pathological map with lots of kill volumes: fall back to the engine area query.
+		int touch[MAX_GENTITIES];
+		int num;
+		for (k = 0; k < 3; k++)
+		{
+			sweepMins[k] = (start[k] < end[k] ? start[k] : end[k]) + playerMins[k];
+			sweepMaxs[k] = (start[k] > end[k] ? start[k] : end[k]) + playerMaxs[k];
+		}
+		num = trap->EntitiesInBox(sweepMins, sweepMaxs, touch, MAX_GENTITIES);
+		for (i = 0; i < num; i++)
+		{
+			gentity_t *hit = &g_entities[touch[i]];
+			if (BotNav_IsInstantKillTrigger(hit) &&
+				trap->EntityContact(sweepMins, sweepMaxs, (sharedEntity_t *)hit, qfalse))
+				return qtrue;
+		}
+		return qfalse;
+	}
+	if (!g_botNavKillTriggerCount)
+		return qfalse;
+
+	for (k = 0; k < 3; k++)
+	{
+		sweepMins[k] = (start[k] < end[k] ? start[k] : end[k]) + playerMins[k];
+		sweepMaxs[k] = (start[k] > end[k] ? start[k] : end[k]) + playerMaxs[k];
+	}
+	VectorSubtract(end, start, delta);
+	for (i = 0; i < g_botNavKillTriggerCount; i++)
+	{
+		gentity_t *hit = &g_entities[g_botNavKillTriggers[i]];
+		const float length = VectorLength(delta);
+		int samples, n;
+
+		if (!BotNav_IsInstantKillTrigger(hit))
+			continue;
+		if (hit->r.absmin[0] > sweepMaxs[0] || hit->r.absmax[0] < sweepMins[0] ||
+			hit->r.absmin[1] > sweepMaxs[1] || hit->r.absmax[1] < sweepMins[1] ||
+			hit->r.absmin[2] > sweepMaxs[2] || hit->r.absmax[2] < sweepMins[2])
+			continue;
+		//Bounds overlap: confirm against the brush along the segment.
+		samples = (int)ceilf(length / 16.0f);
+		for (n = 0; n <= samples; n++)
+		{
+			VectorMA(start, samples ? (float)n / (float)samples : 0.0f, delta, sample);
+			VectorAdd(sample, playerMins, mins);
+			VectorAdd(sample, playerMaxs, maxs);
+			if (trap->EntityContact(mins, maxs, (sharedEntity_t *)hit, qfalse))
+				return qtrue;
+		}
+	}
+	return qfalse;
+}
+
+static qboolean BotNav_TouchesInstantKillTrigger(bot_state_t *bs, vec3_t origin)
+{
 	if (!bs)
 	{
 		return qfalse;
 	}
-
-	VectorAdd(origin, playerMins, mins);
-	VectorAdd(origin, playerMaxs, maxs);
-	num = trap->EntitiesInBox(mins, maxs, touch, MAX_GENTITIES);
-
-	for (i = 0; i < num; i++)
-	{
-		gentity_t *hit = &g_entities[touch[i]];
-
-		if (!BotNav_IsInstantKillTrigger(hit))
-		{
-			continue;
-		}
-		if (!trap->EntityContact(mins, maxs, (sharedEntity_t *)hit, qfalse))
-		{
-			continue;
-		}
-
-		return qtrue;
-	}
-
-	return qfalse;
+	return BotNav_SweepTouchesInstantKillTrigger(origin, origin);
 }
 
 //Trace ahead in the movement direction to detect falling hazards (ledges, lava, death pits,
@@ -2418,6 +2497,8 @@ static void BotSFJ_Clear(bot_state_t *bs)
 	bs->sfjLastEnemyDistance = 0.0f;
 	bs->sfjLastEnemyDistanceTime = 0;
 	bs->sfjLastEnemyTargetNum = -1;
+	bs->sfjArcCheckedTime = 0;
+	bs->sfjArcSafe = qfalse;
 	VectorClear(bs->sfjIntentDirection);
 	VectorClear(bs->sfjIntentDestination);
 }
@@ -2485,95 +2566,419 @@ static qboolean BotSFJ_HasInputConflict(bot_state_t *bs, playerState_t *ps,
 	return qfalse;
 }
 
+#define BOT_SFJ_CORRIDOR_LOOKAHEAD 1024.0f
+#define BOT_SFJ_CORRIDOR_STEER_DISTANCE 512.0f
+#define BOT_SFJ_CORRIDOR_MIN_LENGTH 160.0f
+#define BOT_SFJ_CORRIDOR_MAX_WAYPOINTS 16
+#define BOT_SFJ_CORRIDOR_STRAIGHTNESS 0.9f
+#define BOT_SFJ_NAV_ENEMY_GUARD 384.0f
+#define BOT_SFJ_NAV_ENEMY_CLOSING_SPEED 250.0f
+
+static void BotSFJ_DebugReject(bot_state_t *bs, const char *reason)
+{
+	gclient_t *client;
+
+	if (!bs || !reason || !bot_strafejumps_debug.integer)
+		return;
+	if (bs->sfjDebugNextTime > level.time && bs->sfjDebugNextTime - level.time <= 1000)
+		return;
+	bs->sfjDebugNextTime = level.time + 1000;
+	client = g_entities[bs->client].client;
+	Com_Printf("^5[SFJ]^7 %s: %s\n", client ? client->pers.netname : "bot", reason);
+}
+
+static qboolean BotSFJ_WaypointsLinked(const wpobject_t *from, int toIndex)
+{
+	int i;
+
+	for (i = 0; i < from->neighbornum; i++)
+	{
+		if (from->neighbors[i].num == toIndex)
+			return qtrue;
+	}
+	/* Linear waypoint trails use their contiguous index as an implicit link. */
+	return from->neighbornum <= 0 ? qtrue : qfalse;
+}
+
+/*
+ * Walk forward along the bot's waypoint trail and return a straight, flat
+ * corridor up to BOT_SFJ_CORRIDOR_LOOKAHEAD units long.  The steering direction
+ * aims at a look-ahead point on the trail (path smoothing) instead of the very
+ * next waypoint, so a strafe jump can carry the bot past several waypoints.
+ */
 static qboolean BotSFJ_GetOpenCorridor(bot_state_t *bs, vec3_t direction, vec3_t destination)
 {
 	const int blockedWaypointFlags = WPFLAG_JUMP | WPFLAG_DUCK | WPFLAG_WAITFORFUNC |
 		WPFLAG_NOMOVEFUNC;
+	const qboolean grounded = bs && bs->cur_ps.groundEntityNum != ENTITYNUM_NONE;
+	vec3_t lastPoint, firstDirection, steerPoint;
+	wpobject_t *wp;
+	wpobject_t *previous = NULL;
+	float total = 0.0f;
+	float baseZ;
+	qboolean haveDirection = qfalse;
+	qboolean haveSteer = qfalse;
 	int step;
-	int nextIndex;
-	int i;
-	qboolean nextLinked = qfalse;
-	wpobject_t *current;
-	wpobject_t *next = NULL;
-	vec3_t toCurrent, currentToNext;
-	float toCurrentLength;
+	int index;
+	int count;
 
 	if (!bs || !bs->wpCurrent || bs->doingFallback ||
 		bs->wpCurrent->index < 0 || bs->wpCurrent->index >= gWPNum ||
 		(!bs->frame_Waypoint_Vis && !(bs->wpCurrent->flags & WPFLAG_NOVIS)))
 		return qfalse;
-	current = bs->wpCurrent;
-	if (!current->inuse || (current->flags & blockedWaypointFlags))
-		return qfalse;
 	step = bs->wpDirection ? -1 : 1;
-	nextIndex = current->index + step;
 	if (bs->wpDestination &&
-		((step > 0 && current->index > bs->wpDestination->index) ||
-		 (step < 0 && current->index < bs->wpDestination->index)))
+		((step > 0 && bs->wpCurrent->index > bs->wpDestination->index) ||
+		 (step < 0 && bs->wpCurrent->index < bs->wpDestination->index)))
 		return qfalse;
-	if (!bs->wpDestination || current->index != bs->wpDestination->index)
+
+	VectorCopy(bs->origin, lastPoint);
+	baseZ = bs->origin[2];
+	VectorClear(firstDirection);
+	VectorClear(steerPoint);
+	index = bs->wpCurrent->index;
+	for (count = 0; count < BOT_SFJ_CORRIDOR_MAX_WAYPOINTS; count++, index += step)
 	{
-		if (nextIndex < 0 || nextIndex >= gWPNum)
-			return qfalse;
-		next = gWPArray[nextIndex];
-		if (!next || !next->inuse || (next->flags & blockedWaypointFlags) ||
-			fabs(next->origin[2] - current->origin[2]) > 32.0f)
-			return qfalse;
-		for (i = 0; i < current->neighbornum; i++)
+		vec3_t segment;
+		float segmentLength;
+
+		if (index < 0 || index >= gWPNum)
+			break;
+		wp = gWPArray[index];
+		if (!wp || !wp->inuse || (wp->flags & blockedWaypointFlags))
+			break;
+		if (previous)
 		{
-			if (current->neighbors[i].num == nextIndex)
+			if (!BotSFJ_WaypointsLinked(previous, index) ||
+				fabsf(wp->origin[2] - previous->origin[2]) > 32.0f)
+				break;
+		}
+		if (fabsf(wp->origin[2] - baseZ) > 64.0f)
+			break;
+		VectorSubtract(wp->origin, lastPoint, segment);
+		segment[2] = 0.0f;
+		segmentLength = VectorNormalize(segment);
+		if (!previous && segmentLength > 640.0f)
+			return qfalse;
+		if (segmentLength > 1.0f)
+		{
+			/* A waypoint the bot has nearly reached says little about direction. */
+			const qboolean nearlyReached = !previous && segmentLength < 48.0f;
+
+			if (haveDirection &&
+				DotProduct(segment, firstDirection) < BOT_SFJ_CORRIDOR_STRAIGHTNESS)
+				break;
+			if (!haveDirection && !nearlyReached)
 			{
-				nextLinked = qtrue;
+				VectorCopy(segment, firstDirection);
+				haveDirection = qtrue;
+			}
+			if (!haveSteer && total + segmentLength >= BOT_SFJ_CORRIDOR_STEER_DISTANCE)
+			{
+				VectorMA(lastPoint, BOT_SFJ_CORRIDOR_STEER_DISTANCE - total, segment, steerPoint);
+				haveSteer = qtrue;
+			}
+			total += segmentLength;
+		}
+		VectorCopy(wp->origin, lastPoint);
+		previous = wp;
+		if (total >= BOT_SFJ_CORRIDOR_LOOKAHEAD ||
+			(bs->wpDestination && wp == bs->wpDestination))
+			break;
+	}
+	if (!previous || !haveDirection ||
+		total < (grounded ? BOT_SFJ_CORRIDOR_MIN_LENGTH : 64.0f))
+		return qfalse;
+	if (!haveSteer)
+		VectorCopy(lastPoint, steerPoint);
+	VectorSubtract(steerPoint, bs->origin, direction);
+	direction[2] = 0.0f;
+	if (VectorNormalize(direction) <= 0.0f ||
+		DotProduct(direction, firstDirection) < BOT_SFJ_CORRIDOR_STRAIGHTNESS)
+		return qfalse;
+	VectorCopy(lastPoint, destination);
+	return qtrue;
+}
+
+/*
+ * Direct chase/escape corridor used when the bot is moving straight toward or
+ * away from its enemy rather than following waypoints.  The arc simulation still
+ * validates the landing, so this only has to find open space ahead.
+ */
+static qboolean BotSFJ_GetEnemyCorridor(bot_state_t *bs, const vec3_t moveDirection,
+	const vec3_t toEnemy, float enemyDistance, qboolean retreat,
+	vec3_t direction, vec3_t destination)
+{
+	static vec3_t corridorMins = {-16.0f, -16.0f, 0.0f};
+	static vec3_t corridorMaxs = {16.0f, 16.0f, 32.0f};
+	vec3_t start, end;
+	trace_t trace;
+	float alignment;
+	float length;
+
+	if (!bs)
+		return qfalse;
+	alignment = DotProduct(moveDirection, toEnemy);
+	if (retreat ? alignment > -0.5f : alignment < 0.7f)
+		return qfalse;
+	length = retreat ? BOT_SFJ_CORRIDOR_LOOKAHEAD : enemyDistance - 64.0f;
+	if (length > BOT_SFJ_CORRIDOR_LOOKAHEAD)
+		length = BOT_SFJ_CORRIDOR_LOOKAHEAD;
+	if (length < BOT_SFJ_CORRIDOR_MIN_LENGTH)
+		return qfalse;
+	VectorCopy(bs->origin, start);
+	start[2] += 18.0f;
+	VectorMA(start, length, moveDirection, end);
+	JP_Trace(&trace, start, corridorMins, corridorMaxs, end, bs->client,
+		MASK_PLAYERSOLID & ~CONTENTS_BODY, qfalse, 0, 0);
+	if (trace.startsolid || trace.allsolid)
+		return qfalse;
+	length *= trace.fraction;
+	length -= 32.0f;
+	if (length < BOT_SFJ_CORRIDOR_MIN_LENGTH)
+		return qfalse;
+	VectorCopy(moveDirection, direction);
+	direction[2] = 0.0f;
+	if (VectorNormalize(direction) <= 0.0f)
+		return qfalse;
+	VectorMA(bs->origin, length, direction, destination);
+	return qtrue;
+}
+
+/*
+ * Hand-authored strafe-jump routes, read once per map from
+ * botroutes/<map>.botroute (or routes/<map>.botroute):
+ *
+ *   strafejump
+ *   {
+ *       start_pos   1200.5 -450.0 128.0
+ *       end_pos     1850.0 -450.0 128.0
+ *       min_speed   450
+ *   }
+ *
+ * src_area/dest_area from AAS-based route files are accepted and ignored; these
+ * bots navigate by waypoints, so a hint is matched by position instead.
+ */
+#define BOT_SFJ_MAX_ROUTE_HINTS 64
+#define BOT_SFJ_ROUTE_FILE_MAX 65536
+
+typedef struct
+{
+	vec3_t start;
+	vec3_t end;
+	float minSpeed;
+} bot_sfj_route_hint_t;
+
+static bot_sfj_route_hint_t g_botSfjRouteHints[BOT_SFJ_MAX_ROUTE_HINTS];
+static int g_botSfjRouteHintCount;
+static qboolean g_botSfjRouteHintsLoaded; /* the game module is reloaded on map change */
+
+static qboolean BotSFJ_ParseRouteVector(const char **text, vec3_t out)
+{
+	int i;
+
+	for (i = 0; i < 3; i++)
+	{
+		if (COM_ParseFloat(text, &out[i]))
+			return qfalse;
+	}
+	return qtrue;
+}
+
+static void BotSFJ_ParseRouteHints(const char *buffer, const char *path)
+{
+	const char *text = buffer;
+	char *token;
+
+	COM_BeginParseSession(path);
+	while (1)
+	{
+		bot_sfj_route_hint_t hint;
+		qboolean haveStart = qfalse, haveEnd = qfalse, valid = qtrue;
+
+		token = COM_ParseExt(&text, qtrue);
+		if (!token[0])
+			break;
+		if (Q_stricmp(token, "strafejump"))
+		{
+			if (!strcmp(token, "{"))
+				SkipBracedSection(&text, 1);
+			continue;
+		}
+		token = COM_ParseExt(&text, qtrue);
+		if (strcmp(token, "{"))
+		{
+			trap->Print(S_COLOR_YELLOW "%s: expected { after strafejump\n", path);
+			break;
+		}
+		memset(&hint, 0, sizeof(hint));
+		while (1)
+		{
+			token = COM_ParseExt(&text, qtrue);
+			if (!token[0])
+			{
+				trap->Print(S_COLOR_YELLOW "%s: unexpected end of file\n", path);
+				valid = qfalse;
 				break;
 			}
+			if (!strcmp(token, "}"))
+				break;
+			if (!Q_stricmp(token, "start_pos"))
+			{
+				if (BotSFJ_ParseRouteVector(&text, hint.start))
+					haveStart = qtrue;
+				else
+					valid = qfalse;
+			}
+			else if (!Q_stricmp(token, "end_pos"))
+			{
+				if (BotSFJ_ParseRouteVector(&text, hint.end))
+					haveEnd = qtrue;
+				else
+					valid = qfalse;
+			}
+			else if (!Q_stricmp(token, "min_speed"))
+			{
+				if (COM_ParseFloat(&text, &hint.minSpeed))
+					valid = qfalse;
+			}
+			else
+				COM_ParseExt(&text, qfalse); /* src_area, dest_area, unknown keys */
 		}
-		/* Linear waypoint trails use their contiguous index as an implicit link. */
-		if (!nextLinked && current->neighbornum > 0)
-			return qfalse;
+		if (!valid || !haveStart || !haveEnd)
+		{
+			trap->Print(S_COLOR_YELLOW "%s: skipping strafejump block without valid start_pos/end_pos\n", path);
+			continue;
+		}
+		if (g_botSfjRouteHintCount >= BOT_SFJ_MAX_ROUTE_HINTS)
+		{
+			trap->Print(S_COLOR_YELLOW "%s: more than %i strafejump routes, ignoring the rest\n",
+				path, BOT_SFJ_MAX_ROUTE_HINTS);
+			break;
+		}
+		g_botSfjRouteHints[g_botSfjRouteHintCount++] = hint;
 	}
+}
 
-	VectorSubtract(current->origin, bs->origin, toCurrent);
-	toCurrent[2] = 0.0f;
-	toCurrentLength = VectorNormalize(toCurrent);
-	if (toCurrentLength < (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE ? 8.0f : 64.0f) ||
-		toCurrentLength > 640.0f)
-		return qfalse;
-	if (next)
+static void BotSFJ_LoadRouteHints(void)
+{
+	static const char *folders[] = { "botroutes", "routes" };
+	char mapname[MAX_QPATH];
+	char path[MAX_QPATH];
+	fileHandle_t f;
+	char *buffer;
+	int len;
+	int i;
+
+	if (g_botSfjRouteHintsLoaded)
+		return;
+	g_botSfjRouteHintsLoaded = qtrue;
+	g_botSfjRouteHintCount = 0;
+	trap->Cvar_VariableStringBuffer("mapname", mapname, sizeof(mapname));
+	if (!mapname[0])
+		return;
+	for (i = 0; i < (int)ARRAY_LEN(folders); i++)
 	{
-		VectorSubtract(next->origin, current->origin, currentToNext);
-		currentToNext[2] = 0.0f;
-		if (VectorNormalize(currentToNext) <= 0.0f ||
-			DotProduct(toCurrent, currentToNext) < 0.85f)
-			return qfalse;
+		Com_sprintf(path, sizeof(path), "%s/%s.botroute", folders[i], mapname);
+		len = trap->FS_Open(path, &f, FS_READ);
+		if (!f)
+			continue;
+		if (len <= 0 || len >= BOT_SFJ_ROUTE_FILE_MAX)
+		{
+			trap->Print(S_COLOR_YELLOW "%s: empty or larger than %i bytes, ignored\n",
+				path, BOT_SFJ_ROUTE_FILE_MAX);
+			trap->FS_Close(f);
+			return;
+		}
+		buffer = (char *)B_TempAlloc(len + 1);
+		trap->FS_Read(buffer, len, f);
+		trap->FS_Close(f);
+		buffer[len] = '\0';
+		BotSFJ_ParseRouteHints(buffer, path);
+		B_TempFree(len + 1);
+		trap->Print("Loaded %i strafe-jump route hint(s) from %s\n", g_botSfjRouteHintCount, path);
+		return;
 	}
-	VectorCopy(toCurrent, direction);
-	VectorCopy(current->origin, destination);
-	return qtrue;
+}
+
+/*
+ * Corridor from a .botroute hint the bot is standing on (or at the start of)
+ * and moving along.  Takes priority over the waypoint corridor; the takeoff arc
+ * is still validated like any other strafe jump.
+ */
+static qboolean BotSFJ_GetRouteHintCorridor(bot_state_t *bs, const playerState_t *ps,
+	const vec3_t moveDirection, vec3_t direction, vec3_t destination)
+{
+	const qboolean grounded = ps->groundEntityNum != ENTITYNUM_NONE;
+	const float horizontalSpeed = sqrtf(ps->velocity[0] * ps->velocity[0] +
+		ps->velocity[1] * ps->velocity[1]);
+	int i;
+
+	BotSFJ_LoadRouteHints();
+	for (i = 0; i < g_botSfjRouteHintCount; i++)
+	{
+		const bot_sfj_route_hint_t *hint = &g_botSfjRouteHints[i];
+		vec3_t toEnd;
+		float progress;
+
+		if (!BotSFJ_RouteHintProgress(ps->origin, hint->start, hint->end,
+				BOT_SFJ_ROUTE_HINT_START_RADIUS, BOT_SFJ_ROUTE_HINT_HALF_WIDTH,
+				BOT_SFJ_ROUTE_HINT_HEIGHT_TOLERANCE, BOT_SFJ_ROUTE_HINT_MAX_PROGRESS,
+				&progress))
+			continue;
+		VectorSubtract(hint->end, ps->origin, toEnd);
+		toEnd[2] = 0.0f;
+		if (VectorNormalize(toEnd) <= 0.0f || DotProduct(toEnd, moveDirection) < 0.7f)
+			continue;
+		if (!BotSFJ_RouteHintSpeedAllows(progress, grounded, horizontalSpeed, hint->minSpeed))
+		{
+			BotSFJ_DebugReject(bs, "route hint: below min_speed past the speed gate");
+			continue;
+		}
+		VectorCopy(toEnd, direction);
+		VectorCopy(hint->end, destination);
+		return qtrue;
+	}
+	return qfalse;
+}
+
+/*
+ * Cheap per-frame hazard look-ahead while airborne: one hull trace along the
+ * predicted velocity.  A wall, liquid or kill volume coming up ends the strafe
+ * cleanly instead of letting the bot slam into it.
+ */
+static qboolean BotSFJ_HazardAhead(bot_state_t *bs, const playerState_t *ps)
+{
+	static vec3_t playerMins = {-15.0f, -15.0f, DEFAULT_MINS_2};
+	static vec3_t playerMaxs = {15.0f, 15.0f, DEFAULT_MAXS_2};
+	const float lookSeconds = 0.2f;
+	vec3_t end;
+	trace_t trace;
+
+	if (!bs || !ps)
+		return qfalse;
+	end[0] = ps->origin[0] + ps->velocity[0] * lookSeconds;
+	end[1] = ps->origin[1] + ps->velocity[1] * lookSeconds;
+	end[2] = ps->origin[2] + ps->velocity[2] * lookSeconds -
+		0.5f * (float)ps->gravity * lookSeconds * lookSeconds;
+	JP_Trace(&trace, (float *)ps->origin, playerMins, playerMaxs, end, bs->client,
+		MASK_PLAYERSOLID | CONTENTS_LAVA | CONTENTS_SLIME | CONTENTS_NODROP,
+		qfalse, 0, 0);
+	if (trace.startsolid || trace.allsolid)
+		return qfalse;
+	if (trace.fraction < 1.0f &&
+		((trace.contents & (CONTENTS_LAVA | CONTENTS_SLIME | CONTENTS_NODROP)) ||
+		 trace.plane.normal[2] < 0.7f))
+		return qtrue;
+	return BotNav_SweepTouchesInstantKillTrigger(ps->origin, trace.endpos);
 }
 
 static qboolean BotSFJ_TriggerAlongSegment(bot_state_t *bs, const vec3_t start,
 	const vec3_t end)
 {
-	vec3_t delta, sample;
-	float length;
-	int samples;
-	int i;
-
-	VectorSubtract(end, start, delta);
-	length = VectorLength(delta);
-	if (length <= 0.0f)
-	{
-		VectorCopy(start, sample);
-		return BotNav_TouchesInstantKillTrigger(bs, sample);
-	}
-	samples = (int)ceilf(length / 16.0f);
-	for (i = 0; i <= samples; i++)
-	{
-		VectorMA(start, (float)i / (float)samples, delta, sample);
-		if (BotNav_TouchesInstantKillTrigger(bs, sample))
-			return qtrue;
-	}
-	return qfalse;
+	if (!bs)
+		return qfalse;
+	return BotNav_SweepTouchesInstantKillTrigger(start, end);
 }
 
 static qboolean BotSFJ_GetCommandTiming(const playerState_t *ps, int commandTime,
@@ -2660,7 +3065,8 @@ static qboolean BotSFJ_ArcIsSafe(bot_state_t *bs, const playerState_t *ps,
 
 	for (steps = 0; steps < BOT_SFJ_MAX_ARC_STEPS && elapsed < 2.0f; steps++)
 	{
-		int msec = sliceMsec;
+		/* Coarse 50 ms steps once the jump command has been applied. */
+		int msec = (heldRemaining > 0 || sliceMsec >= 50) ? sliceMsec : 50;
 		float stepSeconds;
 		float commandYaw;
 		float radians;
@@ -2728,8 +3134,7 @@ static qboolean BotSFJ_ArcIsSafe(bot_state_t *bs, const playerState_t *ps,
 		if (trace.entityNum != ENTITYNUM_NONE && trace.entityNum != ENTITYNUM_WORLD)
 			return qfalse;
 		contents = trap->PointContents(next, bs->client);
-		if ((contents & (CONTENTS_LAVA | CONTENTS_SLIME | CONTENTS_NODROP)) ||
-			BotNav_TouchesInstantKillTrigger(bs, next))
+		if (contents & (CONTENTS_LAVA | CONTENTS_SLIME | CONTENTS_NODROP))
 			return qfalse;
 		VectorCopy(next, position);
 		elapsed += stepSeconds;
@@ -2746,13 +3151,48 @@ static qboolean BotSFJ_ArcIsSafe(bot_state_t *bs, const playerState_t *ps,
 		return qfalse;
 	if (!BotSFJ_LandingWithinCorridor(ps->origin[0], ps->origin[1],
 		routeDestination[0], routeDestination[1], trace.endpos[0], trace.endpos[1],
-		48.0f, 0.0f))
+		64.0f, 96.0f))
 		return qfalse;
 	return qtrue;
 }
 
+#define BOT_SFJ_ARC_CACHE_MS 100
+
+/*
+ * The arc simulation is the expensive part of the controller, so the result is
+ * cached per bot.  It runs at most once per BOT_SFJ_ARC_CACHE_MS while the bot is
+ * deciding whether to jump, plus once at each takeoff/rejump; while airborne the
+ * cheap BotSFJ_HazardAhead look-ahead is used instead.
+ */
+static qboolean BotSFJ_CachedArcIsSafe(bot_state_t *bs, const playerState_t *ps,
+	const vec3_t routeDirection, const vec3_t routeDestination,
+	int commandMsec, int sliceMsec, int time, qboolean forceRefresh)
+{
+	if (!forceRefresh && bs->sfjArcCheckedTime > 0 &&
+		time >= bs->sfjArcCheckedTime &&
+		time - bs->sfjArcCheckedTime < BOT_SFJ_ARC_CACHE_MS)
+		return bs->sfjArcSafe;
+	bs->sfjArcSafe = BotSFJ_ArcIsSafe(bs, ps, routeDirection, routeDestination,
+		commandMsec, sliceMsec);
+	bs->sfjArcCheckedTime = time;
+	return bs->sfjArcSafe;
+}
+
+static float BotSFJ_MinStrafeDistance(void)
+{
+	return bot_minstrafe.value > 0.0f ? bot_minstrafe.value : 0.0f;
+}
+
+static qboolean BotSFJ_ClientCarriesFlag(const gclient_t *client)
+{
+	return client && (client->ps.powerups[PW_REDFLAG] ||
+		client->ps.powerups[PW_BLUEFLAG] || client->ps.powerups[PW_NEUTRALFLAG]);
+}
+
 static void BotSFJ_UpdatePursuit(bot_state_t *bs)
 {
+	const float startDistance = BotSFJ_MinStrafeDistance();
+
 	if (!bs->currentEnemy || !bs->currentEnemy->client)
 	{
 		bs->sfjPursuitLatched = qfalse;
@@ -2771,20 +3211,36 @@ static void BotSFJ_UpdatePursuit(bot_state_t *bs)
 	}
 	if (bs->sfjLastEnemyDistanceTime > 0)
 	{
-		bs->sfjPursuitLatched = BotSFJ_UpdatePursuitLatch(bs->sfjPursuitLatched,
+		bs->sfjPursuitLatched = BotSFJ_UpdatePursuitLatchEx(bs->sfjPursuitLatched,
 			bs->frame_Enemy_Len, bs->sfjLastEnemyDistance,
-			level.time - bs->sfjLastEnemyDistanceTime) ? qtrue : qfalse;
+			level.time - bs->sfjLastEnemyDistanceTime, startDistance,
+			BotSFJ_StopDistanceFor(startDistance)) ? qtrue : qfalse;
 	}
 	bs->sfjLastEnemyDistance = bs->frame_Enemy_Len;
 	bs->sfjLastEnemyDistanceTime = level.time;
+}
+
+static void BotSFJ_Reject(bot_state_t *bs, const char *reason)
+{
+	BotSFJ_DebugReject(bs, reason);
+	if (bs->sfjPhase != BOT_SFJ_PHASE_OFF && bs->sfjPhase != BOT_SFJ_PHASE_ABORT)
+		BotSFJ_Abort(bs, level.time);
 }
 
 static void BotSFJ_SelectIntent(bot_state_t *bs)
 {
 	bot_input_t queued;
 	playerState_t *ps;
-	vec3_t routeDirection, routeDestination, effectiveDirection;
+	gclient_t *enemyClient = NULL;
+	vec3_t routeDirection, routeDestination, effectiveDirection, toEnemy;
 	bot_sfj_intent_t purpose = BOT_SFJ_INTENT_NONE;
+	const float minStrafe = BotSFJ_MinStrafeDistance();
+	float enemyDistance = 0.0f;
+	qboolean carryingFlag;
+	qboolean enemyCarriesFlag = qfalse;
+	qboolean retreating;
+	qboolean haveRoute;
+	qboolean airborneJump;
 	int commandMsec;
 	int sliceMsec;
 	int fallbackMsec;
@@ -2799,42 +3255,75 @@ static void BotSFJ_SelectIntent(bot_state_t *bs)
 	ps = &g_entities[bs->client].client->ps;
 	BotSFJ_UpdatePursuit(bs);
 	trap->EA_GetInput(bs->client, (float)level.time / 1000.0f, &queued);
-	if (BotSFJ_HasInputConflict(bs, ps, &queued) ||
-		!BotSFJ_GetOpenCorridor(bs, routeDirection, routeDestination) ||
-		!BotSFJ_EffectiveInputDirection(&queued, effectiveDirection) ||
-		DotProduct(effectiveDirection, routeDirection) < 0.5f)
+	if (BotSFJ_HasInputConflict(bs, ps, &queued))
 	{
-		if (bs->sfjPhase != BOT_SFJ_PHASE_OFF && bs->sfjPhase != BOT_SFJ_PHASE_ABORT)
-			BotSFJ_Abort(bs, level.time);
+		BotSFJ_Reject(bs, "input/state conflict (attacking, force power, special move, etc)");
+		return;
+	}
+	if (!BotSFJ_EffectiveInputDirection(&queued, effectiveDirection))
+	{
+		BotSFJ_Reject(bs, "no horizontal movement input");
 		return;
 	}
 
+	carryingFlag = BotSFJ_ClientCarriesFlag(g_entities[bs->client].client);
+	VectorClear(toEnemy);
 	if (bs->currentEnemy && bs->currentEnemy->client)
 	{
-		vec3_t toEnemy;
-		float alignment;
-
-		VectorSubtract(bs->currentEnemy->client->ps.origin, ps->origin, toEnemy);
+		enemyClient = bs->currentEnemy->client;
+		VectorSubtract(enemyClient->ps.origin, ps->origin, toEnemy);
 		toEnemy[2] = 0.0f;
-		if (VectorNormalize(toEnemy) <= 0.0f)
+		enemyDistance = VectorNormalize(toEnemy);
+		if (enemyDistance <= 0.0f)
 		{
-			if (bs->sfjPhase != BOT_SFJ_PHASE_OFF && bs->sfjPhase != BOT_SFJ_PHASE_ABORT)
-				BotSFJ_Abort(bs, level.time);
+			BotSFJ_Reject(bs, "enemy overlapping");
 			return;
 		}
-		alignment = DotProduct(routeDirection, toEnemy);
-		if ((bs->combatAction == BOT_COMBAT_ACTION_RETREAT_DEFENSE ||
-			bs->runningLikeASissy || bs->runningToEscapeThreat) &&
-			bs->frame_Enemy_Len > BOT_SFJ_PURSUIT_START_DISTANCE && alignment < -0.25f)
+		enemyCarriesFlag = BotSFJ_ClientCarriesFlag(enemyClient);
+	}
+	/* Carrying or returning a flag counts as escape intent in CTF. */
+	retreating = (bs->combatAction == BOT_COMBAT_ACTION_RETREAT_DEFENSE ||
+		bs->runningLikeASissy || bs->runningToEscapeThreat || carryingFlag) ? qtrue : qfalse;
+
+	haveRoute = BotSFJ_GetRouteHintCorridor(bs, ps, effectiveDirection,
+		routeDirection, routeDestination);
+	if (!haveRoute)
+	{
+		haveRoute = BotSFJ_GetOpenCorridor(bs, routeDirection, routeDestination);
+		if (haveRoute && DotProduct(effectiveDirection, routeDirection) < 0.5f)
+			haveRoute = qfalse;
+	}
+	if (!haveRoute && enemyClient &&
+		(retreating || bs->sfjPursuitLatched || enemyCarriesFlag))
+	{
+		haveRoute = BotSFJ_GetEnemyCorridor(bs, effectiveDirection, toEnemy,
+			enemyDistance, retreating, routeDirection, routeDestination);
+	}
+	if (!haveRoute)
+	{
+		BotSFJ_Reject(bs, "no straight open corridor along movement");
+		return;
+	}
+
+	if (enemyClient)
+	{
+		const float alignment = DotProduct(routeDirection, toEnemy);
+		const float stopDistance = BotSFJ_StopDistanceFor(minStrafe);
+
+		if (retreating && alignment < -0.25f && enemyDistance >= minStrafe)
 			purpose = BOT_SFJ_INTENT_RETREAT;
-		else if (bs->sfjPursuitLatched &&
-			bs->frame_Enemy_Len > BOT_SFJ_PURSUIT_STOP_DISTANCE &&
-			alignment > 0.5f)
+		else if ((bs->sfjPursuitLatched ||
+				(enemyCarriesFlag && enemyDistance >= minStrafe)) &&
+			alignment > 0.5f && enemyDistance > stopDistance)
 			purpose = BOT_SFJ_INTENT_PURSUIT;
-		else if (bs->frame_Enemy_Vis || alignment > 0.25f)
+		else if (bs->frame_Enemy_Vis &&
+			(enemyDistance < BOT_SFJ_NAV_ENEMY_GUARD ||
+			 (enemyDistance < BOT_SFJ_CORRIDOR_LOOKAHEAD &&
+			  NewBotAI_GetEnemyClosingSpeed(bs) > BOT_SFJ_NAV_ENEMY_CLOSING_SPEED)))
 		{
-			if (bs->sfjPhase != BOT_SFJ_PHASE_OFF && bs->sfjPhase != BOT_SFJ_PHASE_ABORT)
-				BotSFJ_Abort(bs, level.time);
+			BotSFJ_Reject(bs, retreating ?
+				"enemy closer than bot_minstrafe or not behind" :
+				"visible enemy in close-combat range or closing fast");
 			return;
 		}
 	}
@@ -2849,12 +3338,20 @@ static void BotSFJ_SelectIntent(bot_state_t *bs)
 	}
 	fallbackMsec = sv_fps.integer > 0 ? 1000 / sv_fps.integer : 25;
 	if (!BotSFJ_GetCommandTiming(ps, level.time, fallbackMsec,
-			&commandMsec, &sliceMsec) ||
-		!BotSFJ_ArcIsSafe(bs, ps, routeDirection, routeDestination,
-			commandMsec, sliceMsec))
+			&commandMsec, &sliceMsec))
 	{
-		if (bs->sfjPhase != BOT_SFJ_PHASE_OFF && bs->sfjPhase != BOT_SFJ_PHASE_ABORT)
-			BotSFJ_Abort(bs, level.time);
+		BotSFJ_Reject(bs, "unsupported command timing");
+		return;
+	}
+	/* Mid-jump the takeoff arc was already validated; only watch for hazards. */
+	airborneJump = (bs->sfjPhase == BOT_SFJ_PHASE_TAKEOFF ||
+		bs->sfjPhase == BOT_SFJ_PHASE_AIR) && ps->groundEntityNum == ENTITYNUM_NONE;
+	if (airborneJump ? BotSFJ_HazardAhead(bs, ps) :
+		!BotSFJ_CachedArcIsSafe(bs, ps, routeDirection, routeDestination,
+			commandMsec, sliceMsec, level.time, qfalse))
+	{
+		BotSFJ_Reject(bs, airborneJump ? "hazard ahead in flight" :
+			"predicted jump arc unsafe (wall, drop, hazard or lands off route)");
 		return;
 	}
 
@@ -2869,6 +3366,13 @@ static void BotSFJ_SelectIntent(bot_state_t *bs)
 	{
 		bs->sfjPhase = BOT_SFJ_PHASE_PREPARE;
 		bs->sfjPhaseTime = level.time;
+		if (bot_strafejumps_debug.integer > 1)
+		{
+			Com_Printf("^5[SFJ]^7 %s: start %s\n",
+				g_entities[bs->client].client->pers.netname,
+				purpose == BOT_SFJ_INTENT_RETREAT ? "escape" :
+				purpose == BOT_SFJ_INTENT_PURSUIT ? "chase" : "navigation");
+		}
 	}
 }
 
@@ -2883,6 +3387,8 @@ static void BotSFJ_ApplyInput(bot_state_t *bs, bot_input_t *bi, int time, int el
 	vec3_t effectiveDirection;
 	float routeYaw;
 	float commandYaw;
+	float horizontalSpeed;
+	qboolean circleJump;
 	int commandMsec;
 	int sliceMsec;
 
@@ -2906,13 +3412,21 @@ static void BotSFJ_ApplyInput(bot_state_t *bs, bot_input_t *bi, int time, int el
 	if (eligible && (!BotSFJ_EffectiveInputDirection(bi, effectiveDirection) ||
 		DotProduct(effectiveDirection, bs->sfjIntentDirection) < 0.5f))
 		eligible = qfalse;
-	if (eligible && bs->sfjIntent != BOT_SFJ_INTENT_NAVIGATION &&
-		bs->currentEnemy && bs->currentEnemy->client)
+	if (eligible && bs->currentEnemy && bs->currentEnemy->client)
 	{
 		vec3_t liveSeparation;
+		float separation;
 		VectorSubtract(bs->currentEnemy->client->ps.origin, ps->origin, liveSeparation);
 		liveSeparation[2] = 0.0f;
-		if (VectorLength(liveSeparation) < BOT_SFJ_PURSUIT_STOP_DISTANCE)
+		separation = VectorLength(liveSeparation);
+		if (bs->sfjIntent == BOT_SFJ_INTENT_NAVIGATION)
+		{
+			/* Hand control back to combat when an enemy gets into saber range. */
+			if (bs->frame_Enemy_Vis && separation < BOT_SFJ_NAV_ENEMY_GUARD * 0.5f &&
+				!BotSFJ_ClientCarriesFlag(g_entities[bs->client].client))
+				eligible = qfalse;
+		}
+		else if (separation < BotSFJ_StopDistanceFor(BotSFJ_MinStrafeDistance()))
 			eligible = qfalse;
 	}
 	if (!BotSFJ_CanOwnInput(bot_strafejumps.integer, fresh, eligible, bs->sfjPhase))
@@ -2933,14 +3447,40 @@ static void BotSFJ_ApplyInput(bot_state_t *bs, bot_input_t *bi, int time, int el
 		return;
 	}
 
-	nextPhase = BotSFJ_NextPhase(bs->sfjPhase, qtrue, fresh, eligible, grounded,
-		time - bs->sfjPhaseTime);
-	if (!BotSFJ_GetCommandTiming(ps, time, elapsedTime, &commandMsec, &sliceMsec) ||
-		((nextPhase == BOT_SFJ_PHASE_TAKEOFF || nextPhase == BOT_SFJ_PHASE_REJUMP ||
-			nextPhase == BOT_SFJ_PHASE_AIR) &&
-		!BotSFJ_ArcIsSafe(bs, ps, bs->sfjIntentDirection, bs->sfjIntentDestination,
-			commandMsec, sliceMsec)))
+	horizontalSpeed = sqrtf(ps->velocity[0] * ps->velocity[0] +
+		ps->velocity[1] * ps->velocity[1]);
+	/*
+	 * Circle-jump start: from a slow standing start, spend a few ground frames
+	 * swinging the view across the route before the first takeoff so the jump
+	 * leaves the ground with extra speed.
+	 */
+	circleJump = (bs->sfjPhase == BOT_SFJ_PHASE_PREPARE && grounded && fresh &&
+		eligible && horizontalSpeed < 250.0f && time - bs->sfjPhaseTime < 120) ?
+		qtrue : qfalse;
+	nextPhase = circleJump ? BOT_SFJ_PHASE_PREPARE :
+		BotSFJ_NextPhase(bs->sfjPhase, qtrue, fresh, eligible, grounded,
+			time - bs->sfjPhaseTime);
+	if (!BotSFJ_GetCommandTiming(ps, time, elapsedTime, &commandMsec, &sliceMsec))
 	{
+		BotSFJ_DebugReject(bs, "unsupported command timing");
+		BotSFJ_Abort(bs, time);
+		return;
+	}
+	if ((nextPhase == BOT_SFJ_PHASE_TAKEOFF || nextPhase == BOT_SFJ_PHASE_REJUMP) &&
+		nextPhase != bs->sfjPhase)
+	{
+		/* One full arc check per takeoff (reusing a very recent check). */
+		if (!BotSFJ_CachedArcIsSafe(bs, ps, bs->sfjIntentDirection,
+				bs->sfjIntentDestination, commandMsec, sliceMsec, time, qfalse))
+		{
+			BotSFJ_DebugReject(bs, "takeoff arc unsafe");
+			BotSFJ_Abort(bs, time);
+			return;
+		}
+	}
+	else if (nextPhase == BOT_SFJ_PHASE_AIR && !grounded && BotSFJ_HazardAhead(bs, ps))
+	{
+		BotSFJ_DebugReject(bs, "hazard ahead in flight, releasing");
 		BotSFJ_Abort(bs, time);
 		return;
 	}
@@ -2963,6 +3503,12 @@ static void BotSFJ_ApplyInput(bot_state_t *bs, bot_input_t *bi, int time, int el
 		(float)ps->speed, pm_airaccelerate,
 		(float)sliceMsec / 1000.0f,
 		bs->sfjStrafeSide);
+	if (circleJump)
+	{
+		const float swing = 30.0f * (1.0f - (float)(time - bs->sfjPhaseTime) / 120.0f);
+		commandYaw = AngleNormalize360(routeYaw -
+			(bs->sfjStrafeSide < 0 ? -swing : swing));
+	}
 	candidate = *bi;
 	candidate.viewangles[YAW] = commandYaw;
 	VectorClear(candidate.dir);
@@ -12045,6 +12591,370 @@ static qboolean NewBotAI_UpdateSwingDodge(bot_state_t *bs)
 	return qtrue;
 }
 
+//Retreat wall escapes: a retreating bot backpedals away from its enemy, so the normal
+//forward wall probe never sees the wall behind it. NewBotAI_RetreatWallImminent probes
+//along the actual movement direction a little ahead of contact; when a wall is coming
+//up the bot commits to one of several escapes, chosen at random and weighted by bot
+//learning (the decision is recorded so the outcomes can later be turned into fixed logic).
+enum
+{
+	NEWBOTAI_WALLESC_NONE = 0,
+	NEWBOTAI_WALLESC_WALLRUN,
+	NEWBOTAI_WALLESC_FLIPKICK_DRAIN,
+	NEWBOTAI_WALLESC_DRAIN_FLIPKICK,
+	NEWBOTAI_WALLESC_ROLL_AROUND,
+	NEWBOTAI_WALLESC_HOP_OVER,
+	NEWBOTAI_WALLESC_COUNT
+};
+
+#define NEWBOTAI_WALL_ESCAPE_COMMIT_MS 900
+#define NEWBOTAI_WALL_ESCAPE_RETRY_MS 1200
+#define NEWBOTAI_WALL_ESCAPE_BASE_WEIGHT 50
+#define NEWBOTAI_WALL_ESCAPE_MIN_WEIGHT 5
+#define NEWBOTAI_WALL_ESCAPE_ENGAGE_RANGE 220.0f
+
+static const char *NewBotAI_WallEscapeName(int option)
+{
+	switch (option)
+	{
+	case NEWBOTAI_WALLESC_WALLRUN: return "vertical wallrun";
+	case NEWBOTAI_WALLESC_FLIPKICK_DRAIN: return "flipkick -> drain";
+	case NEWBOTAI_WALLESC_DRAIN_FLIPKICK: return "drain -> flipkick";
+	case NEWBOTAI_WALLESC_ROLL_AROUND: return "roll around";
+	case NEWBOTAI_WALLESC_HOP_OVER: return "hop around/over";
+	default: return "none";
+	}
+}
+
+static void NewBotAI_WallEscapeTokens(int option, int *response, int *follow)
+{
+	*follow = BOTLEARN_TOK_NONE;
+	switch (option)
+	{
+	case NEWBOTAI_WALLESC_WALLRUN: *response = BOTLEARN_TOK_WALLRUN; break;
+	case NEWBOTAI_WALLESC_FLIPKICK_DRAIN: *response = BOTLEARN_TOK_KICK; *follow = BOTLEARN_TOK_DRAIN; break;
+	case NEWBOTAI_WALLESC_DRAIN_FLIPKICK: *response = BOTLEARN_TOK_DRAIN; *follow = BOTLEARN_TOK_KICK; break;
+	case NEWBOTAI_WALLESC_ROLL_AROUND: *response = BOTLEARN_TOK_ROLL; break;
+	case NEWBOTAI_WALLESC_HOP_OVER: *response = BOTLEARN_TOK_HOP; break;
+	default: *response = BOTLEARN_TOK_NONE; break;
+	}
+}
+
+static qboolean NewBotAI_RetreatWallImminent(bot_state_t *bs, vec3_t wallNormal)
+{
+	static vec3_t probeMins = {-15.0f, -15.0f, -8.0f};
+	static vec3_t probeMaxs = {15.0f, 15.0f, 8.0f};
+	vec3_t moveDir, start, end;
+	trace_t tr;
+	float speed;
+	float probeDistance;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+		return qfalse;
+	VectorSet(moveDir, bs->cur_ps.velocity[0], bs->cur_ps.velocity[1], 0.0f);
+	speed = VectorNormalize(moveDir);
+	if (speed < 80.0f)
+	{
+		//Barely moving: assume we are trying to back away from the enemy.
+		VectorSubtract(bs->cur_ps.origin, bs->currentEnemy->client->ps.origin, moveDir);
+		moveDir[2] = 0.0f;
+		if (VectorNormalize(moveDir) <= 0.0f)
+			return qfalse;
+	}
+	probeDistance = NEWBOTAI_WALL_CONTACT_PROBE_DISTANCE + speed * 0.3f;
+	if (probeDistance < 32.0f)
+		probeDistance = 32.0f;
+	else if (probeDistance > 112.0f)
+		probeDistance = 112.0f;
+	VectorCopy(bs->cur_ps.origin, start);
+	start[2] += 24.0f;
+	VectorMA(start, probeDistance, moveDir, end);
+	JP_Trace(&tr, start, probeMins, probeMaxs, end, bs->client,
+		MASK_PLAYERSOLID & ~CONTENTS_BODY, qfalse, 0, 0);
+	if (tr.startsolid || tr.allsolid || tr.fraction >= 1.0f)
+		return qfalse;
+	if (tr.entityNum < MAX_CLIENTS || tr.plane.normal[2] > 0.35f ||
+		DotProduct(moveDir, tr.plane.normal) > -0.25f)
+		return qfalse;
+	if (wallNormal)
+		VectorCopy(tr.plane.normal, wallNormal);
+	return qtrue;
+}
+
+static qboolean NewBotAI_WallEscapeCanDrain(bot_state_t *bs)
+{
+	return (bot_forcepowers.integer && !g_forcePowerDisable.integer &&
+		(bs->cur_ps.fd.forcePowersKnown & (1 << FP_DRAIN)) &&
+		bs->cur_ps.fd.forcePower >= 10 &&
+		bs->frame_Enemy_Len < MAX_DRAIN_DISTANCE - 100) ? qtrue : qfalse;
+}
+
+//True when a player-sized box can move sideways (side -1 left / 1 right, relative to
+//facing the enemy) far enough to get around them.
+static qboolean NewBotAI_WallEscapeSideOpen(bot_state_t *bs, int side, float height)
+{
+	static vec3_t mins = {-15.0f, -15.0f, 0.0f};
+	static vec3_t maxs = {15.0f, 15.0f, 32.0f};
+	vec3_t toEnemy, right, start, end;
+	trace_t tr;
+
+	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->cur_ps.origin, toEnemy);
+	toEnemy[2] = 0.0f;
+	if (VectorNormalize(toEnemy) <= 0.0f)
+		return qfalse;
+	VectorSet(right, toEnemy[1], -toEnemy[0], 0.0f);
+	VectorCopy(bs->cur_ps.origin, start);
+	start[2] += height;
+	VectorMA(start, 96.0f * (float)side, right, end);
+	VectorMA(end, 48.0f, toEnemy, end);
+	JP_Trace(&tr, start, mins, maxs, end, bs->client, MASK_PLAYERSOLID, qfalse, 0, 0);
+	return (!tr.startsolid && !tr.allsolid && tr.fraction >= 0.9f) ? qtrue : qfalse;
+}
+
+static qboolean NewBotAI_WallEscapeHeadroomOverEnemy(bot_state_t *bs)
+{
+	vec3_t start, end;
+	trace_t tr;
+
+	VectorCopy(bs->currentEnemy->client->ps.origin, start);
+	start[2] += DEFAULT_MAXS_2;
+	VectorCopy(start, end);
+	end[2] += 72.0f;
+	JP_Trace(&tr, start, NULL, NULL, end, bs->client, MASK_SOLID, qfalse, 0, 0);
+	return (!tr.startsolid && tr.fraction >= 1.0f) ? qtrue : qfalse;
+}
+
+static qboolean NewBotAI_WallEscapeOptionValid(bot_state_t *bs, int option, int *side)
+{
+	const qboolean grounded = (bs->cur_ps.groundEntityNum != ENTITYNUM_NONE) ? qtrue : qfalse;
+	const qboolean flipkickReady = (NewBotAI_CanAttemptFlipkick(bs) && !bs->cur_ps.saberInFlight &&
+		bs->frame_Enemy_Len < NEWBOTAI_WALL_ESCAPE_ENGAGE_RANGE) ? qtrue : qfalse;
+	const int preferredSide = (bs->wallEscapeSide < 0) ? -1 : 1;
+
+	switch (option)
+	{
+	case NEWBOTAI_WALLESC_WALLRUN:
+		return (grounded &&
+			bs->cur_ps.fd.forcePowerLevel[FP_LEVITATION] >= FORCE_LEVEL_1 &&
+			!(g_forcePowerDisable.integer & (1 << FP_LEVITATION))) ? qtrue : qfalse;
+	case NEWBOTAI_WALLESC_FLIPKICK_DRAIN:
+		return (grounded && flipkickReady) ? qtrue : qfalse;
+	case NEWBOTAI_WALLESC_DRAIN_FLIPKICK:
+		return (flipkickReady && NewBotAI_WallEscapeCanDrain(bs)) ? qtrue : qfalse;
+	case NEWBOTAI_WALLESC_ROLL_AROUND:
+	case NEWBOTAI_WALLESC_HOP_OVER:
+	{
+		const float height = (option == NEWBOTAI_WALLESC_HOP_OVER) ? 40.0f : 0.0f;
+		if (!grounded || bs->frame_Enemy_Len > NEWBOTAI_WALL_ESCAPE_ENGAGE_RANGE)
+			return qfalse;
+		if (NewBotAI_WallEscapeSideOpen(bs, preferredSide, height))
+		{
+			*side = preferredSide;
+			return qtrue;
+		}
+		if (NewBotAI_WallEscapeSideOpen(bs, -preferredSide, height))
+		{
+			*side = -preferredSide;
+			return qtrue;
+		}
+		if (option == NEWBOTAI_WALLESC_HOP_OVER && NewBotAI_WallEscapeHeadroomOverEnemy(bs))
+		{
+			*side = 0;
+			return qtrue;
+		}
+		return qfalse;
+	}
+	default:
+		return qfalse;
+	}
+}
+
+static int NewBotAI_ChooseWallEscape(bot_state_t *bs, const vec3_t wallNormal)
+{
+	int weights[NEWBOTAI_WALLESC_COUNT];
+	int sides[NEWBOTAI_WALLESC_COUNT];
+	int bonuses[NEWBOTAI_WALLESC_COUNT];
+	const int stimulus = NewBotAI_GetEnemyStimulusToken(bs);
+	int total = 0;
+	int option;
+	int roll;
+
+	bs->wallEscapeSide = Q_irand(0, 1) ? 1 : -1;
+	for (option = 0; option < NEWBOTAI_WALLESC_COUNT; option++)
+	{
+		int response, follow;
+
+		weights[option] = 0;
+		sides[option] = bs->wallEscapeSide;
+		bonuses[option] = 0;
+		if (option == NEWBOTAI_WALLESC_NONE ||
+			!NewBotAI_WallEscapeOptionValid(bs, option, &sides[option]))
+			continue;
+		NewBotAI_WallEscapeTokens(option, &response, &follow);
+		bonuses[option] = G_BotLearnBonus(&g_entities[bs->client], bs->currentEnemy,
+			stimulus, response, follow, bs->settings.skill);
+		weights[option] = NEWBOTAI_WALL_ESCAPE_BASE_WEIGHT + bonuses[option];
+		if (weights[option] < NEWBOTAI_WALL_ESCAPE_MIN_WEIGHT)
+			weights[option] = NEWBOTAI_WALL_ESCAPE_MIN_WEIGHT;
+		total += weights[option];
+	}
+	if (total <= 0)
+		return NEWBOTAI_WALLESC_NONE;
+
+	roll = Q_irand(0, total - 1);
+	for (option = 1; option < NEWBOTAI_WALLESC_COUNT; option++)
+	{
+		if (roll < weights[option])
+			break;
+		roll -= weights[option];
+	}
+	if (option >= NEWBOTAI_WALLESC_COUNT)
+		return NEWBOTAI_WALLESC_NONE;
+
+	{
+		int response, follow;
+		NewBotAI_WallEscapeTokens(option, &response, &follow);
+		G_BotLearnDecision(&g_entities[bs->client], bs->currentEnemy, stimulus, response,
+			follow, bonuses[option]);
+	}
+	bs->wallEscapeSide = sides[option];
+	bs->wallEscapeYaw = vectoyaw(wallNormal) + 180.0f;
+	if (bot_learning_debug.integer)
+	{
+		Com_Printf("^3[wall escape]^7 %s: %s (weight %d of %d, learned %+d)\n",
+			g_entities[bs->client].client->pers.netname, NewBotAI_WallEscapeName(option),
+			weights[option], total, bonuses[option]);
+	}
+	return option;
+}
+
+static void NewBotAI_WallEscapeFaceEnemy(bot_state_t *bs)
+{
+	vec3_t toEnemy, angles;
+
+	VectorSubtract(bs->currentEnemy->client->ps.origin, bs->cur_ps.origin, toEnemy);
+	vectoangles(toEnemy, angles);
+	bs->ideal_viewangles[YAW] = angles[YAW];
+}
+
+static void NewBotAI_WallEscapeDrain(bot_state_t *bs)
+{
+	if (NewBotAI_WallEscapeCanDrain(bs))
+	{
+		level.clients[bs->client].ps.fd.forcePowerSelected = FP_DRAIN;
+		trap->EA_ForcePower(bs->client);
+	}
+}
+
+static void NewBotAI_WallEscapeSideMove(bot_state_t *bs)
+{
+	if (bs->wallEscapeSide < 0)
+		trap->EA_MoveLeft(bs->client);
+	else if (bs->wallEscapeSide > 0)
+		trap->EA_MoveRight(bs->client);
+}
+
+//Runs (and if needed picks) a retreat wall escape. Returns qtrue while an escape owns
+//this think's movement.
+static qboolean NewBotAI_RunRetreatWallEscape(bot_state_t *bs)
+{
+	vec3_t wallNormal;
+	int age;
+
+	if (!bs || !bs->currentEnemy || !bs->currentEnemy->client)
+	{
+		if (bs)
+			bs->wallEscapeOption = NEWBOTAI_WALLESC_NONE;
+		return qfalse;
+	}
+	if (bs->wallEscapeOption != NEWBOTAI_WALLESC_NONE &&
+		(bs->wallEscapeUntil <= level.time || bs->wallEscapeStart > level.time))
+	{
+		bs->wallEscapeOption = NEWBOTAI_WALLESC_NONE;
+		bs->wallEscapeNextTime = level.time + NEWBOTAI_WALL_ESCAPE_RETRY_MS;
+	}
+	if (bs->wallEscapeOption == NEWBOTAI_WALLESC_NONE)
+	{
+		if ((bs->wallEscapeNextTime > level.time &&
+				bs->wallEscapeNextTime - level.time <= NEWBOTAI_WALL_ESCAPE_RETRY_MS) ||
+			!NewBotAI_RetreatWallImminent(bs, wallNormal))
+			return qfalse;
+		bs->wallEscapeOption = NewBotAI_ChooseWallEscape(bs, wallNormal);
+		if (bs->wallEscapeOption == NEWBOTAI_WALLESC_NONE)
+		{
+			bs->wallEscapeNextTime = level.time + 250;
+			return qfalse;
+		}
+		bs->wallEscapeStart = level.time;
+		bs->wallEscapeUntil = level.time + NEWBOTAI_WALL_ESCAPE_COMMIT_MS;
+	}
+
+	age = level.time - bs->wallEscapeStart;
+	switch (bs->wallEscapeOption)
+	{
+	case NEWBOTAI_WALLESC_WALLRUN:
+		//Turn into the wall and run up it: forward + jump, then tap jump near the wall.
+		bs->ideal_viewangles[YAW] = AngleNormalize360(bs->wallEscapeYaw);
+		bs->ideal_viewangles[PITCH] = 0.0f;
+		NewBotAI_StartEscapeYawOverride(bs, 200);
+		trap->EA_MoveForward(bs->client);
+		if (age > 100 && bs->cur_ps.groundEntityNum != ENTITYNUM_NONE && age < 500)
+			trap->EA_Jump(bs->client);
+		else if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE)
+		{
+			const float groundDist = BS_GroundDistance(bs);
+			if (groundDist > 20 && groundDist < 40)
+				trap->EA_Jump(bs->client);
+		}
+		break;
+	case NEWBOTAI_WALLESC_FLIPKICK_DRAIN:
+		NewBotAI_WallEscapeFaceEnemy(bs);
+		if (age < 600)
+		{
+			trap->EA_MoveForward(bs->client);
+			NewBotAI_Flipkick(bs);
+		}
+		else
+		{
+			NewBotAI_WallEscapeDrain(bs);
+			NewBotAI_WallEscapeSideMove(bs);
+		}
+		break;
+	case NEWBOTAI_WALLESC_DRAIN_FLIPKICK:
+		NewBotAI_WallEscapeFaceEnemy(bs);
+		if (age < 350)
+		{
+			NewBotAI_WallEscapeDrain(bs);
+			trap->EA_MoveForward(bs->client);
+		}
+		else
+		{
+			trap->EA_MoveForward(bs->client);
+			NewBotAI_Flipkick(bs);
+		}
+		break;
+	case NEWBOTAI_WALLESC_ROLL_AROUND:
+		//A crouch while running on the ground starts a roll; aim it past the enemy.
+		NewBotAI_WallEscapeFaceEnemy(bs);
+		trap->EA_MoveForward(bs->client);
+		NewBotAI_WallEscapeSideMove(bs);
+		if (age > 50 && age < 400 && bs->cur_ps.groundEntityNum != ENTITYNUM_NONE)
+			trap->EA_Crouch(bs->client);
+		break;
+	case NEWBOTAI_WALLESC_HOP_OVER:
+		NewBotAI_WallEscapeFaceEnemy(bs);
+		trap->EA_MoveForward(bs->client);
+		NewBotAI_WallEscapeSideMove(bs);
+		if (age < 300 && bs->cur_ps.groundEntityNum != ENTITYNUM_NONE)
+			trap->EA_Jump(bs->client);
+		break;
+	default:
+		bs->wallEscapeOption = NEWBOTAI_WALLESC_NONE;
+		return qfalse;
+	}
+	return qtrue;
+}
+
 void NewBotAI_GetMovement(bot_state_t *bs)
 {
 	const int hisWeapon = bs->currentEnemy->client->ps.weapon;
@@ -12461,11 +13371,14 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 			//our normal forward approach. Attacks and jumps are unaffected -- they're decided by
 			//NewBotAI_GetAttack and this block, respectively -- only the forward/back choice changes.
 			bs->combatAction = BOT_COMBAT_ACTION_RETREAT_DEFENSE;
-			NewBotAI_RetreatDiagonal(bs, qtrue);
-			if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE - 1 &&
-				(!NewBotAI_TouchingWallNotEnemy(bs) || NewBotAI_ShouldWallrunAgainstWalls(bs)))
+			if (!NewBotAI_RunRetreatWallEscape(bs))
 			{
-				trap->EA_Jump(bs->client);
+				NewBotAI_RetreatDiagonal(bs, qtrue);
+				if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE - 1 &&
+					(!NewBotAI_TouchingWallNotEnemy(bs) || NewBotAI_ShouldWallrunAgainstWalls(bs)))
+				{
+					trap->EA_Jump(bs->client);
+				}
 			}
 		}
 		else if (!pressAdvantage && ((g_entities[bs->client].health < hardRetreatHealth) ||
@@ -12487,7 +13400,10 @@ void NewBotAI_GetMovement(bot_state_t *bs)
 			//If we are touching a suitable wall, insta 180 and wallrun it
 			//stay in wallrun until end then jump
 
-			if (bs->frame_Enemy_Len > 200) {
+			if (NewBotAI_RunRetreatWallEscape(bs)) {
+				wallRun = qtrue; //a wall escape owns this think's movement
+			}
+			else if (bs->frame_Enemy_Len > 200) {
 				const float horizontalSpeedSquared = bs->cur_ps.velocity[0] * bs->cur_ps.velocity[0] +
 					bs->cur_ps.velocity[1] * bs->cur_ps.velocity[1];
 				//Only treat this as a real wall block (and worth a 180+jump escape) when we
@@ -13135,9 +14051,12 @@ static qboolean BotTargetModeAllowsBotDuelChallenges(int targetMode)
 		targetMode == NEWBOTAI_TARGET_PREFER_HUMANS_DUEL);
 }
 
+//The long bot-vs-bot cooldown only exists to keep bots available for humans; with no
+//humans around, bots go back to the normal cooldown so force-duel Elo keeps building.
 static qboolean BotTargetModeUsesExtendedBotDuelCooldown(int targetMode)
 {
-	return BotTargetModeAllowsBotDuelChallenges(targetMode);
+	return (BotTargetModeAllowsBotDuelChallenges(targetMode) &&
+		BotHasActiveHumanPlayers()) ? qtrue : qfalse;
 }
 
 static qboolean BotTargetModeIsForceDuelOnly(int targetMode)
@@ -13220,6 +14139,13 @@ static qboolean NewBotAI_InFFAExploreWindow(bot_state_t *bs, int targetMode)
 #define NEWBOTAI_DUEL_REQUEST_COOLDOWN_MS 7000
 #define NEWBOTAI_DUEL_REQUEST_BOT_VS_BOT_COOLDOWN_MS 120000
 #define NEWBOTAI_DUEL_REQUEST_MIN_INTERVAL_MS 1000
+#define NEWBOTAI_DUEL_OFFER_HOLD_MS 3000
+#define NEWBOTAI_DUEL_OFFER_HOLD_DAMAGE_CANCEL 30
+#define NEWBOTAI_DUEL_ACCEPT_RANGE 224.0f
+#define NEWBOTAI_DUEL_STALEMATE_MS 4000
+#define NEWBOTAI_DUEL_STALEMATE_RADIUS 320.0f
+#define NEWBOTAI_DUEL_STALEMATE_BLACKLIST_MS 20000
+#define NEWBOTAI_DUEL_STALEMATE_ROAM_MS 6000
 
 static qboolean NewBotAI_ShouldIssueBotDuelChallenge(bot_state_t *bs, int targetMode)
 {
@@ -13272,9 +14198,14 @@ static qboolean NewBotAI_TryIssueBotDuelChallenge(bot_state_t *bs, int targetMod
 	VectorCopy(toEnemy, g_entities[bs->client].client->ps.viewangles);
 	VectorCopy(toEnemy, bs->ideal_viewangles);
 
-	// NewBotAI target modes -3 and -4 only offer full-force duels. In
-	// particular, never randomly issue a saber duel from these modes.
+	// Bot-vs-bot offers in -3/-4 are always full-force duels so the force Elo keeps
+	// building. Offers to humans use the last duel type a human offered this bot
+	// (saber or force), defaulting to force.
 	duelType = 1;
+	if (!(bs->currentEnemy->r.svFlags & SVF_BOT) && bs->humanDuelTypePref == 1)
+	{
+		duelType = 0;
+	}
 	Cmd_EngageDuel_f(&g_entities[bs->client], duelType);
 
 	VectorCopy(oldViewAngles, g_entities[bs->client].client->ps.viewangles);
@@ -13289,6 +14220,15 @@ static qboolean NewBotAI_TryIssueBotDuelChallenge(bot_state_t *bs, int targetMod
 	bs->beStill = level.time + 250;
 	bs->doAttack = 0;
 	bs->doAltAttack = 0;
+	//Stay passive and targetable for a few seconds so the offer can be accepted - but
+	//only when Cmd_EngageDuel_f actually sent it.
+	if (g_entities[bs->client].client->ps.duelIndex == bs->currentEnemy->s.number &&
+		g_entities[bs->client].client->ps.duelTime > level.time)
+	{
+		bs->duelOfferHoldUntil = level.time + NEWBOTAI_DUEL_OFFER_HOLD_MS;
+		bs->duelOfferTargetNum = bs->currentEnemy->s.number;
+		bs->duelOfferHoldHealth = g_entities[bs->client].health;
+	}
 	return qtrue;
 }
 
@@ -19452,6 +20392,11 @@ int NewBotAI_ScanForEnemies(bot_state_t* bs) {
 					continue;
 				}
 
+				if (NewBotAI_IsUnavailableDuelBot(bs, ent, targetMode))
+				{
+					continue;
+				}
+
 				if (ent->client->ps.fd.forceGripEntityNum == bs->cur_ps.clientNum) { //always aim at whos gripping us
 					return i;
 				}
@@ -19538,18 +20483,24 @@ int NewBotAI_ScanForEnemies(bot_state_t* bs) {
 
 #define _ADVANCEDBOTSHIT 1
 
+//Returns a client currently challenging this bot. Human challenges win over bot
+//challenges and use the engine's full acceptance window (the challenger's duelTime
+//plus 2s, see Cmd_EngageDuel_f); they also ignore the request throttle and the FFA
+//explore window so a human offer is never missed. Bot challenges in -3/-4 must be
+//force duels.
 static gentity_t *NewBotAI_GetPendingDuelChallenger(bot_state_t *bs, int targetMode, int *duelTypeOut)
 {
+	gentity_t *botChallenger = NULL;
+	int botChallengerType = -1;
+	qboolean botGated;
 	int i;
 
 	if (duelTypeOut)
 		*duelTypeOut = -1;
 	if (!bot_honorableduelacceptance.integer || !g_privateDuel.integer || !bs || bs->cur_ps.duelInProgress)
 		return NULL;
-	if (bs->botDuelRequestThrottleUntil > level.time)
-		return NULL;
-	if (NewBotAI_InFFAExploreWindow(bs, targetMode))
-		return NULL;
+	botGated = (bs->botDuelRequestThrottleUntil > level.time ||
+		NewBotAI_InFFAExploreWindow(bs, targetMode)) ? qtrue : qfalse;
 
 	for (i = 0; i < MAX_CLIENTS; i++)
 	{
@@ -19559,21 +20510,98 @@ static gentity_t *NewBotAI_GetPendingDuelChallenger(bot_state_t *bs, int targetM
 
 		if (!challenger->inuse || !challenger->client || i == bs->client)
 			continue;
-		if (challenger->health < 1 || challenger->client->ps.duelIndex != bs->client || challenger->client->ps.duelTime <= level.time)
+		if (challenger->health < 1 || challenger->client->ps.duelInProgress ||
+			challenger->client->ps.duelIndex != bs->client ||
+			challenger->client->ps.duelTime <= 0 ||
+			challenger->client->ps.duelTime + 2000 < level.time)
 			continue;
 
 		duelType = dueltypes[challenger->client->ps.clientNum];
-		if (challengerIsBot && !BotTargetModeAllowsBotDuelChallenges(targetMode))
+		if (!challengerIsBot)
+		{
+			if (duelTypeOut)
+				*duelTypeOut = duelType;
+			return challenger;
+		}
+		if (botGated || botChallenger || challenger->client->ps.duelTime <= level.time)
 			continue;
-		if (challengerIsBot && BotTargetModeIsForceDuelOnly(targetMode) && duelType != 1)
+		if (!BotTargetModeAllowsBotDuelChallenges(targetMode))
 			continue;
-
-		if (duelTypeOut)
-			*duelTypeOut = duelType;
-		return challenger;
+		if (duelType != 1)
+			continue;
+		botChallenger = challenger;
+		botChallengerType = duelType;
 	}
 
-	return NULL;
+	if (botChallenger && duelTypeOut)
+		*duelTypeOut = botChallengerType;
+	return botChallenger;
+}
+
+static void NewBotAI_RememberHumanDuelType(bot_state_t *bs, gentity_t *challenger, int duelType)
+{
+	if (!bs || !challenger || (challenger->r.svFlags & SVF_BOT))
+		return;
+	if (duelType == 0)
+		bs->humanDuelTypePref = 1;
+	else if (duelType == 1)
+		bs->humanDuelTypePref = 2;
+}
+
+//Accepts (or walks into range to accept) a pending duel challenge. Returns qtrue when
+//the bot spent this think on the challenge.
+static qboolean NewBotAI_AcceptDuelFrom(bot_state_t *bs, gentity_t *challenger, int duelType)
+{
+	gentity_t *self;
+	const qboolean human = (challenger && !(challenger->r.svFlags & SVF_BOT)) ? qtrue : qfalse;
+	vec3_t toChallenger;
+
+	if (!bs || !challenger || !challenger->client)
+		return qfalse;
+	self = &g_entities[bs->client];
+	NewBotAI_RememberHumanDuelType(bs, challenger, duelType);
+
+	bs->currentEnemy = challenger;
+	bs->doAttack = 0;
+	bs->doAltAttack = 0;
+	bs->duelOfferHoldUntil = 0;
+	NewBotAI_FaceEntityImmediately(bs, challenger);
+	if (duelType <= 1 && bs->cur_ps.weapon == WP_SABER && bs->cur_ps.saberHolstered)
+	{
+		if (!bs->cur_ps.saberInFlight && self->client->ps.weaponTime < 1)
+		{
+			Cmd_ToggleSaber_f(self);
+			if (!human)
+				bs->botDuelRequestThrottleUntil = level.time + NEWBOTAI_DUEL_REQUEST_MIN_INTERVAL_MS;
+			bs->duelNoStrafeUntil = level.time + Com_Clampi(0, 10000, bot_duel_nostrafetime.integer);
+			bs->beStill = level.time + (human ? 200 : 2500);
+		}
+		return human;
+	}
+
+	//Cmd_EngageDuel_f traces 256 units along the view: walk into range first.
+	VectorSubtract(challenger->client->ps.origin, self->client->ps.origin, toChallenger);
+	if (VectorLength(toChallenger) > NEWBOTAI_DUEL_ACCEPT_RANGE ||
+		!OrgVisible(bs->eye, challenger->client->ps.origin, bs->client))
+	{
+		if (!human)
+			return qfalse;
+		trap->EA_MoveForward(bs->client);
+		return qtrue;
+	}
+
+	//Our own pending offer blocks Cmd_EngageDuel_f; a human's offer takes priority.
+	if (human && self->client->ps.duelTime >= level.time)
+		self->client->ps.duelTime = 0;
+
+	Cmd_EngageDuel_f(self, duelType);
+
+	if (!human)
+		bs->timeToReact = level.time + BotGetReflexScaledResponseDelayMs(bs);
+	bs->botDuelRequestThrottleUntil = level.time + NEWBOTAI_DUEL_REQUEST_MIN_INTERVAL_MS;
+	bs->duelNoStrafeUntil = level.time + Com_Clampi(0, 10000, bot_duel_nostrafetime.integer);
+	bs->beStill = level.time + (human ? 500 : 2500);
+	return qtrue;
 }
 
 static qboolean BotTryAcceptAnyDuelChallenge(bot_state_t *bs, int targetMode)
@@ -19585,6 +20613,10 @@ static qboolean BotTryAcceptAnyDuelChallenge(bot_state_t *bs, int targetMode)
 	if (!challenger)
 	{
 		return qfalse;
+	}
+	if (!(challenger->r.svFlags & SVF_BOT))
+	{
+		return NewBotAI_AcceptDuelFrom(bs, challenger, duelType);
 	}
 
 	bs->currentEnemy = challenger;
@@ -19609,6 +20641,126 @@ static qboolean BotTryAcceptAnyDuelChallenge(bot_state_t *bs, int targetMode)
 	bs->duelNoStrafeUntil = level.time + Com_Clampi(0, 10000, bot_duel_nostrafetime.integer);
 	bs->beStill = level.time + 2500;
 	return qtrue;
+}
+
+//After issuing a duel offer, stay passive (still, facing the target, no attacks) for
+//NEWBOTAI_DUEL_OFFER_HOLD_MS so the target can accept. Draining is still allowed when
+//recently hurt or low on health. Returns qtrue while the hold owns this think.
+static qboolean NewBotAI_RunDuelOfferHold(bot_state_t *bs)
+{
+	gentity_t *self;
+	gentity_t *target;
+
+	if (!bs || bs->duelOfferHoldUntil <= level.time)
+		return qfalse;
+	self = &g_entities[bs->client];
+	target = (bs->duelOfferTargetNum >= 0 && bs->duelOfferTargetNum < MAX_CLIENTS) ?
+		&g_entities[bs->duelOfferTargetNum] : NULL;
+	if (bs->cur_ps.duelInProgress || !target || !target->inuse || !target->client ||
+		target->health < 1 || target->client->ps.duelInProgress ||
+		self->client->ps.duelIndex != bs->duelOfferTargetNum ||
+		self->client->ps.duelTime + 2000 < level.time ||
+		self->health <= bs->duelOfferHoldHealth - NEWBOTAI_DUEL_OFFER_HOLD_DAMAGE_CANCEL)
+	{
+		bs->duelOfferHoldUntil = 0;
+		return qfalse;
+	}
+
+	bs->currentEnemy = target;
+	bs->doAttack = 0;
+	bs->doAltAttack = 0;
+	bs->beStill = level.time + 100;
+	NewBotAI_FaceEntityImmediately(bs, target);
+	if ((bs->lastHurtTime > level.time - 1000 || self->health < 40) &&
+		bot_forcepowers.integer &&
+		!(g_forcePowerDisable.integer & (1 << FP_DRAIN)) &&
+		(bs->cur_ps.fd.forcePowersKnown & (1 << FP_DRAIN)))
+	{
+		level.clients[bs->client].ps.fd.forcePowerSelected = FP_DRAIN;
+		trap->EA_ForcePower(bs->client);
+	}
+	return qtrue;
+}
+
+static qboolean NewBotAI_BotCanChallengeNow(bot_state_t *bs, int targetMode)
+{
+	return (bs && bs->botChallengingTime <= level.time &&
+		!NewBotAI_InFFAExploreWindow(bs, targetMode)) ? qtrue : qfalse;
+}
+
+//-4 scan filter: skip a bot that neither of us can currently challenge, so arriving
+//bots look for a free partner instead of joining a pile of idle bots.
+static qboolean NewBotAI_IsUnavailableDuelBot(bot_state_t *bs, gentity_t *ent, int targetMode)
+{
+	bot_state_t *otherBS;
+
+	if (!BotTargetModeIsForceDuelOnly(targetMode) || !ent || !ent->client ||
+		!(ent->r.svFlags & SVF_BOT) || ent->s.number < 0 || ent->s.number >= MAX_CLIENTS)
+		return qfalse;
+	if (ent->client->ps.duelInProgress)
+		return qtrue;
+	otherBS = botstates[ent->s.number];
+	if (!otherBS)
+		return qfalse;
+	if (otherBS->duelBlacklistUntil > level.time && otherBS->duelBlacklistIndex == bs->client)
+		return qtrue;
+	return (!NewBotAI_BotCanChallengeNow(bs, targetMode) &&
+		!NewBotAI_BotCanChallengeNow(otherBS, targetMode)) ? qtrue : qfalse;
+}
+
+//-4 stalemate watchdog: two bots idling next to each other without a duel or offer
+//for NEWBOTAI_DUEL_STALEMATE_MS blacklist each other and roam apart.
+static void NewBotAI_UpdateDuelStalemate(bot_state_t *bs, int targetMode)
+{
+	gentity_t *enemy = bs->currentEnemy;
+	bot_state_t *otherBS;
+	qboolean pending;
+
+	if (!BotTargetModeIsForceDuelOnly(targetMode) || bs->cur_ps.duelInProgress ||
+		!enemy || !enemy->client || !(enemy->r.svFlags & SVF_BOT) ||
+		bs->frame_Enemy_Len > NEWBOTAI_DUEL_STALEMATE_RADIUS ||
+		enemy->s.number < 0 || enemy->s.number >= MAX_CLIENTS)
+	{
+		bs->duelStalemateOtherNum = -1;
+		bs->duelStalemateSince = 0;
+		return;
+	}
+	pending = ((g_entities[bs->client].client->ps.duelIndex == enemy->s.number &&
+			g_entities[bs->client].client->ps.duelTime + 2000 >= level.time) ||
+		(enemy->client->ps.duelIndex == bs->client &&
+			enemy->client->ps.duelTime + 2000 >= level.time)) ? qtrue : qfalse;
+	if (pending || bs->duelStalemateOtherNum != enemy->s.number || bs->duelStalemateSince <= 0 ||
+		bs->duelStalemateSince > level.time)
+	{
+		bs->duelStalemateOtherNum = enemy->s.number;
+		bs->duelStalemateSince = level.time;
+		return;
+	}
+	if (level.time - bs->duelStalemateSince < NEWBOTAI_DUEL_STALEMATE_MS)
+		return;
+
+	otherBS = botstates[enemy->s.number];
+	bs->duelBlacklistIndex = enemy->s.number;
+	bs->duelBlacklistUntil = level.time + NEWBOTAI_DUEL_STALEMATE_BLACKLIST_MS;
+	bs->duelRoamUntil = level.time + NEWBOTAI_DUEL_STALEMATE_ROAM_MS;
+	bs->duelStalemateOtherNum = -1;
+	bs->duelStalemateSince = 0;
+	NewBotAI_ClearCurrentEnemyLock(bs);
+	if (otherBS)
+	{
+		otherBS->duelBlacklistIndex = bs->client;
+		otherBS->duelBlacklistUntil = bs->duelBlacklistUntil;
+		otherBS->duelRoamUntil = bs->duelRoamUntil;
+		otherBS->duelStalemateOtherNum = -1;
+		otherBS->duelStalemateSince = 0;
+		if (otherBS->currentEnemy == &g_entities[bs->client])
+			NewBotAI_ClearCurrentEnemyLock(otherBS);
+	}
+	if (bot_learning_debug.integer)
+	{
+		Com_Printf("^3[duel]^7 %s and %s stalemated; roaming apart\n",
+			g_entities[bs->client].client->pers.netname, enemy->client->pers.netname);
+	}
 }
 
 static void NewBotAI_RunForceDuelOnly(bot_state_t *bs)
@@ -20067,6 +21219,18 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	}
 	pendingDuelChallenger = NewBotAI_GetPendingDuelChallenger(bs, targetMode, &pendingDuelType);
 
+	//Human duel offers are accepted right away, ahead of the reaction delay and any
+	//pending offer of our own.
+	if (pendingDuelChallenger && !(pendingDuelChallenger->r.svFlags & SVF_BOT) &&
+		NewBotAI_AcceptDuelFrom(bs, pendingDuelChallenger, pendingDuelType))
+	{
+		return;
+	}
+	if (NewBotAI_RunDuelOfferHold(bs))
+	{
+		return;
+	}
+
 	responseDelay = BotGetReflexScaledResponseDelayMs(bs);
 	if (responseDelay > 0 && bs->currentEnemy && bs->currentEnemy->client)
 	{
@@ -20111,6 +21275,23 @@ void NewBotAI(bot_state_t *bs, float thinktime) //BOT START
 	}
 	if (BotTargetModeIsForceDuelOnly(targetMode) && !bs->cur_ps.duelInProgress)
 	{
+		//Exploring for a new partner, or breaking up a stalemate: roam instead of
+		//walking up to the current target and idling in front of it.
+		if (NewBotAI_InFFAExploreWindow(bs, targetMode) || bs->duelRoamUntil > level.time)
+		{
+			bs->doAttack = 0;
+			bs->doAltAttack = 0;
+			NewBotAI_RunNavigationOrAlone(bs, thinktime);
+			return;
+		}
+		NewBotAI_UpdateDuelStalemate(bs, targetMode);
+		if (bs->duelRoamUntil > level.time)
+		{
+			bs->doAttack = 0;
+			bs->doAltAttack = 0;
+			NewBotAI_RunNavigationOrAlone(bs, thinktime);
+			return;
+		}
 		NewBotAI_RunForceDuelOnly(bs);
 		return;
 	}
@@ -22003,6 +23184,7 @@ int BotAIStartFrame(int time) {
 	static int local_time;
 //	static int botlib_residual;
 	static int lastbotthink_time;
+	const int perfStart = trap->Milliseconds();
 
 	if (gUpdateVars < level.time)
 	{
@@ -22069,6 +23251,7 @@ int BotAIStartFrame(int time) {
 		trap->BotUserCommand(botstates[i]->client, &botstates[i]->lastucmd);
 	}
 
+	G_PerfWarn("bot AI frame", trap->Milliseconds() - perfStart);
 	return qtrue;
 }
 

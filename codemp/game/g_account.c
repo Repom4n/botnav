@@ -39,6 +39,7 @@ static char LOCAL_DUELTRACK_DB_PATH[MAX_OSPATH];
 #define TRACKED_CAPTURE_VERSION 13
 #define TRACKED_FORCE_NOTE_SELECTED_FALLBACK "selected_fallback"
 #define TRACKED_AIR_NOTE_JUMP "jump"
+#define TRACKED_DECISION_NOTE_WALL_ESCAPE "wallescape"
 #define TRACKED_DUEL_MAX_EVENTS 8192
 #define TRACKED_DUEL_TUTORIAL_MAX_MESSAGES 3
 #define TRACKED_DUEL_TUTORIAL_COOLDOWN_MS 7000
@@ -429,6 +430,7 @@ typedef enum
 static tracked_duel_runtime_t g_trackedDuels[MAX_CLIENTS];
 static char g_learningSession[96];
 static qboolean g_learningCacheDirty;
+static int g_learningCacheNextRefresh;
 static struct {
 	sqlite3_int64 summaryId;
 	int finishedAt, startTime;
@@ -444,6 +446,7 @@ static qboolean G_BeginLearningSession(void)
 	g_learningSession[0] = '\0';
 	memset(g_recentLearningDuels, 0, sizeof(g_recentLearningDuels));
 	g_learningCacheDirty = qfalse;
+	g_learningCacheNextRefresh = 0;
 	result = G_GenerateLearningSessionNonce(nonce);
 	if (result != SQLITE_OK)
 	{
@@ -789,6 +792,14 @@ static void G_EnsureLocalDuelTrackingSchema(sqlite3 *db)
 	char *sql;
 	int s = SQLITE_ERROR;
 
+	//The schema/migration pass runs ~150 statements (CREATE + PRAGMA table_info per column).
+	//Once it has succeeded for this database path during the map, skip it so per-duel
+	//persistence does not pay that cost on the game thread.
+	if (!db)
+		return;
+	if (g_duelTrackingSchemaReady && !Q_stricmp(g_duelTrackingSchemaPath, LOCAL_DUELTRACK_DB_PATH))
+		return;
+
 	sql = "CREATE TABLE IF NOT EXISTS LocalDuelTrackSummary("
 		"id INTEGER PRIMARY KEY, start_time UNSIGNED INTEGER, end_time UNSIGNED INTEGER, duration UNSIGNED INTEGER, "
 		"type UNSIGNED TINYINT, mapname VARCHAR(64), winner_key VARCHAR(64), winner_label VARCHAR(36), "
@@ -1060,6 +1071,17 @@ static void G_EnsureLocalDuelTrackingSchema(sqlite3 *db)
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackAggregate", "force_speed", "UNSIGNED INTEGER DEFAULT 0");
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackAggregate", "force_seeing", "UNSIGNED INTEGER DEFAULT 0");
 	G_EnsureTrackedTableColumn(db, "LocalDuelTrackAggregate", "force_unknown", "UNSIGNED INTEGER DEFAULT 0");
+
+	//The duel-end chat association UPDATE filters on these columns; without an index it
+	//scanned the entire (ever-growing) event table on every finished duel.
+	s = sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_dueltrackevent_chat_assoc ON LocalDuelTrackEvent("
+		"session_id, duel_start_time, event_type, association)", NULL, NULL, NULL);
+	if (s != SQLITE_OK)
+		G_TrackedDBError("create idx_dueltrackevent_chat_assoc", db, s);
+	s = sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_dueltrackevent_summary ON LocalDuelTrackEvent(summary_id)",
+		NULL, NULL, NULL);
+	if (s != SQLITE_OK)
+		G_TrackedDBError("create idx_dueltrackevent_summary", db, s);
 
 	g_duelTrackingSchemaReady = qtrue;
 	Q_strncpyz(g_duelTrackingSchemaPath, LOCAL_DUELTRACK_DB_PATH, sizeof(g_duelTrackingSchemaPath));
@@ -2277,7 +2299,9 @@ void G_BotLearnDecision(gentity_t *self, gentity_t *enemy, int stimulus, int res
 		return;
 	G_AddTrackedDuelEvent(runtime, DUEL_TRACK_EVENT_DECISION, level.time - runtime->duelStartTime,
 		0, DUEL_TRACK_POWER_UNKNOWN, G_InferTrackedForceState(self, enemy),
-		G_GetTrackedRangeBucket(self, enemy), "selected", self, enemy);
+		G_GetTrackedRangeBucket(self, enemy),
+		(response >= BOTLEARN_TOK_WALLRUN && response <= BOTLEARN_TOK_HOP) ?
+			TRACKED_DECISION_NOTE_WALL_ESCAPE : "selected", self, enemy);
 	if (!runtime->eventCount)
 		return;
 	event = &runtime->events[runtime->eventCount - 1];
@@ -2290,6 +2314,8 @@ void G_BotLearnDecision(gentity_t *self, gentity_t *enemy, int stimulus, int res
 	event->learnedContext = G_BotLearnLiveContextKey(self, enemy);
 }
 
+static qboolean G_TrackedPersistPendingDuelFor(const char *identityKey, int *startTime, int *finishedAt);
+
 void G_RecordPublicLearningChat(gentity_t *speaker, const char *text)
 {
 	sqlite3 *db = NULL;
@@ -2299,6 +2325,7 @@ void G_RecordPublicLearningChat(gentity_t *speaker, const char *text)
 	const char *association = "session";
 	sqlite3_int64 summaryId = 0;
 	int kind, clientNum, startTime = 0, relTime = level.time, rc;
+	int pendingStart = 0, pendingFinishedAt = 0;
 	const char *sql = "INSERT INTO LocalDuelTrackEvent(summary_id, participant_key, participant_label, "
 		"participant_kind, rel_time, event_type, text, speaker_type, mapname, session_id, session_time, "
 		"duel_start_time, association, recorded_at, event_capture_version, event_capture_revision, quality) "
@@ -2316,6 +2343,15 @@ void G_RecordPublicLearningChat(gentity_t *speaker, const char *text)
 	{
 		association = "active";
 		startTime = runtime->duelStartTime;
+		relTime = level.time - startTime;
+	}
+	else if (G_TrackedPersistPendingDuelFor(key, &pendingStart, &pendingFinishedAt) &&
+		G_DuelCaptureRecentChat(level.time, pendingFinishedAt, qtrue))
+	{
+		//The duel just ended but is still being saved: the save's final stage links
+		//this row to the new summary.
+		association = "recent_inferred";
+		startTime = pendingStart;
 		relTime = level.time - startTime;
 	}
 	else if (g_recentLearningDuels[clientNum].summaryId &&
@@ -3396,9 +3432,11 @@ static qboolean G_InsertTrackedParticipant(sqlite3 *db, sqlite3_int64 summaryId,
 	return G_InsertTrackedCaptureDiagnostics(db, summaryId, runtime->identityKey, &runtime->capture, runtime->eventCount);
 }
 
-static qboolean G_PersistTrackedEventTelemetry(sqlite3 *db, const tracked_duel_event_t *event)
+//cachedStmt lets a batch reuse one prepared UPDATE instead of re-preparing it per event;
+//the caller finalizes it. Pass NULL to prepare/finalize locally.
+static qboolean G_PersistTrackedEventTelemetry(sqlite3 *db, const tracked_duel_event_t *event, sqlite3_stmt **cachedStmt)
 {
-	sqlite3_stmt *stmt = NULL;
+	sqlite3_stmt *stmt = cachedStmt ? *cachedStmt : NULL;
 	const char *sql = "UPDATE LocalDuelTrackEvent SET self_pitch=?, enemy_pitch=?, target_yaw_error=?, "
 		"target_pitch_error=?, defense=?, enemy_defense=?, recovery=?, enemy_recovery=?, enemy_grounded=?, "
 		"enemy_stance=?, saber_position_valid=?, saber_x=?, saber_y=?, saber_z=?, aim_x=?, aim_y=?, aim_z=?, "
@@ -3407,8 +3445,19 @@ static qboolean G_PersistTrackedEventTelemetry(sqlite3 *db, const tracked_duel_e
 		"saber_defense_state=?, enemy_saber_defense_state=?, saber_blocked=?, enemy_saber_blocked=?, "
 		"aim_mask=?, aim_endpoint_valid=?, self_footing=?, enemy_footing=?, torso_timer=?, torso_anim=? WHERE id=?";
 	sqlite3_int64 id = sqlite3_last_insert_rowid(db);
-	int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
-	if (rc == SQLITE_OK)
+	int rc = SQLITE_OK;
+	if (!stmt)
+	{
+		rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+		if (cachedStmt)
+			*cachedStmt = stmt;
+	}
+	else
+	{
+		sqlite3_reset(stmt);
+		sqlite3_clear_bindings(stmt);
+	}
+	if (rc == SQLITE_OK && stmt)
 	{
 		sqlite3_bind_double(stmt, 1, event->selfPitch);
 		sqlite3_bind_double(stmt, 2, event->enemyPitch);
@@ -3451,11 +3500,13 @@ static qboolean G_PersistTrackedEventTelemetry(sqlite3 *db, const tracked_duel_e
 	}
 	if (rc != SQLITE_DONE)
 		G_TrackedDBError("persist event telemetry", db, rc);
-	sqlite3_finalize(stmt);
+	if (!cachedStmt)
+		sqlite3_finalize(stmt);
 	return rc == SQLITE_DONE ? qtrue : qfalse;
 }
 
-static qboolean G_InsertTrackedEvents(sqlite3 *db, sqlite3_int64 summaryId, tracked_duel_runtime_t *runtime)
+static qboolean G_InsertTrackedEvents(sqlite3 *db, sqlite3_int64 summaryId, tracked_duel_runtime_t *runtime,
+	int firstEvent, int endEvent)
 {
 	sqlite3_stmt *stmt = NULL;
 	sqlite3_stmt *geomStmt = NULL;
@@ -3464,8 +3515,15 @@ static qboolean G_InsertTrackedEvents(sqlite3 *db, sqlite3_int64 summaryId, trac
 	int s;
 	qboolean captureGeometry = qfalse;
 	qboolean hasAnyGeometry = qfalse;
+	sqlite3_stmt *telemetryStmt = NULL;
 
 	if (!runtime || runtime->eventCount <= 0)
+		return qtrue;
+	if (firstEvent < 0)
+		firstEvent = 0;
+	if (endEvent > runtime->eventCount)
+		endEvent = runtime->eventCount;
+	if (firstEvent >= endEvent)
 		return qtrue;
 
 	sql = "INSERT INTO LocalDuelTrackEvent(summary_id, participant_key, opponent_key, rel_time, event_index, event_type, power, amount, state, range_bucket, sequence_id, buttons, saber_move, enemy_saber_move, yaw_delta, opponent_label, opponent_kind, self_hp, self_armor, self_force, enemy_hp, enemy_armor, enemy_force, sequence_label, quality, note, swing_side, pre_swing_strafe, movement_intent, radial_speed, yaw_sweep, attack_elapsed_ms, throw_yaw_offset, participant_label, participant_kind, forwardmove, rightmove, upmove, saber_stance, grounded, damage_source, damage_attacker_key, controller_owns_inputs, controller_family, controller_enabled, controller_fanbias, controller_candidate, controller_mistakebias, controller_skill) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
@@ -3481,7 +3539,7 @@ static qboolean G_InsertTrackedEvents(sqlite3 *db, sqlite3_int64 summaryId, trac
 	captureGeometry = G_IsTrackedGeometryEnabled();
 	if (captureGeometry)
 	{
-		for (i = 0; i < runtime->eventCount; i++)
+		for (i = firstEvent; i < endEvent; i++)
 		{
 			if (runtime->events[i].hasGeometry)
 			{
@@ -3511,7 +3569,7 @@ static qboolean G_InsertTrackedEvents(sqlite3 *db, sqlite3_int64 summaryId, trac
 			return qfalse;
 		}
 	}
-	for (i = 0; i < runtime->eventCount; i++)
+	for (i = firstEvent; i < endEvent; i++)
 	{
 		tracked_duel_event_t *event = &runtime->events[i];
 		CALL_SQLITE(bind_int64(stmt, 1, summaryId));
@@ -3568,6 +3626,7 @@ static qboolean G_InsertTrackedEvents(sqlite3 *db, sqlite3_int64 summaryId, trac
 		{
 			G_ErrorPrint("ERROR: SQL Insert Failed (LocalDuelTrackEvent)", s);
 			G_TrackedDBError("insert LocalDuelTrackEvent", db, s);
+			sqlite3_finalize(telemetryStmt);
 			CALL_SQLITE(finalize(stmt));
 			if (geomStmt)
 				CALL_SQLITE(finalize(geomStmt));
@@ -3575,10 +3634,11 @@ static qboolean G_InsertTrackedEvents(sqlite3 *db, sqlite3_int64 summaryId, trac
 		}
 		CALL_SQLITE(reset(stmt));
 		CALL_SQLITE(clear_bindings(stmt));
-		if (!G_PersistTrackedEventTelemetry(db, event))
+		if (!G_PersistTrackedEventTelemetry(db, event, &telemetryStmt))
 		{
 			sqlite3_finalize(stmt);
 			sqlite3_finalize(geomStmt);
+			sqlite3_finalize(telemetryStmt);
 			return qfalse;
 		}
 		if (captureGeometry && hasAnyGeometry && event->hasGeometry)
@@ -3607,6 +3667,7 @@ static qboolean G_InsertTrackedEvents(sqlite3 *db, sqlite3_int64 summaryId, trac
 			{
 				G_ErrorPrint("ERROR: SQL Insert Failed (LocalDuelTrackGeometry)", s);
 				G_TrackedDBError("insert LocalDuelTrackGeometry", db, s);
+				sqlite3_finalize(telemetryStmt);
 				CALL_SQLITE(finalize(stmt));
 				if (geomStmt)
 					CALL_SQLITE(finalize(geomStmt));
@@ -3619,6 +3680,7 @@ static qboolean G_InsertTrackedEvents(sqlite3 *db, sqlite3_int64 summaryId, trac
 	CALL_SQLITE(finalize(stmt));
 	if (geomStmt)
 		CALL_SQLITE(finalize(geomStmt));
+	sqlite3_finalize(telemetryStmt);
 	return qtrue;
 }
 
@@ -3738,6 +3800,14 @@ static int G_BotLearnTokenForTrackedEvent(const tracked_duel_event_t *event)
 		return (event->amount && !Q_stricmp(event->note, TRACKED_AIR_NOTE_JUMP)) ? BOTLEARN_TOK_JUMP : BOTLEARN_TOK_NONE;
 	case DUEL_TRACK_EVENT_KNOCKDOWN:
 		return BOTLEARN_TOK_KNOCKDOWN;
+	case DUEL_TRACK_EVENT_DECISION:
+		//Wall-escape choices (wallrun / roll / hop) have no engine event of their own, so
+		//the recorded decision stands in for the action in learned sequences.
+		if (!Q_stricmp(event->note, TRACKED_DECISION_NOTE_WALL_ESCAPE) &&
+			event->learnedResponse >= BOTLEARN_TOK_WALLRUN &&
+			event->learnedResponse <= BOTLEARN_TOK_HOP)
+			return event->learnedResponse;
+		return BOTLEARN_TOK_NONE;
 	default:
 		return BOTLEARN_TOK_NONE;
 	}
@@ -4017,17 +4087,27 @@ static qboolean G_BotLearnDuelActive(void)
 	return qfalse;
 }
 
+static sqlite3 *G_GetTrackedPersistDB(void);
+
+//Reloads the learned-sequence cache on a quiet frame: nothing queued for persistence and
+//no duel in progress (the cache must not shift mid-duel). Called from the frame loop
+//instead of at duel start so the reload never stacks onto a duel-start frame.
 static void G_BotLearnRefreshBetweenDuels(void)
 {
-	sqlite3 *db = NULL;
-	if (!g_learningCacheDirty || G_BotLearnDuelActive())
+	sqlite3 *db;
+	int start;
+
+	if (!g_learningCacheDirty || g_learningCacheNextRefresh > level.time || G_BotLearnDuelActive())
 		return;
-	if (G_OpenTrackedLocalDB(&db, NULL, 0))
+	g_learningCacheNextRefresh = level.time + 2000;
+	start = trap->Milliseconds();
+	db = G_GetTrackedPersistDB();
+	if (db)
 	{
 		G_BotLearnLoadCache(db);
 		g_learningCacheDirty = qfalse;
-		sqlite3_close(db);
 	}
+	G_PerfWarn("bot learning cache reload", trap->Milliseconds() - start);
 }
 
 void Svcmd_BotLearn_f(void)
@@ -4074,145 +4154,409 @@ void Svcmd_BotLearn_f(void)
 	G_BotLearnDebugPrint(lines);
 }
 
-static void G_PersistTrackedDuel(tracked_duel_runtime_t *winnerRuntime, tracked_duel_runtime_t *loserRuntime, int duelType, qboolean draw)
+//Duel persistence used to run entirely inside the frame the duel ended (open + schema
+//check + thousands of row inserts + learning extraction + fsync), which showed up as a
+//lag spike on every recorded duel. Finished duels are now queued and written a small
+//step per server frame on one persistent WAL connection; anything still queued is
+//flushed synchronously at shutdown so no duel is lost.
+#define TRACKED_PERSIST_QUEUE_SIZE 8
+#define TRACKED_PERSIST_EVENT_CHUNK 200
+
+typedef enum
 {
-	sqlite3 *db;
-	sqlite3_stmt *stmt = NULL;
-	char *sql;
-	int s;
-	sqlite3_int64 summaryId;
-	time_t rawtime;
-	const int duration = (winnerRuntime && winnerRuntime->duelStartTime > 0) ? (level.time - winnerRuntime->duelStartTime) : 0;
-	const int durationSeconds = duration / 1000;
-	int endTimestamp;
+	TRACKED_PERSIST_STAGE_SUMMARY = 0,
+	TRACKED_PERSIST_STAGE_WINNER_EVENTS,
+	TRACKED_PERSIST_STAGE_LOSER_EVENTS,
+	TRACKED_PERSIST_STAGE_AGGREGATE,
+	TRACKED_PERSIST_STAGE_LEARN_WINNER,
+	TRACKED_PERSIST_STAGE_LEARN_LOSER,
+	TRACKED_PERSIST_STAGE_ASSOCIATE,
+	TRACKED_PERSIST_STAGE_DONE
+} tracked_persist_stage_t;
+
+typedef struct
+{
+	tracked_duel_runtime_t winner;
+	tracked_duel_runtime_t loser;
+	int duelType;
+	qboolean draw;
 	int startTimestamp;
-	tracked_duel_runtime_t *summaryFirst = winnerRuntime;
-	tracked_duel_runtime_t *summarySecond = loserRuntime;
-	qboolean persistOk = qtrue;
+	int endTimestamp;
+	int durationSeconds;
+	int finishedAt;
+	tracked_persist_stage_t stage;
+	int eventCursor;
+	sqlite3_int64 summaryId;
+} tracked_persist_job_t;
 
-	if (!winnerRuntime || !loserRuntime)
-		return;
+static tracked_persist_job_t g_trackedPersistQueue[TRACKED_PERSIST_QUEUE_SIZE];
+static int g_trackedPersistHead;
+static int g_trackedPersistCount;
+static sqlite3 *g_trackedPersistDB;
+static char g_trackedPersistDBPath[MAX_OSPATH];
 
-	if (draw && Q_stricmp(summaryFirst->identityKey, summarySecond->identityKey) > 0)
-	{
-		summaryFirst = loserRuntime;
-		summarySecond = winnerRuntime;
-	}
+void G_PerfWarn(const char *context, int elapsedMs)
+{
+	if (bot_perfwarn.integer > 0 && elapsedMs >= bot_perfwarn.integer)
+		trap->Print("^3perfwarn: %s took %i ms (level.time %i)\n", context ? context : "?", elapsedMs, level.time);
+}
 
-	time(&rawtime);
-	endTimestamp = (int)rawtime;
-	startTimestamp = endTimestamp - durationSeconds;
+static void G_CloseTrackedPersistDB(void)
+{
+	if (g_trackedPersistDB)
+		sqlite3_close(g_trackedPersistDB);
+	g_trackedPersistDB = NULL;
+	g_trackedPersistDBPath[0] = '\0';
+}
 
+static sqlite3 *G_GetTrackedPersistDB(void)
+{
+	sqlite3 *db = NULL;
+
+	if (g_trackedPersistDB && !Q_stricmp(g_trackedPersistDBPath, LOCAL_DUELTRACK_DB_PATH))
+		return g_trackedPersistDB;
+	G_CloseTrackedPersistDB();
 	if (!G_OpenTrackedLocalDB(&db, NULL, 0))
-		return;
+		return NULL;
+	//WAL + synchronous=NORMAL: commits append to the log without an fsync per transaction.
+	sqlite3_exec(db, "PRAGMA journal_mode=WAL", NULL, NULL, NULL);
+	sqlite3_exec(db, "PRAGMA synchronous=NORMAL", NULL, NULL, NULL);
+	sqlite3_busy_timeout(db, 50);
 	G_EnsureLocalDuelTrackingSchema(db);
-	s = sqlite3_exec(db, "BEGIN TRANSACTION", NULL, NULL, NULL);
-	if (s != SQLITE_OK)
-	{
-		G_ErrorPrint("ERROR: SQL Begin Failed (LocalDuelTrack persist)", s);
-		G_TrackedDBError("begin LocalDuelTrack persist", db, s);
-		CALL_SQLITE(close(db));
-		return;
-	}
+	g_trackedPersistDB = db;
+	Q_strncpyz(g_trackedPersistDBPath, LOCAL_DUELTRACK_DB_PATH, sizeof(g_trackedPersistDBPath));
+	return db;
+}
 
-	sql = "INSERT INTO LocalDuelTrackSummary(source_context, start_time, end_time, duration, type, mapname, winner_key, winner_label, winner_kind, winner_side, loser_key, loser_label, loser_kind, loser_side, draw, winner_opening, loser_opening, capture_version, capture_revision, result) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
-	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
-	CALL_SQLITE(bind_text(stmt, 1, "duel", -1, SQLITE_STATIC));
-	CALL_SQLITE(bind_int(stmt, 2, startTimestamp));
-	CALL_SQLITE(bind_int(stmt, 3, endTimestamp));
-	CALL_SQLITE(bind_int(stmt, 4, durationSeconds));
-	CALL_SQLITE(bind_int(stmt, 5, duelType));
-	CALL_SQLITE(bind_text(stmt, 6, level.rawmapname, -1, SQLITE_STATIC));
-	CALL_SQLITE(bind_text(stmt, 7, summaryFirst->identityKey, -1, SQLITE_STATIC));
-	CALL_SQLITE(bind_text(stmt, 8, summaryFirst->identityLabel, -1, SQLITE_STATIC));
-	CALL_SQLITE(bind_int(stmt, 9, summaryFirst->identityKind));
-	CALL_SQLITE(bind_int(stmt, 10, summaryFirst->side));
-	CALL_SQLITE(bind_text(stmt, 11, summarySecond->identityKey, -1, SQLITE_STATIC));
-	CALL_SQLITE(bind_text(stmt, 12, summarySecond->identityLabel, -1, SQLITE_STATIC));
-	CALL_SQLITE(bind_int(stmt, 13, summarySecond->identityKind));
-	CALL_SQLITE(bind_int(stmt, 14, summarySecond->side));
-	CALL_SQLITE(bind_int(stmt, 15, draw ? 1 : 0));
-	CALL_SQLITE(bind_text(stmt, 16, summaryFirst->openingTactic, -1, SQLITE_STATIC));
-	CALL_SQLITE(bind_text(stmt, 17, summarySecond->openingTactic, -1, SQLITE_STATIC));
-	CALL_SQLITE(bind_int(stmt, 18, TRACKED_CAPTURE_VERSION));
-	CALL_SQLITE(bind_text(stmt, 19, GIT_HASH, -1, SQLITE_STATIC));
-	CALL_SQLITE(bind_text(stmt, 20, draw ? "draw" : "duel_complete", -1, SQLITE_STATIC));
+//True when a duel involving identityKey has ended but is still queued for saving.
+static qboolean G_TrackedPersistPendingDuelFor(const char *identityKey, int *startTime, int *finishedAt)
+{
+	int n;
+
+	if (!identityKey || !identityKey[0])
+		return qfalse;
+	for (n = g_trackedPersistCount - 1; n >= 0; n--)
+	{
+		const tracked_persist_job_t *job =
+			&g_trackedPersistQueue[(g_trackedPersistHead + n) % TRACKED_PERSIST_QUEUE_SIZE];
+
+		if (job->stage >= TRACKED_PERSIST_STAGE_DONE)
+			continue;
+		if (!strcmp(job->winner.identityKey, identityKey) ||
+			!strcmp(job->loser.identityKey, identityKey))
+		{
+			if (startTime)
+				*startTime = job->winner.duelStartTime;
+			if (finishedAt)
+				*finishedAt = job->finishedAt;
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+
+static qboolean G_TrackedPersistInsertSummary(sqlite3 *db, tracked_persist_job_t *job)
+{
+	sqlite3_stmt *stmt = NULL;
+	tracked_duel_runtime_t *summaryFirst = &job->winner;
+	tracked_duel_runtime_t *summarySecond = &job->loser;
+	const char *sql = "INSERT INTO LocalDuelTrackSummary(source_context, start_time, end_time, duration, type, mapname, winner_key, winner_label, winner_kind, winner_side, loser_key, loser_label, loser_kind, loser_side, draw, winner_opening, loser_opening, capture_version, capture_revision, result) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+	int s;
+
+	if (job->draw && Q_stricmp(summaryFirst->identityKey, summarySecond->identityKey) > 0)
+	{
+		summaryFirst = &job->loser;
+		summarySecond = &job->winner;
+	}
+	s = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+	if (s != SQLITE_OK || !stmt)
+	{
+		G_TrackedDBError("prepare LocalDuelTrackSummary", db, s);
+		sqlite3_finalize(stmt);
+		return qfalse;
+	}
+	sqlite3_bind_text(stmt, 1, "duel", -1, SQLITE_STATIC);
+	sqlite3_bind_int(stmt, 2, job->startTimestamp);
+	sqlite3_bind_int(stmt, 3, job->endTimestamp);
+	sqlite3_bind_int(stmt, 4, job->durationSeconds);
+	sqlite3_bind_int(stmt, 5, job->duelType);
+	sqlite3_bind_text(stmt, 6, level.rawmapname, -1, SQLITE_STATIC);
+	sqlite3_bind_text(stmt, 7, summaryFirst->identityKey, -1, SQLITE_STATIC);
+	sqlite3_bind_text(stmt, 8, summaryFirst->identityLabel, -1, SQLITE_STATIC);
+	sqlite3_bind_int(stmt, 9, summaryFirst->identityKind);
+	sqlite3_bind_int(stmt, 10, summaryFirst->side);
+	sqlite3_bind_text(stmt, 11, summarySecond->identityKey, -1, SQLITE_STATIC);
+	sqlite3_bind_text(stmt, 12, summarySecond->identityLabel, -1, SQLITE_STATIC);
+	sqlite3_bind_int(stmt, 13, summarySecond->identityKind);
+	sqlite3_bind_int(stmt, 14, summarySecond->side);
+	sqlite3_bind_int(stmt, 15, job->draw ? 1 : 0);
+	sqlite3_bind_text(stmt, 16, summaryFirst->openingTactic, -1, SQLITE_STATIC);
+	sqlite3_bind_text(stmt, 17, summarySecond->openingTactic, -1, SQLITE_STATIC);
+	sqlite3_bind_int(stmt, 18, TRACKED_CAPTURE_VERSION);
+	sqlite3_bind_text(stmt, 19, GIT_HASH, -1, SQLITE_STATIC);
+	sqlite3_bind_text(stmt, 20, job->draw ? "draw" : "duel_complete", -1, SQLITE_STATIC);
 	s = sqlite3_step(stmt);
+	sqlite3_finalize(stmt);
 	if (s != SQLITE_DONE)
 	{
 		G_ErrorPrint("ERROR: SQL Insert Failed (LocalDuelTrackSummary)", s);
 		G_TrackedDBError("insert LocalDuelTrackSummary", db, s);
-		persistOk = qfalse;
+		return qfalse;
 	}
-	CALL_SQLITE(finalize(stmt));
-	if (persistOk)
-	{
-		summaryId = sqlite3_last_insert_rowid(db);
-		persistOk = G_InsertTrackedParticipant(db, summaryId, winnerRuntime, draw ? -1 : 1);
-	}
-	if (persistOk)
-		persistOk = G_InsertTrackedParticipant(db, summaryId, loserRuntime, draw ? -1 : 0);
-	if (persistOk)
-		persistOk = G_InsertTrackedEvents(db, summaryId, winnerRuntime);
-	if (persistOk)
-		persistOk = G_InsertTrackedEvents(db, summaryId, loserRuntime);
-	if (persistOk)
-		persistOk = G_UpdateTrackedAggregate(db, winnerRuntime, draw ? qfalse : qtrue, draw);
-	if (persistOk)
-		persistOk = G_UpdateTrackedAggregate(db, loserRuntime, qfalse, draw);
-	if (persistOk)
-		persistOk = G_BotLearnRecordPerspective(db, summaryId, winnerRuntime, loserRuntime, draw ? qfalse : qtrue);
-	if (persistOk)
-		persistOk = G_BotLearnRecordPerspective(db, summaryId, loserRuntime, winnerRuntime, qfalse);
-	if (persistOk)
-	{
-		const char *associateSql = "UPDATE LocalDuelTrackEvent SET summary_id=? WHERE event_type='chat' "
-			"AND association='active' AND summary_id IS NULL AND session_id=? AND duel_start_time=? "
-			"AND participant_key IN (?, ?)";
-		sqlite3_stmt *associate = NULL;
-		int rc = sqlite3_prepare_v2(db, associateSql, -1, &associate, NULL);
-		if (rc == SQLITE_OK)
-		{
-			sqlite3_bind_int64(associate, 1, summaryId);
-			sqlite3_bind_text(associate, 2, g_learningSession, -1, SQLITE_STATIC);
-			sqlite3_bind_int(associate, 3, winnerRuntime->duelStartTime);
-			sqlite3_bind_text(associate, 4, winnerRuntime->identityKey, -1, SQLITE_STATIC);
-			sqlite3_bind_text(associate, 5, loserRuntime->identityKey, -1, SQLITE_STATIC);
-			rc = sqlite3_step(associate);
-		}
-		sqlite3_finalize(associate);
-		if (rc != SQLITE_DONE)
-		{
-			G_TrackedDBError("associate active duel chat", db, rc);
-			persistOk = qfalse;
-		}
-	}
+	job->summaryId = sqlite3_last_insert_rowid(db);
+	if (!G_InsertTrackedParticipant(db, job->summaryId, &job->winner, job->draw ? -1 : 1))
+		return qfalse;
+	return G_InsertTrackedParticipant(db, job->summaryId, &job->loser, job->draw ? -1 : 0);
+}
 
-	s = sqlite3_exec(db, persistOk ? "COMMIT" : "ROLLBACK", NULL, NULL, NULL);
-	if (s != SQLITE_OK)
-		G_ErrorPrint(persistOk ?
-			"ERROR: SQL Commit Failed (LocalDuelTrack persist)" :
-			"ERROR: SQL Rollback Failed (LocalDuelTrack persist)", s);
-	if (persistOk && s == SQLITE_OK)
+static qboolean G_TrackedPersistAssociateChat(sqlite3 *db, tracked_persist_job_t *job)
+{
+	const char *associateSql = "UPDATE LocalDuelTrackEvent SET summary_id=? WHERE event_type='chat' "
+		"AND association IN ('active', 'recent_inferred') AND summary_id IS NULL AND session_id=? AND duel_start_time=? "
+		"AND participant_key IN (?, ?)";
+	sqlite3_stmt *associate = NULL;
+	int rc = sqlite3_prepare_v2(db, associateSql, -1, &associate, NULL);
+
+	if (rc == SQLITE_OK)
+	{
+		sqlite3_bind_int64(associate, 1, job->summaryId);
+		sqlite3_bind_text(associate, 2, g_learningSession, -1, SQLITE_STATIC);
+		sqlite3_bind_int(associate, 3, job->winner.duelStartTime);
+		sqlite3_bind_text(associate, 4, job->winner.identityKey, -1, SQLITE_STATIC);
+		sqlite3_bind_text(associate, 5, job->loser.identityKey, -1, SQLITE_STATIC);
+		rc = sqlite3_step(associate);
+	}
+	sqlite3_finalize(associate);
+	if (rc != SQLITE_DONE)
+	{
+		G_TrackedDBError("associate active duel chat", db, rc);
+		return qfalse;
+	}
+	return qtrue;
+}
+
+//Removes the partially written rows of a job whose later stage failed, so a broken duel
+//does not leave a summary without its events behind.
+static void G_TrackedPersistDiscardPartial(sqlite3 *db, tracked_persist_job_t *job)
+{
+	static const char *tables[] = { "LocalDuelTrackGeometry", "LocalDuelTrackEvent",
+		"LocalDuelTrackParticipant" };
+	char sql[128];
+	int t;
+
+	if (!db || job->summaryId <= 0 || job->stage > TRACKED_PERSIST_STAGE_LOSER_EVENTS)
+		return;
+	sqlite3_exec(db, "BEGIN TRANSACTION", NULL, NULL, NULL);
+	for (t = 0; t < ARRAY_LEN(tables); t++)
+	{
+		Com_sprintf(sql, sizeof(sql), "DELETE FROM %s WHERE summary_id=%lld", tables[t], (long long)job->summaryId);
+		sqlite3_exec(db, sql, NULL, NULL, NULL);
+	}
+	Com_sprintf(sql, sizeof(sql), "DELETE FROM LocalDuelTrackSummary WHERE id=%lld", (long long)job->summaryId);
+	sqlite3_exec(db, sql, NULL, NULL, NULL);
+	sqlite3_exec(db, "COMMIT", NULL, NULL, NULL);
+}
+
+static void G_TrackedPersistFinishJob(tracked_persist_job_t *job, qboolean ok)
+{
+	if (ok && job->summaryId > 0)
 	{
 		int i;
-		const tracked_duel_runtime_t *participants[2] = { winnerRuntime, loserRuntime };
-		const int clients[2] = { loserRuntime->opponentClientNum, winnerRuntime->opponentClientNum };
+		const tracked_duel_runtime_t *participants[2] = { &job->winner, &job->loser };
+		const int clients[2] = { job->loser.opponentClientNum, job->winner.opponentClientNum };
 		for (i = 0; i < 2; i++)
 		{
-			int clientNum = clients[i];
+			const int clientNum = clients[i];
 			if (clientNum < 0 || clientNum >= MAX_CLIENTS)
 				continue;
-			g_recentLearningDuels[clientNum].summaryId = summaryId;
-			g_recentLearningDuels[clientNum].finishedAt = level.time;
+			//Keep a newer duel's chat window if this client already finished another duel.
+			if (g_recentLearningDuels[clientNum].finishedAt > job->finishedAt)
+				continue;
+			g_recentLearningDuels[clientNum].summaryId = job->summaryId;
+			g_recentLearningDuels[clientNum].finishedAt = job->finishedAt;
 			g_recentLearningDuels[clientNum].startTime = participants[i]->duelStartTime;
 			Q_strncpyz(g_recentLearningDuels[clientNum].identityKey, participants[i]->identityKey,
 				sizeof(g_recentLearningDuels[clientNum].identityKey));
 		}
 		g_learningCacheDirty = qtrue;
 	}
+	free(job->winner.events);
+	free(job->loser.events);
+	memset(job, 0, sizeof(*job));
+}
 
-	CALL_SQLITE(close(db));
+//Runs one bounded unit of work for the job. Returns qfalse once the job is finished
+//(successfully or not) and has been released.
+static qboolean G_TrackedPersistStep(tracked_persist_job_t *job)
+{
+	sqlite3 *db = G_GetTrackedPersistDB();
+	qboolean ok = qtrue;
+	int s;
+
+	if (!db)
+	{
+		G_TrackedPersistFinishJob(job, qfalse);
+		return qfalse;
+	}
+	s = sqlite3_exec(db, "BEGIN TRANSACTION", NULL, NULL, NULL);
+	if (s != SQLITE_OK)
+	{
+		//Another connection holds the write lock - retry this step next frame.
+		if (s == SQLITE_BUSY || s == SQLITE_LOCKED)
+			return qtrue;
+		G_TrackedDBError("begin LocalDuelTrack persist step", db, s);
+		G_TrackedPersistFinishJob(job, qfalse);
+		return qfalse;
+	}
+
+	switch (job->stage)
+	{
+	case TRACKED_PERSIST_STAGE_SUMMARY:
+		ok = G_TrackedPersistInsertSummary(db, job);
+		if (ok)
+			job->stage = TRACKED_PERSIST_STAGE_WINNER_EVENTS;
+		break;
+	case TRACKED_PERSIST_STAGE_WINNER_EVENTS:
+	case TRACKED_PERSIST_STAGE_LOSER_EVENTS:
+	{
+		tracked_duel_runtime_t *runtime = (job->stage == TRACKED_PERSIST_STAGE_WINNER_EVENTS) ? &job->winner : &job->loser;
+		const int end = job->eventCursor + TRACKED_PERSIST_EVENT_CHUNK;
+		ok = G_InsertTrackedEvents(db, job->summaryId, runtime, job->eventCursor, end);
+		job->eventCursor = end;
+		if (ok && job->eventCursor >= runtime->eventCount)
+		{
+			job->eventCursor = 0;
+			job->stage = (tracked_persist_stage_t)(job->stage + 1);
+		}
+		break;
+	}
+	case TRACKED_PERSIST_STAGE_AGGREGATE:
+		ok = G_UpdateTrackedAggregate(db, &job->winner, job->draw ? qfalse : qtrue, job->draw);
+		if (ok)
+			ok = G_UpdateTrackedAggregate(db, &job->loser, qfalse, job->draw);
+		if (ok)
+			job->stage = TRACKED_PERSIST_STAGE_LEARN_WINNER;
+		break;
+	case TRACKED_PERSIST_STAGE_LEARN_WINNER:
+		ok = G_BotLearnRecordPerspective(db, job->summaryId, &job->winner, &job->loser, job->draw ? qfalse : qtrue);
+		if (ok)
+			job->stage = TRACKED_PERSIST_STAGE_LEARN_LOSER;
+		break;
+	case TRACKED_PERSIST_STAGE_LEARN_LOSER:
+		ok = G_BotLearnRecordPerspective(db, job->summaryId, &job->loser, &job->winner, qfalse);
+		if (ok)
+			job->stage = TRACKED_PERSIST_STAGE_ASSOCIATE;
+		break;
+	case TRACKED_PERSIST_STAGE_ASSOCIATE:
+	default:
+		ok = G_TrackedPersistAssociateChat(db, job);
+		if (ok)
+			job->stage = TRACKED_PERSIST_STAGE_DONE;
+		break;
+	}
+
+	s = sqlite3_exec(db, ok ? "COMMIT" : "ROLLBACK", NULL, NULL, NULL);
+	if (s != SQLITE_OK)
+	{
+		G_ErrorPrint(ok ? "ERROR: SQL Commit Failed (LocalDuelTrack persist)" :
+			"ERROR: SQL Rollback Failed (LocalDuelTrack persist)", s);
+		if (ok)
+			sqlite3_exec(db, "ROLLBACK", NULL, NULL, NULL);
+		ok = qfalse;
+	}
+	if (!ok)
+	{
+		G_TrackedPersistDiscardPartial(db, job);
+		G_TrackedPersistFinishJob(job, qfalse);
+		return qfalse;
+	}
+	if (job->stage == TRACKED_PERSIST_STAGE_DONE)
+	{
+		G_TrackedPersistFinishJob(job, qtrue);
+		return qfalse;
+	}
+	return qtrue;
+}
+
+static void G_TrackedPersistPopHead(void)
+{
+	g_trackedPersistHead = (g_trackedPersistHead + 1) % TRACKED_PERSIST_QUEUE_SIZE;
+	g_trackedPersistCount--;
+}
+
+//Synchronously completes the oldest queued job (queue overflow / shutdown path).
+static void G_TrackedPersistDrainHead(void)
+{
+	tracked_persist_job_t *job;
+	int guard = 0;
+
+	if (g_trackedPersistCount <= 0)
+		return;
+	job = &g_trackedPersistQueue[g_trackedPersistHead];
+	//A BUSY begin returns qtrue without progress; bound the retries so shutdown never hangs.
+	while (G_TrackedPersistStep(job))
+	{
+		if (++guard > 100000)
+		{
+			G_TrackedPersistFinishJob(job, qfalse);
+			break;
+		}
+	}
+	G_TrackedPersistPopHead();
+}
+
+static void G_PersistTrackedDuel(tracked_duel_runtime_t *winnerRuntime, tracked_duel_runtime_t *loserRuntime, int duelType, qboolean draw)
+{
+	tracked_persist_job_t *job;
+	time_t rawtime;
+	const int duration = (winnerRuntime && winnerRuntime->duelStartTime > 0) ? (level.time - winnerRuntime->duelStartTime) : 0;
+
+	if (!winnerRuntime || !loserRuntime)
+		return;
+	if (g_trackedPersistCount >= TRACKED_PERSIST_QUEUE_SIZE)
+		G_TrackedPersistDrainHead();
+
+	job = &g_trackedPersistQueue[(g_trackedPersistHead + g_trackedPersistCount) % TRACKED_PERSIST_QUEUE_SIZE];
+	memset(job, 0, sizeof(*job));
+	//Take ownership of the runtimes (including their event buffers).
+	G_DuelCaptureMoveRuntime(&job->winner, winnerRuntime, sizeof(job->winner));
+	G_DuelCaptureMoveRuntime(&job->loser, loserRuntime, sizeof(job->loser));
+	job->duelType = duelType;
+	job->draw = draw;
+	job->durationSeconds = duration / 1000;
+	time(&rawtime);
+	job->endTimestamp = (int)rawtime;
+	job->startTimestamp = job->endTimestamp - job->durationSeconds;
+	job->finishedAt = level.time;
+	job->stage = TRACKED_PERSIST_STAGE_SUMMARY;
+	g_trackedPersistCount++;
+}
+
+void G_TrackedPersistFrame(void)
+{
+	int start;
+
+	if (g_trackedPersistCount <= 0)
+	{
+		G_BotLearnRefreshBetweenDuels();
+		return;
+	}
+	start = trap->Milliseconds();
+	if (!G_TrackedPersistStep(&g_trackedPersistQueue[g_trackedPersistHead]))
+		G_TrackedPersistPopHead();
+	G_PerfWarn("duel persist step", trap->Milliseconds() - start);
+}
+
+void G_TrackedPersistShutdown(void)
+{
+	int start = trap->Milliseconds();
+	const int pending = g_trackedPersistCount;
+
+	while (g_trackedPersistCount > 0)
+		G_TrackedPersistDrainHead();
+	if (pending > 0)
+		G_PerfWarn("duel persist shutdown flush", trap->Milliseconds() - start);
+	G_CloseTrackedPersistDB();
 }
 
 static void G_ClassifyTrackedAttackOutcomes(tracked_duel_event_t *events, int eventCount,
@@ -4293,7 +4637,6 @@ void G_StartTrackedDuel(gentity_t *first, gentity_t *second, int duelType)
 	if (!G_IsTrackedDuelEligible(first, second))
 		return;
 
-	G_BotLearnRefreshBetweenDuels();
 	G_InitTrackedDuelRuntimeForClient(first, second, duelType);
 	G_InitTrackedDuelRuntimeForClient(second, first, duelType);
 }
@@ -4914,13 +5257,12 @@ void G_FinishTrackedDuel(gentity_t *winner, gentity_t *loser, int duelType, qboo
 	G_DuelCaptureMoveRuntime(&winnerRuntime, winnerSlot, sizeof(winnerRuntime));
 	G_DuelCaptureMoveRuntime(&loserRuntime, loserSlot, sizeof(loserRuntime));
 
-	G_PersistTrackedDuel(&winnerRuntime, &loserRuntime, duelType, draw);
 	if (!draw)
 		G_MaybeQueueBotTutorial(&loserRuntime, winner, loser);
 	G_RecordTrackedSessionOutcome(winner, &winnerRuntime, draw ? qfalse : qtrue);
 	G_RecordTrackedSessionOutcome(loser, &loserRuntime, qfalse);
-	free(winnerRuntime.events);
-	free(loserRuntime.events);
+	//Queues the database write (spread over later frames); takes ownership of the events.
+	G_PersistTrackedDuel(&winnerRuntime, &loserRuntime, duelType, draw);
 }
 
 void G_ClearTrackedDuelIfMismatched(gentity_t *ent, gentity_t *opponent)
@@ -5077,7 +5419,7 @@ static qboolean G_InsertTrackedArcadeEvents(sqlite3 *db, sqlite3_int64 summaryId
 		CALL_SQLITE(reset(stmt));
 		CALL_SQLITE(clear_bindings(stmt));
 
-		if (!G_PersistTrackedEventTelemetry(db, event))
+		if (!G_PersistTrackedEventTelemetry(db, event, NULL))
 		{
 			insertFailed = qtrue;
 			break;
@@ -10637,6 +10979,10 @@ void Svcmd_ResetDuelTrack_f(void)
 		trap->Print("resetdueltrack failed: duel tracking database path is not initialized.\n");
 		return;
 	}
+
+	//Finish any queued duel saves first so none of them write into the reset tables
+	//(orphan rows would later attach to reused summary ids).
+	G_TrackedPersistShutdown();
 
 	if (!G_OpenTrackedLocalDB(&db, effectiveDbPath, sizeof(effectiveDbPath)))
 	{

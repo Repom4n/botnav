@@ -2168,6 +2168,8 @@ void G_ShutdownGame( int restart ) {
 		G_ClearTrackedDuelClientState(i);
 		G_ClearTrackedArcadeCombat(i);
 	}
+	//Write out any finished duels still queued for persistence before the map goes away.
+	G_TrackedPersistShutdown();
 	i = 0;
 
 	BG_ClearAnimsets(); //free all dynamic allocations made through the engine
@@ -5162,6 +5164,7 @@ void G_RunFrame( int levelTime ) {
 #endif
 
 	static int lastMsgTime = 0;//OSP: pause
+	const int perfFrameStart = trap->Milliseconds();
 
 	if (!level.numVotingClients && g_autoQuit.integer) {
 		if (levelTime > g_autoQuit.integer * 24 * 60 * 60 * 1000) {//X days
@@ -6057,6 +6060,10 @@ void G_RunFrame( int levelTime ) {
 	// accepting commands from connected clients
 	level.frameStartTime = trap->Milliseconds();
 //unlagged - backward reconciliation #4
+
+	//Finished-duel database writes are spread across frames (one bounded step per frame).
+	G_TrackedPersistFrame();
+	G_PerfWarn("game frame", trap->Milliseconds() - perfFrameStart);
 
 	g_LastFrameTime = level.time;
 }

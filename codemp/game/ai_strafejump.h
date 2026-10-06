@@ -37,19 +37,34 @@ static inline int BotSFJ_IntentIsFresh(int now, int intentTime)
 		now - intentTime <= BOT_SFJ_INTENT_MAX_AGE_MS;
 }
 
-static inline int BotSFJ_UpdatePursuitLatch(int latched, float distance, float previousDistance,
-	int elapsedMs)
+static inline int BotSFJ_UpdatePursuitLatchEx(int latched, float distance,
+	float previousDistance, int elapsedMs, float startDistance, float stopDistance)
 {
 	float separationRate;
 
 	if (elapsedMs <= 0 || elapsedMs > 1000 || previousDistance <= 0.0f)
-		return distance >= BOT_SFJ_PURSUIT_STOP_DISTANCE ? latched : 0;
+		return distance >= stopDistance ? latched : 0;
 	separationRate = (distance - previousDistance) * 1000.0f / (float)elapsedMs;
 	if (latched)
-		return distance > BOT_SFJ_PURSUIT_STOP_DISTANCE &&
+		return distance > stopDistance &&
 			separationRate > BOT_SFJ_PURSUIT_STOP_RATE;
-	return distance >= BOT_SFJ_PURSUIT_START_DISTANCE &&
+	return distance >= startDistance &&
 		separationRate >= BOT_SFJ_PURSUIT_START_RATE;
+}
+
+static inline int BotSFJ_UpdatePursuitLatch(int latched, float distance, float previousDistance,
+	int elapsedMs)
+{
+	return BotSFJ_UpdatePursuitLatchEx(latched, distance, previousDistance, elapsedMs,
+		BOT_SFJ_PURSUIT_START_DISTANCE, BOT_SFJ_PURSUIT_STOP_DISTANCE);
+}
+
+/* Stop distance used with a configurable start distance (bot_minstrafe). */
+static inline float BotSFJ_StopDistanceFor(float startDistance)
+{
+	if (startDistance <= 0.0f)
+		return 0.0f;
+	return startDistance * (BOT_SFJ_PURSUIT_STOP_DISTANCE / BOT_SFJ_PURSUIT_START_DISTANCE);
 }
 
 static inline int BotSFJ_CanOwnInput(int enabled, int freshIntent, int eligible,
@@ -299,6 +314,76 @@ static inline int BotSFJ_RouteSafetyAllows(int arcClear, int hazardFree,
 {
 	return arcClear && hazardFree && staticLanding &&
 		landingNormalZ >= 0.7f && routeContinuity >= 0.8f;
+}
+
+/*
+ * Hand-authored .botroute strafe-jump hints (start -> end).  A bot is "on" a
+ * hint when it is within startRadius of the start, or alongside the route
+ * (within halfWidth laterally, heightTolerance of the interpolated route
+ * height) before maxProgress of its length.  *progress receives the fraction
+ * travelled (0 at the start, negative just behind it).
+ */
+#define BOT_SFJ_ROUTE_HINT_START_RADIUS 96.0f
+#define BOT_SFJ_ROUTE_HINT_HALF_WIDTH 96.0f
+#define BOT_SFJ_ROUTE_HINT_HEIGHT_TOLERANCE 64.0f
+#define BOT_SFJ_ROUTE_HINT_MAX_PROGRESS 0.85f
+#define BOT_SFJ_ROUTE_HINT_SPEED_GATE_PROGRESS 0.5f
+
+static inline int BotSFJ_RouteHintProgress(const float *origin, const float *start,
+	const float *end, float startRadius, float halfWidth, float heightTolerance,
+	float maxProgress, float *progress)
+{
+	const float routeX = end[0] - start[0];
+	const float routeY = end[1] - start[1];
+	const float routeLengthSquared = routeX * routeX + routeY * routeY;
+	float routeLength;
+	float t;
+	float lateralX;
+	float lateralY;
+	float routeZ;
+
+	if (routeLengthSquared <= 1.0f)
+		return 0;
+	routeLength = sqrtf(routeLengthSquared);
+	t = ((origin[0] - start[0]) * routeX + (origin[1] - start[1]) * routeY) /
+		routeLengthSquared;
+	if (t < -startRadius / routeLength || t > maxProgress)
+		return 0;
+	if (t < 0.0f)
+	{
+		const float dx = origin[0] - start[0];
+		const float dy = origin[1] - start[1];
+
+		if (dx * dx + dy * dy > startRadius * startRadius ||
+			fabsf(origin[2] - start[2]) > heightTolerance)
+			return 0;
+	}
+	else
+	{
+		lateralX = origin[0] - (start[0] + t * routeX);
+		lateralY = origin[1] - (start[1] + t * routeY);
+		routeZ = start[2] + t * (end[2] - start[2]);
+		if (lateralX * lateralX + lateralY * lateralY > halfWidth * halfWidth ||
+			fabsf(origin[2] - routeZ) > heightTolerance)
+			return 0;
+	}
+	if (progress)
+		*progress = t;
+	return 1;
+}
+
+/*
+ * min_speed from a route hint: the first part of the route is for building
+ * speed, but past the gate a grounded bot slower than min_speed must not take
+ * off on the hint (it would come up short of the gap).
+ */
+static inline int BotSFJ_RouteHintSpeedAllows(float progress, int grounded,
+	float horizontalSpeed, float minSpeed)
+{
+	if (minSpeed <= 0.0f || !grounded ||
+		progress < BOT_SFJ_ROUTE_HINT_SPEED_GATE_PROGRESS)
+		return 1;
+	return horizontalSpeed >= minSpeed;
 }
 
 #endif

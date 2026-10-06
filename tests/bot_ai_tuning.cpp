@@ -52,6 +52,17 @@ BOOST_AUTO_TEST_CASE( strafejump_pursuit_uses_start_stop_hysteresis )
 	BOOST_CHECK( !BotSFJ_UpdatePursuitLatch( 1, 380.0f, 360.0f, 200 ) );
 }
 
+BOOST_AUTO_TEST_CASE( strafejump_pursuit_start_distance_is_configurable )
+{
+	// bot_minstrafe 0: chase as soon as the enemy pulls away, no distance floor.
+	BOOST_CHECK( BotSFJ_UpdatePursuitLatchEx( 0, 60.0f, 40.0f, 200, 0.0f, BotSFJ_StopDistanceFor( 0.0f ) ) );
+	BOOST_CHECK( !BotSFJ_UpdatePursuitLatchEx( 0, 60.0f, 58.0f, 200, 0.0f, 0.0f ) );
+	BOOST_CHECK( !BotSFJ_UpdatePursuitLatchEx( 0, 300.0f, 260.0f, 200, 320.0f, BotSFJ_StopDistanceFor( 320.0f ) ) );
+	BOOST_CHECK( BotSFJ_UpdatePursuitLatchEx( 0, 340.0f, 300.0f, 200, 320.0f, BotSFJ_StopDistanceFor( 320.0f ) ) );
+	BOOST_CHECK_CLOSE( BotSFJ_StopDistanceFor( 512.0f ), BOT_SFJ_PURSUIT_STOP_DISTANCE, 0.01f );
+	BOOST_CHECK_EQUAL( BotSFJ_StopDistanceFor( -5.0f ), 0.0f );
+}
+
 BOOST_AUTO_TEST_CASE( strafejump_yaw_uses_command_dt_and_speed )
 {
 	const float lowSpeedYaw = BotSFJ_CommandYaw( 0.0f, 20.0f, 0.0f, 250.0f, 1.0f, 0.016f, 1 );
@@ -132,6 +143,37 @@ BOOST_AUTO_TEST_CASE( strafejump_route_safety_rejects_each_hazard_class )
 	BOOST_CHECK( !BotSFJ_RouteSafetyAllows( 1, 1, 0, 0.8f, 0.9f ) );
 	BOOST_CHECK( !BotSFJ_RouteSafetyAllows( 1, 1, 1, 0.6f, 0.9f ) );
 	BOOST_CHECK( !BotSFJ_RouteSafetyAllows( 1, 1, 1, 0.8f, 0.7f ) );
+}
+
+BOOST_AUTO_TEST_CASE( strafejump_route_hint_matches_start_and_route_body )
+{
+	const float start[3] = { 0.0f, 0.0f, 0.0f };
+	const float end[3] = { 1000.0f, 0.0f, 0.0f };
+	float progress = -1.0f;
+	const float nearStart[3] = { -50.0f, 30.0f, 10.0f };
+	const float alongside[3] = { 400.0f, 80.0f, 0.0f };
+	const float tooWide[3] = { 400.0f, 120.0f, 0.0f };
+	const float pastEnd[3] = { 900.0f, 0.0f, 0.0f };
+	const float farBehind[3] = { -200.0f, 0.0f, 0.0f };
+	const float tooHigh[3] = { 400.0f, 0.0f, 100.0f };
+
+	BOOST_CHECK( BotSFJ_RouteHintProgress( nearStart, start, end, 96.0f, 96.0f, 64.0f, 0.85f, &progress ) );
+	BOOST_CHECK( progress < 0.0f );
+	BOOST_CHECK( BotSFJ_RouteHintProgress( alongside, start, end, 96.0f, 96.0f, 64.0f, 0.85f, &progress ) );
+	BOOST_CHECK_CLOSE( progress, 0.4f, 0.01f );
+	BOOST_CHECK( !BotSFJ_RouteHintProgress( tooWide, start, end, 96.0f, 96.0f, 64.0f, 0.85f, &progress ) );
+	BOOST_CHECK( !BotSFJ_RouteHintProgress( pastEnd, start, end, 96.0f, 96.0f, 64.0f, 0.85f, &progress ) );
+	BOOST_CHECK( !BotSFJ_RouteHintProgress( farBehind, start, end, 96.0f, 96.0f, 64.0f, 0.85f, &progress ) );
+	BOOST_CHECK( !BotSFJ_RouteHintProgress( tooHigh, start, end, 96.0f, 96.0f, 64.0f, 0.85f, &progress ) );
+}
+
+BOOST_AUTO_TEST_CASE( strafejump_route_hint_min_speed_gates_late_takeoff )
+{
+	BOOST_CHECK( BotSFJ_RouteHintSpeedAllows( 0.2f, 1, 300.0f, 450.0f ) );
+	BOOST_CHECK( !BotSFJ_RouteHintSpeedAllows( 0.6f, 1, 300.0f, 450.0f ) );
+	BOOST_CHECK( BotSFJ_RouteHintSpeedAllows( 0.6f, 1, 460.0f, 450.0f ) );
+	BOOST_CHECK( BotSFJ_RouteHintSpeedAllows( 0.6f, 0, 300.0f, 450.0f ) );
+	BOOST_CHECK( BotSFJ_RouteHintSpeedAllows( 0.6f, 1, 300.0f, 0.0f ) );
 }
 
 BOOST_AUTO_TEST_CASE( ptk_armor_penalty_tracks_force_lead )
