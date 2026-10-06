@@ -353,6 +353,8 @@ XCVAR_DEF( bot_minstrafe,				"320",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_perfwarn,				"0",			NULL,				0,												qfalse )
 XCVAR_DEF( bot_navigation,				"1",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_waypointskip,			"2",			NULL,				CVAR_ARCHIVE,									qtrue )
+// Maximum trail points examined by strafe corridor lookahead (clamped 1..512).
+XCVAR_DEF( bot_strafejumpwaypoints,	"128",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_yawswitch,				"10",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_forcepowers,			"1",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_forgimmick,				"0",			NULL,				CVAR_ARCHIVE,									qtrue )

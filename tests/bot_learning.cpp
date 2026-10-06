@@ -25,9 +25,10 @@ namespace
 	struct LearningDatabase
 	{
 		sqlite3 *db = NULL;
-		LearningDatabase()
+		LearningDatabase(const char *path = ":memory:")
 		{
-			BOOST_REQUIRE_EQUAL(sqlite3_open(":memory:", &db), SQLITE_OK);
+			BOOST_REQUIRE_EQUAL(sqlite3_open_v2(path, &db,
+				SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_URI, NULL), SQLITE_OK);
 			Execute("CREATE TABLE LocalBotLearnedSequence(samples INTEGER);"
 				"INSERT INTO LocalBotLearnedSequence VALUES(42);"
 				"CREATE TABLE LocalBotLearnedEvidence(id INTEGER PRIMARY KEY, "
@@ -182,6 +183,78 @@ BOOST_AUTO_TEST_CASE(learning_reset_handles_a_writer_lock_without_changing_data)
 	BOOST_CHECK_EQUAL(rows, 2);
 	BOOST_CHECK_EQUAL(sqlite3_close(reset), SQLITE_OK);
 	BOOST_CHECK_EQUAL(sqlite3_close(writer), SQLITE_OK);
+}
+
+BOOST_AUTO_TEST_CASE(pending_save_acquires_writer_lock_before_advancing_progress)
+{
+	const char *uri = "file:pending-save-writer?mode=memory&cache=shared";
+	LearningDatabase database(uri);
+	sqlite3 *writer = NULL;
+	BOOST_REQUIRE_EQUAL(sqlite3_open_v2(uri, &writer,
+		SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_URI, NULL), SQLITE_OK);
+	BOOST_REQUIRE_EQUAL(sqlite3_exec(writer, "BEGIN IMMEDIATE", NULL, NULL, NULL), SQLITE_OK);
+	const int status = G_BeginTrackedPersistTransaction(database.db);
+	BOOST_CHECK(G_TrackedPersistRetryable(status));
+	BOOST_CHECK(sqlite3_get_autocommit(database.db));
+	BOOST_REQUIRE_EQUAL(sqlite3_exec(writer, "COMMIT", NULL, NULL, NULL), SQLITE_OK);
+	int stage = 1, cursor = 0;
+	sqlite3_int64 summaryId = 2;
+	BOOST_REQUIRE_EQUAL(G_BeginTrackedPersistTransaction(database.db), SQLITE_OK);
+	database.Execute("INSERT INTO LocalDuelTrackSummary(id) VALUES(2);");
+	BOOST_REQUIRE_EQUAL(G_FinishTrackedPersistTransaction(database.db, SQLITE_OK,
+		&stage, &cursor, &summaryId, 0, 0, 0), SQLITE_OK);
+	BOOST_CHECK_EQUAL(database.Scalar("SELECT COUNT(*) FROM LocalDuelTrackSummary WHERE id=2"), 1);
+	BOOST_CHECK_EQUAL(stage, 1);
+	BOOST_CHECK_EQUAL(sqlite3_close(writer), SQLITE_OK);
+}
+
+BOOST_AUTO_TEST_CASE(pending_save_later_lock_failure_rolls_back_and_restores_retry_progress)
+{
+	const char *uri = "file:pending-save-stage?mode=memory&cache=shared";
+	LearningDatabase database(uri);
+	sqlite3 *reader = NULL;
+	BOOST_REQUIRE_EQUAL(sqlite3_open_v2(uri, &reader,
+		SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_URI, NULL), SQLITE_OK);
+	BOOST_REQUIRE_EQUAL(sqlite3_exec(reader, "BEGIN; SELECT * FROM LocalBotLearnedEvidence",
+		NULL, NULL, NULL), SQLITE_OK);
+	BOOST_REQUIRE_EQUAL(G_BeginTrackedPersistTransaction(database.db), SQLITE_OK);
+	database.Execute("INSERT INTO LocalDuelTrackSummary(id) VALUES(2);");
+	int stage = 2, cursor = 200;
+	sqlite3_int64 summaryId = 2;
+	const int status = sqlite3_exec(database.db,
+		"INSERT INTO LocalBotLearnedEvidence(summary_id,participant_key,session_id) "
+		"VALUES(2,'human','retry-session')", NULL, NULL, NULL);
+	BOOST_REQUIRE(G_TrackedPersistRetryable(status));
+	BOOST_CHECK(G_TrackedPersistRetryable(G_FinishTrackedPersistTransaction(database.db, status,
+		&stage, &cursor, &summaryId, 0, 0, 0)));
+	BOOST_CHECK_EQUAL(stage, 0);
+	BOOST_CHECK_EQUAL(cursor, 0);
+	BOOST_CHECK_EQUAL(summaryId, 0);
+	BOOST_CHECK(sqlite3_get_autocommit(database.db));
+	BOOST_CHECK_EQUAL(database.Scalar("SELECT COUNT(*) FROM LocalDuelTrackSummary WHERE id=2"), 0);
+	BOOST_REQUIRE_EQUAL(sqlite3_exec(reader, "COMMIT", NULL, NULL, NULL), SQLITE_OK);
+	BOOST_REQUIRE_EQUAL(G_BeginTrackedPersistTransaction(database.db), SQLITE_OK);
+	database.Execute("INSERT INTO LocalDuelTrackSummary(id) VALUES(2);"
+		"INSERT INTO LocalBotLearnedEvidence(summary_id,participant_key,session_id) "
+		"VALUES(2,'human','retry-session');");
+	stage = 2;
+	cursor = 200;
+	summaryId = 2;
+	BOOST_REQUIRE_EQUAL(G_FinishTrackedPersistTransaction(database.db, SQLITE_OK,
+		&stage, &cursor, &summaryId, 0, 0, 0), SQLITE_OK);
+	BOOST_CHECK_EQUAL(database.Scalar("SELECT COUNT(*) FROM LocalDuelTrackSummary WHERE id=2"), 1);
+	BOOST_CHECK_EQUAL(database.Scalar("SELECT COUNT(*) FROM LocalBotLearnedEvidence WHERE summary_id=2"), 1);
+	BOOST_CHECK_EQUAL(stage, 2);
+	BOOST_CHECK_EQUAL(cursor, 200);
+	BOOST_CHECK_EQUAL(summaryId, 2);
+	BOOST_CHECK_EQUAL(sqlite3_close(reader), SQLITE_OK);
+}
+
+BOOST_AUTO_TEST_CASE(pending_save_recognizes_extended_retryable_status_codes)
+{
+	BOOST_CHECK(G_TrackedPersistRetryable(SQLITE_BUSY | (1 << 8)));
+	BOOST_CHECK(G_TrackedPersistRetryable(SQLITE_LOCKED | (1 << 8)));
+	BOOST_CHECK(!G_TrackedPersistRetryable(SQLITE_CONSTRAINT));
 }
 
 BOOST_AUTO_TEST_CASE( wall_escape_tokens_are_appended_responses )

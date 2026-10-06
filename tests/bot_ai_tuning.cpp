@@ -23,6 +23,82 @@ BOOST_AUTO_TEST_CASE( strafejump_frequency_and_waypoint_skip_safety )
 	BOOST_CHECK( !BotSFJ_WaypointSkipAllows( 0, 0.0f, 1.0f, 0 ) );
 }
 
+BOOST_AUTO_TEST_CASE( strafejump_dense_waypoint_budget_is_independent_and_bounded )
+{
+	BOOST_CHECK_EQUAL( BotSFJ_WaypointBudget( -1 ), 1 );
+	BOOST_CHECK_EQUAL( BotSFJ_WaypointBudget( 0 ), 1 );
+	BOOST_CHECK_EQUAL( BotSFJ_WaypointBudget( 128 ), 128 );
+	BOOST_CHECK_EQUAL( BotSFJ_WaypointBudget( 1024 ), 512 );
+	// Eight-unit trails need more than the old 16-point limit even to start.
+	BOOST_CHECK( 16 * 8 < 160 );
+	BOOST_CHECK_EQUAL( BotSFJ_WaypointBudget( 128 ) * 8, 1024 );
+}
+
+BOOST_AUTO_TEST_CASE( strafejump_passed_waypoints_ignore_valid_flight_height_not_lateral_error )
+{
+	const float waypoint[3] = { 80.0f, 0.0f, 0.0f };
+	const float direction[3] = { 1.0f, 0.0f, 0.0f };
+	const float reverse[3] = { -1.0f, 0.0f, 0.0f };
+	const float airborne[3] = { 96.0f, 20.0f, 140.0f };
+	const float ahead[3] = { 72.0f, 0.0f, 0.0f };
+	const float outside[3] = { 96.0f, 65.0f, 140.0f };
+
+	BOOST_CHECK( BotSFJ_WaypointPassed( airborne, waypoint, direction, 64.0f ) );
+	BOOST_CHECK( !BotSFJ_WaypointPassed( ahead, waypoint, direction, 64.0f ) );
+	BOOST_CHECK( !BotSFJ_WaypointPassed( outside, waypoint, direction, 64.0f ) );
+	BOOST_CHECK( BotSFJ_WaypointPassed( ahead, waypoint, reverse, 64.0f ) );
+	BOOST_CHECK( !BotSFJ_WaypointPassed( airborne, waypoint, reverse, 64.0f ) );
+}
+
+BOOST_AUTO_TEST_CASE( strafejump_dense_advancement_preserves_every_link_constraint )
+{
+	BOOST_CHECK( BotSFJ_AdvanceLinkAllows( 0, 1, 1, 0.0f, 0.0f, 1.0f, 8.0f ) );
+	BOOST_CHECK( !BotSFJ_AdvanceLinkAllows( 1, 1, 1, 0.0f, 0.0f, 1.0f, 8.0f ) );
+	BOOST_CHECK( !BotSFJ_AdvanceLinkAllows( 0, 0, 1, 0.0f, 0.0f, 1.0f, 8.0f ) );
+	BOOST_CHECK( !BotSFJ_AdvanceLinkAllows( 0, 1, 0, 0.0f, 0.0f, 1.0f, 8.0f ) );
+	BOOST_CHECK( !BotSFJ_AdvanceLinkAllows( 0, 1, 1, 33.0f, 0.0f, 1.0f, 8.0f ) );
+	BOOST_CHECK( !BotSFJ_AdvanceLinkAllows( 0, 1, 1, 0.0f, 65.0f, 1.0f, 8.0f ) );
+	BOOST_CHECK( !BotSFJ_AdvanceLinkAllows( 0, 1, 1, 0.0f, 0.0f, -1.0f, 8.0f ) );
+	BOOST_CHECK( !BotSFJ_AdvanceLinkAllows( 0, 1, 1, 0.0f, 0.0f, 0.8f, 8.0f ) );
+	BOOST_CHECK( !BotSFJ_AdvanceLinkAllows( 0, 1, 1, 0.0f, 0.0f, 1.0f, -1.0f ) );
+
+	const float origin[3] = { 600.0f, 0.0f, 100.0f };
+	const float direction[3] = { 1.0f, 0.0f, 0.0f };
+	int advanced = 0;
+	for (int i = 1; i < BotSFJ_WaypointBudget( 128 ); i++)
+	{
+		const float point[3] = { i * 8.0f, 0.0f, 0.0f };
+		if (!BotSFJ_WaypointPassed( origin, point, direction, 64.0f ))
+			break;
+		advanced++;
+	}
+	BOOST_CHECK_EQUAL( advanced, 75 );
+}
+
+BOOST_AUTO_TEST_CASE( strafejump_passed_source_keeps_forward_target_inside_clipped_corridor )
+{
+	const float origin[3] = { 24.0f, 0.0f, 100.0f };
+	const float passed[3] = { 8.0f, 0.0f, 0.0f };
+	const float direction[3] = { 1.0f, 0.0f, 0.0f };
+	const int isPassed = BotSFJ_WaypointPassed( origin, passed, direction, 64.0f );
+
+	BOOST_CHECK( BotSFJ_UseClippedForwardTarget( isPassed, 1024.0f - 1200.0f, 1176.0f ) );
+	BOOST_CHECK( !BotSFJ_AdvanceLinkAllows( 0, 1, 1, 0.0f, 0.0f, 1.0f, -176.0f ) );
+	BOOST_CHECK( BotSFJ_LandingWithinCorridor( 0.0f, 0.0f, 1024.0f, 0.0f,
+		origin[0], origin[1], 64.0f, 0.0f ) );
+	BOOST_CHECK( !BotSFJ_UseClippedForwardTarget( 0, -176.0f, 1176.0f ) );
+	BOOST_CHECK( !BotSFJ_UseClippedForwardTarget( isPassed, 0.0f, 640.0f ) );
+	BOOST_CHECK( !BotSFJ_UseClippedForwardTarget( isPassed, 176.0f, 640.0f ) );
+	BOOST_CHECK( BotSFJ_UseClippedForwardTarget( isPassed, 176.0f, 641.0f ) );
+}
+
+BOOST_AUTO_TEST_CASE( strafejump_advanced_waypoint_preserves_hostile_field_visibility )
+{
+	BOOST_CHECK( !BotSFJ_WaypointVisible( 0 ) );
+	BOOST_CHECK( BotSFJ_WaypointVisible( 1 ) );
+	BOOST_CHECK( !BotSFJ_WaypointVisible( 2 ) );
+}
+
 BOOST_AUTO_TEST_CASE( strafejump_state_machine_has_release_edges )
 {
 	BOOST_CHECK_EQUAL( BotSFJ_NextPhase( BOT_SFJ_PHASE_PREPARE, 1, 1, 1, 1, 0 ),

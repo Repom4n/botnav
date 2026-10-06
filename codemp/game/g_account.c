@@ -3384,7 +3384,13 @@ static qboolean G_InsertTrackedParticipant(sqlite3 *db, sqlite3_int64 summaryId,
 
 	matchup = G_GetTrackedMatchup(runtime->side, runtime->opponentSide);
 	sql = "INSERT INTO LocalDuelTrackParticipant(summary_id, participant_key, participant_label, participant_kind, elo_key, opponent_key, won, side, opponent_side, matchup, total_force_spent, total_force_regen, ending_force, ending_hp, ending_armor, low_force_windows, grip_cripple_events, saber_throw_punishes, knockdown_events, late_defense_spends, opening_tactic, primary_issue, spent_neutral, spent_advantage, spent_disadvantage, spent_panic, spent_finishing, force_push, force_pull, force_grip, force_drain, force_rage, force_absorb, force_protect, force_heal, force_speed, force_seeing, force_unknown, total_damage_taken, total_damage_dealt, counter_successes, punish_successes, reset_successes, total_kills) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
-	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
+	s = sqlite3_prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL);
+	if (s != SQLITE_OK)
+	{
+		G_TrackedDBError("prepare LocalDuelTrackParticipant", db, s);
+		sqlite3_finalize(stmt);
+		return qfalse;
+	}
 	CALL_SQLITE(bind_int64(stmt, 1, summaryId));
 	CALL_SQLITE(bind_text(stmt, 2, runtime->identityKey, -1, SQLITE_STATIC));
 	CALL_SQLITE(bind_text(stmt, 3, runtime->identityLabel, -1, SQLITE_TRANSIENT));
@@ -3770,7 +3776,8 @@ static qboolean G_UpdateTrackedAggregate(sqlite3 *db, tracked_duel_runtime_t *ru
 		//Stamp the capture version/revision that last touched this aggregate row.
 		sqlite3_stmt *stampStmt = NULL;
 		const char *stampSql = "UPDATE LocalDuelTrackAggregate SET capture_version = ?, capture_revision = ? WHERE participant_key = ? AND participant_kind = ? AND side = ? AND matchup = ?";
-		if (sqlite3_prepare_v2(db, stampSql, -1, &stampStmt, NULL) == SQLITE_OK)
+		int stampStatus = sqlite3_prepare_v2(db, stampSql, -1, &stampStmt, NULL);
+		if (stampStatus == SQLITE_OK)
 		{
 			sqlite3_bind_int(stampStmt, 1, TRACKED_CAPTURE_VERSION);
 			sqlite3_bind_text(stampStmt, 2, GIT_HASH, -1, SQLITE_STATIC);
@@ -3778,9 +3785,16 @@ static qboolean G_UpdateTrackedAggregate(sqlite3 *db, tracked_duel_runtime_t *ru
 			sqlite3_bind_int(stampStmt, 4, runtime->identityKind);
 			sqlite3_bind_int(stampStmt, 5, runtime->side);
 			sqlite3_bind_int(stampStmt, 6, matchup);
-			sqlite3_step(stampStmt);
+			stampStatus = sqlite3_step(stampStmt);
 		}
+		if (stampStatus != SQLITE_DONE)
+			G_TrackedDBError("stamp LocalDuelTrackAggregate capture", db, stampStatus);
 		sqlite3_finalize(stampStmt);
+		if (stampStatus != SQLITE_DONE)
+		{
+			sqlite3_finalize(stmt);
+			return qfalse;
+		}
 	}
 	if (s != SQLITE_DONE)
 	{

@@ -2504,6 +2504,8 @@ static void BotSFJ_Clear(bot_state_t *bs)
 	bs->sfjLastEnemyTargetNum = -1;
 	bs->sfjArcCheckedTime = 0;
 	bs->sfjArcSafe = qfalse;
+	bs->sfjCorridorValid = qfalse;
+	bs->sfjCorridorForwardGoal = qfalse;
 	VectorClear(bs->sfjIntentDirection);
 	VectorClear(bs->sfjIntentDestination);
 }
@@ -2519,6 +2521,8 @@ static void BotSFJ_Abort(bot_state_t *bs, int time)
 	bs->sfjIntentTime = 0;
 	bs->sfjSafetyUntil = 0;
 	bs->sfjOwnsInput = qfalse;
+	bs->sfjCorridorValid = qfalse;
+	bs->sfjCorridorForwardGoal = qfalse;
 }
 
 static qboolean BotSFJ_HasInputConflict(bot_state_t *bs, playerState_t *ps,
@@ -2574,7 +2578,6 @@ static qboolean BotSFJ_HasInputConflict(bot_state_t *bs, playerState_t *ps,
 #define BOT_SFJ_CORRIDOR_LOOKAHEAD 1024.0f
 #define BOT_SFJ_CORRIDOR_STEER_DISTANCE 512.0f
 #define BOT_SFJ_CORRIDOR_MIN_LENGTH 160.0f
-#define BOT_SFJ_CORRIDOR_MAX_WAYPOINTS 16
 #define BOT_SFJ_CORRIDOR_STRAIGHTNESS 0.9f
 #define BOT_SFJ_NAV_ENEMY_GUARD 384.0f
 #define BOT_SFJ_NAV_ENEMY_CLOSING_SPEED 250.0f
@@ -2610,7 +2613,8 @@ static qboolean BotSFJ_WaypointsLinked(const wpobject_t *from, int toIndex)
 	return from->neighbornum <= 0 ? qtrue : qfalse;
 }
 
-static qboolean BotWaypointSkipPathSafe(bot_state_t *bs, const wpobject_t *destination)
+static qboolean BotWaypointSkipPathSafe(bot_state_t *bs, const vec3_t destination,
+	float maxDistance)
 {
 	vec3_t delta, point, floor;
 	vec3_t mins = {-15.0f, -15.0f, DEFAULT_MINS_2};
@@ -2622,14 +2626,14 @@ static qboolean BotWaypointSkipPathSafe(bot_state_t *bs, const wpobject_t *desti
 
 	if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE)
 		return qfalse;
-	VectorSubtract(destination->origin, bs->origin, delta);
+	VectorSubtract(destination, bs->origin, delta);
 	distance = VectorLength(delta);
-	if (distance > 640.0f)
+	if (distance > maxDistance)
 		return qfalse;
-	JP_Trace(&trace, bs->origin, mins, maxs, (float *)destination->origin,
+	JP_Trace(&trace, bs->origin, mins, maxs, (float *)destination,
 		bs->client, mask, qfalse, 0, 0);
 	if (trace.startsolid || trace.allsolid || trace.fraction < 1.0f ||
-		BotNav_SweepTouchesInstantKillTrigger(bs->origin, destination->origin))
+		BotNav_SweepTouchesInstantKillTrigger(bs->origin, destination))
 		return qfalse;
 	samples = (int)(distance / 32.0f) + 1;
 	for (sample = 1; sample <= samples; sample++)
@@ -2655,8 +2659,7 @@ static qboolean BotWaypointSkipPathSafe(bot_state_t *bs, const wpobject_t *desti
  */
 static qboolean BotSFJ_GetOpenCorridor(bot_state_t *bs, vec3_t direction, vec3_t destination)
 {
-	const int blockedWaypointFlags = WPFLAG_JUMP | WPFLAG_DUCK | WPFLAG_WAITFORFUNC |
-		WPFLAG_NOMOVEFUNC;
+	const int waypointBudget = BotSFJ_WaypointBudget(bot_strafejumpwaypoints.integer);
 	const qboolean grounded = bs && bs->cur_ps.groundEntityNum != ENTITYNUM_NONE;
 	vec3_t lastPoint, firstDirection, steerPoint;
 	wpobject_t *wp;
@@ -2665,6 +2668,7 @@ static qboolean BotSFJ_GetOpenCorridor(bot_state_t *bs, vec3_t direction, vec3_t
 	float baseZ;
 	qboolean haveDirection = qfalse;
 	qboolean haveSteer = qfalse;
+	qboolean reachedEnd = qfalse;
 	int step;
 	int index;
 	int count;
@@ -2680,11 +2684,12 @@ static qboolean BotSFJ_GetOpenCorridor(bot_state_t *bs, vec3_t direction, vec3_t
 		return qfalse;
 
 	VectorCopy(bs->origin, lastPoint);
-	baseZ = bs->origin[2];
+	/* Flight height is not a change in the underlying trail's elevation. */
+	baseZ = grounded ? bs->origin[2] : bs->wpCurrent->origin[2];
 	VectorClear(firstDirection);
 	VectorClear(steerPoint);
 	index = bs->wpCurrent->index;
-	for (count = 0; count < BOT_SFJ_CORRIDOR_MAX_WAYPOINTS; count++, index += step)
+	for (count = 0; count < waypointBudget; count++, index += step)
 	{
 		vec3_t segment;
 		float segmentLength;
@@ -2692,7 +2697,8 @@ static qboolean BotSFJ_GetOpenCorridor(bot_state_t *bs, vec3_t direction, vec3_t
 		if (index < 0 || index >= gWPNum)
 			break;
 		wp = gWPArray[index];
-		if (!wp || !wp->inuse || (wp->flags & blockedWaypointFlags))
+		if (!wp || !wp->inuse || wp->flags || wp->forceJumpTo ||
+			!PassWayCheck(bs, index))
 			break;
 		if (previous)
 		{
@@ -2702,6 +2708,14 @@ static qboolean BotSFJ_GetOpenCorridor(bot_state_t *bs, vec3_t direction, vec3_t
 		}
 		if (fabsf(wp->origin[2] - baseZ) > 64.0f)
 			break;
+		if (!previous && bs->sfjCorridorForwardGoal && bs->sfjOwnsInput &&
+			BotSFJ_IntentIsFresh(level.time, bs->sfjIntentTime) &&
+			BotSFJ_WaypointPassed(bs->origin, wp->origin, bs->sfjIntentDirection, 64.0f))
+		{
+			/* Keep the passed source as a link anchor, not a backward segment. */
+			previous = wp;
+			continue;
+		}
 		VectorSubtract(wp->origin, lastPoint, segment);
 		segment[2] = 0.0f;
 		segmentLength = VectorNormalize(segment);
@@ -2725,14 +2739,28 @@ static qboolean BotSFJ_GetOpenCorridor(bot_state_t *bs, vec3_t direction, vec3_t
 				VectorMA(lastPoint, BOT_SFJ_CORRIDOR_STEER_DISTANCE - total, segment, steerPoint);
 				haveSteer = qtrue;
 			}
+			if (total + segmentLength >= BOT_SFJ_CORRIDOR_LOOKAHEAD)
+			{
+				VectorMA(lastPoint, BOT_SFJ_CORRIDOR_LOOKAHEAD - total,
+					segment, lastPoint);
+				total = BOT_SFJ_CORRIDOR_LOOKAHEAD;
+				previous = wp;
+				reachedEnd = qtrue;
+				break;
+			}
 			total += segmentLength;
 		}
 		VectorCopy(wp->origin, lastPoint);
 		previous = wp;
 		if (total >= BOT_SFJ_CORRIDOR_LOOKAHEAD ||
 			(bs->wpDestination && wp == bs->wpDestination))
+		{
+			reachedEnd = qtrue;
 			break;
+		}
 	}
+	if (!reachedEnd && count == waypointBudget)
+		BotSFJ_DebugReject(bs, "corridor density budget exhausted (bot_strafejumpwaypoints)");
 	if (!previous || !haveDirection ||
 		total < (grounded ? BOT_SFJ_CORRIDOR_MIN_LENGTH : 64.0f))
 		return qfalse;
@@ -2744,7 +2772,127 @@ static qboolean BotSFJ_GetOpenCorridor(bot_state_t *bs, vec3_t direction, vec3_t
 		DotProduct(direction, firstDirection) < BOT_SFJ_CORRIDOR_STRAIGHTNESS)
 		return qfalse;
 	VectorCopy(lastPoint, destination);
+	VectorCopy(bs->origin, bs->sfjCorridorStart);
+	bs->sfjCorridorStart[2] = baseZ;
+	bs->sfjCorridorFirst = bs->wpCurrent->index;
+	bs->sfjCorridorLast = previous->index;
+	bs->sfjCorridorStep = step;
+	bs->sfjCorridorValid = qtrue;
 	return qtrue;
+}
+
+/*
+ * Consume only passed, unflagged points in the previously accepted corridor.
+ * Run before navigation queues movement, otherwise an airborne bot aims back
+ * at a passed dense waypoint and loses strafe input ownership.
+ */
+static void BotSFJ_AdvancePassedWaypoints(bot_state_t *bs)
+{
+	vec3_t delta, segment, end;
+	vec3_t mins = {-15.0f, -15.0f, DEFAULT_MINS_2};
+	vec3_t maxs = {15.0f, 15.0f, DEFAULT_MAXS_2};
+	trace_t trace;
+	int count;
+	int step;
+	const int budget = BotSFJ_WaypointBudget(bot_strafejumpwaypoints.integer);
+	const int mask = MASK_PLAYERSOLID | CONTENTS_LAVA | CONTENTS_SLIME | CONTENTS_NODROP;
+
+	if (bs)
+		bs->sfjCorridorForwardGoal = qfalse;
+	if (!bs || !bs->wpCurrent || !bs->sfjCorridorValid || !bs->sfjOwnsInput ||
+		!bot_strafejumps.integer || bot_strafejumpfrequency.integer <= 0 ||
+		!BotSFJ_CanOwnInput(1, BotSFJ_IntentIsFresh(level.time, bs->sfjIntentTime),
+			bs->sfjSafetyUntil >= level.time, bs->sfjPhase))
+		return;
+	if (bs->currentEnemy && bs->frame_Enemy_Vis)
+	{
+		BotSFJ_DebugReject(bs, "safe advance: visible enemy combat lock");
+		return;
+	}
+	step = bs->wpDirection ? -1 : 1;
+	if (step != bs->sfjCorridorStep ||
+		!BotSFJ_LandingWithinCorridor(bs->sfjCorridorStart[0], bs->sfjCorridorStart[1],
+			bs->sfjIntentDestination[0], bs->sfjIntentDestination[1],
+			bs->origin[0], bs->origin[1], 64.0f, 0.0f))
+	{
+		BotSFJ_DebugReject(bs, "safe advance: outside validated intent corridor");
+		return;
+	}
+	for (count = 0; count < budget; count++)
+	{
+		wpobject_t *current = bs->wpCurrent;
+		wpobject_t *next;
+		const int nextIndex = current->index + step;
+		float alignment;
+		float length;
+		float endpointProgress;
+		qboolean clippedTarget;
+
+		if (!current->inuse || current->flags || current->forceJumpTo ||
+			current == bs->wpDestination ||
+			(current->index - bs->sfjCorridorFirst) * step < 0 ||
+			(nextIndex - bs->sfjCorridorLast) * step > 0 ||
+			nextIndex < 0 || nextIndex >= gWPNum)
+		{
+			BotSFJ_DebugReject(bs, "safe advance: required waypoint or corridor endpoint");
+			break;
+		}
+		next = gWPArray[nextIndex];
+		if (!next || !next->inuse)
+		{
+			BotSFJ_DebugReject(bs, "safe advance: missing corridor waypoint");
+			break;
+		}
+		VectorSubtract(next->origin, current->origin, segment);
+		segment[2] = 0.0f;
+		length = VectorNormalize(segment);
+		alignment = length > 1.0f ? DotProduct(segment, bs->sfjIntentDirection) : 1.0f;
+		if (!BotSFJ_WaypointPassed(bs->origin, current->origin,
+			bs->sfjIntentDirection, 64.0f))
+			break;
+		VectorSubtract(bs->sfjIntentDestination, next->origin, delta);
+		endpointProgress = DotProduct(delta, bs->sfjIntentDirection);
+		VectorSubtract(next->origin, bs->origin, delta);
+		delta[2] = 0.0f;
+		/* A far new first point would fail the corridor's 640-unit entry bound. */
+		clippedTarget = BotSFJ_UseClippedForwardTarget(1, endpointProgress,
+			VectorLength(delta)) ? qtrue : qfalse;
+		if (!BotSFJ_AdvanceLinkAllows(next->flags || next->forceJumpTo,
+			BotSFJ_WaypointsLinked(current, nextIndex), PassWayCheck(bs, nextIndex),
+			next->origin[2] - current->origin[2],
+			next->origin[2] - bs->sfjCorridorStart[2], alignment,
+			clippedTarget ? 0.0f : endpointProgress) ||
+			(bs->wpDestination && (nextIndex - bs->wpDestination->index) * step > 0))
+		{
+			BotSFJ_DebugReject(bs, "safe advance: required waypoint, link, height, turn or endpoint");
+			break;
+		}
+		/* Collision/hazard sweep at actual flight height, not a walk-floor test. */
+		VectorCopy(clippedTarget ? bs->sfjIntentDestination : next->origin, end);
+		end[2] = bs->origin[2];
+		JP_Trace(&trace, bs->origin, mins, maxs, end, bs->client, mask, qfalse, 0, 0);
+		if (trace.startsolid || trace.allsolid || trace.fraction < 1.0f ||
+			BotNav_SweepTouchesInstantKillTrigger(bs->origin, end) ||
+			(bs->cur_ps.groundEntityNum != ENTITYNUM_NONE &&
+				!BotWaypointSkipPathSafe(bs, end, BOT_SFJ_CORRIDOR_LOOKAHEAD)))
+		{
+			BotSFJ_DebugReject(bs, "safe advance: blocked path, hazard or unsafe grounded floor");
+			break;
+		}
+		if (clippedTarget)
+		{
+			/* Keep the link anchor until the next point is a valid first target. */
+			bs->sfjCorridorForwardGoal = qtrue;
+			break;
+		}
+		bs->lastWPIndex = current->index;
+		bs->lastWPDir = bs->wpDirection;
+		bs->wpCurrent = next;
+		bs->wpTravelTime = level.time + 10000;
+		bs->wpSeenTime = level.time + 1500;
+	}
+	if (count == budget)
+		BotSFJ_DebugReject(bs, "safe advance: density budget exhausted");
 }
 
 /*
@@ -3333,13 +3481,17 @@ static void BotSFJ_SelectIntent(bot_state_t *bs)
 	retreating = (bs->combatAction == BOT_COMBAT_ACTION_RETREAT_DEFENSE ||
 		bs->runningLikeASissy || bs->runningToEscapeThreat || carryingFlag) ? qtrue : qfalse;
 
+	bs->sfjCorridorValid = qfalse;
 	haveRoute = BotSFJ_GetRouteHintCorridor(bs, ps, effectiveDirection,
 		routeDirection, routeDestination);
 	if (!haveRoute)
 	{
 		haveRoute = BotSFJ_GetOpenCorridor(bs, routeDirection, routeDestination);
 		if (haveRoute && DotProduct(effectiveDirection, routeDirection) < 0.5f)
+		{
 			haveRoute = qfalse;
+			bs->sfjCorridorValid = qfalse;
+		}
 	}
 	if (!haveRoute && enemyClient &&
 		(retreating || bs->sfjPursuitLatched || enemyCarriesFlag ||
@@ -3395,6 +3547,7 @@ static void BotSFJ_SelectIntent(bot_state_t *bs)
 	}
 	/* Mid-jump the takeoff arc was already validated; only watch for hazards. */
 	airborneJump = (bs->sfjPhase == BOT_SFJ_PHASE_TAKEOFF ||
+		bs->sfjPhase == BOT_SFJ_PHASE_REJUMP ||
 		bs->sfjPhase == BOT_SFJ_PHASE_AIR) && ps->groundEntityNum == ENTITYNUM_NONE;
 	if (airborneJump ? BotSFJ_HazardAhead(bs, ps) :
 		!BotSFJ_CachedArcIsSafe(bs, ps, routeDirection, routeDestination,
@@ -22334,6 +22487,20 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 	if (bs->wpCurrent)
 	{
 		int wpTouchDist = BOT_WPTOUCH_DISTANCE;
+		wpobject_t *beforeAdvance = bs->wpCurrent;
+		BotSFJ_AdvancePassedWaypoints(bs);
+		if (bs->wpCurrent != beforeAdvance)
+		{
+			VectorSubtract(bs->wpCurrent->origin, bs->origin, a);
+			if (RMG.integer)
+				a[2] = 0.0f;
+			bs->frame_Waypoint_Len = VectorLength(a);
+			visResult = WPOrgVisible(&g_entities[bs->client],
+				bs->origin, bs->wpCurrent->origin, bs->client);
+			bs->frame_Waypoint_Vis = BotSFJ_WaypointVisible(visResult);
+			if (visResult == 2)
+				bs->wpSeenTime = 0;
+		}
 		WPConstantRoutine(bs);
 
 		if (!bs->wpCurrent)
@@ -22353,6 +22520,8 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 			}
 		}
 		VectorCopy(bs->wpCurrent->origin, bs->goalPosition);
+		if (bs->sfjCorridorForwardGoal)
+			VectorCopy(bs->sfjIntentDestination, bs->goalPosition);
 		if (bs->wpDirection)
 		{
 			goalWPIndex = bs->wpCurrent->index-1;
@@ -22419,7 +22588,9 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 			}
 		}
 
-		if (bs->frame_Waypoint_Len < wpTouchDist || (RMG.integer && bs->frame_Waypoint_Len < wpTouchDist*2))
+		if (!bs->sfjCorridorForwardGoal &&
+			(bs->frame_Waypoint_Len < wpTouchDist ||
+				(RMG.integer && bs->frame_Waypoint_Len < wpTouchDist*2)))
 		{
 			const qboolean activeCombatLock = (bs->currentEnemy && bs->frame_Enemy_Vis) ? qtrue : qfalse;
 			const qboolean canSkipAhead = !activeCombatLock;
@@ -22519,7 +22690,7 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 							BotSFJ_DebugReject(bs, "waypoint skip: no straight eligible link");
 							break;
 						}
-						if (!BotWaypointSkipPathSafe(bs, gWPArray[nextIndex]))
+						if (!BotWaypointSkipPathSafe(bs, gWPArray[nextIndex]->origin, 640.0f))
 						{
 							BotSFJ_DebugReject(bs, "waypoint skip: blocked path or unsafe floor");
 							break;
@@ -22980,6 +23151,20 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 	if (bs->beStill < level.time && !WaitingForNow(bs, bs->goalPosition) && !fjHalt)
 	{
 		VectorSubtract(bs->goalPosition, bs->origin, bs->goalMovedir);
+		if (bs->sfjCorridorValid && bs->sfjOwnsInput && bs->wpCurrent &&
+			!bs->wpCurrent->flags && !bs->wpCurrent->forceJumpTo &&
+			!(bs->currentEnemy && bs->frame_Enemy_Vis) &&
+			(VectorCompare(bs->goalPosition, bs->wpCurrent->origin) ||
+				(bs->sfjCorridorForwardGoal &&
+					VectorCompare(bs->goalPosition, bs->sfjIntentDestination))) &&
+			BotSFJ_CanOwnInput(bot_strafejumps.integer,
+				BotSFJ_IntentIsFresh(level.time, bs->sfjIntentTime),
+				bot_strafejumpfrequency.integer > 0 && bs->sfjSafetyUntil >= level.time,
+				bs->sfjPhase))
+		{
+			/* Trail elevation must not queue a downward input during flight. */
+			bs->goalMovedir[2] = 0.0f;
+		}
 		VectorNormalize(bs->goalMovedir);
 
 		//Falling hazard awareness: don't walk off ledges or into lava/death pits.
