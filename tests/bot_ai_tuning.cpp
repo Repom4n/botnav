@@ -1,12 +1,138 @@
 #include <math.h>
 
 #include "ai_combat_tuning.h"
+#include "ai_strafejump.h"
 
 #include <boost/test/unit_test.hpp>
 
 BOOST_AUTO_TEST_SUITE( bot_ai )
 
 BOOST_AUTO_TEST_SUITE( tuning )
+
+BOOST_AUTO_TEST_CASE( strafejump_state_machine_has_release_edges )
+{
+	BOOST_CHECK_EQUAL( BotSFJ_NextPhase( BOT_SFJ_PHASE_PREPARE, 1, 1, 1, 1, 0 ),
+		BOT_SFJ_PHASE_PREPARE );
+	BOOST_CHECK_EQUAL( BotSFJ_NextPhase( BOT_SFJ_PHASE_PREPARE, 1, 1, 1, 1, 16 ),
+		BOT_SFJ_PHASE_TAKEOFF );
+	BOOST_CHECK( BotSFJ_JumpPressed( BOT_SFJ_PHASE_TAKEOFF, 1 ) );
+	BOOST_CHECK_EQUAL( BotSFJ_NextPhase( BOT_SFJ_PHASE_TAKEOFF, 1, 1, 1, 0, 16 ),
+		BOT_SFJ_PHASE_AIR );
+	BOOST_CHECK( !BotSFJ_JumpPressed( BOT_SFJ_PHASE_AIR, 0 ) );
+	BOOST_CHECK_EQUAL( BotSFJ_NextPhase( BOT_SFJ_PHASE_AIR, 1, 1, 1, 1, 300 ),
+		BOT_SFJ_PHASE_LANDING );
+	BOOST_CHECK( !BotSFJ_JumpPressed( BOT_SFJ_PHASE_LANDING, 1 ) );
+	BOOST_CHECK_EQUAL( BotSFJ_NextPhase( BOT_SFJ_PHASE_LANDING, 1, 1, 1, 1, 16 ),
+		BOT_SFJ_PHASE_REJUMP );
+}
+
+BOOST_AUTO_TEST_CASE( strafejump_disable_and_conflict_drop_ownership )
+{
+	BOOST_CHECK( BotSFJ_CanOwnInput( 1, 1, 1, BOT_SFJ_PHASE_AIR ) );
+	BOOST_CHECK( !BotSFJ_CanOwnInput( 0, 1, 1, BOT_SFJ_PHASE_AIR ) );
+	BOOST_CHECK( !BotSFJ_CanOwnInput( 1, 1, 0, BOT_SFJ_PHASE_AIR ) );
+	BOOST_CHECK_EQUAL( BotSFJ_NextPhase( BOT_SFJ_PHASE_AIR, 0, 1, 1, 0, 30 ),
+		BOT_SFJ_PHASE_OFF );
+	BOOST_CHECK_EQUAL( BotSFJ_NextPhase( BOT_SFJ_PHASE_AIR, 1, 0, 1, 0, 30 ),
+		BOT_SFJ_PHASE_ABORT );
+}
+
+BOOST_AUTO_TEST_CASE( strafejump_intent_freshness_is_bounded )
+{
+	BOOST_CHECK( BotSFJ_IntentIsFresh( 1200, 1000 ) );
+	BOOST_CHECK( !BotSFJ_IntentIsFresh( 1251, 1000 ) );
+	BOOST_CHECK( !BotSFJ_IntentIsFresh( 999, 1000 ) );
+}
+
+BOOST_AUTO_TEST_CASE( strafejump_pursuit_uses_start_stop_hysteresis )
+{
+	BOOST_CHECK( BotSFJ_UpdatePursuitLatch( 0, 540.0f, 500.0f, 200 ) );
+	BOOST_CHECK( BotSFJ_UpdatePursuitLatch( 1, 548.0f, 540.0f, 200 ) );
+	BOOST_CHECK( !BotSFJ_UpdatePursuitLatch( 1, 550.0f, 548.0f, 200 ) );
+	BOOST_CHECK( !BotSFJ_UpdatePursuitLatch( 1, 380.0f, 360.0f, 200 ) );
+}
+
+BOOST_AUTO_TEST_CASE( strafejump_yaw_uses_command_dt_and_speed )
+{
+	const float lowSpeedYaw = BotSFJ_CommandYaw( 0.0f, 20.0f, 0.0f, 250.0f, 1.0f, 0.016f, 1 );
+	const float highSpeedShort = BotSFJ_CommandYaw( 0.0f, 600.0f, 0.0f, 250.0f, 1.0f, 0.008f, 1 );
+	const float highSpeedLong = BotSFJ_CommandYaw( 0.0f, 600.0f, 0.0f, 250.0f, 1.0f, 0.05f, 1 );
+
+	BOOST_CHECK_SMALL( lowSpeedYaw, 0.001f );
+	BOOST_CHECK( highSpeedShort < highSpeedLong );
+	BOOST_CHECK( isfinite( BotSFJ_CommandYaw( 90.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.016f, -1 ) ) );
+	BOOST_CHECK_EQUAL( BotSFJ_SelectSide( 30.0f, 500.0f, 0.0f, -1 ), 1 );
+	BOOST_CHECK_EQUAL( BotSFJ_SelectSide( 330.0f, 500.0f, 0.0f, 1 ), -1 );
+}
+
+BOOST_AUTO_TEST_CASE( strafejump_launch_matches_jka_force_jump_substep )
+{
+	BOOST_CHECK_EQUAL( BotSFJ_JKALaunchVelocity( 0, 0.0f, 1 ), 225.0f );
+	BOOST_CHECK_EQUAL( BotSFJ_JKALaunchVelocity( 1, 0.0f, 1 ), 267.0f );
+	BOOST_CHECK_EQUAL( BotSFJ_JKALaunchVelocity( 2, 0.0f, 1 ), 284.0f );
+	BOOST_CHECK_EQUAL( BotSFJ_JKALaunchVelocity( 3, 0.0f, 1 ), 309.0f );
+	BOOST_CHECK_EQUAL( BotSFJ_JKALaunchVelocity( 3, 0.0f, 0 ), 225.0f );
+	BOOST_CHECK_EQUAL( BotSFJ_JKALaunchVelocity( 4, 0.0f, 1 ), 225.0f );
+}
+
+BOOST_AUTO_TEST_CASE( strafejump_launch_prediction_accounts_for_command_slices )
+{
+	float shortHeight, shortVelocity, longHeight, longVelocity;
+
+	BotSFJ_PredictReleasedVertical( 3, 1, 1, 800.0f, 8, 8,
+		&shortHeight, &shortVelocity );
+	BotSFJ_PredictReleasedVertical( 3, 1, 1, 800.0f, 32, 8,
+		&longHeight, &longVelocity );
+	BOOST_CHECK( longHeight > shortHeight );
+	BOOST_CHECK( longVelocity < shortVelocity );
+	BOOST_CHECK_EQUAL( BotSFJ_PmoveSliceMsec( 50, 1, 8, 0 ), 8 );
+	BOOST_CHECK_EQUAL( BotSFJ_PmoveSliceMsec( 50, 0, 8, 0 ), 50 );
+	BOOST_CHECK_EQUAL( BotSFJ_PmoveSliceMsec( 80, 0, 8, 0 ), 66 );
+	BOOST_CHECK_EQUAL( BotSFJ_PmoveSliceMsec( 50, 0, 8, 1 ), 8 );
+}
+
+BOOST_AUTO_TEST_CASE( strafejump_effective_movement_honors_direction_overrides )
+{
+	float x, y;
+
+	BOOST_CHECK( BotSFJ_EffectiveMovement( 1.0f, 0.0f, 400.0f, 90.0f,
+		0, 0, 0, 0, &x, &y ) > 0.0f );
+	BOOST_CHECK_CLOSE_FRACTION( x, 1.0f, 0.0001f );
+	BOOST_CHECK_SMALL( y, 0.0001f );
+	BOOST_CHECK( BotSFJ_EffectiveMovement( 0.0f, 0.0f, 0.0f, 90.0f,
+		1, 127, 0, 0, &x, &y ) > 0.0f );
+	BOOST_CHECK_SMALL( x, 0.0001f );
+	BOOST_CHECK_CLOSE_FRACTION( y, 1.0f, 0.0001f );
+	BOOST_CHECK_SMALL( BotSFJ_EffectiveMovement( 1.0f, 0.0f, 0.0f, 0.0f,
+		0, 0, 0, 0, &x, &y ), 0.0001f );
+}
+
+BOOST_AUTO_TEST_CASE( strafejump_landing_cannot_bypass_route_endpoint )
+{
+	BOOST_CHECK( BotSFJ_LandingWithinCorridor( 0.0f, 0.0f, 100.0f, 0.0f,
+		80.0f, 20.0f, 24.0f, 0.0f ) );
+	BOOST_CHECK( !BotSFJ_LandingWithinCorridor( 0.0f, 0.0f, 100.0f, 0.0f,
+		101.0f, 0.0f, 24.0f, 0.0f ) );
+	BOOST_CHECK( !BotSFJ_LandingWithinCorridor( 0.0f, 0.0f, 100.0f, 0.0f,
+		80.0f, 25.0f, 24.0f, 0.0f ) );
+}
+
+BOOST_AUTO_TEST_CASE( strafejump_random_use_does_not_mask_deliberate_use )
+{
+	BOOST_CHECK( !BotSFJ_UseIsConflict( 0, 1, 1 ) );
+	BOOST_CHECK( BotSFJ_UseIsConflict( 0, 1, 0 ) );
+	BOOST_CHECK( BotSFJ_UseIsConflict( 1, 0, 0 ) );
+}
+
+BOOST_AUTO_TEST_CASE( strafejump_route_safety_rejects_each_hazard_class )
+{
+	BOOST_CHECK( BotSFJ_RouteSafetyAllows( 1, 1, 1, 0.8f, 0.9f ) );
+	BOOST_CHECK( !BotSFJ_RouteSafetyAllows( 0, 1, 1, 0.8f, 0.9f ) );
+	BOOST_CHECK( !BotSFJ_RouteSafetyAllows( 1, 0, 1, 0.8f, 0.9f ) );
+	BOOST_CHECK( !BotSFJ_RouteSafetyAllows( 1, 1, 0, 0.8f, 0.9f ) );
+	BOOST_CHECK( !BotSFJ_RouteSafetyAllows( 1, 1, 1, 0.6f, 0.9f ) );
+	BOOST_CHECK( !BotSFJ_RouteSafetyAllows( 1, 1, 1, 0.8f, 0.7f ) );
+}
 
 BOOST_AUTO_TEST_CASE( ptk_armor_penalty_tracks_force_lead )
 {
