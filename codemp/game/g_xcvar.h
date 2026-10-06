@@ -341,6 +341,8 @@ XCVAR_DEF( bot_dueltracking,			"1",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_dueltracking_geometry,	"2",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_strafeOffset,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_strafejumps,			"1",			NULL,				CVAR_ARCHIVE,									qtrue )
+XCVAR_DEF( bot_strafejumpfrequency,	"100",			NULL,				CVAR_ARCHIVE,									qtrue )
+XCVAR_DEF( bot_onlystrafes,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 // 1: print why strafe-jump attempts are rejected (rate limited per bot).
 XCVAR_DEF( bot_strafejumps_debug,		"0",			NULL,				0,												qfalse )
 // Minimum enemy distance (units) before a chase/escape strafe jump may start. 0 lets bots
@@ -351,6 +353,8 @@ XCVAR_DEF( bot_minstrafe,				"320",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_perfwarn,				"0",			NULL,				0,												qfalse )
 XCVAR_DEF( bot_navigation,				"1",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_waypointskip,			"2",			NULL,				CVAR_ARCHIVE,									qtrue )
+// Maximum trail points examined by strafe corridor lookahead (clamped 1..512).
+XCVAR_DEF( bot_strafejumpwaypoints,	"128",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_yawswitch,				"10",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_forcepowers,			"1",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_forgimmick,				"0",			NULL,				CVAR_ARCHIVE,									qtrue )

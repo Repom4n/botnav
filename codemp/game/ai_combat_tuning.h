@@ -1978,10 +1978,16 @@ static inline int NewBotAI_SaberThrowSteerCadence(int throwLevel)
 	return throwLevel >= 3 ? 100 : throwLevel == 2 ? 400 : 0;
 }
 
-static inline int NewBotAI_SaberThrowTargetGuarded(int saberEquipped, int bladeAvailable,
-	int saberInFlight, int brokenParry, int knockedDown)
+static inline int NewBotAI_SaberThrowConfiguredLevel(float skill, int configuredLevel,
+	int disabled, int forceAllowed)
 {
-	return saberEquipped && bladeAvailable && !saberInFlight && !brokenParry && !knockedDown;
+	return skill > 2.0f && !disabled && forceAllowed ? 3 : configuredLevel;
+}
+
+static inline int NewBotAI_SaberThrowTargetGuarded(int saberEquipped, int bladeAvailable,
+	int saberInFlight, int brokenParry, int knockedDown, int committed)
+{
+	return saberEquipped && bladeAvailable && !saberInFlight && !brokenParry && !knockedDown && !committed;
 }
 
 static inline newbotai_throw_phase_t NewBotAI_SaberThrowTargetPhase(
@@ -2035,6 +2041,13 @@ static inline int NewBotAI_SaberThrowRoutingHold(int throwLevel, newbotai_throw_
 		!NewBotAI_SaberThrowRecallDue(throwLevel, heldMs, 0, 0, 1);
 }
 
+static inline int NewBotAI_SaberThrowMayMarkPass(newbotai_throw_phase_t phase,
+	int heldMs, int phaseMs, int cadenceMs)
+{
+	return heldMs >= 150 && (phase == NEWBOTAI_THROW_LAUNCH ||
+		(phase == NEWBOTAI_THROW_CUT_THROUGH && phaseMs >= cadenceMs));
+}
+
 static inline int NewBotAI_SaberThrowTraceSafe(int viewSolid, int flightSolid,
 	int flightBlocked, int flightHitTarget, newbotai_throw_phase_t phase)
 {
@@ -2068,6 +2081,32 @@ static inline int NewBotAI_SaberThrowFinalHoldProtected(int heldMs, int passedTa
 {
 	return !hardRecall && !returning && forceAllowed &&
 		!NewBotAI_SaberThrowMayRelease(heldMs, passedTarget, headingToTarget, drainlockRule, lethalDanger);
+}
+
+// Existing THROW outcomes describe context, not duration or trajectory. A positive
+// learned weight may favor one bounded continuation, never weaken safety or the minimum.
+static inline int NewBotAI_SaberThrowLearnedHold(int heldMs, int learnedWeight, int safeContext)
+{
+	return safeContext && learnedWeight >= 8 &&
+		heldMs >= NEWBOTAI_THROW_MIN_HOLD_MS && heldMs < 900;
+}
+
+static inline int NewBotAI_SaberThrowDecisionSampleDue(int sameThrow, int sameNote, int elapsedMs)
+{
+	return !sameThrow || !sameNote || elapsedMs < 0 || elapsedMs >= 250;
+}
+
+static inline int NewBotAI_SaberThrowWantsHold(int throwLevel, newbotai_throw_phase_t phase,
+	int heldMs, int passedTarget, int headingToTarget, int safetyRecall, int softRecall,
+	int learnedWeight, int safeLearnedContext)
+{
+	if (safetyRecall || phase == NEWBOTAI_THROW_RECALL ||
+		NewBotAI_SaberThrowRecallDue(throwLevel, heldMs, 0, 0, 1))
+		return 0;
+	if (NewBotAI_SaberThrowHoldProtected(heldMs, passedTarget, headingToTarget) ||
+		NewBotAI_SaberThrowRoutingHold(throwLevel, phase, heldMs))
+		return 1;
+	return !softRecall || NewBotAI_SaberThrowLearnedHold(heldMs, learnedWeight, safeLearnedContext);
 }
 
 // Yaw offset (degrees, positive toward the target's lateral motion) for a thrown saber:

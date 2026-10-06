@@ -12,6 +12,59 @@
 #define BOT_SFJ_JUMP_VELOCITY 225.0f
 #define BOT_SFJ_MAX_ARC_STEPS 256
 
+static inline int BotSFJ_WaypointBudget(int budget)
+{
+	return budget < 1 ? 1 : (budget > 512 ? 512 : budget);
+}
+
+static inline int BotSFJ_WaypointVisible(int visibility)
+{
+	return visibility != 0 && visibility != 2;
+}
+
+static inline int BotSFJ_UseClippedForwardTarget(int passed, float endpointProgress,
+	float firstTargetDistance)
+{
+	return passed && (endpointProgress < 0.0f || firstTargetDistance > 640.0f);
+}
+
+/* Horizontal progress only: a validated jump may be well above its trail. */
+static inline int BotSFJ_WaypointPassed(const float *origin, const float *waypoint,
+	const float *direction, float halfWidth)
+{
+	const float x = origin[0] - waypoint[0];
+	const float y = origin[1] - waypoint[1];
+	const float progress = x * direction[0] + y * direction[1];
+	const float lateral = x * direction[1] - y * direction[0];
+
+	return progress >= 0.0f && lateral * lateral <= halfWidth * halfWidth;
+}
+
+static inline int BotSFJ_AdvanceLinkAllows(int requiredFlags, int linked,
+	int passable, float heightDelta, float baseHeightDelta, float alignment,
+	float endpointProgress)
+{
+	return !requiredFlags && linked && passable &&
+		fabsf(heightDelta) <= 32.0f && fabsf(baseHeightDelta) <= 64.0f &&
+		alignment >= 0.9f && endpointProgress >= 0.0f;
+}
+
+static inline int BotSFJ_StartIntervalMs(int frequency)
+{
+	if (frequency <= 0)
+		return 0;
+	if (frequency > 1000)
+		frequency = 1000;
+	return 100000 / frequency;
+}
+
+static inline int BotSFJ_WaypointSkipAllows(int requiredFlags, float heightDelta,
+	float alignment, int clearPath)
+{
+	return !requiredFlags && fabsf(heightDelta) <= 32.0f &&
+		alignment >= 0.9f && clearPath;
+}
+
 typedef enum
 {
 	BOT_SFJ_PHASE_OFF = 0,

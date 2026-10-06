@@ -550,10 +550,18 @@ typedef struct bot_state_s
 	bot_sfj_intent_t	sfjIntent;
 	vec3_t				sfjIntentDirection;
 	vec3_t				sfjIntentDestination;
+	vec3_t				sfjCorridorStart;
+	int					sfjCorridorFirst;
+	int					sfjCorridorLast;
+	int					sfjCorridorStep;
+	qboolean			sfjCorridorValid;
+	qboolean			sfjCorridorForwardGoal;
 	int					sfjIntentTime;
 	int					sfjSafetyUntil;
 	int					sfjPhaseTime;
 	int					sfjCooldownUntil;
+	int					sfjNextStartTime;
+	int					sfjStartFrequency;
 	int					sfjStrafeSide;
 	qboolean			sfjOwnsInput;
 	qboolean			sfjLastRandomUse;

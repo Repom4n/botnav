@@ -3,6 +3,7 @@
 #include "g_duel_elo.h"
 #include "g_duel_capture.h"
 #include "g_duel_session.h"
+#include "g_account.h"
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -480,21 +481,17 @@ static void G_QueueBotTutorialMessage(int botClientNum, int targetClientNum, con
 //The CALL_SQLITE macro only writes to stderr, which is invisible on a hosted dedicated
 //server. Duel tracking used to fail silently because of that, so route the tracking
 //failures through trap->Print where the operator can actually see them.
+static int g_trackedPersistRetryStatus;
 static void G_TrackedDBError(const char *context, sqlite3 *db, int status)
 {
+	//Finalizing another statement can overwrite SQLite's connection error code.
+	if (G_TrackedPersistRetryable(status))
+		g_trackedPersistRetryStatus = status;
 	trap->Print("Duel tracking: %s failed (%i: %s)\n",
 		context ? context : "sqlite operation", status,
 		db ? sqlite3_errmsg(db) : "no database handle");
 }
 
-static const char *const g_trackedDuelTableNames[] = {
-	"LocalDuelTrackSummary",
-	"LocalDuelTrackParticipant",
-	"LocalDuelTrackEvent",
-	"LocalDuelTrackGeometry",
-	"LocalDuelTrackAggregate",
-	"LocalBotLearnedEvidence"
-};
 static void G_FormatArcadeLeaderboardName(const char *input, char *output, int outputSize)
 {
 	char clean[MAX_NETNAME];
@@ -915,11 +912,13 @@ static void G_EnsureLocalDuelTrackingSchema(sqlite3 *db)
 		"id INTEGER PRIMARY KEY, summary_id INTEGER NOT NULL, participant_key TEXT, source_kind INTEGER, "
 		"skill_band INTEGER, ctx_key INTEGER, stimulus INTEGER, response INTEGER, follow1 INTEGER, follow2 INTEGER, "
 		"action_index INTEGER, window_start_ms INTEGER, window_end_ms INTEGER, net_damage INTEGER, won INTEGER, "
-		"capture_version INTEGER, capture_revision TEXT, extracted_at INTEGER, self_footing INTEGER DEFAULT -1)";
+		"capture_version INTEGER, capture_revision TEXT, extracted_at INTEGER, self_footing INTEGER DEFAULT -1, "
+		"session_id TEXT DEFAULT '')";
 	s = sqlite3_exec(db, sql, NULL, NULL, NULL);
 	if (s != SQLITE_OK)
 		G_TrackedDBError("create LocalBotLearnedEvidence", db, s);
 	G_EnsureTrackedTableColumn(db, "LocalBotLearnedEvidence", "self_footing", "INTEGER DEFAULT -1");
+	G_EnsureTrackedTableColumn(db, "LocalBotLearnedEvidence", "session_id", "TEXT DEFAULT ''");
 	{
 		static const char *realColumns[] = { "self_pitch", "enemy_pitch", "target_yaw_error", "target_pitch_error",
 			"saber_x", "saber_y", "saber_z", "aim_x", "aim_y", "aim_z" };
@@ -1082,6 +1081,9 @@ static void G_EnsureLocalDuelTrackingSchema(sqlite3 *db)
 		NULL, NULL, NULL);
 	if (s != SQLITE_OK)
 		G_TrackedDBError("create idx_dueltrackevent_summary", db, s);
+	s = G_BackfillLearningEvidenceSessions(db);
+	if (s != SQLITE_OK)
+		G_TrackedDBError("backfill learned evidence sessions", db, s);
 
 	g_duelTrackingSchemaReady = qtrue;
 	Q_strncpyz(g_duelTrackingSchemaPath, LOCAL_DUELTRACK_DB_PATH, sizeof(g_duelTrackingSchemaPath));
@@ -2286,6 +2288,20 @@ int G_BotLearnDuelMode(gentity_t *self)
 	return g_trackedArcadeCombats[clientNum].active ? 2 : 3;
 }
 
+void G_RecordTrackedDuelDecision(gentity_t *self, gentity_t *enemy, int amount, const char *note)
+{
+	tracked_duel_runtime_t *runtime;
+	if (!self || !self->client || !(self->r.svFlags & SVF_BOT) ||
+		self->s.number < 0 || self->s.number >= MAX_CLIENTS)
+		return;
+	runtime = &g_trackedDuels[self->s.number];
+	if (!runtime->active || !enemy || !enemy->client || enemy->s.number != runtime->opponentClientNum)
+		return;
+	G_AddTrackedDuelEvent(runtime, DUEL_TRACK_EVENT_DECISION, level.time - runtime->duelStartTime,
+		amount, DUEL_TRACK_POWER_UNKNOWN, G_InferTrackedForceState(self, enemy),
+		G_GetTrackedRangeBucket(self, enemy), note, self, enemy);
+}
+
 void G_BotLearnDecision(gentity_t *self, gentity_t *enemy, int stimulus, int response,
 	int follow1, int learnedBonus)
 {
@@ -3368,7 +3384,13 @@ static qboolean G_InsertTrackedParticipant(sqlite3 *db, sqlite3_int64 summaryId,
 
 	matchup = G_GetTrackedMatchup(runtime->side, runtime->opponentSide);
 	sql = "INSERT INTO LocalDuelTrackParticipant(summary_id, participant_key, participant_label, participant_kind, elo_key, opponent_key, won, side, opponent_side, matchup, total_force_spent, total_force_regen, ending_force, ending_hp, ending_armor, low_force_windows, grip_cripple_events, saber_throw_punishes, knockdown_events, late_defense_spends, opening_tactic, primary_issue, spent_neutral, spent_advantage, spent_disadvantage, spent_panic, spent_finishing, force_push, force_pull, force_grip, force_drain, force_rage, force_absorb, force_protect, force_heal, force_speed, force_seeing, force_unknown, total_damage_taken, total_damage_dealt, counter_successes, punish_successes, reset_successes, total_kills) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
-	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
+	s = sqlite3_prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL);
+	if (s != SQLITE_OK)
+	{
+		G_TrackedDBError("prepare LocalDuelTrackParticipant", db, s);
+		sqlite3_finalize(stmt);
+		return qfalse;
+	}
 	CALL_SQLITE(bind_int64(stmt, 1, summaryId));
 	CALL_SQLITE(bind_text(stmt, 2, runtime->identityKey, -1, SQLITE_STATIC));
 	CALL_SQLITE(bind_text(stmt, 3, runtime->identityLabel, -1, SQLITE_TRANSIENT));
@@ -3696,7 +3718,13 @@ static qboolean G_UpdateTrackedAggregate(sqlite3 *db, tracked_duel_runtime_t *ru
 
 	matchup = G_GetTrackedMatchup(runtime->side, runtime->opponentSide);
 	sql = "INSERT OR IGNORE INTO LocalDuelTrackAggregate(participant_key, participant_kind, side, matchup, duels, wins, losses, total_force_spent, total_force_regen, low_force_deaths, grip_cripples, saber_throw_punishes, force_push, force_pull, force_grip, force_drain, force_rage, force_absorb, force_protect, force_heal, force_speed, force_seeing, force_unknown) VALUES (?, ?, ?, ?, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)";
-	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
+	s = sqlite3_prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL);
+	if (s != SQLITE_OK)
+	{
+		G_TrackedDBError("prepare LocalDuelTrackAggregate init", db, s);
+		sqlite3_finalize(stmt);
+		return qfalse;
+	}
 	CALL_SQLITE(bind_text(stmt, 1, runtime->identityKey, -1, SQLITE_STATIC));
 	CALL_SQLITE(bind_int(stmt, 2, runtime->identityKind));
 	CALL_SQLITE(bind_int(stmt, 3, runtime->side));
@@ -3712,7 +3740,14 @@ static qboolean G_UpdateTrackedAggregate(sqlite3 *db, tracked_duel_runtime_t *ru
 	CALL_SQLITE(finalize(stmt));
 
 	sql = "UPDATE LocalDuelTrackAggregate SET duels = duels + 1, wins = wins + ?, losses = losses + ?, total_force_spent = total_force_spent + ?, total_force_regen = total_force_regen + ?, low_force_deaths = low_force_deaths + ?, grip_cripples = grip_cripples + ?, saber_throw_punishes = saber_throw_punishes + ?, force_push = force_push + ?, force_pull = force_pull + ?, force_grip = force_grip + ?, force_drain = force_drain + ?, force_rage = force_rage + ?, force_absorb = force_absorb + ?, force_protect = force_protect + ?, force_heal = force_heal + ?, force_speed = force_speed + ?, force_seeing = force_seeing + ?, force_unknown = force_unknown + ? WHERE participant_key = ? AND participant_kind = ? AND side = ? AND matchup = ?";
-	CALL_SQLITE(prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL));
+	stmt = NULL;
+	s = sqlite3_prepare_v2(db, sql, strlen(sql) + 1, &stmt, NULL);
+	if (s != SQLITE_OK)
+	{
+		G_TrackedDBError("prepare LocalDuelTrackAggregate update", db, s);
+		sqlite3_finalize(stmt);
+		return qfalse;
+	}
 	CALL_SQLITE(bind_int(stmt, 1, (won && !draw) ? 1 : 0));
 	CALL_SQLITE(bind_int(stmt, 2, (!won && !draw) ? 1 : 0));
 	CALL_SQLITE(bind_int(stmt, 3, runtime->totalForceSpent));
@@ -3741,7 +3776,8 @@ static qboolean G_UpdateTrackedAggregate(sqlite3 *db, tracked_duel_runtime_t *ru
 		//Stamp the capture version/revision that last touched this aggregate row.
 		sqlite3_stmt *stampStmt = NULL;
 		const char *stampSql = "UPDATE LocalDuelTrackAggregate SET capture_version = ?, capture_revision = ? WHERE participant_key = ? AND participant_kind = ? AND side = ? AND matchup = ?";
-		if (sqlite3_prepare_v2(db, stampSql, -1, &stampStmt, NULL) == SQLITE_OK)
+		int stampStatus = sqlite3_prepare_v2(db, stampSql, -1, &stampStmt, NULL);
+		if (stampStatus == SQLITE_OK)
 		{
 			sqlite3_bind_int(stampStmt, 1, TRACKED_CAPTURE_VERSION);
 			sqlite3_bind_text(stampStmt, 2, GIT_HASH, -1, SQLITE_STATIC);
@@ -3749,9 +3785,16 @@ static qboolean G_UpdateTrackedAggregate(sqlite3 *db, tracked_duel_runtime_t *ru
 			sqlite3_bind_int(stampStmt, 4, runtime->identityKind);
 			sqlite3_bind_int(stampStmt, 5, runtime->side);
 			sqlite3_bind_int(stampStmt, 6, matchup);
-			sqlite3_step(stampStmt);
+			stampStatus = sqlite3_step(stampStmt);
 		}
+		if (stampStatus != SQLITE_DONE)
+			G_TrackedDBError("stamp LocalDuelTrackAggregate capture", db, stampStatus);
 		sqlite3_finalize(stampStmt);
+		if (stampStatus != SQLITE_DONE)
+		{
+			sqlite3_finalize(stmt);
+			return qfalse;
+		}
 	}
 	if (s != SQLITE_DONE)
 	{
@@ -3932,7 +3975,7 @@ static qboolean G_BotLearnRecordPerspective(sqlite3 *db, sqlite3_int64 summaryId
 			-1, &updateStmt, NULL) == SQLITE_OK &&
 		sqlite3_prepare_v2(db, "INSERT INTO LocalBotLearnedEvidence(summary_id, participant_key, source_kind, "
 			"skill_band, ctx_key, stimulus, response, follow1, follow2, action_index, window_start_ms, window_end_ms, "
-			"net_damage, won, capture_version, capture_revision, extracted_at, self_footing) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			"net_damage, won, capture_version, capture_revision, extracted_at, self_footing, session_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 			-1, &evidenceStmt, NULL) == SQLITE_OK)
 	{
 		for (i = 0; i < sequenceCount && ok; i++)
@@ -3960,6 +4003,7 @@ static qboolean G_BotLearnRecordPerspective(sqlite3 *db, sqlite3_int64 summaryId
 			sqlite3_bind_text(evidenceStmt, 16, GIT_HASH, -1, SQLITE_STATIC);
 			sqlite3_bind_int64(evidenceStmt, 17, (sqlite3_int64)time(NULL));
 			sqlite3_bind_int(evidenceStmt, 18, seq->selfFooting);
+			sqlite3_bind_text(evidenceStmt, 19, g_learningSession, -1, SQLITE_STATIC);
 			rc = sqlite3_step(evidenceStmt);
 			if (rc != SQLITE_DONE)
 			{
@@ -4158,9 +4202,13 @@ void Svcmd_BotLearn_f(void)
 //check + thousands of row inserts + learning extraction + fsync), which showed up as a
 //lag spike on every recorded duel. Finished duels are now queued and written a small
 //step per server frame on one persistent WAL connection; anything still queued is
-//flushed synchronously at shutdown so no duel is lost.
+//flushed within a bounded shutdown budget; unflushed snapshots are reported and freed.
 #define TRACKED_PERSIST_QUEUE_SIZE 8
 #define TRACKED_PERSIST_EVENT_CHUNK 200
+#define TRACKED_PERSIST_OVERFLOW_STEPS 128
+#define TRACKED_PERSIST_OVERFLOW_BUDGET_MS 10
+#define TRACKED_PERSIST_SHUTDOWN_STEPS 128
+#define TRACKED_PERSIST_SHUTDOWN_BUDGET_MS 1000
 
 typedef enum
 {
@@ -4184,7 +4232,7 @@ typedef struct
 	int endTimestamp;
 	int durationSeconds;
 	int finishedAt;
-	tracked_persist_stage_t stage;
+	int stage;
 	int eventCursor;
 	sqlite3_int64 summaryId;
 } tracked_persist_job_t;
@@ -4192,6 +4240,7 @@ typedef struct
 static tracked_persist_job_t g_trackedPersistQueue[TRACKED_PERSIST_QUEUE_SIZE];
 static int g_trackedPersistHead;
 static int g_trackedPersistCount;
+static int g_trackedPersistFailures;
 static sqlite3 *g_trackedPersistDB;
 static char g_trackedPersistDBPath[MAX_OSPATH];
 
@@ -4359,6 +4408,8 @@ static void G_TrackedPersistDiscardPartial(sqlite3 *db, tracked_persist_job_t *j
 
 static void G_TrackedPersistFinishJob(tracked_persist_job_t *job, qboolean ok)
 {
+	if (!ok)
+		g_trackedPersistFailures++;
 	if (ok && job->summaryId > 0)
 	{
 		int i;
@@ -4380,9 +4431,7 @@ static void G_TrackedPersistFinishJob(tracked_persist_job_t *job, qboolean ok)
 		}
 		g_learningCacheDirty = qtrue;
 	}
-	free(job->winner.events);
-	free(job->loser.events);
-	memset(job, 0, sizeof(*job));
+	G_ReleaseTrackedPersistSnapshots(job, sizeof(*job), job->winner.events, job->loser.events);
 }
 
 //Runs one bounded unit of work for the job. Returns qfalse once the job is finished
@@ -4391,6 +4440,9 @@ static qboolean G_TrackedPersistStep(tracked_persist_job_t *job)
 {
 	sqlite3 *db = G_GetTrackedPersistDB();
 	qboolean ok = qtrue;
+	const int savedStage = job->stage;
+	const int savedCursor = job->eventCursor;
+	const sqlite3_int64 savedSummaryId = job->summaryId;
 	int s;
 
 	if (!db)
@@ -4398,11 +4450,12 @@ static qboolean G_TrackedPersistStep(tracked_persist_job_t *job)
 		G_TrackedPersistFinishJob(job, qfalse);
 		return qfalse;
 	}
-	s = sqlite3_exec(db, "BEGIN TRANSACTION", NULL, NULL, NULL);
+	g_trackedPersistRetryStatus = SQLITE_OK;
+	s = G_BeginTrackedPersistTransaction(db);
 	if (s != SQLITE_OK)
 	{
 		//Another connection holds the write lock - retry this step next frame.
-		if (s == SQLITE_BUSY || s == SQLITE_LOCKED)
+		if (G_TrackedPersistRetryable(s))
 			return qtrue;
 		G_TrackedDBError("begin LocalDuelTrack persist step", db, s);
 		G_TrackedPersistFinishJob(job, qfalse);
@@ -4455,17 +4508,18 @@ static qboolean G_TrackedPersistStep(tracked_persist_job_t *job)
 		break;
 	}
 
-	s = sqlite3_exec(db, ok ? "COMMIT" : "ROLLBACK", NULL, NULL, NULL);
+	s = ok ? SQLITE_OK : sqlite3_errcode(db);
+	if (g_trackedPersistRetryStatus != SQLITE_OK)
+		s = g_trackedPersistRetryStatus;
+	else if (!ok && s == SQLITE_OK)
+		s = SQLITE_ERROR;
+	s = G_FinishTrackedPersistTransaction(db, s, &job->stage, &job->eventCursor,
+		&job->summaryId, savedStage, savedCursor, savedSummaryId);
 	if (s != SQLITE_OK)
 	{
-		G_ErrorPrint(ok ? "ERROR: SQL Commit Failed (LocalDuelTrack persist)" :
-			"ERROR: SQL Rollback Failed (LocalDuelTrack persist)", s);
-		if (ok)
-			sqlite3_exec(db, "ROLLBACK", NULL, NULL, NULL);
-		ok = qfalse;
-	}
-	if (!ok)
-	{
+		if (G_TrackedPersistRetryable(s))
+			return qtrue;
+		G_TrackedDBError("LocalDuelTrack persist transaction", db, s);
 		G_TrackedPersistDiscardPartial(db, job);
 		G_TrackedPersistFinishJob(job, qfalse);
 		return qfalse;
@@ -4484,39 +4538,48 @@ static void G_TrackedPersistPopHead(void)
 	g_trackedPersistCount--;
 }
 
-//Synchronously completes the oldest queued job (queue overflow / shutdown path).
-static void G_TrackedPersistDrainHead(void)
+static int G_TrackedPersistDrainStep(void *job)
+{
+	return G_TrackedPersistStep((tracked_persist_job_t *)job);
+}
+
+//Only pop a completed job; contention or exhausted budgets leave it queued.
+static qboolean G_TrackedPersistDrainHead(int maxSteps, int budgetMs)
 {
 	tracked_persist_job_t *job;
-	int guard = 0;
 
 	if (g_trackedPersistCount <= 0)
-		return;
+		return qtrue;
 	job = &g_trackedPersistQueue[g_trackedPersistHead];
-	//A BUSY begin returns qtrue without progress; bound the retries so shutdown never hangs.
-	while (G_TrackedPersistStep(job))
-	{
-		if (++guard > 100000)
-		{
-			G_TrackedPersistFinishJob(job, qfalse);
-			break;
-		}
-	}
+	if (!G_DrainTrackedPersistJob(job, G_TrackedPersistDrainStep,
+		&job->stage, &job->eventCursor, &job->summaryId, maxSteps, trap->Milliseconds, budgetMs))
+		return qfalse;
 	G_TrackedPersistPopHead();
+	return qtrue;
 }
 
 static void G_PersistTrackedDuel(tracked_duel_runtime_t *winnerRuntime, tracked_duel_runtime_t *loserRuntime, int duelType, qboolean draw)
 {
 	tracked_persist_job_t *job;
 	time_t rawtime;
+	int slot;
 	const int duration = (winnerRuntime && winnerRuntime->duelStartTime > 0) ? (level.time - winnerRuntime->duelStartTime) : 0;
 
 	if (!winnerRuntime || !loserRuntime)
 		return;
 	if (g_trackedPersistCount >= TRACKED_PERSIST_QUEUE_SIZE)
-		G_TrackedPersistDrainHead();
+		G_TrackedPersistDrainHead(TRACKED_PERSIST_OVERFLOW_STEPS, TRACKED_PERSIST_OVERFLOW_BUDGET_MS);
+	slot = G_TrackedPersistQueueSlot(g_trackedPersistHead, g_trackedPersistCount, TRACKED_PERSIST_QUEUE_SIZE);
+	if (slot < 0)
+	{
+		trap->Print("Duel tracking: save queue full (%i); incoming duel %s vs %s cannot be saved. Existing queued saves were retained.\n",
+			g_trackedPersistCount, winnerRuntime->identityKey, loserRuntime->identityKey);
+		G_DuelCaptureClearRuntime(winnerRuntime, sizeof(*winnerRuntime), winnerRuntime->events);
+		G_DuelCaptureClearRuntime(loserRuntime, sizeof(*loserRuntime), loserRuntime->events);
+		return;
+	}
 
-	job = &g_trackedPersistQueue[(g_trackedPersistHead + g_trackedPersistCount) % TRACKED_PERSIST_QUEUE_SIZE];
+	job = &g_trackedPersistQueue[slot];
 	memset(job, 0, sizeof(*job));
 	//Take ownership of the runtimes (including their event buffers).
 	G_DuelCaptureMoveRuntime(&job->winner, winnerRuntime, sizeof(job->winner));
@@ -4553,10 +4616,49 @@ void G_TrackedPersistShutdown(void)
 	const int pending = g_trackedPersistCount;
 
 	while (g_trackedPersistCount > 0)
-		G_TrackedPersistDrainHead();
+	{
+		const int remaining = TRACKED_PERSIST_SHUTDOWN_BUDGET_MS - (trap->Milliseconds() - start);
+		if (remaining <= 0 || !G_TrackedPersistDrainHead(TRACKED_PERSIST_SHUTDOWN_STEPS, remaining))
+			break;
+	}
+	if (g_trackedPersistCount > 0)
+	{
+		trap->Print("Duel tracking: shutdown could not finish %i queued saves; unsaved recordings are lost and their snapshots are being freed. Already committed tracking and learned data are unchanged.\n",
+			g_trackedPersistCount);
+		while (g_trackedPersistCount > 0)
+		{
+			G_TrackedPersistFinishJob(&g_trackedPersistQueue[g_trackedPersistHead], qfalse);
+			G_TrackedPersistPopHead();
+		}
+	}
 	if (pending > 0)
 		G_PerfWarn("duel persist shutdown flush", trap->Milliseconds() - start);
 	G_CloseTrackedPersistDB();
+}
+
+static qboolean G_FlushTrackedPersistForReset(void)
+{
+	const int failures = g_trackedPersistFailures;
+	while (g_trackedPersistCount > 0)
+	{
+		tracked_persist_job_t *job = &g_trackedPersistQueue[g_trackedPersistHead];
+		const tracked_persist_stage_t stage = job->stage;
+		const int cursor = job->eventCursor;
+		if (!G_TrackedPersistStep(job))
+			G_TrackedPersistPopHead();
+		else if (job->stage == stage && job->eventCursor == cursor)
+		{
+			trap->Print("Tracking reset deferred: database is busy; queued duel saves were retained. Retry the command.\n");
+			return qfalse;
+		}
+		if (g_trackedPersistFailures != failures)
+		{
+			trap->Print("Tracking reset aborted: a queued duel save failed. No tables were reset.\n");
+			return qfalse;
+		}
+	}
+	G_CloseTrackedPersistDB();
+	return qtrue;
 }
 
 static void G_ClassifyTrackedAttackOutcomes(tracked_duel_event_t *events, int eventCount,
@@ -10961,12 +11063,9 @@ void Svcmd_ResetDuelTrack_f(void)
 {
 	sqlite3 *db = NULL;
 	char effectiveDbPath[MAX_OSPATH];
-	char sql[128];
 	int i;
 	int trackedRows = 0;
-	qboolean transactionStarted = qfalse;
-	qboolean committed = qfalse;
-	qboolean success = qtrue;
+	int result;
 
 	if (trap->Argc() != 1)
 	{
@@ -10979,10 +11078,16 @@ void Svcmd_ResetDuelTrack_f(void)
 		trap->Print("resetdueltrack failed: duel tracking database path is not initialized.\n");
 		return;
 	}
+	if (G_BotLearnDuelActive())
+	{
+		trap->Print("resetdueltrack refused: wait until no duel is in progress.\n");
+		return;
+	}
 
 	//Finish any queued duel saves first so none of them write into the reset tables
 	//(orphan rows would later attach to reused summary ids).
-	G_TrackedPersistShutdown();
+	if (!G_FlushTrackedPersistForReset())
+		return;
 
 	if (!G_OpenTrackedLocalDB(&db, effectiveDbPath, sizeof(effectiveDbPath)))
 	{
@@ -11003,78 +11108,8 @@ void Svcmd_ResetDuelTrack_f(void)
 		}
 	}
 
-	i = sqlite3_exec(db, "BEGIN TRANSACTION", NULL, NULL, NULL);
-	if (i != SQLITE_OK)
-	{
-		G_TrackedDBError("begin resetdueltrack transaction", db, i);
-		success = qfalse;
-	}
-	else
-		transactionStarted = qtrue;
-
-	for (i = 0; success && i < (int)ARRAY_LEN(g_trackedDuelTableNames); i++)
-	{
-		int s;
-		Com_sprintf(sql, sizeof(sql), "DELETE FROM main.%s", g_trackedDuelTableNames[i]);
-		s = sqlite3_exec(db, sql, NULL, NULL, NULL);
-		if (s != SQLITE_OK)
-		{
-			G_TrackedDBError(va("clear %s", g_trackedDuelTableNames[i]), db, s);
-			success = qfalse;
-		}
-		else
-			trackedRows += sqlite3_changes(db);
-	}
-
-	//A reset starts a clean slate, so forget which legacy sources were imported; running
-	//importDuelTrack afterwards can then bring them back without double counting.
-	if (success && G_DoesTrackedDuelTableExist(db, "LocalDuelTrackImport"))
-	{
-		int s = sqlite3_exec(db, "DELETE FROM main.LocalDuelTrackImport", NULL, NULL, NULL);
-		if (s != SQLITE_OK)
-		{
-			G_TrackedDBError("clear LocalDuelTrackImport", db, s);
-			success = qfalse;
-		}
-	}
-
-	//Only the tracking tables are targeted here; account, Elo, race and arcade score data
-	//lives in other tables (and in data.db) and must never be touched by this command.
-	if (success && G_DoesTrackedDuelTableExist(db, "sqlite_sequence"))
-	{
-		for (i = 0; success && i < (int)ARRAY_LEN(g_trackedDuelTableNames); i++)
-		{
-			int s;
-			Com_sprintf(sql, sizeof(sql), "DELETE FROM main.sqlite_sequence WHERE name='%s'",
-				g_trackedDuelTableNames[i]);
-			s = sqlite3_exec(db, sql, NULL, NULL, NULL);
-			if (s != SQLITE_OK)
-			{
-				G_TrackedDBError(va("reset rowid sequence for %s", g_trackedDuelTableNames[i]), db, s);
-				success = qfalse;
-			}
-		}
-	}
-
-	if (success)
-	{
-		int s = sqlite3_exec(db, "COMMIT", NULL, NULL, NULL);
-		if (s == SQLITE_OK)
-		{
-			transactionStarted = qfalse;
-			committed = qtrue;
-		}
-		else
-		{
-			G_TrackedDBError("commit resetdueltrack transaction", db, s);
-			success = qfalse;
-		}
-	}
-
-	if (transactionStarted)
-		sqlite3_exec(db, "ROLLBACK", NULL, NULL, NULL);
-
-	if (committed)
+	result = G_ResetTrackingTables(db, 0, &trackedRows);
+	if (result == SQLITE_OK)
 	{
 		//VACUUM has to run outside a transaction; it shrinks the file so the reset really
 		//does leave a clean tracking database behind.
@@ -11089,26 +11124,67 @@ void Svcmd_ResetDuelTrack_f(void)
 		}
 		memset(g_duelAdviceSessions, 0, sizeof(g_duelAdviceSessions));
 		G_BeginLearningSession();
-	}
-
-	if (success)
-	{
-		trap->Print("resetdueltrack: cleared %i tracking rows including sequence evidence in \"%s\"; learned aggregates, account, Elo, arcade, and legacy data were not changed.\n",
-			trackedRows, effectiveDbPath);
-		G_PrintTrackedDuelTableCounts(db, effectiveDbPath);
-	}
-	else if (committed)
-	{
-		trap->Print("resetdueltrack: cleared %i tracking rows, but database cleanup failed for \"%s\".\n",
+		//The flush may have learned new sequences; do not lose its dirty-cache refresh.
+		G_BotLearnLoadCache(db);
+		trap->Print("resetdueltrack: cleared %i tracking rows in \"%s\"; learned aggregates and evidence, account, Elo, arcade, and legacy data were not changed.\n",
 			trackedRows, effectiveDbPath);
 		G_PrintTrackedDuelTableCounts(db, effectiveDbPath);
 	}
 	else
 	{
+		G_TrackedDBError("resetdueltrack transaction", db, result);
 		trap->Print("resetdueltrack failed: unable to clear duel tracking data in \"%s\"; no account, Elo, arcade, or legacy tables were targeted.\n",
 			effectiveDbPath);
 	}
 
+	sqlite3_close(db);
+}
+
+void Svcmd_ResetLearningTrack_f(void)
+{
+	sqlite3 *db = NULL;
+	char effectiveDbPath[MAX_OSPATH];
+	int rows = 0;
+	int result;
+
+	if (trap->Argc() != 1)
+	{
+		trap->Print("Usage: resetlearningtrack\n");
+		return;
+	}
+	if (!LOCAL_DUELTRACK_DB_PATH[0])
+	{
+		trap->Print("resetlearningtrack failed: duel tracking database path is not initialized.\n");
+		return;
+	}
+	if (G_BotLearnDuelActive())
+	{
+		trap->Print("resetlearningtrack refused: wait until no duel is in progress.\n");
+		return;
+	}
+	//Complete both perspectives of every queued duel before forgetting their learning.
+	if (!G_FlushTrackedPersistForReset())
+		return;
+	if (!G_OpenTrackedLocalDB(&db, effectiveDbPath, sizeof(effectiveDbPath)))
+	{
+		trap->Print("resetlearningtrack failed: unable to open the duel tracking database.\n");
+		return;
+	}
+	G_EnsureLocalDuelTrackingSchema(db);
+	result = G_ResetTrackingTables(db, 1, &rows);
+	if (result == SQLITE_OK)
+	{
+		G_BotLearnLoadCache(db);
+		g_learningCacheDirty = qfalse;
+		g_learningCacheNextRefresh = 0;
+		trap->Print("resetlearningtrack: cleared %i learned aggregate and evidence rows in \"%s\" and refreshed the runtime cache; duel tracking and other data were not changed.\n",
+			rows, effectiveDbPath);
+	}
+	else
+	{
+		G_TrackedDBError("resetlearningtrack transaction", db, result);
+		trap->Print("resetlearningtrack failed: learning tables and runtime cache were not reset.\n");
+	}
 	sqlite3_close(db);
 }
 

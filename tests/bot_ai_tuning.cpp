@@ -9,6 +9,96 @@ BOOST_AUTO_TEST_SUITE( bot_ai )
 
 BOOST_AUTO_TEST_SUITE( tuning )
 
+BOOST_AUTO_TEST_CASE( strafejump_frequency_and_waypoint_skip_safety )
+{
+	BOOST_CHECK_EQUAL( BotSFJ_StartIntervalMs( 0 ), 0 );
+	BOOST_CHECK_EQUAL( BotSFJ_StartIntervalMs( -1 ), 0 );
+	BOOST_CHECK_EQUAL( BotSFJ_StartIntervalMs( 100 ), 1000 );
+	BOOST_CHECK_EQUAL( BotSFJ_StartIntervalMs( 200 ), 500 );
+	BOOST_CHECK_EQUAL( BotSFJ_StartIntervalMs( 2000 ), 100 );
+	BOOST_CHECK( BotSFJ_WaypointSkipAllows( 0, 0.0f, 1.0f, 1 ) );
+	BOOST_CHECK( !BotSFJ_WaypointSkipAllows( 1, 0.0f, 1.0f, 1 ) );
+	BOOST_CHECK( !BotSFJ_WaypointSkipAllows( 0, 33.0f, 1.0f, 1 ) );
+	BOOST_CHECK( !BotSFJ_WaypointSkipAllows( 0, 0.0f, 0.8f, 1 ) );
+	BOOST_CHECK( !BotSFJ_WaypointSkipAllows( 0, 0.0f, 1.0f, 0 ) );
+}
+
+BOOST_AUTO_TEST_CASE( strafejump_dense_waypoint_budget_is_independent_and_bounded )
+{
+	BOOST_CHECK_EQUAL( BotSFJ_WaypointBudget( -1 ), 1 );
+	BOOST_CHECK_EQUAL( BotSFJ_WaypointBudget( 0 ), 1 );
+	BOOST_CHECK_EQUAL( BotSFJ_WaypointBudget( 128 ), 128 );
+	BOOST_CHECK_EQUAL( BotSFJ_WaypointBudget( 1024 ), 512 );
+	// Eight-unit trails need more than the old 16-point limit even to start.
+	BOOST_CHECK( 16 * 8 < 160 );
+	BOOST_CHECK_EQUAL( BotSFJ_WaypointBudget( 128 ) * 8, 1024 );
+}
+
+BOOST_AUTO_TEST_CASE( strafejump_passed_waypoints_ignore_valid_flight_height_not_lateral_error )
+{
+	const float waypoint[3] = { 80.0f, 0.0f, 0.0f };
+	const float direction[3] = { 1.0f, 0.0f, 0.0f };
+	const float reverse[3] = { -1.0f, 0.0f, 0.0f };
+	const float airborne[3] = { 96.0f, 20.0f, 140.0f };
+	const float ahead[3] = { 72.0f, 0.0f, 0.0f };
+	const float outside[3] = { 96.0f, 65.0f, 140.0f };
+
+	BOOST_CHECK( BotSFJ_WaypointPassed( airborne, waypoint, direction, 64.0f ) );
+	BOOST_CHECK( !BotSFJ_WaypointPassed( ahead, waypoint, direction, 64.0f ) );
+	BOOST_CHECK( !BotSFJ_WaypointPassed( outside, waypoint, direction, 64.0f ) );
+	BOOST_CHECK( BotSFJ_WaypointPassed( ahead, waypoint, reverse, 64.0f ) );
+	BOOST_CHECK( !BotSFJ_WaypointPassed( airborne, waypoint, reverse, 64.0f ) );
+}
+
+BOOST_AUTO_TEST_CASE( strafejump_dense_advancement_preserves_every_link_constraint )
+{
+	BOOST_CHECK( BotSFJ_AdvanceLinkAllows( 0, 1, 1, 0.0f, 0.0f, 1.0f, 8.0f ) );
+	BOOST_CHECK( !BotSFJ_AdvanceLinkAllows( 1, 1, 1, 0.0f, 0.0f, 1.0f, 8.0f ) );
+	BOOST_CHECK( !BotSFJ_AdvanceLinkAllows( 0, 0, 1, 0.0f, 0.0f, 1.0f, 8.0f ) );
+	BOOST_CHECK( !BotSFJ_AdvanceLinkAllows( 0, 1, 0, 0.0f, 0.0f, 1.0f, 8.0f ) );
+	BOOST_CHECK( !BotSFJ_AdvanceLinkAllows( 0, 1, 1, 33.0f, 0.0f, 1.0f, 8.0f ) );
+	BOOST_CHECK( !BotSFJ_AdvanceLinkAllows( 0, 1, 1, 0.0f, 65.0f, 1.0f, 8.0f ) );
+	BOOST_CHECK( !BotSFJ_AdvanceLinkAllows( 0, 1, 1, 0.0f, 0.0f, -1.0f, 8.0f ) );
+	BOOST_CHECK( !BotSFJ_AdvanceLinkAllows( 0, 1, 1, 0.0f, 0.0f, 0.8f, 8.0f ) );
+	BOOST_CHECK( !BotSFJ_AdvanceLinkAllows( 0, 1, 1, 0.0f, 0.0f, 1.0f, -1.0f ) );
+
+	const float origin[3] = { 600.0f, 0.0f, 100.0f };
+	const float direction[3] = { 1.0f, 0.0f, 0.0f };
+	int advanced = 0;
+	for (int i = 1; i < BotSFJ_WaypointBudget( 128 ); i++)
+	{
+		const float point[3] = { i * 8.0f, 0.0f, 0.0f };
+		if (!BotSFJ_WaypointPassed( origin, point, direction, 64.0f ))
+			break;
+		advanced++;
+	}
+	BOOST_CHECK_EQUAL( advanced, 75 );
+}
+
+BOOST_AUTO_TEST_CASE( strafejump_passed_source_keeps_forward_target_inside_clipped_corridor )
+{
+	const float origin[3] = { 24.0f, 0.0f, 100.0f };
+	const float passed[3] = { 8.0f, 0.0f, 0.0f };
+	const float direction[3] = { 1.0f, 0.0f, 0.0f };
+	const int isPassed = BotSFJ_WaypointPassed( origin, passed, direction, 64.0f );
+
+	BOOST_CHECK( BotSFJ_UseClippedForwardTarget( isPassed, 1024.0f - 1200.0f, 1176.0f ) );
+	BOOST_CHECK( !BotSFJ_AdvanceLinkAllows( 0, 1, 1, 0.0f, 0.0f, 1.0f, -176.0f ) );
+	BOOST_CHECK( BotSFJ_LandingWithinCorridor( 0.0f, 0.0f, 1024.0f, 0.0f,
+		origin[0], origin[1], 64.0f, 0.0f ) );
+	BOOST_CHECK( !BotSFJ_UseClippedForwardTarget( 0, -176.0f, 1176.0f ) );
+	BOOST_CHECK( !BotSFJ_UseClippedForwardTarget( isPassed, 0.0f, 640.0f ) );
+	BOOST_CHECK( !BotSFJ_UseClippedForwardTarget( isPassed, 176.0f, 640.0f ) );
+	BOOST_CHECK( BotSFJ_UseClippedForwardTarget( isPassed, 176.0f, 641.0f ) );
+}
+
+BOOST_AUTO_TEST_CASE( strafejump_advanced_waypoint_preserves_hostile_field_visibility )
+{
+	BOOST_CHECK( !BotSFJ_WaypointVisible( 0 ) );
+	BOOST_CHECK( BotSFJ_WaypointVisible( 1 ) );
+	BOOST_CHECK( !BotSFJ_WaypointVisible( 2 ) );
+}
+
 BOOST_AUTO_TEST_CASE( strafejump_state_machine_has_release_edges )
 {
 	BOOST_CHECK_EQUAL( BotSFJ_NextPhase( BOT_SFJ_PHASE_PREPARE, 1, 1, 1, 1, 0 ),
@@ -1640,12 +1730,13 @@ BOOST_AUTO_TEST_CASE( saber_throw_phase_uses_target_facing_and_engine_cadence )
 
 BOOST_AUTO_TEST_CASE( saber_throw_bypasses_ready_defense_but_intercepts_exposed_targets )
 {
-	BOOST_CHECK( NewBotAI_SaberThrowTargetGuarded( 1, 1, 0, 0, 0 ) );
-	BOOST_CHECK( !NewBotAI_SaberThrowTargetGuarded( 0, 1, 0, 0, 0 ) );
-	BOOST_CHECK( !NewBotAI_SaberThrowTargetGuarded( 1, 0, 0, 0, 0 ) );
-	BOOST_CHECK( !NewBotAI_SaberThrowTargetGuarded( 1, 1, 1, 0, 0 ) );
-	BOOST_CHECK( !NewBotAI_SaberThrowTargetGuarded( 1, 1, 0, 1, 0 ) );
-	BOOST_CHECK( !NewBotAI_SaberThrowTargetGuarded( 1, 1, 0, 0, 1 ) );
+	BOOST_CHECK( NewBotAI_SaberThrowTargetGuarded( 1, 1, 0, 0, 0, 0 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowTargetGuarded( 0, 1, 0, 0, 0, 0 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowTargetGuarded( 1, 0, 0, 0, 0, 0 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowTargetGuarded( 1, 1, 1, 0, 0, 0 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowTargetGuarded( 1, 1, 0, 1, 0, 0 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowTargetGuarded( 1, 1, 0, 0, 1, 0 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowTargetGuarded( 1, 1, 0, 0, 0, 1 ) );
 	BOOST_CHECK_EQUAL( NewBotAI_SaberThrowTargetPhase( NEWBOTAI_THROW_LAUNCH, 1, 1 ), NEWBOTAI_THROW_BYPASS );
 	BOOST_CHECK_EQUAL( NewBotAI_SaberThrowTargetPhase( NEWBOTAI_THROW_LAUNCH, 0, 1 ), NEWBOTAI_THROW_CUT_THROUGH );
 	BOOST_CHECK_EQUAL( NewBotAI_SaberThrowTargetPhase( NEWBOTAI_THROW_REAR, 0, 1 ), NEWBOTAI_THROW_CUT_THROUGH );
@@ -1748,6 +1839,73 @@ BOOST_AUTO_TEST_CASE( saber_throw_hard_recall_overrides_protected_hold )
 	// Lost/invalid targets are hard recalls even while the old heading is positive.
 	BOOST_CHECK( !NewBotAI_SaberThrowFinalHoldProtected( 550, 0, 1, 0, 0, 0, 1, 1 ) );
 	BOOST_CHECK( NewBotAI_SaberThrowFinalHoldProtected( 550, 0, 1, 0, 0, 0, 1, 0 ) );
+}
+
+BOOST_AUTO_TEST_CASE( saber_throw_skill_upgrade_preserves_restricted_and_low_skill_loadouts )
+{
+	for (int configured = 0; configured <= 3; ++configured)
+	{
+		BOOST_CHECK_EQUAL( NewBotAI_SaberThrowConfiguredLevel( 1.0f, configured, 0, 1 ), configured );
+		BOOST_CHECK_EQUAL( NewBotAI_SaberThrowConfiguredLevel( 2.0f, configured, 0, 1 ), configured );
+		BOOST_CHECK_EQUAL( NewBotAI_SaberThrowConfiguredLevel( 2.1f, configured, 0, 1 ), 3 );
+		BOOST_CHECK_EQUAL( NewBotAI_SaberThrowConfiguredLevel( 10.0f, configured, 1, 1 ), configured );
+		BOOST_CHECK_EQUAL( NewBotAI_SaberThrowConfiguredLevel( 10.0f, configured, 0, 0 ), configured );
+	}
+}
+
+BOOST_AUTO_TEST_CASE( saber_throw_shared_policy_keeps_soft_recall_out_of_protected_routes )
+{
+	BOOST_CHECK( NewBotAI_SaberThrowWantsHold( 3, NEWBOTAI_THROW_CUT_THROUGH, 599, 1, 0, 0, 1, -30, 0 ) );
+	BOOST_CHECK( NewBotAI_SaberThrowWantsHold( 3, NEWBOTAI_THROW_CUT_THROUGH, 1000, 0, 1, 0, 1, 0, 0 ) );
+	BOOST_CHECK( NewBotAI_SaberThrowWantsHold( 3, NEWBOTAI_THROW_BYPASS, 1000, 1, 0, 0, 1, -30, 0 ) );
+	BOOST_CHECK( NewBotAI_SaberThrowWantsHold( 2, NEWBOTAI_THROW_REAR, 1799, 1, 0, 0, 1, 0, 0 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowWantsHold( 2, NEWBOTAI_THROW_REAR, 1800, 1, 0, 0, 0, 30, 1 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowWantsHold( 3, NEWBOTAI_THROW_BYPASS, 1500, 0, 1, 0, 0, 30, 1 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowWantsHold( 1, NEWBOTAI_THROW_LAUNCH, 750, 0, 1, 0, 0, 30, 1 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowWantsHold( 3, NEWBOTAI_THROW_RECALL, 50, 0, 1, 0, 0, 30, 1 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowWantsHold( 3, NEWBOTAI_THROW_BYPASS, -1, 0, 1, 0, 0, 30, 1 ) );
+	// Drainlock, lethal danger, disallowed force, return and route obstruction
+	// all arrive as safetyRecall and override both base and learned holds.
+	BOOST_CHECK( !NewBotAI_SaberThrowWantsHold( 3, NEWBOTAI_THROW_BYPASS, 50, 0, 1, 1, 0, 30, 1 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowWantsHold( 3, NEWBOTAI_THROW_REAR, 800, 1, 0, 1, 0, 30, 1 ) );
+}
+
+BOOST_AUTO_TEST_CASE( saber_throw_learned_preference_is_context_gated_and_not_duration_learning )
+{
+	BOOST_CHECK( !NewBotAI_SaberThrowLearnedHold( 599, 30, 1 ) );
+	BOOST_CHECK( NewBotAI_SaberThrowLearnedHold( 600, 8, 1 ) );
+	BOOST_CHECK( NewBotAI_SaberThrowLearnedHold( 899, 30, 1 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowLearnedHold( 900, 30, 1 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowLearnedHold( 800, 7, 1 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowLearnedHold( 800, -30, 1 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowLearnedHold( 800, 30, 0 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowWantsHold( 3, NEWBOTAI_THROW_CUT_THROUGH, 800, 1, 0, 0, 1, 0, 1 ) );
+	BOOST_CHECK( NewBotAI_SaberThrowWantsHold( 3, NEWBOTAI_THROW_CUT_THROUGH, 800, 1, 0, 0, 1, 8, 1 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowWantsHold( 3, NEWBOTAI_THROW_CUT_THROUGH, 900, 1, 0, 0, 1, 30, 1 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowWantsHold( 3, NEWBOTAI_THROW_CUT_THROUGH, 800, 1, 0, 0, 1, 30, 0 ) );
+}
+
+BOOST_AUTO_TEST_CASE( saber_throw_detours_do_not_count_as_target_passes )
+{
+	BOOST_CHECK( !NewBotAI_SaberThrowMayMarkPass( NEWBOTAI_THROW_LAUNCH, 149, 149, 0 ) );
+	BOOST_CHECK( NewBotAI_SaberThrowMayMarkPass( NEWBOTAI_THROW_LAUNCH, 150, 150, 0 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowMayMarkPass( NEWBOTAI_THROW_BYPASS, 800, 400, 100 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowMayMarkPass( NEWBOTAI_THROW_REAR, 800, 400, 100 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowMayMarkPass( NEWBOTAI_THROW_RECALL, 800, 400, 100 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowMayMarkPass( NEWBOTAI_THROW_CUT_THROUGH, 800, 99, 100 ) );
+	BOOST_CHECK( NewBotAI_SaberThrowMayMarkPass( NEWBOTAI_THROW_CUT_THROUGH, 800, 100, 100 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowMayMarkPass( NEWBOTAI_THROW_CUT_THROUGH, 800, 399, 400 ) );
+	BOOST_CHECK( NewBotAI_SaberThrowMayMarkPass( NEWBOTAI_THROW_CUT_THROUGH, 800, 400, 400 ) );
+}
+
+BOOST_AUTO_TEST_CASE( saber_throw_hold_telemetry_records_transitions_and_bounded_samples )
+{
+	BOOST_CHECK( NewBotAI_SaberThrowDecisionSampleDue( 0, 1, 0 ) );
+	BOOST_CHECK( NewBotAI_SaberThrowDecisionSampleDue( 1, 0, 0 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowDecisionSampleDue( 1, 1, 0 ) );
+	BOOST_CHECK( !NewBotAI_SaberThrowDecisionSampleDue( 1, 1, 249 ) );
+	BOOST_CHECK( NewBotAI_SaberThrowDecisionSampleDue( 1, 1, 250 ) );
+	BOOST_CHECK( NewBotAI_SaberThrowDecisionSampleDue( 1, 1, -1 ) );
 }
 
 BOOST_AUTO_TEST_SUITE_END()
