@@ -34,6 +34,34 @@ BOOST_AUTO_TEST_CASE( strafejump_dense_waypoint_budget_is_independent_and_bounde
 	BOOST_CHECK_EQUAL( BotSFJ_WaypointBudget( 128 ) * 8, 1024 );
 }
 
+BOOST_AUTO_TEST_CASE( strafejump_soft_conflicts_only_block_initiation )
+{
+	const bot_sfj_phase_t startPhases[] = { BOT_SFJ_PHASE_OFF, BOT_SFJ_PHASE_PREPARE,
+		BOT_SFJ_PHASE_ABORT };
+	const bot_sfj_phase_t activePhases[] = { BOT_SFJ_PHASE_TAKEOFF, BOT_SFJ_PHASE_AIR,
+		BOT_SFJ_PHASE_LANDING, BOT_SFJ_PHASE_REJUMP };
+
+	for (bot_sfj_phase_t phase : startPhases)
+	{
+		BOOST_CHECK( !BotSFJ_PhaseInProgress( phase ) );
+		BOOST_CHECK( !BotSFJ_ConflictBlocks( BOT_SFJ_CONFLICT_NONE, phase ) );
+		BOOST_CHECK( BotSFJ_ConflictBlocks( BOT_SFJ_CONFLICT_SOFT, phase ) );
+		BOOST_CHECK( BotSFJ_ConflictBlocks( BOT_SFJ_CONFLICT_HARD, phase ) );
+	}
+	for (bot_sfj_phase_t phase : activePhases)
+	{
+		BOOST_CHECK( BotSFJ_PhaseInProgress( phase ) );
+		BOOST_CHECK( !BotSFJ_ConflictBlocks( BOT_SFJ_CONFLICT_NONE, phase ) );
+		BOOST_CHECK( !BotSFJ_ConflictBlocks( BOT_SFJ_CONFLICT_SOFT, phase ) );
+		BOOST_CHECK( BotSFJ_ConflictBlocks( BOT_SFJ_CONFLICT_HARD, phase ) );
+		// Ignoring a soft conflict keeps ownership through the air phase.
+		BOOST_CHECK( BotSFJ_CanOwnInput( 1, 1,
+			!BotSFJ_ConflictBlocks( BOT_SFJ_CONFLICT_SOFT, phase ), phase ) );
+		BOOST_CHECK( !BotSFJ_CanOwnInput( 1, 1,
+			!BotSFJ_ConflictBlocks( BOT_SFJ_CONFLICT_HARD, phase ), phase ) );
+	}
+}
+
 BOOST_AUTO_TEST_CASE( strafejump_passed_waypoints_ignore_valid_flight_height_not_lateral_error )
 {
 	const float waypoint[3] = { 80.0f, 0.0f, 0.0f };
