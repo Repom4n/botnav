@@ -22003,6 +22003,7 @@ int BotAIStartFrame(int time) {
 	static int local_time;
 //	static int botlib_residual;
 	static int lastbotthink_time;
+	const int perfStart = trap->Milliseconds();
 
 	if (gUpdateVars < level.time)
 	{
@@ -22069,6 +22070,7 @@ int BotAIStartFrame(int time) {
 		trap->BotUserCommand(botstates[i]->client, &botstates[i]->lastucmd);
 	}
 
+	G_PerfWarn("bot AI frame", trap->Milliseconds() - perfStart);
 	return qtrue;
 }
 
