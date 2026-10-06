@@ -548,6 +548,9 @@ typedef struct bot_state_s
 	float				sfjLastEnemyDistance;
 	int					sfjLastEnemyDistanceTime;
 	int					sfjLastEnemyTargetNum;
+	int					sfjArcCheckedTime;
+	qboolean			sfjArcSafe;
+	int					sfjDebugNextTime;
 
 	int					gripMistakeDelayUntil; // level.time until which bot_mistakebias holds us from correctly breaking an opponent's grip (see NewBotAI_GetGripEscapeDelayMs) - rolled once per grip session
 	qboolean			gripSpeedOffPressed; // alternates the force button while gripped with speed active so the speed-off toggle is spammed (press/release) instead of held

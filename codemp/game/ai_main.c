@@ -2223,41 +2223,119 @@ static qboolean BotNav_IsInstantKillTrigger(gentity_t *ent)
 	return (ent->damage == -1 || ent->damage >= 1000) ? qtrue : qfalse;
 }
 
-static qboolean BotNav_TouchesInstantKillTrigger(bot_state_t *bs, vec3_t origin)
+//Instant-kill trigger_hurt volumes rarely change, so they are collected into a small
+//list (refreshed every few seconds) instead of calling EntitiesInBox (a 4KB stack array
+//plus an engine area query) for every nav/strafe-jump hazard sample.
+#define BOTNAV_MAX_KILL_TRIGGERS 128
+#define BOTNAV_KILL_TRIGGER_REFRESH_MS 5000
+static int g_botNavKillTriggers[BOTNAV_MAX_KILL_TRIGGERS];
+static int g_botNavKillTriggerCount;
+static int g_botNavKillTriggerRefreshAt;
+static qboolean g_botNavKillTriggerOverflow;
+
+static void BotNav_RefreshKillTriggerCache(void)
+{
+	int i;
+
+	//level.time restarts on map change, so also refresh when the stamp is far ahead.
+	if (g_botNavKillTriggerRefreshAt > level.time &&
+		g_botNavKillTriggerRefreshAt - level.time <= BOTNAV_KILL_TRIGGER_REFRESH_MS)
+	{
+		return;
+	}
+	g_botNavKillTriggerRefreshAt = level.time + BOTNAV_KILL_TRIGGER_REFRESH_MS;
+	g_botNavKillTriggerCount = 0;
+	g_botNavKillTriggerOverflow = qfalse;
+	for (i = MAX_CLIENTS; i < level.num_entities; i++)
+	{
+		gentity_t *ent = &g_entities[i];
+
+		if (!ent->inuse || !ent->classname || Q_stricmp(ent->classname, "trigger_hurt") ||
+			!(ent->damage == -1 || ent->damage >= 1000))
+		{
+			continue;
+		}
+		if (g_botNavKillTriggerCount >= BOTNAV_MAX_KILL_TRIGGERS)
+		{
+			g_botNavKillTriggerOverflow = qtrue;
+			break;
+		}
+		g_botNavKillTriggers[g_botNavKillTriggerCount++] = i;
+	}
+}
+
+//True when a player box swept from start to end touches an instant-kill trigger.
+//Pass start == end for a single position.
+static qboolean BotNav_SweepTouchesInstantKillTrigger(const vec3_t start, const vec3_t end)
 {
 	static vec3_t playerMins = {-15.0f, -15.0f, DEFAULT_MINS_2};
 	static vec3_t playerMaxs = {15.0f, 15.0f, DEFAULT_MAXS_2};
-	int touch[MAX_GENTITIES];
-	vec3_t mins, maxs;
-	int num;
-	int i;
+	vec3_t sweepMins, sweepMaxs, delta, sample, mins, maxs;
+	int i, k;
 
+	BotNav_RefreshKillTriggerCache();
+	if (g_botNavKillTriggerOverflow)
+	{
+		//Pathological map with lots of kill volumes: fall back to the engine area query.
+		int touch[MAX_GENTITIES];
+		int num;
+		for (k = 0; k < 3; k++)
+		{
+			sweepMins[k] = (start[k] < end[k] ? start[k] : end[k]) + playerMins[k];
+			sweepMaxs[k] = (start[k] > end[k] ? start[k] : end[k]) + playerMaxs[k];
+		}
+		num = trap->EntitiesInBox(sweepMins, sweepMaxs, touch, MAX_GENTITIES);
+		for (i = 0; i < num; i++)
+		{
+			gentity_t *hit = &g_entities[touch[i]];
+			if (BotNav_IsInstantKillTrigger(hit) &&
+				trap->EntityContact(sweepMins, sweepMaxs, (sharedEntity_t *)hit, qfalse))
+				return qtrue;
+		}
+		return qfalse;
+	}
+	if (!g_botNavKillTriggerCount)
+		return qfalse;
+
+	for (k = 0; k < 3; k++)
+	{
+		sweepMins[k] = (start[k] < end[k] ? start[k] : end[k]) + playerMins[k];
+		sweepMaxs[k] = (start[k] > end[k] ? start[k] : end[k]) + playerMaxs[k];
+	}
+	VectorSubtract(end, start, delta);
+	for (i = 0; i < g_botNavKillTriggerCount; i++)
+	{
+		gentity_t *hit = &g_entities[g_botNavKillTriggers[i]];
+		const float length = VectorLength(delta);
+		int samples, n;
+
+		if (!BotNav_IsInstantKillTrigger(hit))
+			continue;
+		if (hit->r.absmin[0] > sweepMaxs[0] || hit->r.absmax[0] < sweepMins[0] ||
+			hit->r.absmin[1] > sweepMaxs[1] || hit->r.absmax[1] < sweepMins[1] ||
+			hit->r.absmin[2] > sweepMaxs[2] || hit->r.absmax[2] < sweepMins[2])
+			continue;
+		//Bounds overlap: confirm against the brush along the segment.
+		samples = (int)ceilf(length / 16.0f);
+		for (n = 0; n <= samples; n++)
+		{
+			VectorMA(start, samples ? (float)n / (float)samples : 0.0f, delta, sample);
+			VectorAdd(sample, playerMins, mins);
+			VectorAdd(sample, playerMaxs, maxs);
+			if (trap->EntityContact(mins, maxs, (sharedEntity_t *)hit, qfalse))
+				return qtrue;
+		}
+	}
+	return qfalse;
+}
+
+static qboolean BotNav_TouchesInstantKillTrigger(bot_state_t *bs, vec3_t origin)
+{
 	if (!bs)
 	{
 		return qfalse;
 	}
-
-	VectorAdd(origin, playerMins, mins);
-	VectorAdd(origin, playerMaxs, maxs);
-	num = trap->EntitiesInBox(mins, maxs, touch, MAX_GENTITIES);
-
-	for (i = 0; i < num; i++)
-	{
-		gentity_t *hit = &g_entities[touch[i]];
-
-		if (!BotNav_IsInstantKillTrigger(hit))
-		{
-			continue;
-		}
-		if (!trap->EntityContact(mins, maxs, (sharedEntity_t *)hit, qfalse))
-		{
-			continue;
-		}
-
-		return qtrue;
-	}
-
-	return qfalse;
+	return BotNav_SweepTouchesInstantKillTrigger(origin, origin);
 }
 
 //Trace ahead in the movement direction to detect falling hazards (ledges, lava, death pits,
@@ -2418,6 +2496,8 @@ static void BotSFJ_Clear(bot_state_t *bs)
 	bs->sfjLastEnemyDistance = 0.0f;
 	bs->sfjLastEnemyDistanceTime = 0;
 	bs->sfjLastEnemyTargetNum = -1;
+	bs->sfjArcCheckedTime = 0;
+	bs->sfjArcSafe = qfalse;
 	VectorClear(bs->sfjIntentDirection);
 	VectorClear(bs->sfjIntentDestination);
 }
@@ -2485,95 +2565,222 @@ static qboolean BotSFJ_HasInputConflict(bot_state_t *bs, playerState_t *ps,
 	return qfalse;
 }
 
+#define BOT_SFJ_CORRIDOR_LOOKAHEAD 1024.0f
+#define BOT_SFJ_CORRIDOR_STEER_DISTANCE 512.0f
+#define BOT_SFJ_CORRIDOR_MIN_LENGTH 160.0f
+#define BOT_SFJ_CORRIDOR_MAX_WAYPOINTS 16
+#define BOT_SFJ_CORRIDOR_STRAIGHTNESS 0.9f
+#define BOT_SFJ_NAV_ENEMY_GUARD 384.0f
+#define BOT_SFJ_NAV_ENEMY_CLOSING_SPEED 250.0f
+
+static void BotSFJ_DebugReject(bot_state_t *bs, const char *reason)
+{
+	gclient_t *client;
+
+	if (!bs || !reason || !bot_strafejumps_debug.integer)
+		return;
+	if (bs->sfjDebugNextTime > level.time && bs->sfjDebugNextTime - level.time <= 1000)
+		return;
+	bs->sfjDebugNextTime = level.time + 1000;
+	client = g_entities[bs->client].client;
+	Com_Printf("^5[SFJ]^7 %s: %s\n", client ? client->pers.netname : "bot", reason);
+}
+
+static qboolean BotSFJ_WaypointsLinked(const wpobject_t *from, int toIndex)
+{
+	int i;
+
+	for (i = 0; i < from->neighbornum; i++)
+	{
+		if (from->neighbors[i].num == toIndex)
+			return qtrue;
+	}
+	/* Linear waypoint trails use their contiguous index as an implicit link. */
+	return from->neighbornum <= 0 ? qtrue : qfalse;
+}
+
+/*
+ * Walk forward along the bot's waypoint trail and return a straight, flat
+ * corridor up to BOT_SFJ_CORRIDOR_LOOKAHEAD units long.  The steering direction
+ * aims at a look-ahead point on the trail (path smoothing) instead of the very
+ * next waypoint, so a strafe jump can carry the bot past several waypoints.
+ */
 static qboolean BotSFJ_GetOpenCorridor(bot_state_t *bs, vec3_t direction, vec3_t destination)
 {
 	const int blockedWaypointFlags = WPFLAG_JUMP | WPFLAG_DUCK | WPFLAG_WAITFORFUNC |
 		WPFLAG_NOMOVEFUNC;
+	const qboolean grounded = bs && bs->cur_ps.groundEntityNum != ENTITYNUM_NONE;
+	vec3_t lastPoint, firstDirection, steerPoint;
+	wpobject_t *wp;
+	wpobject_t *previous = NULL;
+	float total = 0.0f;
+	float baseZ;
+	qboolean haveDirection = qfalse;
+	qboolean haveSteer = qfalse;
 	int step;
-	int nextIndex;
-	int i;
-	qboolean nextLinked = qfalse;
-	wpobject_t *current;
-	wpobject_t *next = NULL;
-	vec3_t toCurrent, currentToNext;
-	float toCurrentLength;
+	int index;
+	int count;
 
 	if (!bs || !bs->wpCurrent || bs->doingFallback ||
 		bs->wpCurrent->index < 0 || bs->wpCurrent->index >= gWPNum ||
 		(!bs->frame_Waypoint_Vis && !(bs->wpCurrent->flags & WPFLAG_NOVIS)))
 		return qfalse;
-	current = bs->wpCurrent;
-	if (!current->inuse || (current->flags & blockedWaypointFlags))
-		return qfalse;
 	step = bs->wpDirection ? -1 : 1;
-	nextIndex = current->index + step;
 	if (bs->wpDestination &&
-		((step > 0 && current->index > bs->wpDestination->index) ||
-		 (step < 0 && current->index < bs->wpDestination->index)))
+		((step > 0 && bs->wpCurrent->index > bs->wpDestination->index) ||
+		 (step < 0 && bs->wpCurrent->index < bs->wpDestination->index)))
 		return qfalse;
-	if (!bs->wpDestination || current->index != bs->wpDestination->index)
-	{
-		if (nextIndex < 0 || nextIndex >= gWPNum)
-			return qfalse;
-		next = gWPArray[nextIndex];
-		if (!next || !next->inuse || (next->flags & blockedWaypointFlags) ||
-			fabs(next->origin[2] - current->origin[2]) > 32.0f)
-			return qfalse;
-		for (i = 0; i < current->neighbornum; i++)
-		{
-			if (current->neighbors[i].num == nextIndex)
-			{
-				nextLinked = qtrue;
-				break;
-			}
-		}
-		/* Linear waypoint trails use their contiguous index as an implicit link. */
-		if (!nextLinked && current->neighbornum > 0)
-			return qfalse;
-	}
 
-	VectorSubtract(current->origin, bs->origin, toCurrent);
-	toCurrent[2] = 0.0f;
-	toCurrentLength = VectorNormalize(toCurrent);
-	if (toCurrentLength < (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE ? 8.0f : 64.0f) ||
-		toCurrentLength > 640.0f)
-		return qfalse;
-	if (next)
+	VectorCopy(bs->origin, lastPoint);
+	baseZ = bs->origin[2];
+	VectorClear(firstDirection);
+	VectorClear(steerPoint);
+	index = bs->wpCurrent->index;
+	for (count = 0; count < BOT_SFJ_CORRIDOR_MAX_WAYPOINTS; count++, index += step)
 	{
-		VectorSubtract(next->origin, current->origin, currentToNext);
-		currentToNext[2] = 0.0f;
-		if (VectorNormalize(currentToNext) <= 0.0f ||
-			DotProduct(toCurrent, currentToNext) < 0.85f)
+		vec3_t segment;
+		float segmentLength;
+
+		if (index < 0 || index >= gWPNum)
+			break;
+		wp = gWPArray[index];
+		if (!wp || !wp->inuse || (wp->flags & blockedWaypointFlags))
+			break;
+		if (previous)
+		{
+			if (!BotSFJ_WaypointsLinked(previous, index) ||
+				fabsf(wp->origin[2] - previous->origin[2]) > 32.0f)
+				break;
+		}
+		if (fabsf(wp->origin[2] - baseZ) > 64.0f)
+			break;
+		VectorSubtract(wp->origin, lastPoint, segment);
+		segment[2] = 0.0f;
+		segmentLength = VectorNormalize(segment);
+		if (!previous && segmentLength > 640.0f)
 			return qfalse;
+		if (segmentLength > 1.0f)
+		{
+			/* A waypoint the bot has nearly reached says little about direction. */
+			const qboolean nearlyReached = !previous && segmentLength < 48.0f;
+
+			if (haveDirection &&
+				DotProduct(segment, firstDirection) < BOT_SFJ_CORRIDOR_STRAIGHTNESS)
+				break;
+			if (!haveDirection && !nearlyReached)
+			{
+				VectorCopy(segment, firstDirection);
+				haveDirection = qtrue;
+			}
+			if (!haveSteer && total + segmentLength >= BOT_SFJ_CORRIDOR_STEER_DISTANCE)
+			{
+				VectorMA(lastPoint, BOT_SFJ_CORRIDOR_STEER_DISTANCE - total, segment, steerPoint);
+				haveSteer = qtrue;
+			}
+			total += segmentLength;
+		}
+		VectorCopy(wp->origin, lastPoint);
+		previous = wp;
+		if (total >= BOT_SFJ_CORRIDOR_LOOKAHEAD ||
+			(bs->wpDestination && wp == bs->wpDestination))
+			break;
 	}
-	VectorCopy(toCurrent, direction);
-	VectorCopy(current->origin, destination);
+	if (!previous || !haveDirection ||
+		total < (grounded ? BOT_SFJ_CORRIDOR_MIN_LENGTH : 64.0f))
+		return qfalse;
+	if (!haveSteer)
+		VectorCopy(lastPoint, steerPoint);
+	VectorSubtract(steerPoint, bs->origin, direction);
+	direction[2] = 0.0f;
+	if (VectorNormalize(direction) <= 0.0f ||
+		DotProduct(direction, firstDirection) < BOT_SFJ_CORRIDOR_STRAIGHTNESS)
+		return qfalse;
+	VectorCopy(lastPoint, destination);
 	return qtrue;
+}
+
+/*
+ * Direct chase/escape corridor used when the bot is moving straight toward or
+ * away from its enemy rather than following waypoints.  The arc simulation still
+ * validates the landing, so this only has to find open space ahead.
+ */
+static qboolean BotSFJ_GetEnemyCorridor(bot_state_t *bs, const vec3_t moveDirection,
+	const vec3_t toEnemy, float enemyDistance, qboolean retreat,
+	vec3_t direction, vec3_t destination)
+{
+	static vec3_t corridorMins = {-16.0f, -16.0f, 0.0f};
+	static vec3_t corridorMaxs = {16.0f, 16.0f, 32.0f};
+	vec3_t start, end;
+	trace_t trace;
+	float alignment;
+	float length;
+
+	if (!bs)
+		return qfalse;
+	alignment = DotProduct(moveDirection, toEnemy);
+	if (retreat ? alignment > -0.5f : alignment < 0.7f)
+		return qfalse;
+	length = retreat ? BOT_SFJ_CORRIDOR_LOOKAHEAD : enemyDistance - 64.0f;
+	if (length > BOT_SFJ_CORRIDOR_LOOKAHEAD)
+		length = BOT_SFJ_CORRIDOR_LOOKAHEAD;
+	if (length < BOT_SFJ_CORRIDOR_MIN_LENGTH)
+		return qfalse;
+	VectorCopy(bs->origin, start);
+	start[2] += 18.0f;
+	VectorMA(start, length, moveDirection, end);
+	JP_Trace(&trace, start, corridorMins, corridorMaxs, end, bs->client,
+		MASK_PLAYERSOLID & ~CONTENTS_BODY, qfalse, 0, 0);
+	if (trace.startsolid || trace.allsolid)
+		return qfalse;
+	length *= trace.fraction;
+	length -= 32.0f;
+	if (length < BOT_SFJ_CORRIDOR_MIN_LENGTH)
+		return qfalse;
+	VectorCopy(moveDirection, direction);
+	direction[2] = 0.0f;
+	if (VectorNormalize(direction) <= 0.0f)
+		return qfalse;
+	VectorMA(bs->origin, length, direction, destination);
+	return qtrue;
+}
+
+/*
+ * Cheap per-frame hazard look-ahead while airborne: one hull trace along the
+ * predicted velocity.  A wall, liquid or kill volume coming up ends the strafe
+ * cleanly instead of letting the bot slam into it.
+ */
+static qboolean BotSFJ_HazardAhead(bot_state_t *bs, const playerState_t *ps)
+{
+	static vec3_t playerMins = {-15.0f, -15.0f, DEFAULT_MINS_2};
+	static vec3_t playerMaxs = {15.0f, 15.0f, DEFAULT_MAXS_2};
+	const float lookSeconds = 0.2f;
+	vec3_t end;
+	trace_t trace;
+
+	if (!bs || !ps)
+		return qfalse;
+	end[0] = ps->origin[0] + ps->velocity[0] * lookSeconds;
+	end[1] = ps->origin[1] + ps->velocity[1] * lookSeconds;
+	end[2] = ps->origin[2] + ps->velocity[2] * lookSeconds -
+		0.5f * (float)ps->gravity * lookSeconds * lookSeconds;
+	JP_Trace(&trace, (float *)ps->origin, playerMins, playerMaxs, end, bs->client,
+		MASK_PLAYERSOLID | CONTENTS_LAVA | CONTENTS_SLIME | CONTENTS_NODROP,
+		qfalse, 0, 0);
+	if (trace.startsolid || trace.allsolid)
+		return qfalse;
+	if (trace.fraction < 1.0f &&
+		((trace.contents & (CONTENTS_LAVA | CONTENTS_SLIME | CONTENTS_NODROP)) ||
+		 trace.plane.normal[2] < 0.7f))
+		return qtrue;
+	return BotNav_SweepTouchesInstantKillTrigger(ps->origin, trace.endpos);
 }
 
 static qboolean BotSFJ_TriggerAlongSegment(bot_state_t *bs, const vec3_t start,
 	const vec3_t end)
 {
-	vec3_t delta, sample;
-	float length;
-	int samples;
-	int i;
-
-	VectorSubtract(end, start, delta);
-	length = VectorLength(delta);
-	if (length <= 0.0f)
-	{
-		VectorCopy(start, sample);
-		return BotNav_TouchesInstantKillTrigger(bs, sample);
-	}
-	samples = (int)ceilf(length / 16.0f);
-	for (i = 0; i <= samples; i++)
-	{
-		VectorMA(start, (float)i / (float)samples, delta, sample);
-		if (BotNav_TouchesInstantKillTrigger(bs, sample))
-			return qtrue;
-	}
-	return qfalse;
+	if (!bs)
+		return qfalse;
+	return BotNav_SweepTouchesInstantKillTrigger(start, end);
 }
 
 static qboolean BotSFJ_GetCommandTiming(const playerState_t *ps, int commandTime,
@@ -2660,7 +2867,8 @@ static qboolean BotSFJ_ArcIsSafe(bot_state_t *bs, const playerState_t *ps,
 
 	for (steps = 0; steps < BOT_SFJ_MAX_ARC_STEPS && elapsed < 2.0f; steps++)
 	{
-		int msec = sliceMsec;
+		/* Coarse 50 ms steps once the jump command has been applied. */
+		int msec = (heldRemaining > 0 || sliceMsec >= 50) ? sliceMsec : 50;
 		float stepSeconds;
 		float commandYaw;
 		float radians;
@@ -2728,8 +2936,7 @@ static qboolean BotSFJ_ArcIsSafe(bot_state_t *bs, const playerState_t *ps,
 		if (trace.entityNum != ENTITYNUM_NONE && trace.entityNum != ENTITYNUM_WORLD)
 			return qfalse;
 		contents = trap->PointContents(next, bs->client);
-		if ((contents & (CONTENTS_LAVA | CONTENTS_SLIME | CONTENTS_NODROP)) ||
-			BotNav_TouchesInstantKillTrigger(bs, next))
+		if (contents & (CONTENTS_LAVA | CONTENTS_SLIME | CONTENTS_NODROP))
 			return qfalse;
 		VectorCopy(next, position);
 		elapsed += stepSeconds;
@@ -2746,13 +2953,48 @@ static qboolean BotSFJ_ArcIsSafe(bot_state_t *bs, const playerState_t *ps,
 		return qfalse;
 	if (!BotSFJ_LandingWithinCorridor(ps->origin[0], ps->origin[1],
 		routeDestination[0], routeDestination[1], trace.endpos[0], trace.endpos[1],
-		48.0f, 0.0f))
+		64.0f, 96.0f))
 		return qfalse;
 	return qtrue;
 }
 
+#define BOT_SFJ_ARC_CACHE_MS 100
+
+/*
+ * The arc simulation is the expensive part of the controller, so the result is
+ * cached per bot.  It runs at most once per BOT_SFJ_ARC_CACHE_MS while the bot is
+ * deciding whether to jump, plus once at each takeoff/rejump; while airborne the
+ * cheap BotSFJ_HazardAhead look-ahead is used instead.
+ */
+static qboolean BotSFJ_CachedArcIsSafe(bot_state_t *bs, const playerState_t *ps,
+	const vec3_t routeDirection, const vec3_t routeDestination,
+	int commandMsec, int sliceMsec, int time, qboolean forceRefresh)
+{
+	if (!forceRefresh && bs->sfjArcCheckedTime > 0 &&
+		time >= bs->sfjArcCheckedTime &&
+		time - bs->sfjArcCheckedTime < BOT_SFJ_ARC_CACHE_MS)
+		return bs->sfjArcSafe;
+	bs->sfjArcSafe = BotSFJ_ArcIsSafe(bs, ps, routeDirection, routeDestination,
+		commandMsec, sliceMsec);
+	bs->sfjArcCheckedTime = time;
+	return bs->sfjArcSafe;
+}
+
+static float BotSFJ_MinStrafeDistance(void)
+{
+	return bot_minstrafe.value > 0.0f ? bot_minstrafe.value : 0.0f;
+}
+
+static qboolean BotSFJ_ClientCarriesFlag(const gclient_t *client)
+{
+	return client && (client->ps.powerups[PW_REDFLAG] ||
+		client->ps.powerups[PW_BLUEFLAG] || client->ps.powerups[PW_NEUTRALFLAG]);
+}
+
 static void BotSFJ_UpdatePursuit(bot_state_t *bs)
 {
+	const float startDistance = BotSFJ_MinStrafeDistance();
+
 	if (!bs->currentEnemy || !bs->currentEnemy->client)
 	{
 		bs->sfjPursuitLatched = qfalse;
@@ -2771,20 +3013,36 @@ static void BotSFJ_UpdatePursuit(bot_state_t *bs)
 	}
 	if (bs->sfjLastEnemyDistanceTime > 0)
 	{
-		bs->sfjPursuitLatched = BotSFJ_UpdatePursuitLatch(bs->sfjPursuitLatched,
+		bs->sfjPursuitLatched = BotSFJ_UpdatePursuitLatchEx(bs->sfjPursuitLatched,
 			bs->frame_Enemy_Len, bs->sfjLastEnemyDistance,
-			level.time - bs->sfjLastEnemyDistanceTime) ? qtrue : qfalse;
+			level.time - bs->sfjLastEnemyDistanceTime, startDistance,
+			BotSFJ_StopDistanceFor(startDistance)) ? qtrue : qfalse;
 	}
 	bs->sfjLastEnemyDistance = bs->frame_Enemy_Len;
 	bs->sfjLastEnemyDistanceTime = level.time;
+}
+
+static void BotSFJ_Reject(bot_state_t *bs, const char *reason)
+{
+	BotSFJ_DebugReject(bs, reason);
+	if (bs->sfjPhase != BOT_SFJ_PHASE_OFF && bs->sfjPhase != BOT_SFJ_PHASE_ABORT)
+		BotSFJ_Abort(bs, level.time);
 }
 
 static void BotSFJ_SelectIntent(bot_state_t *bs)
 {
 	bot_input_t queued;
 	playerState_t *ps;
-	vec3_t routeDirection, routeDestination, effectiveDirection;
+	gclient_t *enemyClient = NULL;
+	vec3_t routeDirection, routeDestination, effectiveDirection, toEnemy;
 	bot_sfj_intent_t purpose = BOT_SFJ_INTENT_NONE;
+	const float minStrafe = BotSFJ_MinStrafeDistance();
+	float enemyDistance = 0.0f;
+	qboolean carryingFlag;
+	qboolean enemyCarriesFlag = qfalse;
+	qboolean retreating;
+	qboolean haveRoute;
+	qboolean airborneJump;
 	int commandMsec;
 	int sliceMsec;
 	int fallbackMsec;
@@ -2799,42 +3057,70 @@ static void BotSFJ_SelectIntent(bot_state_t *bs)
 	ps = &g_entities[bs->client].client->ps;
 	BotSFJ_UpdatePursuit(bs);
 	trap->EA_GetInput(bs->client, (float)level.time / 1000.0f, &queued);
-	if (BotSFJ_HasInputConflict(bs, ps, &queued) ||
-		!BotSFJ_GetOpenCorridor(bs, routeDirection, routeDestination) ||
-		!BotSFJ_EffectiveInputDirection(&queued, effectiveDirection) ||
-		DotProduct(effectiveDirection, routeDirection) < 0.5f)
+	if (BotSFJ_HasInputConflict(bs, ps, &queued))
 	{
-		if (bs->sfjPhase != BOT_SFJ_PHASE_OFF && bs->sfjPhase != BOT_SFJ_PHASE_ABORT)
-			BotSFJ_Abort(bs, level.time);
+		BotSFJ_Reject(bs, "input/state conflict (attacking, force power, special move, etc)");
+		return;
+	}
+	if (!BotSFJ_EffectiveInputDirection(&queued, effectiveDirection))
+	{
+		BotSFJ_Reject(bs, "no horizontal movement input");
 		return;
 	}
 
+	carryingFlag = BotSFJ_ClientCarriesFlag(g_entities[bs->client].client);
+	VectorClear(toEnemy);
 	if (bs->currentEnemy && bs->currentEnemy->client)
 	{
-		vec3_t toEnemy;
-		float alignment;
-
-		VectorSubtract(bs->currentEnemy->client->ps.origin, ps->origin, toEnemy);
+		enemyClient = bs->currentEnemy->client;
+		VectorSubtract(enemyClient->ps.origin, ps->origin, toEnemy);
 		toEnemy[2] = 0.0f;
-		if (VectorNormalize(toEnemy) <= 0.0f)
+		enemyDistance = VectorNormalize(toEnemy);
+		if (enemyDistance <= 0.0f)
 		{
-			if (bs->sfjPhase != BOT_SFJ_PHASE_OFF && bs->sfjPhase != BOT_SFJ_PHASE_ABORT)
-				BotSFJ_Abort(bs, level.time);
+			BotSFJ_Reject(bs, "enemy overlapping");
 			return;
 		}
-		alignment = DotProduct(routeDirection, toEnemy);
-		if ((bs->combatAction == BOT_COMBAT_ACTION_RETREAT_DEFENSE ||
-			bs->runningLikeASissy || bs->runningToEscapeThreat) &&
-			bs->frame_Enemy_Len > BOT_SFJ_PURSUIT_START_DISTANCE && alignment < -0.25f)
+		enemyCarriesFlag = BotSFJ_ClientCarriesFlag(enemyClient);
+	}
+	/* Carrying or returning a flag counts as escape intent in CTF. */
+	retreating = (bs->combatAction == BOT_COMBAT_ACTION_RETREAT_DEFENSE ||
+		bs->runningLikeASissy || bs->runningToEscapeThreat || carryingFlag) ? qtrue : qfalse;
+
+	haveRoute = BotSFJ_GetOpenCorridor(bs, routeDirection, routeDestination);
+	if (haveRoute && DotProduct(effectiveDirection, routeDirection) < 0.5f)
+		haveRoute = qfalse;
+	if (!haveRoute && enemyClient &&
+		(retreating || bs->sfjPursuitLatched || enemyCarriesFlag))
+	{
+		haveRoute = BotSFJ_GetEnemyCorridor(bs, effectiveDirection, toEnemy,
+			enemyDistance, retreating, routeDirection, routeDestination);
+	}
+	if (!haveRoute)
+	{
+		BotSFJ_Reject(bs, "no straight open corridor along movement");
+		return;
+	}
+
+	if (enemyClient)
+	{
+		const float alignment = DotProduct(routeDirection, toEnemy);
+		const float stopDistance = BotSFJ_StopDistanceFor(minStrafe);
+
+		if (retreating && alignment < -0.25f && enemyDistance >= minStrafe)
 			purpose = BOT_SFJ_INTENT_RETREAT;
-		else if (bs->sfjPursuitLatched &&
-			bs->frame_Enemy_Len > BOT_SFJ_PURSUIT_STOP_DISTANCE &&
-			alignment > 0.5f)
+		else if ((bs->sfjPursuitLatched ||
+				(enemyCarriesFlag && enemyDistance >= minStrafe)) &&
+			alignment > 0.5f && enemyDistance > stopDistance)
 			purpose = BOT_SFJ_INTENT_PURSUIT;
-		else if (bs->frame_Enemy_Vis || alignment > 0.25f)
+		else if (bs->frame_Enemy_Vis &&
+			(enemyDistance < BOT_SFJ_NAV_ENEMY_GUARD ||
+			 (enemyDistance < BOT_SFJ_CORRIDOR_LOOKAHEAD &&
+			  NewBotAI_GetEnemyClosingSpeed(bs) > BOT_SFJ_NAV_ENEMY_CLOSING_SPEED)))
 		{
-			if (bs->sfjPhase != BOT_SFJ_PHASE_OFF && bs->sfjPhase != BOT_SFJ_PHASE_ABORT)
-				BotSFJ_Abort(bs, level.time);
+			BotSFJ_Reject(bs, retreating ?
+				"enemy closer than bot_minstrafe or not behind" :
+				"visible enemy in close-combat range or closing fast");
 			return;
 		}
 	}
@@ -2849,12 +3135,20 @@ static void BotSFJ_SelectIntent(bot_state_t *bs)
 	}
 	fallbackMsec = sv_fps.integer > 0 ? 1000 / sv_fps.integer : 25;
 	if (!BotSFJ_GetCommandTiming(ps, level.time, fallbackMsec,
-			&commandMsec, &sliceMsec) ||
-		!BotSFJ_ArcIsSafe(bs, ps, routeDirection, routeDestination,
-			commandMsec, sliceMsec))
+			&commandMsec, &sliceMsec))
 	{
-		if (bs->sfjPhase != BOT_SFJ_PHASE_OFF && bs->sfjPhase != BOT_SFJ_PHASE_ABORT)
-			BotSFJ_Abort(bs, level.time);
+		BotSFJ_Reject(bs, "unsupported command timing");
+		return;
+	}
+	/* Mid-jump the takeoff arc was already validated; only watch for hazards. */
+	airborneJump = (bs->sfjPhase == BOT_SFJ_PHASE_TAKEOFF ||
+		bs->sfjPhase == BOT_SFJ_PHASE_AIR) && ps->groundEntityNum == ENTITYNUM_NONE;
+	if (airborneJump ? BotSFJ_HazardAhead(bs, ps) :
+		!BotSFJ_CachedArcIsSafe(bs, ps, routeDirection, routeDestination,
+			commandMsec, sliceMsec, level.time, qfalse))
+	{
+		BotSFJ_Reject(bs, airborneJump ? "hazard ahead in flight" :
+			"predicted jump arc unsafe (wall, drop, hazard or lands off route)");
 		return;
 	}
 
@@ -2869,6 +3163,13 @@ static void BotSFJ_SelectIntent(bot_state_t *bs)
 	{
 		bs->sfjPhase = BOT_SFJ_PHASE_PREPARE;
 		bs->sfjPhaseTime = level.time;
+		if (bot_strafejumps_debug.integer > 1)
+		{
+			Com_Printf("^5[SFJ]^7 %s: start %s\n",
+				g_entities[bs->client].client->pers.netname,
+				purpose == BOT_SFJ_INTENT_RETREAT ? "escape" :
+				purpose == BOT_SFJ_INTENT_PURSUIT ? "chase" : "navigation");
+		}
 	}
 }
 
@@ -2883,6 +3184,8 @@ static void BotSFJ_ApplyInput(bot_state_t *bs, bot_input_t *bi, int time, int el
 	vec3_t effectiveDirection;
 	float routeYaw;
 	float commandYaw;
+	float horizontalSpeed;
+	qboolean circleJump;
 	int commandMsec;
 	int sliceMsec;
 
@@ -2906,13 +3209,21 @@ static void BotSFJ_ApplyInput(bot_state_t *bs, bot_input_t *bi, int time, int el
 	if (eligible && (!BotSFJ_EffectiveInputDirection(bi, effectiveDirection) ||
 		DotProduct(effectiveDirection, bs->sfjIntentDirection) < 0.5f))
 		eligible = qfalse;
-	if (eligible && bs->sfjIntent != BOT_SFJ_INTENT_NAVIGATION &&
-		bs->currentEnemy && bs->currentEnemy->client)
+	if (eligible && bs->currentEnemy && bs->currentEnemy->client)
 	{
 		vec3_t liveSeparation;
+		float separation;
 		VectorSubtract(bs->currentEnemy->client->ps.origin, ps->origin, liveSeparation);
 		liveSeparation[2] = 0.0f;
-		if (VectorLength(liveSeparation) < BOT_SFJ_PURSUIT_STOP_DISTANCE)
+		separation = VectorLength(liveSeparation);
+		if (bs->sfjIntent == BOT_SFJ_INTENT_NAVIGATION)
+		{
+			/* Hand control back to combat when an enemy gets into saber range. */
+			if (bs->frame_Enemy_Vis && separation < BOT_SFJ_NAV_ENEMY_GUARD * 0.5f &&
+				!BotSFJ_ClientCarriesFlag(g_entities[bs->client].client))
+				eligible = qfalse;
+		}
+		else if (separation < BotSFJ_StopDistanceFor(BotSFJ_MinStrafeDistance()))
 			eligible = qfalse;
 	}
 	if (!BotSFJ_CanOwnInput(bot_strafejumps.integer, fresh, eligible, bs->sfjPhase))
@@ -2933,14 +3244,40 @@ static void BotSFJ_ApplyInput(bot_state_t *bs, bot_input_t *bi, int time, int el
 		return;
 	}
 
-	nextPhase = BotSFJ_NextPhase(bs->sfjPhase, qtrue, fresh, eligible, grounded,
-		time - bs->sfjPhaseTime);
-	if (!BotSFJ_GetCommandTiming(ps, time, elapsedTime, &commandMsec, &sliceMsec) ||
-		((nextPhase == BOT_SFJ_PHASE_TAKEOFF || nextPhase == BOT_SFJ_PHASE_REJUMP ||
-			nextPhase == BOT_SFJ_PHASE_AIR) &&
-		!BotSFJ_ArcIsSafe(bs, ps, bs->sfjIntentDirection, bs->sfjIntentDestination,
-			commandMsec, sliceMsec)))
+	horizontalSpeed = sqrtf(ps->velocity[0] * ps->velocity[0] +
+		ps->velocity[1] * ps->velocity[1]);
+	/*
+	 * Circle-jump start: from a slow standing start, spend a few ground frames
+	 * swinging the view across the route before the first takeoff so the jump
+	 * leaves the ground with extra speed.
+	 */
+	circleJump = (bs->sfjPhase == BOT_SFJ_PHASE_PREPARE && grounded && fresh &&
+		eligible && horizontalSpeed < 250.0f && time - bs->sfjPhaseTime < 120) ?
+		qtrue : qfalse;
+	nextPhase = circleJump ? BOT_SFJ_PHASE_PREPARE :
+		BotSFJ_NextPhase(bs->sfjPhase, qtrue, fresh, eligible, grounded,
+			time - bs->sfjPhaseTime);
+	if (!BotSFJ_GetCommandTiming(ps, time, elapsedTime, &commandMsec, &sliceMsec))
 	{
+		BotSFJ_DebugReject(bs, "unsupported command timing");
+		BotSFJ_Abort(bs, time);
+		return;
+	}
+	if ((nextPhase == BOT_SFJ_PHASE_TAKEOFF || nextPhase == BOT_SFJ_PHASE_REJUMP) &&
+		nextPhase != bs->sfjPhase)
+	{
+		/* One full arc check per takeoff (reusing a very recent check). */
+		if (!BotSFJ_CachedArcIsSafe(bs, ps, bs->sfjIntentDirection,
+				bs->sfjIntentDestination, commandMsec, sliceMsec, time, qfalse))
+		{
+			BotSFJ_DebugReject(bs, "takeoff arc unsafe");
+			BotSFJ_Abort(bs, time);
+			return;
+		}
+	}
+	else if (nextPhase == BOT_SFJ_PHASE_AIR && !grounded && BotSFJ_HazardAhead(bs, ps))
+	{
+		BotSFJ_DebugReject(bs, "hazard ahead in flight, releasing");
 		BotSFJ_Abort(bs, time);
 		return;
 	}
@@ -2963,6 +3300,12 @@ static void BotSFJ_ApplyInput(bot_state_t *bs, bot_input_t *bi, int time, int el
 		(float)ps->speed, pm_airaccelerate,
 		(float)sliceMsec / 1000.0f,
 		bs->sfjStrafeSide);
+	if (circleJump)
+	{
+		const float swing = 30.0f * (1.0f - (float)(time - bs->sfjPhaseTime) / 120.0f);
+		commandYaw = AngleNormalize360(routeYaw -
+			(bs->sfjStrafeSide < 0 ? -swing : swing));
+	}
 	candidate = *bi;
 	candidate.viewangles[YAW] = commandYaw;
 	VectorClear(candidate.dir);

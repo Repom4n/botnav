@@ -37,19 +37,34 @@ static inline int BotSFJ_IntentIsFresh(int now, int intentTime)
 		now - intentTime <= BOT_SFJ_INTENT_MAX_AGE_MS;
 }
 
-static inline int BotSFJ_UpdatePursuitLatch(int latched, float distance, float previousDistance,
-	int elapsedMs)
+static inline int BotSFJ_UpdatePursuitLatchEx(int latched, float distance,
+	float previousDistance, int elapsedMs, float startDistance, float stopDistance)
 {
 	float separationRate;
 
 	if (elapsedMs <= 0 || elapsedMs > 1000 || previousDistance <= 0.0f)
-		return distance >= BOT_SFJ_PURSUIT_STOP_DISTANCE ? latched : 0;
+		return distance >= stopDistance ? latched : 0;
 	separationRate = (distance - previousDistance) * 1000.0f / (float)elapsedMs;
 	if (latched)
-		return distance > BOT_SFJ_PURSUIT_STOP_DISTANCE &&
+		return distance > stopDistance &&
 			separationRate > BOT_SFJ_PURSUIT_STOP_RATE;
-	return distance >= BOT_SFJ_PURSUIT_START_DISTANCE &&
+	return distance >= startDistance &&
 		separationRate >= BOT_SFJ_PURSUIT_START_RATE;
+}
+
+static inline int BotSFJ_UpdatePursuitLatch(int latched, float distance, float previousDistance,
+	int elapsedMs)
+{
+	return BotSFJ_UpdatePursuitLatchEx(latched, distance, previousDistance, elapsedMs,
+		BOT_SFJ_PURSUIT_START_DISTANCE, BOT_SFJ_PURSUIT_STOP_DISTANCE);
+}
+
+/* Stop distance used with a configurable start distance (bot_minstrafe). */
+static inline float BotSFJ_StopDistanceFor(float startDistance)
+{
+	if (startDistance <= 0.0f)
+		return 0.0f;
+	return startDistance * (BOT_SFJ_PURSUIT_STOP_DISTANCE / BOT_SFJ_PURSUIT_START_DISTANCE);
 }
 
 static inline int BotSFJ_CanOwnInput(int enabled, int freshIntent, int eligible,
