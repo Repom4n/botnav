@@ -52,6 +52,17 @@ BOOST_AUTO_TEST_CASE( strafejump_pursuit_uses_start_stop_hysteresis )
 	BOOST_CHECK( !BotSFJ_UpdatePursuitLatch( 1, 380.0f, 360.0f, 200 ) );
 }
 
+BOOST_AUTO_TEST_CASE( strafejump_pursuit_start_distance_is_configurable )
+{
+	// bot_minstrafe 0: chase as soon as the enemy pulls away, no distance floor.
+	BOOST_CHECK( BotSFJ_UpdatePursuitLatchEx( 0, 60.0f, 40.0f, 200, 0.0f, BotSFJ_StopDistanceFor( 0.0f ) ) );
+	BOOST_CHECK( !BotSFJ_UpdatePursuitLatchEx( 0, 60.0f, 58.0f, 200, 0.0f, 0.0f ) );
+	BOOST_CHECK( !BotSFJ_UpdatePursuitLatchEx( 0, 300.0f, 260.0f, 200, 320.0f, BotSFJ_StopDistanceFor( 320.0f ) ) );
+	BOOST_CHECK( BotSFJ_UpdatePursuitLatchEx( 0, 340.0f, 300.0f, 200, 320.0f, BotSFJ_StopDistanceFor( 320.0f ) ) );
+	BOOST_CHECK_CLOSE( BotSFJ_StopDistanceFor( 512.0f ), BOT_SFJ_PURSUIT_STOP_DISTANCE, 0.01f );
+	BOOST_CHECK_EQUAL( BotSFJ_StopDistanceFor( -5.0f ), 0.0f );
+}
+
 BOOST_AUTO_TEST_CASE( strafejump_yaw_uses_command_dt_and_speed )
 {
 	const float lowSpeedYaw = BotSFJ_CommandYaw( 0.0f, 20.0f, 0.0f, 250.0f, 1.0f, 0.016f, 1 );

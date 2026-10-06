@@ -2314,6 +2314,8 @@ void G_BotLearnDecision(gentity_t *self, gentity_t *enemy, int stimulus, int res
 	event->learnedContext = G_BotLearnLiveContextKey(self, enemy);
 }
 
+static qboolean G_TrackedPersistPendingDuelFor(const char *identityKey, int *startTime, int *finishedAt);
+
 void G_RecordPublicLearningChat(gentity_t *speaker, const char *text)
 {
 	sqlite3 *db = NULL;
@@ -2323,6 +2325,7 @@ void G_RecordPublicLearningChat(gentity_t *speaker, const char *text)
 	const char *association = "session";
 	sqlite3_int64 summaryId = 0;
 	int kind, clientNum, startTime = 0, relTime = level.time, rc;
+	int pendingStart = 0, pendingFinishedAt = 0;
 	const char *sql = "INSERT INTO LocalDuelTrackEvent(summary_id, participant_key, participant_label, "
 		"participant_kind, rel_time, event_type, text, speaker_type, mapname, session_id, session_time, "
 		"duel_start_time, association, recorded_at, event_capture_version, event_capture_revision, quality) "
@@ -2340,6 +2343,15 @@ void G_RecordPublicLearningChat(gentity_t *speaker, const char *text)
 	{
 		association = "active";
 		startTime = runtime->duelStartTime;
+		relTime = level.time - startTime;
+	}
+	else if (G_TrackedPersistPendingDuelFor(key, &pendingStart, &pendingFinishedAt) &&
+		G_DuelCaptureRecentChat(level.time, pendingFinishedAt, qtrue))
+	{
+		//The duel just ended but is still being saved: the save's final stage links
+		//this row to the new summary.
+		association = "recent_inferred";
+		startTime = pendingStart;
 		relTime = level.time - startTime;
 	}
 	else if (g_recentLearningDuels[clientNum].summaryId &&
@@ -4216,6 +4228,33 @@ static sqlite3 *G_GetTrackedPersistDB(void)
 	return db;
 }
 
+//True when a duel involving identityKey has ended but is still queued for saving.
+static qboolean G_TrackedPersistPendingDuelFor(const char *identityKey, int *startTime, int *finishedAt)
+{
+	int n;
+
+	if (!identityKey || !identityKey[0])
+		return qfalse;
+	for (n = g_trackedPersistCount - 1; n >= 0; n--)
+	{
+		const tracked_persist_job_t *job =
+			&g_trackedPersistQueue[(g_trackedPersistHead + n) % TRACKED_PERSIST_QUEUE_SIZE];
+
+		if (job->stage >= TRACKED_PERSIST_STAGE_DONE)
+			continue;
+		if (!strcmp(job->winner.identityKey, identityKey) ||
+			!strcmp(job->loser.identityKey, identityKey))
+		{
+			if (startTime)
+				*startTime = job->winner.duelStartTime;
+			if (finishedAt)
+				*finishedAt = job->finishedAt;
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+
 static qboolean G_TrackedPersistInsertSummary(sqlite3 *db, tracked_persist_job_t *job)
 {
 	sqlite3_stmt *stmt = NULL;
@@ -4273,7 +4312,7 @@ static qboolean G_TrackedPersistInsertSummary(sqlite3 *db, tracked_persist_job_t
 static qboolean G_TrackedPersistAssociateChat(sqlite3 *db, tracked_persist_job_t *job)
 {
 	const char *associateSql = "UPDATE LocalDuelTrackEvent SET summary_id=? WHERE event_type='chat' "
-		"AND association='active' AND summary_id IS NULL AND session_id=? AND duel_start_time=? "
+		"AND association IN ('active', 'recent_inferred') AND summary_id IS NULL AND session_id=? AND duel_start_time=? "
 		"AND participant_key IN (?, ?)";
 	sqlite3_stmt *associate = NULL;
 	int rc = sqlite3_prepare_v2(db, associateSql, -1, &associate, NULL);
@@ -10940,6 +10979,10 @@ void Svcmd_ResetDuelTrack_f(void)
 		trap->Print("resetdueltrack failed: duel tracking database path is not initialized.\n");
 		return;
 	}
+
+	//Finish any queued duel saves first so none of them write into the reset tables
+	//(orphan rows would later attach to reused summary ids).
+	G_TrackedPersistShutdown();
 
 	if (!G_OpenTrackedLocalDB(&db, effectiveDbPath, sizeof(effectiveDbPath)))
 	{

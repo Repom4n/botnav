@@ -14018,10 +14018,15 @@ static qboolean NewBotAI_TryIssueBotDuelChallenge(bot_state_t *bs, int targetMod
 	bs->beStill = level.time + 250;
 	bs->doAttack = 0;
 	bs->doAltAttack = 0;
-	//Stay passive and targetable for a few seconds so the offer can be accepted.
-	bs->duelOfferHoldUntil = level.time + NEWBOTAI_DUEL_OFFER_HOLD_MS;
-	bs->duelOfferTargetNum = bs->currentEnemy->s.number;
-	bs->duelOfferHoldHealth = g_entities[bs->client].health;
+	//Stay passive and targetable for a few seconds so the offer can be accepted - but
+	//only when Cmd_EngageDuel_f actually sent it.
+	if (g_entities[bs->client].client->ps.duelIndex == bs->currentEnemy->s.number &&
+		g_entities[bs->client].client->ps.duelTime > level.time)
+	{
+		bs->duelOfferHoldUntil = level.time + NEWBOTAI_DUEL_OFFER_HOLD_MS;
+		bs->duelOfferTargetNum = bs->currentEnemy->s.number;
+		bs->duelOfferHoldHealth = g_entities[bs->client].health;
+	}
 	return qtrue;
 }
 
@@ -20451,6 +20456,8 @@ static qboolean NewBotAI_RunDuelOfferHold(bot_state_t *bs)
 		&g_entities[bs->duelOfferTargetNum] : NULL;
 	if (bs->cur_ps.duelInProgress || !target || !target->inuse || !target->client ||
 		target->health < 1 || target->client->ps.duelInProgress ||
+		self->client->ps.duelIndex != bs->duelOfferTargetNum ||
+		self->client->ps.duelTime + 2000 < level.time ||
 		self->health <= bs->duelOfferHoldHealth - NEWBOTAI_DUEL_OFFER_HOLD_DAMAGE_CANCEL)
 	{
 		bs->duelOfferHoldUntil = 0;
