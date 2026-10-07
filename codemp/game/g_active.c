@@ -1752,6 +1752,14 @@ void ClientTimerActions( gentity_t *ent, int msec ) {
 	gclient_t	*client;
 
 	client = ent->client;
+	if (JVM_IsMode(level.gametype) && client->sess.sessionTeam != TEAM_SPECTATOR &&
+		JVM_ReplicatedClass(client->ps.stats[STAT_RESTRICTIONS]) == JVM_TANK) {
+		ent->health = JVM_HealthRegen(ent->health, client->ps.stats[STAT_MAX_HEALTH],
+			jedi_healthregen.integer, msec, &client->jvmHealthResidual);
+		client->ps.stats[STAT_HEALTH] = ent->health;
+	} else {
+		client->jvmHealthResidual = 0;
+	}
 	client->timeResidual += msec;
 
 	while ( client->timeResidual >= 1000 )
@@ -3388,8 +3396,8 @@ qboolean CanGrapple( gentity_t *ent ) {
 	if (!ent || !ent->client)
 		return qfalse;
 	if (JVM_IsMode(level.gametype) &&
-		(JVM_ReplicatedClass(ent->client->ps.stats[STAT_RESTRICTIONS]) != JVM_MERC ||
-		 !merc_grapple.integer || ent->client->ps.fd.forcePower <= 0 || ent->health <= 0))
+		(!JVM_GrappleAllowed(JVM_ReplicatedClass(ent->client->ps.stats[STAT_RESTRICTIONS]),
+			merc_grapple.integer) || ent->client->ps.fd.forcePower <= 0 || ent->health <= 0))
 		return qfalse;
 	if (!JVM_IsMode(level.gametype) && !g_allowGrapple.integer && !ent->client->sess.raceMode)
 		return qfalse;

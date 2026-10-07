@@ -38,6 +38,7 @@ XCVAR_DEF( g_forceRegenTime,		"0",	NULL,					CVAR_ARCHIVE )
 XCVAR_DEF( cl_currentServerAddress,	"0",	NULL,					CVAR_ROM )
 
 //JAPRO HUD / DISPLAY
+XCVAR_DEF( cg_showPickupMessages,		"0",	NULL,					CVAR_ARCHIVE )
 XCVAR_DEF( cg_movementKeys,			"0",	NULL,					CVAR_ARCHIVE )
 XCVAR_DEF( cg_movementKeysX,		"0",	NULL,					CVAR_ARCHIVE )
 XCVAR_DEF( cg_movementKeysY,		"0",	NULL,					CVAR_ARCHIVE )

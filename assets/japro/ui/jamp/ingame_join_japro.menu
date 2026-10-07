@@ -134,7 +134,8 @@
 				"6" ; 
 				"7" ; 
 				"8" ; 
-				"9"
+				"9" ;
+				"11"
 			}
 			visible				1 
 			action 
@@ -172,7 +173,8 @@
 				"6" ; 
 				"7" ; 
 				"8" ;
-				"9"
+				"9" ;
+				"11"
 			}
 			visible				1 
 			action 
@@ -210,7 +212,8 @@
 				"6" ; 
 				"7" ; 
 				"8" ;
-				"9"
+				"9" ;
+				"11"
 			}
 			visible				1 
 			action 
@@ -320,7 +323,9 @@
 				"6" ; 
 				"7" ; 
 				"8" ; 
-				"9"
+				"9" ;
+				"11" ;
+				"12"
 			}
 			visible				1 
 			action 
@@ -342,6 +347,84 @@
 		//---------------------------------
 		// NON-TEAM JOIN
 		//---------------------------------
+		itemDef
+		{
+			name				jedi
+			text				"Jedi"
+			type				1
+			style				2
+			rect				2 4 124 30
+			textalign			ITEM_ALIGN_CENTER
+			textalignx			62
+			textaligny			0
+			font				2
+			textscale			1
+			forecolor			1 .682 0 1
+			cvarTest			"ui_about_gametype"
+			showCvar			{ "12" }
+			visible				1
+			action
+			{
+				play			"sound/interface/button1.wav" ;
+				exec			"cmd team jedi" ;
+				uiScript		closeingame
+			}
+			mouseEnter			{ show button1 }
+			mouseExit			{ hide button1 }
+		}
+
+		itemDef
+		{
+			name				merc
+			text				"Merc"
+			type				1
+			style				2
+			rect				2 34 124 30
+			textalign			ITEM_ALIGN_CENTER
+			textalignx			62
+			textaligny			0
+			font				2
+			textscale			1
+			forecolor			1 .682 0 1
+			cvarTest			"ui_about_gametype"
+			showCvar			{ "12" }
+			visible				1
+			action
+			{
+				play			"sound/interface/button1.wav" ;
+				exec			"cmd team merc" ;
+				uiScript		closeingame
+			}
+			mouseEnter			{ show button2 }
+			mouseExit			{ hide button2 }
+		}
+
+		itemDef
+		{
+			name				tank
+			text				"Jedi Tank"
+			type				1
+			style				2
+			rect				2 64 124 30
+			textalign			ITEM_ALIGN_CENTER
+			textalignx			62
+			textaligny			0
+			font				2
+			textscale			1
+			forecolor			1 .682 0 1
+			cvarTest			"ui_about_gametype"
+			showCvar			{ "12" }
+			visible				1
+			action
+			{
+				play			"sound/interface/button1.wav" ;
+				exec			"cmd team tank" ;
+				uiScript		closeingame
+			}
+			mouseEnter			{ show button3 }
+			mouseExit			{ hide button3 }
+		}
+
 		itemDef 
 		{
 			name				team
@@ -362,7 +445,9 @@
 				"6" ; 
 				"7" ; 
 				"8" ; 
-				"9"
+				"9" ;
+				"11" ;
+				"12"
 			}
 			visible				1 
 			action 
@@ -401,7 +486,9 @@
 				"6" ; 
 				"7" ; 
 				"8" ; 
-				"9"
+				"9" ;
+				"11" ;
+				"12"
 			}
 			visible				1 
 			action 

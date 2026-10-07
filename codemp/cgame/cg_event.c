@@ -670,7 +670,7 @@ static void CG_ItemPickup( int itemNum ) {
 	}
 
 	//rww - print pickup messages
-	if (bg_itemlist[itemNum].classname && bg_itemlist[itemNum].classname[0] &&
+	if (cg_showPickupMessages.integer && bg_itemlist[itemNum].classname && bg_itemlist[itemNum].classname[0] &&
 		(bg_itemlist[itemNum].giType != IT_TEAM || (bg_itemlist[itemNum].giTag != PW_REDFLAG && bg_itemlist[itemNum].giTag != PW_BLUEFLAG && bg_itemlist[itemNum].giTag != PW_NEUTRALFLAG)) )
 	{ //don't print messages for flags, they have their own pickup event broadcasts - add neutral
 		char	text[1024];

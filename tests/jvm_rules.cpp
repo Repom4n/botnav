@@ -206,17 +206,71 @@ BOOST_AUTO_TEST_CASE(merc_regeneration_overrides_live_interval_only_in_class_mod
 
 BOOST_AUTO_TEST_CASE(damage_scales_only_intended_sources)
 {
-	BOOST_CHECK_CLOSE(JVM_DamageScale(JVM_TANK, JVM_JEDI, 0, 0, .5f, 2, 0), .5f, .001f);
-	BOOST_CHECK_CLOSE(JVM_DamageScale(JVM_JEDI, JVM_TANK, 1, 0, .5f, 2, 0), 2.0f, .001f);
-	BOOST_CHECK_CLOSE(JVM_DamageScale(JVM_TANK, JVM_TANK, 1, 0, .5f, 2, 0), 1.0f, .001f);
-	BOOST_CHECK_CLOSE(JVM_DamageScale(JVM_MERC, JVM_JEDI, 0, 1, .5f, 2, .75f), .25f, .001f);
+	BOOST_CHECK_CLOSE(JVM_DamageScale(JVM_TANK, JVM_JEDI, 0, 0, .5f, 2, 0, 0), .5f, .001f);
+	BOOST_CHECK_CLOSE(JVM_DamageScale(JVM_JEDI, JVM_TANK, 1, 0, .5f, 2, 0, 0), 2.0f, .001f);
+	BOOST_CHECK_CLOSE(JVM_DamageScale(JVM_TANK, JVM_TANK, 1, 0, .5f, 2, 0, 0), 1.0f, .001f);
+	BOOST_CHECK_CLOSE(JVM_DamageScale(JVM_MERC, JVM_JEDI, 0, 1, .5f, 2, .75f, 0), .25f, .001f);
 	/* Lightning and punches are not marked as grip/flipkick by production. */
-	BOOST_CHECK_EQUAL(JVM_DamageScale(JVM_MERC, JVM_JEDI, 0, 0, .5f, 2, 1), 1);
-	BOOST_CHECK_EQUAL(JVM_DamageScale(JVM_MERC, JVM_JEDI, 0, 1, .5f, 2, 5), 0);
-	BOOST_CHECK_EQUAL(JVM_DamageScale(JVM_MERC, JVM_JEDI, 0, 1, .5f, 2, -2), 1);
+	BOOST_CHECK_EQUAL(JVM_DamageScale(JVM_MERC, JVM_JEDI, 0, 0, .5f, 2, 1, 0), 1);
+	BOOST_CHECK_EQUAL(JVM_DamageScale(JVM_MERC, JVM_JEDI, 0, 1, .5f, 2, 5, 0), 0);
+	BOOST_CHECK_EQUAL(JVM_DamageScale(JVM_MERC, JVM_JEDI, 0, 1, .5f, 2, -2, 0), 1);
 	BOOST_CHECK_EQUAL(JVM_ClampScale(-1, 10), 0);
 	BOOST_CHECK_EQUAL(JVM_ClampScale(1000, 10), 10);
 	BOOST_CHECK_EQUAL(JVM_ClampScale(std::numeric_limits<float>::quiet_NaN(), 10), 0);
+}
+
+BOOST_AUTO_TEST_CASE(tanks_share_merc_grapple_permission)
+{
+	for (int playerClass = JVM_JEDI; playerClass <= JVM_TANK; ++playerClass) {
+		BOOST_CHECK(!JVM_GrappleAllowed(playerClass, 0));
+		BOOST_CHECK_EQUAL(JVM_GrappleAllowed(playerClass, 1), playerClass != JVM_JEDI);
+	}
+	BOOST_CHECK(!JVM_GrappleAllowed(3, 1));
+}
+
+BOOST_AUTO_TEST_CASE(tank_gripkick_reduction_is_independent_and_composes_with_scales)
+{
+	BOOST_CHECK_CLOSE(JVM_DamageScale(JVM_TANK, JVM_JEDI, 0, 1, .5f, 2, 1, .75f), .125f, .001f);
+	BOOST_CHECK_CLOSE(JVM_DamageScale(JVM_TANK, JVM_TANK, 1, 1, .5f, 2, 1, .75f), .25f, .001f);
+	BOOST_CHECK_CLOSE(JVM_DamageScale(JVM_MERC, JVM_JEDI, 0, 1, .5f, 2, .25f, 1), .75f, .001f);
+	BOOST_CHECK_EQUAL(JVM_DamageScale(JVM_JEDI, JVM_JEDI, 0, 1, .5f, 2, 1, 1), 1);
+	BOOST_CHECK_EQUAL(JVM_DamageScale(JVM_TANK, JVM_JEDI, 0, 0, .5f, 2, 1, 1), .5f);
+	BOOST_CHECK_EQUAL(JVM_DamageScale(JVM_TANK, JVM_JEDI, 0, 1, .5f, 2, 0, 5), 0);
+	BOOST_CHECK_EQUAL(JVM_DamageScale(JVM_TANK, JVM_JEDI, 0, 1, .5f, 2, 0, -2), .5f);
+	BOOST_CHECK_EQUAL(JVM_DamageScale(JVM_TANK, JVM_JEDI, 0, 1, .5f, 2, 0,
+		std::numeric_limits<float>::quiet_NaN()), .5f);
+}
+
+BOOST_AUTO_TEST_CASE(tank_health_regeneration_is_timed_capped_and_cannot_revive)
+{
+	int residual = 0;
+	int health = 50;
+	for (int i = 0; i < 624; ++i)
+		health = JVM_HealthRegen(health, 100, 5000, 8, &residual);
+	BOOST_CHECK_EQUAL(health, 50);
+	health = JVM_HealthRegen(health, 100, 5000, 8, &residual);
+	BOOST_CHECK_EQUAL(health, 51);
+	BOOST_CHECK_EQUAL(residual, 0);
+	BOOST_CHECK_EQUAL(JVM_HealthRegen(51, 100, 5000, 12000, &residual), 53);
+	BOOST_CHECK_EQUAL(residual, 2000);
+	BOOST_CHECK_EQUAL(JVM_HealthRegen(99, 100, 5000, 10000, &residual), 100);
+	BOOST_CHECK_EQUAL(residual, 0);
+	for (int hp : {-10, 0, 100, 125}) {
+		residual = 4000;
+		BOOST_CHECK_EQUAL(JVM_HealthRegen(hp, 100, 5000, 10000, &residual), hp);
+		BOOST_CHECK_EQUAL(residual, 0);
+	}
+	for (int interval : {-1, 0}) {
+		residual = 4000;
+		BOOST_CHECK_EQUAL(JVM_HealthRegen(50, 100, interval, 10000, &residual), 50);
+		BOOST_CHECK_EQUAL(residual, 0);
+	}
+	residual = 2000;
+	BOOST_CHECK_EQUAL(JVM_HealthRegen(50, 100, 5000, -1, &residual), 50);
+	BOOST_CHECK_EQUAL(residual, 2000);
+	residual = std::numeric_limits<int>::max() - 10;
+	BOOST_CHECK_EQUAL(JVM_HealthRegen(50, 100, std::numeric_limits<int>::max(), 20, &residual), 51);
+	BOOST_CHECK_EQUAL(residual, 10);
 }
 
 BOOST_AUTO_TEST_CASE(fractional_grapple_is_frame_rate_independent)

@@ -461,6 +461,8 @@ CTF (8), CTY (9) and Arcade (10) retain their IDs and rules.
 In JoM, use `/class jedi`, `/class merc`, or `/class tank` (also `/team jedi|merc|tank`,
 or `/team 1`, `/team 2`, `/team 3` for Jedi, Merc, Tank; `/class 1|2|3` works too). `/team free`
 and `/team spectator` behave as in FFA. JoM is not a team game: the server sends no team scores.
+The in-game Join menu offers Jedi, Merc, Jedi Tank and Spectate in JoM; selecting
+a class joins spectators or changes an active player's class using the same server rules.
 Clients running an older cgame that treats every gametype from 6 up as a team game will still
 draw team scores; deploy the cgame from this repo.
 Changing class kills and respawns an active player, has a five-second cooldown,
@@ -475,14 +477,19 @@ can select Merc or Tank. JvM class is always determined by team.
 | `merc_startingweapons` | 102384 | Merc spawn weapons, same bit layout as `g_startingWeapons` (bit = 1 << weapon number). The default is bryar pistol, E-11 blaster, disruptor, bowcaster, repeater, DEMP2, flechette, rocket launcher, concussion rifle and old bryar pistol, i.e. every gun but no stun baton, thermal detonators, trip mines or det packs. The saber bit is always removed, melee is always added, `g_weaponDisable` still applies and ammo is filled for every weapon owned. |
 | `merc_startingitems` | 0 | Merc spawn holdable items, same bit layout as `g_startingItems` (bit = 1 << holdable number). Medpacs are never given (Mercs heal only from pickups). |
 | `g_mercforceregentime` | 200 | Merc Force-energy regeneration interval, milliseconds (minimum 1). |
-| `merc_grapple` | 1 | Allow Merc grapple (`+grapple`), independent of legacy `g_allowGrapple`. |
-| `merc_grappleFPscale` | 10 | Force points/second while the hook exists; fractional drain is accumulated across frames/releases. Clamped 0–1000. Depletion releases the real hook. |
+| `merc_grapple` | 1 | Allow Merc and Tank grapple (`+grapple`), independent of legacy `g_allowGrapple`. Jedi cannot grapple. |
+| `merc_grappleFPscale` | 10 | Merc and Tank Force points/second while the hook exists; fractional drain is accumulated across frames/releases. Clamped 0–1000. Depletion releases the real hook. |
 | `merc_gripkickreduction` | 0 | Fraction of actual Force Grip and flipkick damage resisted by Mercs, clamped 0–1. Does not reduce lightning, punches or ordinary saber kicks. |
 | `merc_forcejumplevel` | 1 | Force Jump rank for **both Mercs and Tanks**, clamped 0–3 and replicated for prediction. If Jump is globally disabled, positive ranks are capped at 1 (the normal basic-jump exception); rank 0 stays disabled. |
 | `merc_botfloodprotect` | 100 | Minimum milliseconds between Merc bot primary/alternate gun attack commands, clamped 0–2000; all bot AI paths share the final command gate. Melee and saber attacks are not throttled. |
 | `merc_flipkick` | 1 | Merc flipkick permission, replicated for shared movement prediction; rank-1 Mercs can front-flipkick. No duplicate `g_mercflipkick` cvar. |
 | `jedi_tankscale` | 0.5 | Tank incoming combat-damage multiplier, clamped 0–10. Does not mitigate suicide, team changes, forced deaths or environmental hazards. |
 | `jedi_saberdamagescale` | 2 | Tank outgoing saber-damage multiplier, clamped 0–10. |
+| `jedi_healthregen` | 5000 | Tank passive health-regeneration interval in milliseconds: 1 HP every 5 seconds by default, up to maximum health. Values <= 0 disable it; never revives dead players. Does not heal Jedi or Mercs. |
+| `jedi_gripkickreduction` | 0 | Fraction of actual Force Grip and flipkick damage resisted by Tanks, clamped 0–1, applied in addition to `jedi_tankscale`. Like the Merc setting, does not reduce lightning, punches or ordinary saber kicks. |
+
+Client console pickup messages are disabled by default. Set `cg_showPickupMessages 1`
+to restore them; pickup sounds, HUD notifications and team-objective broadcasts remain unchanged.
 
 Pickups by class (team objectives such as CTF flags are allowed for everyone):
 
@@ -509,7 +516,9 @@ receive the legacy automatic health/armor refill for winning a private duel.
 Tanks have a saber, rank-3 saber offense/defense/throw, and the same configured
 Jump as Mercs. Globally disabled saber throw is not granted; offense/defense keep
 the normal rank-3 free-saber exception. They have no other Force powers, including push, pull, Heal or
-Drain, and cannot use medpacs or receive external Force healing. Only health/armor pickups are
+Drain, and cannot use medpacs or receive external Force healing. They can grapple when Mercs
+can, using the same Force-energy drain, and regenerate health according to `jedi_healthregen`.
+Only health/armor pickups are
 allowed, at ordinary opacity. Explicit class modifiers replace legacy
 `g_jediVmerc` bonuses rather than stacking with them. Weapon loadouts are applied
 at spawn, not granted every frame, so disarming a Merc remains effective.

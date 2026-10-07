@@ -136,13 +136,46 @@ static inline int JVM_TeamArgClass(const char *arg) {
 
 static inline float JVM_DamageScale(int targetClass, int attackerClass,
 	int saber, int gripOrFlipkick, float tankScale, float saberScale,
-	float reduction) {
+	float reduction, float tankReduction) {
 	float scale = targetClass == JVM_TANK ? JVM_ClampScale(tankScale, 10.0f) : 1.0f;
 	if (saber && attackerClass == JVM_TANK)
 		scale *= JVM_ClampScale(saberScale, 10.0f);
 	if (targetClass == JVM_MERC && gripOrFlipkick)
 		scale *= 1.0f - JVM_ClampScale(reduction, 1.0f);
+	if (targetClass == JVM_TANK && gripOrFlipkick)
+		scale *= 1.0f - JVM_ClampScale(tankReduction, 1.0f);
 	return scale;
+}
+
+static inline int JVM_GrappleAllowed(int playerClass, int enabled) {
+	return enabled && (playerClass == JVM_MERC || playerClass == JVM_TANK);
+}
+
+/* Accumulate milliseconds without overflowing for very large intervals. */
+static inline int JVM_HealthRegen(int health, int maximum, int interval,
+	int msec, int *residual) {
+	int ticks, elapsed;
+	if (interval <= 0 || health <= 0 || health >= maximum) {
+		*residual = 0;
+		return health;
+	}
+	if (msec <= 0)
+		return health;
+	if (*residual < 0 || *residual >= interval)
+		*residual = 0;
+	ticks = msec / interval;
+	elapsed = msec % interval;
+	if (elapsed >= interval - *residual) {
+		ticks++;
+		*residual -= interval - elapsed;
+	} else {
+		*residual += elapsed;
+	}
+	if (ticks >= maximum - health) {
+		*residual = 0;
+		return maximum;
+	}
+	return health + ticks;
 }
 
 static inline int JVM_GrappleDrain(float *fraction, int elapsed, float rate) {
