@@ -2645,12 +2645,15 @@ typedef struct
 } bot_sfj_stats_t;
 
 static bot_sfj_stats_t g_botSfjStats;
+/* Rejection reasons are only tallied once strafeJumpStats has been run (or while
+ * bot_strafejumps_debug is on), so normal play pays no string matching. */
+static qboolean g_botSfjStatsCollecting;
 
 static void BotSFJ_CountReason(const char *reason)
 {
 	int i;
 
-	if (!reason || !reason[0])
+	if (!reason || !reason[0] || (!g_botSfjStatsCollecting && !bot_strafejumps_debug.integer))
 		return;
 	g_botSfjStats.rejects++;
 	for (i = 0; i < g_botSfjStats.reasonCount; i++)
@@ -2674,6 +2677,9 @@ void BotSFJ_PrintStats(qboolean reset)
 	int i;
 	int order[BOT_SFJ_STAT_REASONS];
 
+	if (!g_botSfjStatsCollecting && !bot_strafejumps_debug.integer)
+		trap->Print("Rejection reasons are counted from now on (run strafeJumpStats again later).\n");
+	g_botSfjStatsCollecting = qtrue;
 	trap->Print("Strafe-jump stats over %.1f s:\n",
 		(float)(level.time - g_botSfjStats.sinceTime) / 1000.0f);
 	trap->Print("  starts %i, takeoffs %i, route starts %i, aborts %i, wall/slow releases %i\n",
@@ -3284,6 +3290,8 @@ static qboolean BotSFJ_GetEnemyCorridor(bot_state_t *bs, const vec3_t moveDirect
 #define BOT_SFJ_TRACK_ROUTE_HEIGHT_TOLERANCE 64.0f
 #define BOT_SFJ_TRACK_NODE_REACHED 80.0f
 #define BOT_SFJ_TRACK_NODE_TIMEOUT_MS 3000
+/* cos(~45 deg): the first recorded landing must lie ahead of the bot's movement. */
+#define BOT_SFJ_TRACK_ROUTE_MIN_ALIGNMENT 0.7f
 
 typedef struct
 {
@@ -3602,7 +3610,7 @@ static qboolean BotSFJ_GetTrackRouteCorridor(bot_state_t *bs, const playerState_
 				continue;
 			VectorSubtract(candidate->node[0], ps->origin, toNode);
 			toNode[2] = 0.0f;
-			if (VectorNormalize(toNode) <= 0.0f || DotProduct(toNode, moveDirection) < 0.7f)
+			if (VectorNormalize(toNode) <= 0.0f || DotProduct(toNode, moveDirection) < BOT_SFJ_TRACK_ROUTE_MIN_ALIGNMENT)
 				continue;
 			/* The route must take the bot closer to where it is going. */
 			if (Distance(candidate->node[candidate->nodeCount - 1], bs->goalPosition) >=
@@ -4163,8 +4171,12 @@ static void BotSFJ_SelectIntent(bot_state_t *bs)
 			ps->velocity[0], ps->velocity[1], bs->sfjStrafeSide ?
 			bs->sfjStrafeSide : ((bs->client & 1) ? -1 : 1));
 		/* Recorded routes replay the human's strafe key for this hop. */
-		if (BotSFJ_TrackRouteSide(bs))
-			bs->sfjStrafeSide = BotSFJ_TrackRouteSide(bs);
+		{
+			const int recordedSide = BotSFJ_TrackRouteSide(bs);
+
+			if (recordedSide)
+				bs->sfjStrafeSide = recordedSide;
+		}
 	}
 	fallbackMsec = sv_fps.integer > 0 ? 1000 / sv_fps.integer : 25;
 	if (!BotSFJ_GetCommandTiming(ps, level.time, fallbackMsec,

@@ -1696,9 +1696,13 @@ static void Cmd_Class_f(gentity_t *ent) {
 	if (level.gametype != GT_JOM)
 		return;
 	trap->Argv(1, name, sizeof(name));
-	if (JVM_TeamArgClass(name) >= 0)
-		Q_strncpyz(name, JVM_TeamArgClass(name) == JVM_MERC ? "merc" :
-			JVM_TeamArgClass(name) == JVM_TANK ? "tank" : "jedi", sizeof(name));
+	{
+		const int digitClass = JVM_TeamArgClass(name);
+
+		if (digitClass >= 0)
+			Q_strncpyz(name, digitClass == JVM_MERC ? "merc" :
+				digitClass == JVM_TANK ? "tank" : "jedi", sizeof(name));
+	}
 	if (!Q_stricmp(name, "jedi"))
 		playerClass = JVM_JEDI;
 	else if (!Q_stricmp(name, "merc"))

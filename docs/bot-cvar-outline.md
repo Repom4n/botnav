@@ -144,7 +144,7 @@ Walls: bots are not afraid of touching walls. The takeoff arc uses the real 15-u
 
 Initiation ignores queued navigation jump/delayed-jump/walk requests (the controller supplies its own jump timing once it owns input).
 
-`strafeJumpStats [reset]` (server console) prints how often bots started, took off, followed recorded routes, aborted and were released by a wall/slow-down, plus the most frequent rejection reasons since the last reset. Use it to compare wall rejections before and after tuning.
+`strafeJumpStats [reset]` (server console) prints how often bots started, took off, followed recorded routes, aborted and were released by a wall/slow-down, plus the most frequent rejection reasons since the last reset. Rejection reasons are only tallied after the command has been run once (or while `bot_strafejumps_debug` is on), so run `strafeJumpStats reset`, play, then `strafeJumpStats` to compare wall rejections before and after tuning.
 
 Dense waypoint trails use `bot_strafejumpwaypoints`, not a large ordinary skip setting. During a committed strafe sequence, already-passed, unflagged waypoints may advance within the validated linked corridor so navigation does not aim backward at them. Advancement remains bounded, stops at required interactions/destinations and visible-enemy combat locks, and rechecks collision/hazards at the bot's actual flight height. It does not demand a walking floor immediately under an airborne bot or blindly advance to the hundredth point. Budget exhaustion and rejected advances appear in strafe diagnostics.
 

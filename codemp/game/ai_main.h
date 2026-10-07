@@ -576,7 +576,7 @@ typedef struct bot_state_s
 	int					sfjRoute;			// recorded multi-node route being followed + 1 (0 = none)
 	int					sfjRouteNode;		// next landing node on sfjRoute
 	int					sfjRouteTime;		// level.time the route was last advanced
-	int					wpRecent[8];		// recently reached waypoint indices + 1 (0 = empty slot)
+	int					wpRecent[BOT_NAV_RECENT_WAYPOINTS];		// recently reached waypoint indices + 1 (0 = empty slot)
 	int					wpRecentHead;
 	float				navProgressBest;	// best distance to the current waypoint goal
 	int					navProgressTime;	// level.time navProgressBest last improved

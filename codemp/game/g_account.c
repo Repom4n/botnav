@@ -11651,7 +11651,15 @@ void G_StrafeTrackFrame(gentity_t *ent)
 		track->yawRate = track->yawRate * 0.5f + instant * 0.5f;
 	}
 	if (teleport != track->prevTeleport)
+	{
+		//Never start a route from the far side of a teleporter on the same frame.
 		G_StrafeTrackFinish(ent, track, "teleported", qtrue, speed);
+		track->prevGrounded = grounded;
+		track->prevYaw = client->ps.viewangles[YAW];
+		track->prevTime = level.time;
+		track->prevTeleport = teleport;
+		return;
+	}
 
 	if (!track->active)
 	{
@@ -11782,7 +11790,8 @@ static int G_StrafeTrackWriteRouteFile(sqlite3 *db, const char *mapname)
 	char path[MAX_QPATH];
 	int len, written = 0;
 
-	if (!mapname || !mapname[0] || strchr(mapname, '.') || strchr(mapname, '\\') || strchr(mapname, ':'))
+	if (!mapname || !mapname[0] || strstr(mapname, "..") || strchr(mapname, '\\') || strchr(mapname, ':') ||
+		mapname[0] == '/')
 		return 0;
 	Com_sprintf(path, sizeof(path), "botroutes/%s.botroute", mapname);
 	text.capacity = 65536;
