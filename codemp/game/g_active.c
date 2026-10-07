@@ -1754,11 +1754,14 @@ void ClientTimerActions( gentity_t *ent, int msec ) {
 	client = ent->client;
 	if (JVM_IsMode(level.gametype) && client->sess.sessionTeam != TEAM_SPECTATOR &&
 		JVM_ReplicatedClass(client->ps.stats[STAT_RESTRICTIONS]) == JVM_TANK) {
+		int elapsed = client->jvmHealthTime ? level.time - client->jvmHealthTime : 0;
+		client->jvmHealthTime = level.time;
 		ent->health = JVM_HealthRegen(ent->health, client->ps.stats[STAT_MAX_HEALTH],
-			jedi_healthregen.integer, msec, &client->jvmHealthResidual);
+			jedi_healthregen.integer, elapsed, &client->jvmHealthResidual);
 		client->ps.stats[STAT_HEALTH] = ent->health;
 	} else {
 		client->jvmHealthResidual = 0;
+		client->jvmHealthTime = 0;
 	}
 	client->timeResidual += msec;
 
@@ -5960,6 +5963,8 @@ void ClientThink_real( gentity_t *ent ) {
 	//OSP: pause
 	if ( level.pause.state == PAUSE_NONE || ent->client->sess.raceMode )
 		ClientTimerActions( ent, msec );
+	else
+		ent->client->jvmHealthTime = 0;
 
 	G_UpdateClientBroadcasts ( ent );
 
