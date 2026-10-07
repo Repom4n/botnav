@@ -2499,11 +2499,105 @@ static qboolean BotSFJ_EffectiveInputDirection(const bot_input_t *bi, vec3_t dir
 	return qtrue;
 }
 
+/*
+ * Strafe-jump outcome counters for strafeJumpStats, so wall rejections and
+ * releases can be compared between builds.
+ */
+#define BOT_SFJ_STAT_REASONS 48
+
+typedef struct
+{
+	int starts;
+	int takeoffs;
+	int aborts;
+	int slowReleases;
+	int routeStarts;
+	int rejects;
+	int reasonCount;
+	char reasonText[BOT_SFJ_STAT_REASONS][80];
+	int reasonHits[BOT_SFJ_STAT_REASONS];
+	int sinceTime;
+} bot_sfj_stats_t;
+
+static bot_sfj_stats_t g_botSfjStats;
+
+static void BotSFJ_CountReason(const char *reason)
+{
+	int i;
+
+	if (!reason || !reason[0])
+		return;
+	g_botSfjStats.rejects++;
+	for (i = 0; i < g_botSfjStats.reasonCount; i++)
+	{
+		if (!Q_strncmp(g_botSfjStats.reasonText[i], reason,
+				sizeof(g_botSfjStats.reasonText[i]) - 1))
+		{
+			g_botSfjStats.reasonHits[i]++;
+			return;
+		}
+	}
+	if (g_botSfjStats.reasonCount >= BOT_SFJ_STAT_REASONS)
+		return;
+	Q_strncpyz(g_botSfjStats.reasonText[g_botSfjStats.reasonCount], reason,
+		sizeof(g_botSfjStats.reasonText[0]));
+	g_botSfjStats.reasonHits[g_botSfjStats.reasonCount++] = 1;
+}
+
+void BotSFJ_PrintStats(qboolean reset)
+{
+	int i;
+	int order[BOT_SFJ_STAT_REASONS];
+
+	trap->Print("Strafe-jump stats over %.1f s:\n",
+		(float)(level.time - g_botSfjStats.sinceTime) / 1000.0f);
+	trap->Print("  starts %i, takeoffs %i, route starts %i, aborts %i, wall/slow releases %i\n",
+		g_botSfjStats.starts, g_botSfjStats.takeoffs, g_botSfjStats.routeStarts,
+		g_botSfjStats.aborts, g_botSfjStats.slowReleases);
+	trap->Print("  reject frames %i by reason (most frequent first):\n", g_botSfjStats.rejects);
+	for (i = 0; i < g_botSfjStats.reasonCount; i++)
+		order[i] = i;
+	for (i = 1; i < g_botSfjStats.reasonCount; i++)
+	{
+		int key = order[i];
+		int j = i - 1;
+
+		while (j >= 0 && g_botSfjStats.reasonHits[order[j]] < g_botSfjStats.reasonHits[key])
+		{
+			order[j + 1] = order[j];
+			j--;
+		}
+		order[j + 1] = key;
+	}
+	for (i = 0; i < g_botSfjStats.reasonCount; i++)
+		trap->Print("  %8i  %s\n", g_botSfjStats.reasonHits[order[i]],
+			g_botSfjStats.reasonText[order[i]]);
+	if (reset)
+	{
+		memset(&g_botSfjStats, 0, sizeof(g_botSfjStats));
+		g_botSfjStats.sinceTime = level.time;
+		trap->Print("Strafe-jump stats reset.\n");
+	}
+}
+
+/* strafeJumpStats [reset] */
+void Svcmd_StrafeJumpStats_f(void)
+{
+	char arg[16] = { 0 };
+
+	if (trap->Argc() > 1)
+		trap->Argv(1, arg, sizeof(arg));
+	BotSFJ_PrintStats(!Q_stricmp(arg, "reset") ? qtrue : qfalse);
+}
+
 static void BotSFJ_Clear(bot_state_t *bs)
 {
 	if (!bs)
 		return;
 	bs->sfjPhase = BOT_SFJ_PHASE_OFF;
+	bs->sfjPeakSpeed = 0.0f;
+	bs->sfjRoute = 0;
+	bs->sfjRouteNode = 0;
 	bs->sfjIntent = BOT_SFJ_INTENT_NONE;
 	bs->sfjIntentTime = 0;
 	bs->sfjSafetyUntil = 0;
@@ -2529,15 +2623,42 @@ static void BotSFJ_Abort(bot_state_t *bs, int time)
 {
 	if (!bs)
 		return;
+	if (bs->sfjPhase != BOT_SFJ_PHASE_ABORT && bs->sfjPhase != BOT_SFJ_PHASE_OFF)
+		g_botSfjStats.aborts++;
 	bs->sfjPhase = BOT_SFJ_PHASE_ABORT;
 	bs->sfjPhaseTime = time;
 	bs->sfjCooldownUntil = time + BOT_SFJ_ABORT_COOLDOWN_MS;
+	bs->sfjPeakSpeed = 0.0f;
+	bs->sfjRoute = 0;
+	bs->sfjRouteNode = 0;
 	bs->sfjIntent = BOT_SFJ_INTENT_NONE;
 	bs->sfjIntentTime = 0;
 	bs->sfjSafetyUntil = 0;
 	bs->sfjOwnsInput = qfalse;
 	bs->sfjCorridorValid = qfalse;
 	bs->sfjCorridorForwardGoal = qfalse;
+}
+
+/* A wall (or anything) slowed the strafe to ground speed: hand control back to
+ * normal navigation straight away, without the abort cooldown. */
+static void BotSFJ_Release(bot_state_t *bs, int time)
+{
+	if (!bs)
+		return;
+	g_botSfjStats.slowReleases++;
+	bs->sfjPhase = BOT_SFJ_PHASE_OFF;
+	bs->sfjPhaseTime = time;
+	bs->sfjCooldownUntil = 0;
+	bs->sfjIntent = BOT_SFJ_INTENT_NONE;
+	bs->sfjIntentTime = 0;
+	bs->sfjSafetyUntil = 0;
+	bs->sfjOwnsInput = qfalse;
+	bs->sfjCorridorValid = qfalse;
+	bs->sfjCorridorForwardGoal = qfalse;
+	bs->sfjPeakSpeed = 0.0f;
+	bs->sfjRoute = 0;
+	bs->sfjRouteNode = 0;
+	bs->sfjArcCheckedTime = 0;
 }
 
 #define BOT_SFJ_HARD(text) do { *reason = (text); return BOT_SFJ_CONFLICT_HARD; } while (0)
@@ -2649,6 +2770,7 @@ static void BotSFJ_DebugReject(bot_state_t *bs, const char *reason)
 {
 	gclient_t *client;
 
+	BotSFJ_CountReason(reason);
 	if (!bs || !reason || !bot_strafejumps_debug.integer)
 		return;
 	if (bs->sfjDebugNextTime > level.time && bs->sfjDebugNextTime - level.time <= 1000)
@@ -3016,9 +3138,41 @@ static qboolean BotSFJ_GetEnemyCorridor(bot_state_t *bs, const vec3_t moveDirect
  *
  * src_area/dest_area from AAS-based route files are accepted and ignored; these
  * bots navigate by waypoints, so a hint is matched by position instead.
+ *
+ * Recorded human routes (bot_strafetrack + exportStrafeTrack) are multi-node:
+ *
+ *   strafejump_route
+ *   {
+ *       start_pos   x y z            // where the human circle-jumped
+ *       min_speed   320              // speed at the circle jump
+ *       node        x y z speed side air_ms   // one per landing, in order
+ *   }
+ *
+ * side is the strafe key held during the hop that ended at the node (-1 left,
+ * 1 right) and air_ms its flight time.  Recorded routes take precedence over
+ * single hints and waypoints; waypoints remain the fallback.
  */
-#define BOT_SFJ_MAX_ROUTE_HINTS 64
-#define BOT_SFJ_ROUTE_FILE_MAX 65536
+#define BOT_SFJ_MAX_ROUTE_HINTS 256
+#define BOT_SFJ_MAX_TRACK_ROUTES 128
+#define BOT_SFJ_ROUTE_FILE_MAX 1048576
+#define BOT_SFJ_TRACK_ROUTE_START_RADIUS 96.0f
+#define BOT_SFJ_TRACK_ROUTE_HEIGHT_TOLERANCE 64.0f
+#define BOT_SFJ_TRACK_NODE_REACHED 80.0f
+#define BOT_SFJ_TRACK_NODE_TIMEOUT_MS 3000
+
+typedef struct
+{
+	vec3_t start;
+	float minSpeed;
+	int nodeCount;
+	vec3_t node[BOT_SFJ_TRACK_MAX_NODES];
+	float nodeSpeed[BOT_SFJ_TRACK_MAX_NODES];
+	int nodeSide[BOT_SFJ_TRACK_MAX_NODES];
+	int nodeAirMs[BOT_SFJ_TRACK_MAX_NODES];
+} bot_sfj_track_route_t;
+
+static bot_sfj_track_route_t g_botSfjTrackRoutes[BOT_SFJ_MAX_TRACK_ROUTES];
+static int g_botSfjTrackRouteCount;
 
 typedef struct
 {
@@ -3043,6 +3197,69 @@ static qboolean BotSFJ_ParseRouteVector(const char **text, vec3_t out)
 	return qtrue;
 }
 
+/* Parses the body of a strafejump_route block (after the opening brace). */
+static void BotSFJ_ParseTrackRoute(const char **text, const char *path)
+{
+	bot_sfj_track_route_t route;
+	qboolean haveStart = qfalse, valid = qtrue;
+	char *token;
+
+	memset(&route, 0, sizeof(route));
+	while (1)
+	{
+		token = COM_ParseExt(text, qtrue);
+		if (!token[0])
+		{
+			trap->Print(S_COLOR_YELLOW "%s: unexpected end of file in strafejump_route\n", path);
+			return;
+		}
+		if (!strcmp(token, "}"))
+			break;
+		if (!Q_stricmp(token, "start_pos"))
+		{
+			if (BotSFJ_ParseRouteVector(text, route.start))
+				haveStart = qtrue;
+			else
+				valid = qfalse;
+		}
+		else if (!Q_stricmp(token, "min_speed"))
+		{
+			if (COM_ParseFloat(text, &route.minSpeed))
+				valid = qfalse;
+		}
+		else if (!Q_stricmp(token, "node"))
+		{
+			vec3_t origin;
+			float speed = 0.0f;
+			int side = 0, airMs = 0;
+
+			if (!BotSFJ_ParseRouteVector(text, origin) || COM_ParseFloat(text, &speed) ||
+				COM_ParseInt(text, &side) || COM_ParseInt(text, &airMs))
+			{
+				valid = qfalse;
+				continue;
+			}
+			if (route.nodeCount >= BOT_SFJ_TRACK_MAX_NODES)
+				continue;
+			VectorCopy(origin, route.node[route.nodeCount]);
+			route.nodeSpeed[route.nodeCount] = speed;
+			route.nodeSide[route.nodeCount] = side < 0 ? -1 : (side > 0 ? 1 : 0);
+			route.nodeAirMs[route.nodeCount] = airMs;
+			route.nodeCount++;
+		}
+		else
+			COM_ParseExt(text, qfalse);
+	}
+	if (!valid || !haveStart || route.nodeCount < 1)
+	{
+		trap->Print(S_COLOR_YELLOW "%s: skipping strafejump_route without valid start_pos/nodes\n", path);
+		return;
+	}
+	if (g_botSfjTrackRouteCount >= BOT_SFJ_MAX_TRACK_ROUTES)
+		return;
+	g_botSfjTrackRoutes[g_botSfjTrackRouteCount++] = route;
+}
+
 static void BotSFJ_ParseRouteHints(const char *buffer, const char *path)
 {
 	const char *text = buffer;
@@ -3057,6 +3274,17 @@ static void BotSFJ_ParseRouteHints(const char *buffer, const char *path)
 		token = COM_ParseExt(&text, qtrue);
 		if (!token[0])
 			break;
+		if (!Q_stricmp(token, "strafejump_route"))
+		{
+			token = COM_ParseExt(&text, qtrue);
+			if (strcmp(token, "{"))
+			{
+				trap->Print(S_COLOR_YELLOW "%s: expected { after strafejump_route\n", path);
+				break;
+			}
+			BotSFJ_ParseTrackRoute(&text, path);
+			continue;
+		}
 		if (Q_stricmp(token, "strafejump"))
 		{
 			if (!strcmp(token, "{"))
@@ -3112,7 +3340,7 @@ static void BotSFJ_ParseRouteHints(const char *buffer, const char *path)
 		{
 			trap->Print(S_COLOR_YELLOW "%s: more than %i strafejump routes, ignoring the rest\n",
 				path, BOT_SFJ_MAX_ROUTE_HINTS);
-			break;
+			continue;
 		}
 		g_botSfjRouteHints[g_botSfjRouteHintCount++] = hint;
 	}
@@ -3132,6 +3360,7 @@ static void BotSFJ_LoadRouteHints(void)
 		return;
 	g_botSfjRouteHintsLoaded = qtrue;
 	g_botSfjRouteHintCount = 0;
+	g_botSfjTrackRouteCount = 0;
 	trap->Cvar_VariableStringBuffer("mapname", mapname, sizeof(mapname));
 	if (!mapname[0])
 		return;
@@ -3148,15 +3377,174 @@ static void BotSFJ_LoadRouteHints(void)
 			trap->FS_Close(f);
 			return;
 		}
-		buffer = (char *)B_TempAlloc(len + 1);
+		buffer = (char *)malloc(len + 1);
+		if (!buffer)
+		{
+			trap->FS_Close(f);
+			return;
+		}
 		trap->FS_Read(buffer, len, f);
 		trap->FS_Close(f);
 		buffer[len] = '\0';
 		BotSFJ_ParseRouteHints(buffer, path);
-		B_TempFree(len + 1);
-		trap->Print("Loaded %i strafe-jump route hint(s) from %s\n", g_botSfjRouteHintCount, path);
+		free(buffer);
+		trap->Print("Loaded %i strafe-jump route hint(s) and %i recorded route(s) from %s\n",
+			g_botSfjRouteHintCount, g_botSfjTrackRouteCount, path);
 		return;
 	}
+}
+
+/* exportStrafeTrack rewrites the route file; pick it up on the next bot frame. */
+void BotSFJ_ReloadRouteHints(void)
+{
+	int i;
+
+	g_botSfjRouteHintsLoaded = qfalse;
+	for (i = 0; i < MAX_CLIENTS; i++)
+	{
+		if (botstates[i] && botstates[i]->inuse)
+		{
+			botstates[i]->sfjRoute = 0;
+			botstates[i]->sfjRouteNode = 0;
+		}
+	}
+	BotSFJ_LoadRouteHints();
+}
+
+/* Current recorded-route node for a bot following one (movement goal override). */
+static qboolean BotSFJ_GetTrackRouteGoal(const bot_state_t *bs, vec3_t goal)
+{
+	const bot_sfj_track_route_t *route;
+
+	if (!bs || bs->sfjRoute <= 0 || bs->sfjRoute > g_botSfjTrackRouteCount)
+		return qfalse;
+	route = &g_botSfjTrackRoutes[bs->sfjRoute - 1];
+	if (bs->sfjRouteNode < 0 || bs->sfjRouteNode >= route->nodeCount)
+		return qfalse;
+	VectorCopy(route->node[bs->sfjRouteNode], goal);
+	return qtrue;
+}
+
+static void BotSFJ_EndTrackRoute(bot_state_t *bs, const char *reason)
+{
+	if (!bs || !bs->sfjRoute)
+		return;
+	BotSFJ_DebugReject(bs, reason);
+	bs->sfjRoute = 0;
+	bs->sfjRouteNode = 0;
+}
+
+/*
+ * Corridor from a recorded human route: the next landing node is the bot's
+ * next goal.  A bot picks up a route standing at its start when the route
+ * heads the way it is moving and ends closer to its goal.
+ */
+static qboolean BotSFJ_GetTrackRouteCorridor(bot_state_t *bs, const playerState_t *ps,
+	const vec3_t moveDirection, vec3_t direction, vec3_t destination)
+{
+	const qboolean grounded = ps->groundEntityNum != ENTITYNUM_NONE;
+	const bot_sfj_track_route_t *route;
+	vec3_t toNode;
+	int i;
+
+	BotSFJ_LoadRouteHints();
+	if (!g_botSfjTrackRouteCount)
+		return qfalse;
+	if (bs->sfjRoute > g_botSfjTrackRouteCount)
+		bs->sfjRoute = 0;
+	if (!bs->sfjRoute)
+	{
+		float myGoalDistance;
+		int best = -1;
+		float bestStartDistance = BOT_SFJ_TRACK_ROUTE_START_RADIUS + 1.0f;
+
+		if (!grounded)
+			return qfalse;
+		myGoalDistance = Distance(bs->origin, bs->goalPosition);
+		for (i = 0; i < g_botSfjTrackRouteCount; i++)
+		{
+			const bot_sfj_track_route_t *candidate = &g_botSfjTrackRoutes[i];
+			vec3_t delta;
+			float startDistance;
+
+			VectorSubtract(candidate->start, ps->origin, delta);
+			if (fabsf(delta[2]) > BOT_SFJ_TRACK_ROUTE_HEIGHT_TOLERANCE)
+				continue;
+			delta[2] = 0.0f;
+			startDistance = VectorLength(delta);
+			if (startDistance > BOT_SFJ_TRACK_ROUTE_START_RADIUS ||
+				startDistance >= bestStartDistance)
+				continue;
+			VectorSubtract(candidate->node[0], ps->origin, toNode);
+			toNode[2] = 0.0f;
+			if (VectorNormalize(toNode) <= 0.0f || DotProduct(toNode, moveDirection) < 0.7f)
+				continue;
+			/* The route must take the bot closer to where it is going. */
+			if (Distance(candidate->node[candidate->nodeCount - 1], bs->goalPosition) >=
+				myGoalDistance)
+				continue;
+			best = i;
+			bestStartDistance = startDistance;
+		}
+		if (best < 0)
+			return qfalse;
+		bs->sfjRoute = best + 1;
+		bs->sfjRouteNode = 0;
+		bs->sfjRouteTime = level.time;
+		g_botSfjStats.routeStarts++;
+		if (bot_strafejumps_debug.integer > 1)
+			BotSFJ_DebugReject(bs, va("start recorded route %i (%i landings)", best,
+				g_botSfjTrackRoutes[best].nodeCount));
+	}
+	route = &g_botSfjTrackRoutes[bs->sfjRoute - 1];
+	/* Advance past landings already reached (or passed along the segment). */
+	while (bs->sfjRouteNode < route->nodeCount)
+	{
+		const float *node = route->node[bs->sfjRouteNode];
+		const float *from = bs->sfjRouteNode > 0 ? route->node[bs->sfjRouteNode - 1] : route->start;
+		vec3_t segment, toBot;
+		float horizontal;
+
+		VectorSubtract(node, ps->origin, toNode);
+		horizontal = sqrtf(toNode[0] * toNode[0] + toNode[1] * toNode[1]);
+		VectorSubtract(node, from, segment);
+		VectorSubtract(ps->origin, node, toBot);
+		segment[2] = toBot[2] = 0.0f;
+		if (horizontal > BOT_SFJ_TRACK_NODE_REACHED && DotProduct(segment, toBot) <= 0.0f)
+			break;
+		bs->sfjRouteNode++;
+		bs->sfjRouteTime = level.time;
+	}
+	if (bs->sfjRouteNode >= route->nodeCount)
+	{
+		BotSFJ_EndTrackRoute(bs, "recorded route complete, back to waypoints");
+		return qfalse;
+	}
+	if (level.time - bs->sfjRouteTime > BOT_SFJ_TRACK_NODE_TIMEOUT_MS)
+	{
+		BotSFJ_EndTrackRoute(bs, "recorded route node not reached in time, back to waypoints");
+		return qfalse;
+	}
+	VectorSubtract(route->node[bs->sfjRouteNode], ps->origin, toNode);
+	toNode[2] = 0.0f;
+	if (VectorNormalize(toNode) <= 0.0f)
+		return qfalse;
+	VectorCopy(toNode, direction);
+	VectorCopy(route->node[bs->sfjRouteNode], destination);
+	return qtrue;
+}
+
+/* Strafe key the human held on the hop toward the bot's next route node (0 = any). */
+static int BotSFJ_TrackRouteSide(const bot_state_t *bs)
+{
+	const bot_sfj_track_route_t *route;
+
+	if (!bs || bs->sfjRoute <= 0 || bs->sfjRoute > g_botSfjTrackRouteCount)
+		return 0;
+	route = &g_botSfjTrackRoutes[bs->sfjRoute - 1];
+	if (bs->sfjRouteNode < 0 || bs->sfjRouteNode >= route->nodeCount)
+		return 0;
+	return route->nodeSide[bs->sfjRouteNode];
 }
 
 /*
@@ -3202,8 +3590,8 @@ static qboolean BotSFJ_GetRouteHintCorridor(bot_state_t *bs, const playerState_t
 
 /*
  * Cheap per-frame hazard look-ahead while airborne: one hull trace along the
- * predicted velocity.  A wall, liquid or kill volume coming up ends the strafe
- * cleanly instead of letting the bot slam into it.
+ * predicted velocity.  Liquid, nodrop or a kill volume coming up ends the strafe
+ * cleanly; walls are allowed (see BotSFJ_SlowedOut).
  */
 static qboolean BotSFJ_HazardAhead(bot_state_t *bs, const playerState_t *ps)
 {
@@ -3224,11 +3612,9 @@ static qboolean BotSFJ_HazardAhead(bot_state_t *bs, const playerState_t *ps)
 		qfalse, 0, 0);
 	if (trace.startsolid || trace.allsolid)
 		return qfalse;
+	/* Plain walls are not hazards; the live speed check ends a strafe a wall slowed out. */
 	if (trace.fraction < 1.0f &&
-		((trace.contents & (CONTENTS_LAVA | CONTENTS_SLIME | CONTENTS_NODROP)) ||
-		 (trace.plane.normal[2] < 0.7f &&
-		  !BotSFJ_IsGlancingWall(trace.plane.normal[0], trace.plane.normal[1],
-			trace.plane.normal[2], ps->velocity[0], ps->velocity[1]))))
+		(trace.contents & (CONTENTS_LAVA | CONTENTS_SLIME | CONTENTS_NODROP)))
 		return qtrue;
 	return BotNav_SweepTouchesInstantKillTrigger(ps->origin, trace.endpos);
 }
@@ -3269,9 +3655,9 @@ static qboolean BotSFJ_ArcIsSafe(bot_state_t *bs, const playerState_t *ps,
 	const vec3_t routeDirection, const vec3_t routeDestination,
 	int commandMsec, int sliceMsec)
 {
-	/* 3u margin over the 15u player hull: nearby walls the path never touches are fine. */
-	static vec3_t playerMins = {-18.0f, -18.0f, DEFAULT_MINS_2};
-	static vec3_t playerMaxs = {18.0f, 18.0f, DEFAULT_MAXS_2};
+	/* Real 15u player hull: walls the path only touches are handled as contacts below. */
+	static vec3_t playerMins = {-15.0f, -15.0f, DEFAULT_MINS_2};
+	static vec3_t playerMaxs = {15.0f, 15.0f, DEFAULT_MAXS_2};
 	const int traceMask = MASK_PLAYERSOLID | CONTENTS_LAVA | CONTENTS_SLIME | CONTENTS_NODROP;
 	vec3_t position, velocity, next, wishDirection;
 	vec3_t traveled;
@@ -3284,7 +3670,9 @@ static qboolean BotSFJ_ArcIsSafe(bot_state_t *bs, const playerState_t *ps,
 	int heldRemaining;
 	int steps;
 	int side;
-	int wallSlides = 0;
+	int wallContacts = 0;
+	qboolean slowedByWall = qfalse;
+	float slowedAt = 0.0f;
 	const qboolean launched = ps && ps->groundEntityNum != ENTITYNUM_NONE;
 	qboolean forceEligible = qfalse;
 	qboolean predictedLanding = qfalse;
@@ -3350,7 +3738,8 @@ static qboolean BotSFJ_ArcIsSafe(bot_state_t *bs, const playerState_t *ps,
 		VectorSet(wishDirection, cosf(radians), sinf(radians), 0.0f);
 		currentSpeed = DotProduct(velocity, wishDirection);
 		addSpeed = (float)ps->speed - currentSpeed;
-		if (addSpeed > 0.0f)
+		/* Once a wall has slowed the strafe out, navigation takes over: no more air strafing. */
+		if (addSpeed > 0.0f && !slowedByWall)
 		{
 			accelSpeed = pm_airaccelerate * stepSeconds * (float)ps->speed;
 			if (accelSpeed > addSpeed)
@@ -3391,19 +3780,28 @@ static qboolean BotSFJ_ArcIsSafe(bot_state_t *bs, const playerState_t *ps,
 				predictedLanding = qtrue;
 				break;
 			}
-			if (wallSlides < BOT_SFJ_MAX_WALL_SLIDES &&
+			if (wallContacts < BOT_SFJ_MAX_WALL_CONTACTS &&
 				trace.entityNum == ENTITYNUM_WORLD &&
 				!(trace.contents & (CONTENTS_LAVA | CONTENTS_SLIME | CONTENTS_NODROP)) &&
-				BotSFJ_IsGlancingWall(trace.plane.normal[0], trace.plane.normal[1],
-					trace.plane.normal[2], velocity[0], velocity[1]))
+				trace.plane.normal[2] < 0.7f && trace.plane.normal[2] >= -0.1f)
 			{
-				/* Graze: slide along the wall like PM_ClipVelocity and keep going. */
+				/*
+				 * Direct wall contact is allowed: clip like PM_ClipVelocity and keep
+				 * going. If the contact drops horizontal speed to ground speed or
+				 * below, the strafe ends there and the bot only has to come down safely.
+				 */
 				const float backoff = DotProduct(velocity, trace.plane.normal) * 1.001f;
 
 				VectorMA(velocity, -backoff, trace.plane.normal, velocity);
 				VectorCopy(trace.endpos, position);
 				elapsed += stepSeconds;
-				wallSlides++;
+				wallContacts++;
+				if (!BotSFJ_WallContactKeepsStrafe(sqrtf(velocity[0] * velocity[0] +
+						velocity[1] * velocity[1]), (float)ps->speed) && !slowedByWall)
+				{
+					slowedByWall = qtrue;
+					slowedAt = elapsed;
+				}
 				continue;
 			}
 			return qfalse;
@@ -3420,6 +3818,9 @@ static qboolean BotSFJ_ArcIsSafe(bot_state_t *bs, const playerState_t *ps,
 	if (!predictedLanding)
 		return qfalse;
 
+	/* Slowed out by a wall: a safe landing is enough, the corridor no longer applies. */
+	if (slowedByWall)
+		return slowedAt >= BOT_SFJ_MIN_USEFUL_FLIGHT_S ? qtrue : qfalse;
 	VectorSubtract(trace.endpos, ps->origin, traveled);
 	traveled[2] = 0.0f;
 	if (VectorLength(traveled) > 1.0f &&
@@ -3573,8 +3974,16 @@ static void BotSFJ_SelectIntent(bot_state_t *bs)
 		bs->runningLikeASissy || bs->runningToEscapeThreat || carryingFlag) ? qtrue : qfalse;
 
 	bs->sfjCorridorValid = qfalse;
-	haveRoute = BotSFJ_GetRouteHintCorridor(bs, ps, effectiveDirection,
-		routeDirection, routeDestination);
+	/* Fights take priority over recorded routes. */
+	if (bs->sfjRoute && enemyClient && bs->frame_Enemy_Vis &&
+		enemyDistance < BOT_SFJ_NAV_ENEMY_GUARD && !carryingFlag)
+		BotSFJ_EndTrackRoute(bs, "enemy close, leaving recorded route");
+	haveRoute = (!enemyClient || !bs->frame_Enemy_Vis || enemyDistance >= BOT_SFJ_NAV_ENEMY_GUARD ||
+		carryingFlag) ? BotSFJ_GetTrackRouteCorridor(bs, ps, effectiveDirection,
+			routeDirection, routeDestination) : qfalse;
+	if (!haveRoute)
+		haveRoute = BotSFJ_GetRouteHintCorridor(bs, ps, effectiveDirection,
+			routeDirection, routeDestination);
 	if (!haveRoute)
 	{
 		haveRoute = BotSFJ_GetOpenCorridor(bs, routeDirection, routeDestination);
@@ -3628,6 +4037,9 @@ static void BotSFJ_SelectIntent(bot_state_t *bs)
 		bs->sfjStrafeSide = BotSFJ_SelectSide(vectoyaw(routeDirection),
 			ps->velocity[0], ps->velocity[1], bs->sfjStrafeSide ?
 			bs->sfjStrafeSide : ((bs->client & 1) ? -1 : 1));
+		/* Recorded routes replay the human's strafe key for this hop. */
+		if (BotSFJ_TrackRouteSide(bs))
+			bs->sfjStrafeSide = BotSFJ_TrackRouteSide(bs);
 	}
 	fallbackMsec = sv_fps.integer > 0 ? 1000 / sv_fps.integer : 25;
 	if (!BotSFJ_GetCommandTiming(ps, level.time, fallbackMsec,
@@ -3658,7 +4070,8 @@ static void BotSFJ_SelectIntent(bot_state_t *bs)
 		(bs->sfjPhase == BOT_SFJ_PHASE_ABORT && bs->sfjCooldownUntil <= level.time)) &&
 		ps->groundEntityNum != ENTITYNUM_NONE)
 	{
-		if (!bot_onlystrafes.integer)
+		/* Recorded routes start right away; the frequency gate is for improvised strafes. */
+		if (!bot_onlystrafes.integer && !bs->sfjRoute)
 		{
 			if (!bs->sfjNextStartTime ||
 				bs->sfjStartFrequency != bot_strafejumpfrequency.integer ||
@@ -3677,6 +4090,8 @@ static void BotSFJ_SelectIntent(bot_state_t *bs)
 		bs->sfjNextStartTime = 0;
 		bs->sfjPhase = BOT_SFJ_PHASE_PREPARE;
 		bs->sfjPhaseTime = level.time;
+		bs->sfjPeakSpeed = 0.0f;
+		g_botSfjStats.starts++;
 		if (bot_strafejumps_debug.integer > 1)
 		{
 			BotSFJ_DebugReject(bs, purpose == BOT_SFJ_INTENT_RETREAT ? "start escape" :
@@ -3787,6 +4202,17 @@ static void BotSFJ_ApplyInput(bot_state_t *bs, bot_input_t *bi, int time, int el
 
 	horizontalSpeed = sqrtf(ps->velocity[0] * ps->velocity[0] +
 		ps->velocity[1] * ps->velocity[1]);
+	if (horizontalSpeed > bs->sfjPeakSpeed)
+		bs->sfjPeakSpeed = horizontalSpeed;
+	/* Walls may be touched; once one slows the bot to ground speed, navigate normally. */
+	if ((bs->sfjPhase == BOT_SFJ_PHASE_AIR || bs->sfjPhase == BOT_SFJ_PHASE_LANDING ||
+			bs->sfjPhase == BOT_SFJ_PHASE_REJUMP) &&
+		BotSFJ_SlowedOut(bs->sfjPeakSpeed, horizontalSpeed, (float)ps->speed))
+	{
+		BotSFJ_DebugReject(bs, "slowed to ground speed (wall contact), resuming navigation");
+		BotSFJ_Release(bs, time);
+		return;
+	}
 	/*
 	 * Circle-jump start: from a slow standing start, spend a few ground frames
 	 * swinging the view across the route before the first takeoff so the jump
@@ -3824,6 +4250,8 @@ static void BotSFJ_ApplyInput(bot_state_t *bs, bot_input_t *bi, int time, int el
 	}
 	if (nextPhase != bs->sfjPhase)
 	{
+		if (nextPhase == BOT_SFJ_PHASE_TAKEOFF)
+			g_botSfjStats.takeoffs++;
 		bs->sfjPhase = nextPhase;
 		bs->sfjPhaseTime = time;
 		if (nextPhase == BOT_SFJ_PHASE_LANDING)
@@ -22660,6 +23088,8 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 		VectorCopy(bs->wpCurrent->origin, bs->goalPosition);
 		if (bs->sfjCorridorForwardGoal)
 			VectorCopy(bs->sfjIntentDestination, bs->goalPosition);
+		/* Recorded strafe routes take precedence over waypoints while being followed. */
+		BotSFJ_GetTrackRouteGoal(bs, bs->goalPosition);
 		if (bs->wpDirection)
 		{
 			goalWPIndex = bs->wpCurrent->index-1;

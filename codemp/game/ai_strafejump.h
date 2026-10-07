@@ -419,6 +419,74 @@ static inline int BotSFJ_RouteSafetyAllows(int arcClear, int hazardFree,
 }
 
 /*
+ * Wall contact: bots may hit walls directly. The arc keeps going (velocity is
+ * clipped like PM_ClipVelocity) while horizontal speed after the contact stays
+ * above normal ground speed; at or below it the strafe is over and the bot
+ * resumes normal navigation.
+ */
+#define BOT_SFJ_MAX_WALL_CONTACTS 8
+/* A jump a wall slows out sooner than this is not worth starting. */
+#define BOT_SFJ_MIN_USEFUL_FLIGHT_S 0.3f
+
+static inline int BotSFJ_WallContactKeepsStrafe(float speedAfterContact, float groundSpeed)
+{
+	return groundSpeed > 0.0f && speedAfterContact > groundSpeed;
+}
+
+/* In flight: a strafe that has been faster than ground speed and has now
+ * dropped to ground speed or below (usually a wall) hands control back. */
+static inline int BotSFJ_SlowedOut(float peakSpeed, float horizontalSpeed, float groundSpeed)
+{
+	return groundSpeed > 0.0f && peakSpeed > groundSpeed && horizontalSpeed <= groundSpeed;
+}
+
+/*
+ * Human strafe-route recording (bot_strafetrack).
+ * A route starts on a circle jump: grounded, forward + strafe held, view
+ * turning at least BOT_SFJ_TRACK_MIN_YAW_RATE deg/s, faster than ground speed,
+ * jump pressed. Each landing is a node. The route ends once the player has
+ * been on the ground at or below ground speed for BOT_SFJ_TRACK_END_MS.
+ */
+#define BOT_SFJ_TRACK_MIN_YAW_RATE 90.0f
+#define BOT_SFJ_TRACK_END_MS 150
+#define BOT_SFJ_TRACK_MIN_NODES 2
+#define BOT_SFJ_TRACK_MIN_DISTANCE 256.0f
+#define BOT_SFJ_TRACK_MAX_NODES 32
+
+static inline int BotSFJ_TrackCircleJumpStart(int grounded, int forwardMove, int rightMove,
+	float yawRate, float horizontalSpeed, float groundSpeed, int jumpPressed)
+{
+	return grounded && jumpPressed && forwardMove > 0 && rightMove != 0 &&
+		fabsf(yawRate) >= BOT_SFJ_TRACK_MIN_YAW_RATE &&
+		groundSpeed > 0.0f && horizontalSpeed > groundSpeed;
+}
+
+static inline int BotSFJ_TrackLanded(int wasGrounded, int grounded)
+{
+	return !wasGrounded && grounded;
+}
+
+/* Returns the updated "slow on ground since" time (0 = not slow). */
+static inline int BotSFJ_TrackSlowSince(int slowSince, int now, int grounded,
+	float horizontalSpeed, float groundSpeed)
+{
+	if (!grounded || horizontalSpeed > groundSpeed)
+		return 0;
+	return slowSince ? slowSince : (now ? now : 1);
+}
+
+static inline int BotSFJ_TrackShouldEnd(int slowSince, int now)
+{
+	return slowSince && now - slowSince >= BOT_SFJ_TRACK_END_MS;
+}
+
+static inline int BotSFJ_TrackKeep(int nodes, float pathDistance, int touchedHazard)
+{
+	return !touchedHazard && nodes >= BOT_SFJ_TRACK_MIN_NODES &&
+		pathDistance >= BOT_SFJ_TRACK_MIN_DISTANCE;
+}
+
+/*
  * Hand-authored .botroute strafe-jump hints (start -> end).  A bot is "on" a
  * hint when it is within startRadius of the start, or alongside the route
  * (within halfWidth laterally, heightTolerance of the interpolated route

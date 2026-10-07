@@ -1615,6 +1615,8 @@ void Svcmd_RenameAccount_f( void );
 void Svcmd_ClearIP_f( void );
 void Svcmd_DBInfo_f( void );
 void Svcmd_ExportDuelTrack_f(void);
+void Svcmd_ExportStrafeTrack_f(void);
+void Svcmd_StrafeJumpStats_f(void);
 void Svcmd_ResetDuelTrack_f(void);
 void Svcmd_ResetLearningTrack_f(void);
 void Svcmd_ImportDuelTrack_f(void);
@@ -1686,6 +1688,7 @@ svcmd_t svcmds[] = {
 	{ "entitylist",					Svcmd_EntityList_f,					qfalse },
 	{ "exportDuelTrack",			Svcmd_ExportDuelTrack_f,			qfalse },
 	{ "exportDuelTracks",			Svcmd_ExportDuelTrack_f,			qfalse },
+	{ "exportStrafeTrack",			Svcmd_ExportStrafeTrack_f,			qfalse },
 	{ "flagAccount",				Svcmd_FlagAccount_f,				qfalse },
 	{ "forceteam",					Svcmd_ForceTeam_f,					qfalse },
 	{ "gametype",					Svcmd_ChangeGametype_f,				qfalse },
@@ -1724,6 +1727,7 @@ svcmd_t svcmds[] = {
 
 	{ "startingItems",				Svcmd_ToggleStartingItems_f,		qfalse },
 	{ "startingWeapons",			Svcmd_ToggleStartingWeapons_f,		qfalse },
+	{ "strafeJumpStats",			Svcmd_StrafeJumpStats_f,			qfalse },
 	{ "toggleAdmin",				Svcmd_ToggleAdmin_f,				qfalse },
 	{ "toggleallowvote",			Svcmd_ToggleAllowVote_f,			qfalse },
 	{ "toggleEmotes",				Svcmd_ToggleEmotes_f,				qfalse },

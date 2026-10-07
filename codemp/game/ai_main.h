@@ -572,7 +572,15 @@ typedef struct bot_state_s
 	int					sfjArcCheckedTime;
 	qboolean			sfjArcSafe;
 	int					sfjDebugNextTime;
-
+	float				sfjPeakSpeed;		// fastest horizontal speed this strafe (BotSFJ_SlowedOut)
+	int					sfjRoute;			// recorded multi-node route being followed + 1 (0 = none)
+	int					sfjRouteNode;		// next landing node on sfjRoute
+	int					sfjRouteTime;		// level.time the route was last advanced
+	int					wpRecent[8];		// recently reached waypoint indices + 1 (0 = empty slot)
+	int					wpRecentHead;
+	float				navProgressBest;	// best distance to the current waypoint goal
+	int					navProgressTime;	// level.time navProgressBest last improved
+	int					navProgressGoal;	// waypoint index + 1 navProgressBest refers to (0 = none)
 	int					gripMistakeDelayUntil; // level.time until which bot_gkmistakebias holds us from correctly breaking an opponent's grip (see NewBotAI_GetGripEscapeDelayMs) - rolled once per grip session
 	qboolean			gripSpeedOffPressed; // alternates the force button while gripped with speed active so the speed-off toggle is spammed (press/release) instead of held
 	int					gripReactLastCallTime; // level.time of the last NewBotAI_ReactToBeingGripped call, used to detect a fresh grip session (a gap since the last call) so the escape delay above is only rolled once per grip
