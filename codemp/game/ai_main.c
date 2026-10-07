@@ -3175,7 +3175,7 @@ static void BotSFJ_LoadRouteHints(void)
  * navigation goal. Require an unflagged, passable linked trail through its end.
  */
 static qboolean BotSFJ_DemoTrailAllows(bot_state_t *bs, const vec3_t start,
-	const vec3_t end)
+	const vec3_t end, int *lastIndex)
 {
 	const int budget = BotSFJ_WaypointBudget(bot_strafejumpwaypoints.integer);
 	const int step = bs->wpDirection ? -1 : 1;
@@ -3212,7 +3212,12 @@ static qboolean BotSFJ_DemoTrailAllows(bot_state_t *bs, const vec3_t start,
 			!previous || BotSFJ_WaypointsLinked(previous, index),
 			wp == bs->wpDestination, progress, length);
 		if (decision)
-			return decision > 0 ? qtrue : qfalse;
+		{
+			if (decision < 0)
+				return qfalse;
+			*lastIndex = index;
+			return qtrue;
+		}
 		previous = wp;
 	}
 	return qfalse;
@@ -3237,6 +3242,7 @@ static qboolean BotSFJ_GetRouteHintCorridor(bot_state_t *bs, const playerState_t
 		const bot_sfj_route_hint_t *hint = &g_botSfjRouteHints[i];
 		vec3_t toEnd;
 		float progress;
+		int demoLastIndex = -1;
 
 		if (hint->demo && !bot_demotracks.integer)
 			continue;
@@ -3249,7 +3255,8 @@ static qboolean BotSFJ_GetRouteHintCorridor(bot_state_t *bs, const playerState_t
 		toEnd[2] = 0.0f;
 		if (VectorNormalize(toEnd) <= 0.0f || DotProduct(toEnd, moveDirection) < 0.7f)
 			continue;
-		if (hint->demo && !BotSFJ_DemoTrailAllows(bs, ps->origin, hint->end))
+		if (hint->demo && !BotSFJ_DemoTrailAllows(bs, ps->origin, hint->end,
+				&demoLastIndex))
 			continue;
 		if (!BotSFJ_RouteHintSpeedAllows(progress, grounded, horizontalSpeed, hint->minSpeed))
 		{
@@ -3258,6 +3265,15 @@ static qboolean BotSFJ_GetRouteHintCorridor(bot_state_t *bs, const playerState_t
 		}
 		VectorCopy(toEnd, direction);
 		VectorCopy(hint->end, destination);
+		if (hint->demo)
+		{
+			VectorCopy(ps->origin, bs->sfjCorridorStart);
+			bs->sfjCorridorStart[2] = bs->wpCurrent->origin[2];
+			bs->sfjCorridorFirst = bs->wpCurrent->index;
+			bs->sfjCorridorLast = demoLastIndex;
+			bs->sfjCorridorStep = bs->wpDirection ? -1 : 1;
+			bs->sfjCorridorValid = qtrue;
+		}
 		return qtrue;
 	}
 	return qfalse;
