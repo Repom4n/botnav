@@ -720,6 +720,7 @@ typedef struct playerTeamState_s {
 // MUST be dealt with in G_InitSessionData() / G_ReadSessionData() / G_WriteSessionData()
 typedef struct clientSession_s {
 	team_t		sessionTeam;
+	int			jvmClass;
 	int			spectatorNum;		// for determining next-in-line to play
 	spectatorState_t	spectatorState;
 	int			spectatorClient;	// for chasecam and follow mode
@@ -987,6 +988,9 @@ struct gclient_s {
 	// the rest of the structure is private to game
 	clientPersistant_t	pers;
 	clientSession_t		sess;
+	int			jvmGrappleTime;
+	float		jvmGrappleFraction;
+	int			jvmBotAttackTime;
 
 	saberInfo_t	saber[MAX_SABERS];
 	void		*weaponGhoul2[MAX_SABERS];
@@ -1741,6 +1745,7 @@ extern int gGAvoidDismember;
 
 // damage flags
 #define DAMAGE_NORMAL				0x00000000	// No flags set.
+#define DAMAGE_JVM_GRIPKICK			0x00100000
 #define DAMAGE_RADIUS				0x00000001	// damage was indirect
 #define DAMAGE_NO_ARMOR				0x00000002	// armour does not protect from this damage
 #define DAMAGE_NO_KNOCKBACK			0x00000004	// do not affect velocity, just view angles
@@ -1857,6 +1862,8 @@ void ClientRespawn (gentity_t *ent);
 void BeginIntermission (void);
 void InitBodyQue (void);
 void ClientSpawn( gentity_t *ent );
+void G_JVMApplyClass( gentity_t *ent, qboolean loadout );
+void G_WriteClientSessionData( gclient_t *client );
 void player_die (gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int damage, int mod);
 void AddScore( gentity_t *ent, vec3_t origin, int score );
 void CalculateRanks( void );

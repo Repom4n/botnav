@@ -514,6 +514,9 @@ static const char *gameTypes[GT_MAX_GAME_TYPE] = {
 	"Siege",
 	"CTF",
 	"CTY",
+	"Arcade",
+	"Jedi vs Merc",
+	"Jedi or Merc",
 };
 static const int numGameTypes = ARRAY_LEN( gameTypes );
 
@@ -661,7 +664,7 @@ void UI_UpdateCurrentServerInfo(void) { //parses server info to contextually hid
 		if (jcinfo2 & (1 << 1)) //allow registration
 			trap->Cvar_Set("ui_allowRegistration", "1");
 
-		if ((trap->Cvar_VariableValue("g_gametype") < GT_TEAM) && (jcinfo2 & JAPRO_CINFO2_SABERSWITCH)) //allow /saber switch cmd
+		if ((!BG_IsTeamGame((int)trap->Cvar_VariableValue("g_gametype"))) && (jcinfo2 & JAPRO_CINFO2_SABERSWITCH)) //allow /saber switch cmd
 			trap->Cvar_Set("ui_allowSaberSwitch", "1");
 	}
 
@@ -1063,7 +1066,7 @@ void UI_SetActiveMenu( uiMenuCommand_t menu ) {
 				Menus_CloseAll();
 				Menus_ActivateByName("ingame_vgs");
 			}
-			else if (trap->Cvar_VariableValue("g_gametype") >= GT_TEAM) {
+			else if (BG_IsTeamGame((int)trap->Cvar_VariableValue("g_gametype"))) {
 				trap->Key_SetCatcher(KEYCATCH_UI);
 				Menus_CloseAll();
 				Menus_ActivateByName("ingame_voicechat");
@@ -1625,6 +1628,8 @@ static void UI_SetCapFragLimits(qboolean uiVars) {
 
 static const char* UI_GetGameTypeName(int gtEnum)
 {
+	if (gtEnum == GT_JVM || gtEnum == GT_JOM || gtEnum == GT_ARCADE)
+		return BG_GetGametypeString(gtEnum);
 	switch ( gtEnum )
 	{
 	case GT_FFA:
@@ -2331,7 +2336,7 @@ void UpdateForceStatus()
 		else
 		{
 			// Set or reset buttons based on choices
-			if (atoi(Info_ValueForKey(info, "g_gametype")) >= GT_TEAM &&
+			if (BG_IsTeamGame(atoi(Info_ValueForKey(info, "g_gametype"))) &&
 				atoi(Info_ValueForKey(info, "g_gametype")) != GT_ARCADE)
 			{	// This is a team-based game.
 				Menu_ShowItemByName(menu, "playerforcespectate", qtrue);
@@ -2391,7 +2396,7 @@ void UpdateForceStatus()
 		default:
 			trap->GetConfigString( CS_SERVERINFO, info, sizeof(info) );
 
-			if (atoi(Info_ValueForKey(info, "g_gametype")) >= GT_TEAM &&
+			if (BG_IsTeamGame(atoi(Info_ValueForKey(info, "g_gametype"))) &&
 				atoi(Info_ValueForKey(info, "g_gametype")) != GT_ARCADE)
 			{
 				uiSkinColor = TEAM_FREE;
@@ -3428,25 +3433,29 @@ static qboolean UI_OwnerDrawVisible(int flags) {
 			flags &= ~UI_SHOW_NOTFAVORITESERVERS;
 		}
 		if (flags & UI_SHOW_ANYTEAMGAME) {
-			if (uiInfo.gameTypes[ui_gametype.integer].gtEnum <= GT_TEAM ) {
+			if (uiInfo.gameTypes[ui_gametype.integer].gtEnum <= GT_TEAM ||
+				uiInfo.gameTypes[ui_gametype.integer].gtEnum == GT_JOM) {
 				vis = qfalse;
 			}
 			flags &= ~UI_SHOW_ANYTEAMGAME;
 		}
 		if (flags & UI_SHOW_ANYNONTEAMGAME) {
-			if (uiInfo.gameTypes[ui_gametype.integer].gtEnum > GT_TEAM ) {
+			if (uiInfo.gameTypes[ui_gametype.integer].gtEnum > GT_TEAM &&
+				uiInfo.gameTypes[ui_gametype.integer].gtEnum != GT_JOM) {
 				vis = qfalse;
 			}
 			flags &= ~UI_SHOW_ANYNONTEAMGAME;
 		}
 		if (flags & UI_SHOW_NETANYTEAMGAME) {
-			if (uiInfo.gameTypes[ui_netGametype.integer].gtEnum <= GT_TEAM ) {
+			if (uiInfo.gameTypes[ui_netGametype.integer].gtEnum <= GT_TEAM ||
+				uiInfo.gameTypes[ui_netGametype.integer].gtEnum == GT_JOM) {
 				vis = qfalse;
 			}
 			flags &= ~UI_SHOW_NETANYTEAMGAME;
 		}
 		if (flags & UI_SHOW_NETANYNONTEAMGAME) {
-			if (uiInfo.gameTypes[ui_netGametype.integer].gtEnum > GT_TEAM ) {
+			if (uiInfo.gameTypes[ui_netGametype.integer].gtEnum > GT_TEAM &&
+				uiInfo.gameTypes[ui_netGametype.integer].gtEnum != GT_JOM) {
 				vis = qfalse;
 			}
 			flags &= ~UI_SHOW_NETANYNONTEAMGAME;
@@ -5139,7 +5148,7 @@ static qboolean UI_BotName_HandleKey(int flags, float *special, int key) {
 		}
 
 		/*
-		if (game >= GT_TEAM) {
+		if (BG_IsTeamGame(game)) {
 		if (value >= uiInfo.characterCount + 2) {
 		value = 0;
 		} else if (value < 0) {
@@ -5807,7 +5816,7 @@ static void UI_StartSkirmish(qboolean next) {
 			delay += 500;
 		}
 	}
-	if (g >= GT_TEAM ) {
+	if (BG_IsTeamGame(g)) {
 		trap->Cmd_ExecuteText( EXEC_APPEND, "wait 5; team Red\n" );
 	}
 }
@@ -5828,7 +5837,7 @@ static void UI_Update(const char *name) {
 
 		//Set the team to whatever our current skin is.
 		Q_strncpyz(buf, UI_Cvar_VariableString("model"), sizeof(buf));
-		if (ui_selectedModelIndex.integer > -1 && ui_gametype.integer < GT_TEAM)
+		if (ui_selectedModelIndex.integer > -1 && !BG_IsTeamGame(uiInfo.gameTypes[ui_gametype.integer].gtEnum))
 		{
 			const char *skin = Q_strchrs(buf, "/");
 
@@ -6568,7 +6577,7 @@ static void UI_GetCharacterCvars ( void )
 	}
 	else
 	{
-		if (skin != NULL && ui_selectedModelIndex.integer > -1 && ui_gametype.integer < GT_TEAM)
+		if (skin != NULL && ui_selectedModelIndex.integer > -1 && !BG_IsTeamGame(uiInfo.gameTypes[ui_gametype.integer].gtEnum))
 		{ //set our team to respect our current skin
 			if (!Q_stricmp(skin, "/red")) {
 				uiSkinColor = TEAM_RED;
@@ -7547,7 +7556,7 @@ static void UI_RunMenuScript(char **args)
 
 					if (numval <= maxcl)
 					{
-						if (ui_actualNetGametype.integer >= GT_TEAM) {
+						if (BG_IsTeamGame(ui_actualNetGametype.integer)) {
 							Com_sprintf( buff, sizeof(buff), "addbot \"%s\" %f %s\n", UI_GetBotNameByNumber(bot-2), skill, "Blue");
 						} else {
 							Com_sprintf( buff, sizeof(buff), "addbot \"%s\" %f \n", UI_GetBotNameByNumber(bot-2), skill);
@@ -7564,7 +7573,7 @@ static void UI_RunMenuScript(char **args)
 
 					if (numval <= maxcl)
 					{
-						if (ui_actualNetGametype.integer >= GT_TEAM) {
+						if (BG_IsTeamGame(ui_actualNetGametype.integer)) {
 							Com_sprintf( buff, sizeof(buff), "addbot \"%s\" %f %s\n", UI_GetBotNameByNumber(bot-2), skill, "Red");
 						} else {
 							Com_sprintf( buff, sizeof(buff), "addbot \"%s\" %f \n", UI_GetBotNameByNumber(bot-2), skill);
@@ -7809,7 +7818,7 @@ static void UI_RunMenuScript(char **args)
 		} else if (Q_stricmp(name, "register") == 0) {
 			trap->Cmd_ExecuteText( EXEC_APPEND, va("register %s %s\n", ui_username.string, ui_password.string) );
 		} else if (Q_stricmp(name, "addBot") == 0) {
-			if (trap->Cvar_VariableValue("g_gametype") >= GT_TEAM) {
+			if (BG_IsTeamGame((int)trap->Cvar_VariableValue("g_gametype"))) {
 				trap->Cmd_ExecuteText( EXEC_APPEND, va("addbot \"%s\" %i %s\n", UI_GetBotNameByNumber(uiInfo.botIndex), uiInfo.skillIndex+1, (uiInfo.redBlue == 0) ? "Red" : "Blue") );
 			} else {
 				trap->Cmd_ExecuteText( EXEC_APPEND, va("addbot \"%s\" %i %s\n", UI_GetBotNameByNumber(uiInfo.botIndex), uiInfo.skillIndex+1, (uiInfo.redBlue == 0) ? "Red" : "Blue") );
@@ -10839,6 +10848,8 @@ qboolean UI_FeederSelection(float feederFloat, int index, itemDef_t *item)
 
 static qboolean GameType_Parse(char **p, qboolean join) {
 	char *token;
+	int gt, i, *count;
+	gameTypeInfo_t *types;
 
 	token = COM_ParseExt((const char **)p, qtrue);
 
@@ -10856,6 +10867,18 @@ static qboolean GameType_Parse(char **p, qboolean join) {
 		token = COM_ParseExt((const char **)p, qtrue);
 
 		if (Q_stricmp(token, "}") == 0) {
+			count = join ? &uiInfo.numJoinGameTypes : &uiInfo.numGameTypes;
+			types = join ? uiInfo.joinGameTypes : uiInfo.gameTypes;
+			for (gt = GT_JVM; gt <= GT_JOM; gt++) {
+				for (i = 0; i < *count; i++)
+					if (types[i].gtEnum == gt)
+						break;
+				if (i == *count && *count < MAX_GAMETYPES) {
+					types[*count].gtEnum = gt;
+					types[*count].gameType = String_Alloc(BG_GetGametypeString(gt));
+					(*count)++;
+				}
+			}
 			return qtrue;
 		}
 

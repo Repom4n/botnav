@@ -410,3 +410,56 @@ g_newBotAI (master switch)
   +-- Misc
         +-- bot_nochat, bot_forcepowers, bot_maxbots, etc.
 ```
+
+## Jedi vs Merc / Jedi or Merc
+
+`g_gametype 11` (`jvm`) is team deathmatch: **Red Jedi, Blue Mercs**.
+`g_gametype 12` (`jom`) is free-for-all: Jedi, Merc and Tank are loadout
+classes, not teams. Everyone else is an enemy, spawning and scores are individual.
+CTF (8), CTY (9) and Arcade (10) retain their IDs and rules.
+
+In JoM, use `/class jedi`, `/class merc`, or `/class tank` (also `/team jedi|merc|tank`).
+Changing class kills and respawns an active player, has a five-second cooldown,
+and is forbidden during private duels. Spectators select their next spawn's class.
+Class persists across reconnects/map restarts and is replicated without changing
+the player-state layout. Bots default to a mix of JoM classes; `class` userinfo
+can select Merc or Tank. JvM class is always determined by team.
+
+| Cvar | Default | Meaning (only in JvM/JoM) |
+|---|---:|---|
+| `g_mercforceregentime` | 200 | Merc Force-energy regeneration interval, milliseconds (minimum 1). |
+| `merc_grapple` | 1 | Allow Merc grapple (`+grapple`), independent of legacy `g_allowGrapple`. |
+| `merc_grappleFPscale` | 10 | Force points/second while the hook exists; fractional drain is accumulated across frames/releases. Clamped 0–1000. Depletion releases the real hook. |
+| `merc_gripkickreduction` | 0 | Fraction of actual Force Grip and flipkick damage resisted by Mercs, clamped 0–1. Does not reduce lightning, punches or ordinary saber kicks. |
+| `merc_forcejumplevel` | 1 | Force Jump rank for **both Mercs and Tanks**, clamped 0–3 and replicated for prediction. If Jump is globally disabled, positive ranks are capped at 1 (the normal basic-jump exception); rank 0 stays disabled. |
+| `merc_botfloodprotect` | 100 | Minimum milliseconds between Merc bot primary/alternate gun attack commands, clamped 0–2000; all bot AI paths share the final command gate. Melee and saber attacks are not throttled. |
+| `merc_flipkick` | 1 | Merc flipkick permission, replicated for shared movement prediction; rank-1 Mercs can front-flipkick. No duplicate `g_mercflipkick` cvar. |
+| `jedi_tankscale` | 0.5 | Tank incoming combat-damage multiplier, clamped 0–10. Does not mitigate suicide, team changes, forced deaths or environmental hazards. |
+| `jedi_saberdamagescale` | 2 | Tank outgoing saber-damage multiplier, clamped 0–10. |
+
+Jedi have their normally configured Force powers and only a saber. Weapons,
+ammo, health and armor cannot be picked up and render at 50% opacity to Jedi
+(including simple items, holograms and respawn passes). Jedi can push/pull world
+items and disarm opponents using normal Force rules.
+
+Mercs have melee and permitted configured starting guns (when `g_startingWeapons`
+is zero: pistol, blaster and bowcaster), but never a saber. Pickups remain available.
+They have no Force powers except configured Jump, cannot push/pull/disarm, and
+heal only through health pickups (no medpac use, starting medpacs or external Force healing).
+In JoM full-force private duels, Mercs retain **only already owned** guns and ammo;
+duels do not grant new guns or replace their inventory with a saber. Gun-duel
+variants are disabled in JoM; saber-only duels require a saber on both sides.
+JoM duels retain current health/armor at acceptance; Mercs and Tanks do not
+receive the legacy automatic health/armor refill for winning a private duel.
+
+Tanks have a saber, rank-3 saber offense/defense/throw, and the same configured
+Jump as Mercs. Globally disabled saber throw is not granted; offense/defense keep
+the normal rank-3 free-saber exception. They have no other Force powers, including push, pull, Heal or
+Drain, and cannot use medpacs or receive external Force healing. Only health/armor pickups are
+allowed, at ordinary opacity. Explicit class modifiers replace legacy
+`g_jediVmerc` bonuses rather than stacking with them. Weapon loadouts are applied
+at spawn, not granted every frame, so disarming a Merc remains effective.
+
+FFA arena maps support JoM, and FFA/team arena maps support JvM. Both modes are
+available through gametype votes and server-browser filters in the updated UI.
+Deploy matching game, cgame and UI modules for class display and prediction.

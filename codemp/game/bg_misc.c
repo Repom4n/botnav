@@ -659,7 +659,7 @@ qboolean BG_LegalizedForcePowers(char *powerOut, size_t powerOutSize, int maxRan
 		i++;
 	}
 
-	if (gametype < GT_TEAM)
+	if (!BG_IsTeamGame(gametype))
 	{ //don't bother with team powers then
 		final_Powers[FP_TEAM_HEAL] = 0;
 		final_Powers[FP_TEAM_FORCE] = 0;
@@ -1889,6 +1889,15 @@ extern int cg_dueltypes[MAX_CLIENTS];
 
 qboolean BG_CanUseFPNow(int gametype, playerState_t *ps, int time, forcePowers_t power)
 {
+	if (JVM_IsMode(gametype) &&
+		JVM_ReplicatedClass(ps->stats[STAT_RESTRICTIONS]) != JVM_JEDI &&
+		(!ps->fd.forcePowerLevel[power] || !(ps->fd.forcePowersKnown & (1 << power)) ||
+		!JVM_ForceRank(JVM_ReplicatedClass(ps->stats[STAT_RESTRICTIONS]), 1,
+			power == FP_LEVITATION,
+			power == FP_SABER_OFFENSE || power == FP_SABER_DEFENSE || power == FP_SABERTHROW,
+			ps->fd.forcePowerLevel[FP_LEVITATION])))
+		return qfalse;
+
 	if (BG_HasYsalamiri(gametype, ps))
 	{
 		return qfalse;
@@ -2310,9 +2319,16 @@ qboolean BG_CanItemBeGrabbed( int gametype, const entityState_t *ent, const play
 
 	item = &bg_itemlist[ent->modelindex];
 
+	if (ps && JVM_IsMode(gametype) &&
+		!JVM_PickupAllowed(JVM_ReplicatedClass(ps->stats[STAT_RESTRICTIONS]),
+			item->giType == IT_WEAPON, item->giType == IT_AMMO,
+			item->giType == IT_HEALTH, item->giType == IT_ARMOR,
+			item->giType == IT_WEAPON && item->giTag == WP_SABER))
+		return qfalse;
+
 	if ( ps )
 	{
-		if ( ps->trueJedi )
+		if ( ps->trueJedi && !JVM_IsMode(gametype) )
 		{//force powers and saber only
 			if ( item->giType != IT_TEAM //not a flag
 				&& item->giType != IT_ARMOR//not shields
@@ -2323,7 +2339,7 @@ qboolean BG_CanItemBeGrabbed( int gametype, const entityState_t *ent, const play
 				return qfalse;
 			}
 		}
-		else if ( ps->trueNonJedi )
+		else if ( ps->trueNonJedi && !JVM_IsMode(gametype) )
 		{//can't pick up force powerups
 			if ( (item->giType == IT_POWERUP && item->giTag != PW_YSALAMIRI) //if a powerup, can only can pick up ysalamiri
 				|| (item->giType == IT_HOLDABLE && item->giTag == HI_SEEKER)//if holdable, cannot pick up seeker
@@ -3450,7 +3466,9 @@ const char *gametypeStringShort[GT_MAX_GAME_TYPE] = {
 	"SAGA",
 	"CTF",
 	"CTY",
-	"ARCADE"
+	"ARCADE",
+	"JvM",
+	"JoM"
 };
 
 const char *BG_GetGametypeString( int gametype )
@@ -3480,6 +3498,10 @@ const char *BG_GetGametypeString( int gametype )
 		return "Capture The Ysalimiri";
 	case GT_ARCADE:
 		return "Arcade";
+	case GT_JVM:
+		return "Jedi vs Merc";
+	case GT_JOM:
+		return "Jedi or Merc";
 
 	default:
 		return "Unknown Gametype";
@@ -3503,5 +3525,7 @@ int BG_GetGametypeForString( const char *gametype )
 	else if ( !Q_stricmp( gametype, "ctf" ) )			return GT_CTF;
 	else if ( !Q_stricmp( gametype, "cty" ) )			return GT_CTY;
 	else if ( !Q_stricmp( gametype, "arcade" ) )		return GT_ARCADE;
+	else if ( !Q_stricmp( gametype, "jvm" ) )			return GT_JVM;
+	else if ( !Q_stricmp( gametype, "jom" ) )			return GT_JOM;
 	else												return -1;
 }

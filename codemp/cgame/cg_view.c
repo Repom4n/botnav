@@ -2418,7 +2418,7 @@ void CG_DrawAutoMap(void)
 		return;
 	}
 
-	if (cgs.gametype < GT_TEAM)
+	if (!BG_IsTeamGame(cgs.gametype))
 	{ //don't show in non-team gametypes
 		return;
 	}

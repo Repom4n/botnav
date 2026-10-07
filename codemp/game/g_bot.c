@@ -173,6 +173,10 @@ int G_GetMapTypeBits(char *type)
 		typeBits |= (1 << GT_JEDIMASTER);
 	}
 
+	if ((typeBits & (1 << GT_FFA)) || strstr(type, "jom"))
+		typeBits |= 1 << GT_JOM;
+	if ((typeBits & (1 << GT_TEAM)) || strstr(type, "jvm"))
+		typeBits |= 1 << GT_JVM;
 	return typeBits;
 }
 
@@ -738,7 +742,7 @@ void G_CheckMinimumPlayers( void ) {
 	}*/
 
 	/*
-	if (level.gametype >= GT_TEAM) {
+	if (BG_IsTeamGame(level.gametype)) {
 		int humanplayers2, botplayers2;
 		if (minplayers >= sv_maxclients.integer / 2) {
 			minplayers = (sv_maxclients.integer / 2) -1;
@@ -789,7 +793,7 @@ void G_CheckMinimumPlayers( void ) {
 			}
 		}
 	}
-	else if (level.gametype == GT_FFA) {
+	else if (level.gametype == GT_FFA || level.gametype == GT_JOM) {
 		if (minplayers >= sv_maxclients.integer) {
 			minplayers = sv_maxclients.integer-1;
 		}
@@ -1049,7 +1053,7 @@ static void G_AddBot( const char *name, float skill, const char *team, int delay
 	Info_SetValueForKey( userinfo, key, s );
 
 	// initialize the bot settings
-	if (level.gametype >= GT_TEAM && level.gametype != GT_ARCADE) {
+	if (BG_IsTeamGame(level.gametype) && level.gametype != GT_ARCADE) {
 		if (bot_team.integer == 1)
 			team = "blue";
 		else if (bot_team.integer > 1)
@@ -1060,7 +1064,7 @@ static void G_AddBot( const char *name, float skill, const char *team, int delay
 		if ( level.gametype == GT_ARCADE ) {
 			team = "free";
 		}
-		else if ( level.gametype >= GT_TEAM ) {
+		else if ( BG_IsTeamGame(level.gametype) ) {
 			if ( PickTeam( clientNum ) == TEAM_RED )
 				team = "red";
 			else
@@ -1082,7 +1086,7 @@ static void G_AddBot( const char *name, float skill, const char *team, int delay
 	{
 		bot->client->sess.sessionTeam = TEAM_FREE;
 	}
-	else if ( level.gametype >= GT_TEAM )
+	else if ( BG_IsTeamGame(level.gametype) )
 	{
 		if ( team && !Q_stricmp( team, "red" ) )
 			bot->client->sess.sessionTeam = TEAM_RED;

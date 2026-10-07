@@ -24,6 +24,7 @@ endif(NOT InOpenJK)
 set(TestFiles
 	"main.cpp"
 	"bot_ai_tuning.cpp"
+	"jvm_rules.cpp"
 	"bot_learning.cpp"
 	"duel_identity.cpp"
 	"duel_elo.cpp"
@@ -59,6 +60,7 @@ set(TestIncludeDirectories
 	"${SharedDir}"
 	"${GSLIncludeDirectory}"
 	"${CMAKE_SOURCE_DIR}/codemp/game"
+	"${CMAKE_SOURCE_DIR}/codemp"
 	)
 set(TestDefines "${SharedDefines}")
 

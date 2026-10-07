@@ -95,7 +95,7 @@ void CG_RailTrail( clientInfo_t *ci, vec3_t start, vec3_t end, int time ) {
 #endif
     int killTime = (time < 0) ? 175 : time;
 
-    if ( cgs.gametype >= GT_TEAM )
+    if ( BG_IsTeamGame(cgs.gametype) )
     {
         if ( ci->team == TEAM_RED )
         {

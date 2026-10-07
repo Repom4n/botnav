@@ -476,7 +476,7 @@ void CG_CheckLocalSounds( playerState_t *ps, playerState_t *ops ) {
 		if ( !cg.warmup && cgs.gametype != GT_POWERDUEL ) {
 			// never play lead changes during warmup and powerduel
 			if ( ps->persistant[PERS_RANK] != ops->persistant[PERS_RANK] ) {
-				if ( cgs.gametype < GT_TEAM) {
+				if ( !BG_IsTeamGame(cgs.gametype)) {
 					/*
 					if (  ps->persistant[PERS_RANK] == 0 ) {
 						CG_AddBufferedSound(cgs.media.takenLeadSound);
@@ -522,7 +522,7 @@ void CG_CheckLocalSounds( playerState_t *ps, playerState_t *ops ) {
 	}
 
 	// fraglimit warnings
-	if ( cgs.fraglimit > 0 && cgs.gametype < GT_CTF && cgs.gametype != GT_DUEL && cgs.gametype != GT_POWERDUEL && cgs.gametype != GT_SIEGE && cgAnnouncerTime < cg.time) {
+	if ( cgs.fraglimit > 0 && (cgs.gametype < GT_CTF || JVM_IsMode(cgs.gametype)) && cgs.gametype != GT_DUEL && cgs.gametype != GT_POWERDUEL && cgs.gametype != GT_SIEGE && cgAnnouncerTime < cg.time) {
 		highScore = cgs.scores1;
 		if ( cgs.gametype == GT_TEAM && cgs.scores2 > highScore )
 			highScore = cgs.scores2;

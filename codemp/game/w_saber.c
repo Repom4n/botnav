@@ -121,7 +121,7 @@ qboolean G_CanBeEnemy( gentity_t *self, gentity_t *enemy )
 		return qfalse;
 	}
 
-	if (level.gametype < GT_TEAM)
+	if (!BG_IsTeamGame(level.gametype))
 		return qtrue;
 
 	if ( g_friendlyFire.value)

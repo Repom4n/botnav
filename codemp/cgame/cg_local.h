@@ -346,6 +346,7 @@ typedef struct clientInfo_s {
 	char			name[MAX_QPATH];
 	char			cleanname[MAX_QPATH];
 	team_t			team;
+	int				jvmClass;
 
 	int				duelTeam;
 

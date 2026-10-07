@@ -287,7 +287,7 @@ static void CG_Obituary( entityState_t *ent ) {
         }
         //tayst
 
-        if (cg_killMessage.integer != 2 && cgs.gametype < GT_TEAM && cgs.gametype != GT_DUEL &&
+        if (cg_killMessage.integer != 2 && !BG_IsTeamGame(cgs.gametype) && cgs.gametype != GT_DUEL &&
             cgs.gametype != GT_POWERDUEL) {
             if (cgs.gametype == GT_JEDIMASTER &&
                 attacker < MAX_CLIENTS &&
@@ -2831,6 +2831,7 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 		if (cgs.serverMod == SVMOD_JAPRO && cg.predictedPlayerState.stats[STAT_RACEMODE] && cg.predictedPlayerState.stats[STAT_MOVEMENTSTYLE] == MV_COOP_JKA) {
 		}
 		else if (cg.predictedPlayerState.duelInProgress &&
+			!JVM_DuelAllowsGuns(cgs.gametype, cg_dueltypes[cg.predictedPlayerState.clientNum] - 1) &&
 			(cgs.serverMod != SVMOD_JAPRO || cg_dueltypes[cg.predictedPlayerState.clientNum] == 1 || cg_dueltypes[cg.predictedPlayerState.clientNum] == 2))
 			break; //FF or NF Duel, no weapons so ignore this..
 
@@ -2869,6 +2870,7 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 		if (cgs.serverMod == SVMOD_JAPRO && cg.predictedPlayerState.stats[STAT_RACEMODE] && cg.predictedPlayerState.stats[STAT_MOVEMENTSTYLE] == MV_COOP_JKA) {
 		}
 		else if (cg.predictedPlayerState.duelInProgress &&
+			!JVM_DuelAllowsGuns(cgs.gametype, cg_dueltypes[cg.predictedPlayerState.clientNum] - 1) &&
 			(cgs.serverMod != SVMOD_JAPRO || cg_dueltypes[cg.predictedPlayerState.clientNum] == 1 || cg_dueltypes[cg.predictedPlayerState.clientNum] == 2))
 			break; //FF or NF Duel, no weapons so ignore this..
 
@@ -2904,7 +2906,9 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 
 	case EV_DISRUPTOR_SNIPER_MISS:
 		DEBUGNAME("EV_DISRUPTOR_SNIPER_MISS");
-		if (cg.snap && cg.snap->ps.duelInProgress && ((cg_dueltypes[cg.snap->ps.clientNum] == 1) | (cg_dueltypes[cg.snap->ps.clientNum] == 2))) { //FF or NF Duel, no weapons so ignore this..
+		if (cg.snap && cg.snap->ps.duelInProgress &&
+			!JVM_DuelAllowsGuns(cgs.gametype, cg_dueltypes[cg.snap->ps.clientNum] - 1) &&
+			((cg_dueltypes[cg.snap->ps.clientNum] == 1) | (cg_dueltypes[cg.snap->ps.clientNum] == 2))) {
 			break;
 		}
 		ByteToDir( es->eventParm, dir );
@@ -2920,7 +2924,9 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 
 	case EV_DISRUPTOR_HIT:
 		DEBUGNAME("EV_DISRUPTOR_HIT");
-		if (cg.snap && cg.snap->ps.duelInProgress && ((cg_dueltypes[cg.snap->ps.clientNum] == 1) | (cg_dueltypes[cg.snap->ps.clientNum] == 2))) { //FF or NF Duel, no weapons so ignore this..
+		if (cg.snap && cg.snap->ps.duelInProgress &&
+			!JVM_DuelAllowsGuns(cgs.gametype, cg_dueltypes[cg.snap->ps.clientNum] - 1) &&
+			((cg_dueltypes[cg.snap->ps.clientNum] == 1) | (cg_dueltypes[cg.snap->ps.clientNum] == 2))) {
 			break;
 		}
 		ByteToDir( es->eventParm, dir );
@@ -3335,6 +3341,7 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 		if (cgs.serverMod == SVMOD_JAPRO && cg.predictedPlayerState.stats[STAT_RACEMODE] && cg.predictedPlayerState.stats[STAT_MOVEMENTSTYLE] == MV_COOP_JKA) {
 		}
 		else if (cg.predictedPlayerState.duelInProgress &&
+			!JVM_DuelAllowsGuns(cgs.gametype, cg_dueltypes[cg.predictedPlayerState.clientNum] - 1) &&
 			(cgs.serverMod != SVMOD_JAPRO || cg_dueltypes[cg.predictedPlayerState.clientNum] == 1 || cg_dueltypes[cg.predictedPlayerState.clientNum] == 2))
 			break; //FF or NF Duel, no weapons so ignore this..
 
@@ -3375,6 +3382,7 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 		if (cgs.serverMod == SVMOD_JAPRO && cg.predictedPlayerState.stats[STAT_RACEMODE] && cg.predictedPlayerState.stats[STAT_MOVEMENTSTYLE] == MV_COOP_JKA) {
 		}
 		else if (cg.predictedPlayerState.duelInProgress &&
+			!JVM_DuelAllowsGuns(cgs.gametype, cg_dueltypes[cg.predictedPlayerState.clientNum] - 1) &&
 			(cgs.serverMod != SVMOD_JAPRO || cg_dueltypes[cg.predictedPlayerState.clientNum] == 1 || cg_dueltypes[cg.predictedPlayerState.clientNum] == 2)) {
 			break; //FF or NF Duel, no weapons so ignore this..
 		}
@@ -3445,6 +3453,7 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 		if (cgs.serverMod == SVMOD_JAPRO && cg.predictedPlayerState.stats[STAT_RACEMODE] && cg.predictedPlayerState.stats[STAT_MOVEMENTSTYLE] == MV_COOP_JKA) {
 		}
 		else if (cg.predictedPlayerState.duelInProgress &&
+			!JVM_DuelAllowsGuns(cgs.gametype, cg_dueltypes[cg.predictedPlayerState.clientNum] - 1) &&
 			(cgs.serverMod != SVMOD_JAPRO || cg_dueltypes[cg.predictedPlayerState.clientNum] == 1 || cg_dueltypes[cg.predictedPlayerState.clientNum] == 2)) {
 			break; //FF or NF Duel, no weapons so ignore this..
 		}
@@ -3517,7 +3526,9 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 		// Authoritative stop signal (see EV_MISSILE_MISS) — rocket impacting metal still means it exploded.
 		if (cg_predictKnockback.integer && cg.predictKnockback && es->weapon == WP_ROCKET_LAUNCHER && es->owner == cg.predictedPlayerState.clientNum)
 			cg.predictKnockbackExploded = qtrue;
-		if (cg.snap && cg.snap->ps.duelInProgress && ((cg_dueltypes[cg.snap->ps.clientNum] == 1) | (cg_dueltypes[cg.snap->ps.clientNum] == 2))) { //FF or NF Duel, no weapons so ignore this..
+		if (cg.snap && cg.snap->ps.duelInProgress &&
+			!JVM_DuelAllowsGuns(cgs.gametype, cg_dueltypes[cg.snap->ps.clientNum] - 1) &&
+			((cg_dueltypes[cg.snap->ps.clientNum] == 1) | (cg_dueltypes[cg.snap->ps.clientNum] == 2))) {
 			break;
 		}
 		ByteToDir( es->eventParm, dir );

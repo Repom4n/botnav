@@ -247,8 +247,13 @@ typedef enum {
 	GT_CTF,				// capture the flag
 	GT_CTY,
 	GT_ARCADE,
+	GT_JVM = 11,
+	GT_JOM = 12,
 	GT_MAX_GAME_TYPE
 } gametype_t;
+
+#include "bg_jvm.h"
+#define BG_IsTeamGame(gametype) JVM_IsTeamGame(gametype)
 
 // gametype bits
 #define GTB_NONE			0x000 // invalid
@@ -264,7 +269,9 @@ typedef enum {
 #define GTB_CTF				0x100 // capture the flag
 #define GTB_CTY				0x200 // capture the ysalimiri
 #define GTB_ARCADE			0x400 // arcade survival
-#define GTB_ALL				0x3FF // all
+#define GTB_JVM				0x800
+#define GTB_JOM				0x1000
+#define GTB_ALL				(0x3FF | GTB_JVM | GTB_JOM) // preserve legacy vote masks
 
 typedef enum _flag_status {
 	FLAG_ATBASE = 0,
@@ -1927,6 +1934,11 @@ int		BG_PickAnim( int animIndex, int minAnim, int maxAnim );
 int BG_GetItemIndexByTag(int tag, int type);
 
 qboolean BG_IsItemSelectable(playerState_t *ps, int item);
+
+static inline int BG_CanUseHoldable(const playerState_t *ps, int item) {
+	return JVM_HoldableAllowed(ps->stats[STAT_RESTRICTIONS],
+		item == HI_MEDPAC || item == HI_MEDPAC_BIG);
+}
 
 qboolean BG_HasYsalamiri(int gametype, playerState_t *ps);
 qboolean BG_CanUseFPNow(int gametype, playerState_t *ps, int time, forcePowers_t power);

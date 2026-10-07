@@ -1986,7 +1986,7 @@ void CG_DrawHUD(centity_t	*cent)
 					else //show round win/loss
 						scoreStr = va("%i/%i", cgs.clientinfo[cg.snap->ps.clientNum].wins, cgs.clientinfo[cg.snap->ps.clientNum].losses);
 				}
-				else if (0 && cgs.gametype < GT_TEAM)
+				else if (0 && !BG_IsTeamGame(cgs.gametype))
 				{	// This is a teamless mode, draw the score bias.
 					scoreBias = cg.snap->ps.persistant[PERS_SCORE] - cgs.scores1;
 					if (scoreBias == 0)
@@ -2016,7 +2016,7 @@ void CG_DrawHUD(centity_t	*cent)
 				}
 				else
 				{	// Don't draw a bias.
-					if (cg_drawScore.integer > 1 && cgs.gametype >= GT_TEAM && cgs.gametype != GT_SIEGE && cgs.gametype != GT_ARCADE) {
+					if (cg_drawScore.integer > 1 && BG_IsTeamGame(cgs.gametype) && cgs.gametype != GT_SIEGE && cgs.gametype != GT_ARCADE) {
 						int teamscore;
 						int teamscorebias;
 						char teamscoreStr[16];
@@ -2085,7 +2085,7 @@ void CG_DrawHUD(centity_t	*cent)
 
 					CG_DrawSimpleForcePower(cent);
 
-					if (cg_drawScore.integer > 1 && cgs.gametype >= GT_TEAM && cgs.gametype != GT_SIEGE && cgs.gametype != GT_ARCADE)
+					if (cg_drawScore.integer > 1 && BG_IsTeamGame(cgs.gametype) && cgs.gametype != GT_SIEGE && cgs.gametype != GT_ARCADE)
 						CG_DrawScaledProportionalString(SCREEN_WIDTH - 112 * cgs.widthRatioCoef, SCREEN_HEIGHT - 34, scoreStr, UI_RIGHT | UI_DROPSHADOW, colorTable[CT_WHITE], 0.7f);
 					else
 						CG_DrawScaledProportionalString(SCREEN_WIDTH - 100 * cgs.widthRatioCoef, SCREEN_HEIGHT - 20, scoreStr, UI_RIGHT | UI_DROPSHADOW, colorTable[CT_WHITE], 0.7f);
@@ -2097,7 +2097,7 @@ void CG_DrawHUD(centity_t	*cent)
 					return;
 				}
 
-				if (cgs.gametype >= GT_TEAM && cgs.gametype != GT_SIEGE && cgs.gametype != GT_ARCADE)
+				if (BG_IsTeamGame(cgs.gametype) && cgs.gametype != GT_SIEGE && cgs.gametype != GT_ARCADE)
 				{	// tint the hud items based on team (JAPRO - Clientside - Tint hud in team gamemode toggle)
 					if (cg.snap->ps.persistant[PERS_TEAM] == TEAM_RED && cg_tintHud.integer && cg_hudFiles.integer != 3)
 						hudTintColor = redhudtint;
@@ -2199,7 +2199,7 @@ void CG_DrawHUD(centity_t	*cent)
 					CG_DrawForcePowerJK2(SCREEN_WIDTH - 80, SCREEN_HEIGHT - 80);
 					CG_DrawAmmoJK2(cent, SCREEN_WIDTH - 80, SCREEN_HEIGHT - 80);
 					CG_DrawJK2HUDRightFrame2(SCREEN_WIDTH - 80, SCREEN_HEIGHT - 80);
-					if (cg_drawScore.integer > 1 && cgs.gametype >= GT_TEAM && cgs.gametype != GT_SIEGE && cgs.gametype != GT_ARCADE)
+					if (cg_drawScore.integer > 1 && BG_IsTeamGame(cgs.gametype) && cgs.gametype != GT_SIEGE && cgs.gametype != GT_ARCADE)
 						CG_DrawScaledProportionalString(SCREEN_WIDTH - 125 * cgs.widthRatioCoef, SCREEN_HEIGHT - 38,
 														scoreStr, UI_RIGHT | UI_DROPSHADOW, colorTable[CT_WHITE], 0.7f);
 					else
@@ -2215,7 +2215,7 @@ void CG_DrawHUD(centity_t	*cent)
 							focusItem = Menu_FindItemByName(menuHUD, "score_line");
 							if (focusItem)
 							{
-								if (cg_drawScore.integer > 1 && cgs.gametype >= GT_TEAM && cgs.gametype != GT_SIEGE && cgs.gametype != GT_ARCADE) {
+								if (cg_drawScore.integer > 1 && BG_IsTeamGame(cgs.gametype) && cgs.gametype != GT_SIEGE && cgs.gametype != GT_ARCADE) {
 									CG_DrawScaledProportionalString(
 											SCREEN_WIDTH - (SCREEN_WIDTH - focusItem->window.rect.x - cg_drawScoreX.value) * cgs.widthRatioCoef,
 											focusItem->window.rect.y - cg_drawScoreY.value - 14,
@@ -3848,7 +3848,7 @@ static void CG_DrawTaystHUD(char* s) {
 					  FONT_MEDIUM);
     }
 
-	if ( cgs.gametype >= GT_TEAM && cgs.gametype != GT_ARCADE )
+	if ( BG_IsTeamGame(cgs.gametype) && cgs.gametype != GT_ARCADE )
 	{
 		CG_DrawTeamHUD(background, xOffset);
 	}
@@ -4272,7 +4272,7 @@ static float CG_DrawMiniScoreboard ( float y )
 		return y;
 	}
 
-	if ( cgs.gametype >= GT_TEAM && cgs.gametype != GT_ARCADE && cg_drawScores.integer != 3)
+	if ( BG_IsTeamGame(cgs.gametype) && cgs.gametype != GT_ARCADE && cg_drawScores.integer != 3)
 	{
 		if (cg_drawScores.integer == 1) {
 		Q_strncpyz( temp, va( "%s: ", CG_GetStringEdString( "MP_INGAME", "RED" ) ), sizeof( temp ) );
@@ -6908,7 +6908,7 @@ static void CG_DrawUpperRight( void ) {
 		trap->R_SetColor(colorTable[CT_WHITE]);
 
 		if(!(cg.tribesHUD)) {
-			if (cgs.gametype >= GT_TEAM && cg_drawTeamOverlay.integer) {
+			if (BG_IsTeamGame(cgs.gametype) && cg_drawTeamOverlay.integer) {
 				if (cg_drawTeamOverlay.integer < 3)
 					y = CG_DrawTeamOverlay(y, qtrue, qtrue);
 				else if (cg_drawTeamOverlay.integer < 5)
@@ -6938,7 +6938,7 @@ static void CG_DrawUpperRight( void ) {
 
 		if(!(cg.tribesHUD)) {
 
-			if (cg_drawRadar.integer && (cgs.gametype >= GT_TEAM ||
+			if (cg_drawRadar.integer && (BG_IsTeamGame(cgs.gametype) ||
 										 cg.predictedPlayerState.m_iVehicleNum)) {//draw Radar in Siege mode or when in a vehicle of any kind
 				y = CG_DrawRadar(y);
 			}
@@ -7674,7 +7674,7 @@ void CG_DrawHealthBar(centity_t *cent, float chX, float chY, float chW, float ch
 	}
 
 	//color of the bar
-	if (!cent->currentState.teamowner || cgs.gametype < GT_TEAM)
+	if (!cent->currentState.teamowner || !BG_IsTeamGame(cgs.gametype))
 	{ //not owned by a team or teamplay
 		aColor[0] = 1.0f;
 		aColor[1] = 1.0f;
@@ -7968,7 +7968,7 @@ static void CG_DrawCrosshair( vec3_t worldPoint, int chEntValid ) {
 			}
 			else if ( crossEnt->currentState.number < MAX_CLIENTS )
 			{
-				if (cgs.gametype >= GT_TEAM &&
+				if (BG_IsTeamGame(cgs.gametype) &&
 					cgs.clientinfo[crossEnt->currentState.number].team == cgs.clientinfo[cg.snap->ps.clientNum].team )
 				{
 					//Allies are green
@@ -8048,7 +8048,7 @@ static void CG_DrawCrosshair( vec3_t worldPoint, int chEntValid ) {
 							{ //base color on who is pilotting this thing
 								clientInfo_t *ci = &cgs.clientinfo[crossEnt->currentState.owner];
 
-								if (cgs.gametype >= GT_TEAM && ci->team == cg.predictedPlayerState.persistant[PERS_TEAM])
+								if (BG_IsTeamGame(cgs.gametype) && ci->team == cg.predictedPlayerState.persistant[PERS_TEAM])
 								{ //friendly
 									ecolor[0] = 0.0f;//R
 									ecolor[1] = 1.0f;//G
@@ -8091,7 +8091,7 @@ static void CG_DrawCrosshair( vec3_t worldPoint, int chEntValid ) {
 				else if ( crossEnt->currentState.teamowner == TEAM_RED
 					|| crossEnt->currentState.teamowner == TEAM_BLUE )
 				{
-					if (cgs.gametype < GT_TEAM)
+					if (!BG_IsTeamGame(cgs.gametype))
 					{ //not teamplay, just neutral then
 						ecolor[0] = 1.0f;//R
 						ecolor[1] = 1.0f;//G
@@ -8111,14 +8111,14 @@ static void CG_DrawCrosshair( vec3_t worldPoint, int chEntValid ) {
 					}
 				}
 				else if (crossEnt->currentState.owner == cg.snap->ps.clientNum ||
-					(cgs.gametype >= GT_TEAM && crossEnt->currentState.teamowner == cgs.clientinfo[cg.snap->ps.clientNum].team))
+					(BG_IsTeamGame(cgs.gametype) && crossEnt->currentState.teamowner == cgs.clientinfo[cg.snap->ps.clientNum].team))
 				{
 					ecolor[0] = 0.0f;//R
 					ecolor[1] = 1.0f;//G
 					ecolor[2] = 0.0f;//B
 				}
 				else if (crossEnt->currentState.teamowner == 16 ||
-					(cgs.gametype >= GT_TEAM && crossEnt->currentState.teamowner && crossEnt->currentState.teamowner != cgs.clientinfo[cg.snap->ps.clientNum].team))
+					(BG_IsTeamGame(cgs.gametype) && crossEnt->currentState.teamowner && crossEnt->currentState.teamowner != cgs.clientinfo[cg.snap->ps.clientNum].team))
 				{
 					ecolor[0] = 1.0f;//R
 					ecolor[1] = 0.0f;//G
@@ -8135,7 +8135,7 @@ static void CG_DrawCrosshair( vec3_t worldPoint, int chEntValid ) {
 			}
 			else if (crossEnt->currentState.eType == ET_MOVER && crossEnt->currentState.teamowner)
 			{ //a team owns this - if it's my team green, if not red, if not teamplay then yellow
-				if (cgs.gametype < GT_TEAM)
+				if (!BG_IsTeamGame(cgs.gametype))
 				{
 					ecolor[0] = 1.0f;//R
 					ecolor[1] = 1.0f;//G
@@ -8156,7 +8156,7 @@ static void CG_DrawCrosshair( vec3_t worldPoint, int chEntValid ) {
 			}
 			else if (crossEnt->currentState.health)
 			{
-				if (!crossEnt->currentState.teamowner || cgs.gametype < GT_TEAM)
+				if (!crossEnt->currentState.teamowner || !BG_IsTeamGame(cgs.gametype))
 				{ //not owned by a team or teamplay
 					ecolor[0] = 1.0f;
 					ecolor[1] = 1.0f;
@@ -8499,7 +8499,7 @@ void CG_BracketEntity( centity_t *cent, float radius )
 		&& (cent->currentState.m_iVehicleNum-1) < MAX_CLIENTS
 		&& cgs.clientinfo[ cent->currentState.m_iVehicleNum-1 ].infoValid )
 	{
-		if ( cgs.gametype < GT_TEAM )
+		if ( !BG_IsTeamGame(cgs.gametype) )
 		{//ffa?
 			isEnemy = qtrue;
 			trap->R_SetColor ( g_color_table[ColorIndex(COLOR_RED)] );
@@ -8516,7 +8516,7 @@ void CG_BracketEntity( centity_t *cent, float radius )
 	}
 	else if ( cent->currentState.teamowner )
 	{
-		if ( cgs.gametype < GT_TEAM )
+		if ( !BG_IsTeamGame(cgs.gametype) )
 		{//ffa?
 			isEnemy = qtrue;
 			trap->R_SetColor ( g_color_table[ColorIndex(COLOR_RED)] );
@@ -8871,12 +8871,12 @@ static void CG_DrawRocketLocking( int lockEntNum, int lockTime )
 		{
 			if (ci->team == cgs.clientinfo[cg.snap->ps.clientNum].team)
 			{
-				if (cgs.gametype >= GT_TEAM)
+				if (BG_IsTeamGame(cgs.gametype))
 				{
 					return;
 				}
 			}
-			else if (cgs.gametype >= GT_TEAM)
+			else if (BG_IsTeamGame(cgs.gametype))
 			{
 				centity_t *hitEnt = &cg_entities[cg.snap->ps.rocketLockIndex];
 				if (hitEnt->currentState.eType == ET_NPC &&
@@ -9528,7 +9528,7 @@ static void CG_DrawCrosshairNames( void ) {
 	name = cgs.clientinfo[ cg.crosshairClientNum ].name;
 
 	if ( cg_drawCrosshairNamesColours.integer == 0 ) {
-		if ( cgs.gametype >= GT_TEAM )
+		if ( BG_IsTeamGame(cgs.gametype) )
 		{
 			//oriented based on which team we're on
 			if ( cgs.clientinfo[cg.crosshairClientNum].team == cg.predictedPlayerState.persistant[PERS_TEAM] )
@@ -10091,6 +10091,7 @@ static void CG_DrawWarmup( void ) {
 		else if ( cgs.gametype == GT_CTF )				s = CG_GetStringEdString("MENUS", "CAPTURE_THE_FLAG");//"Capture the Flag";
 		else if ( cgs.gametype == GT_CTY )				s = CG_GetStringEdString("MENUS", "CAPTURE_THE_YSALIMARI");//"Capture the Ysalamiri";
 		else if ( cgs.gametype == GT_SINGLE_PLAYER )	s = "Cooperative";
+		else if ( JVM_IsMode(cgs.gametype) )			s = BG_GetGametypeString(cgs.gametype);
 		else											s = "";
 		w = CG_Text_Width(s, 1.5f, FONT_MEDIUM);
 		CG_Text_Paint((SCREEN_WIDTH / 2) - w / 2, 90, 1.5f, colorWhite, s, 0, 0, ITEM_TEXTSTYLE_SHADOWEDMORE,FONT_MEDIUM);

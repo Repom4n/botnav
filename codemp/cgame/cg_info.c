@@ -267,7 +267,7 @@ void CG_DrawInformation( void ) {
 			y += iPropHeight;
 		}
 
-		if (cgs.gametype < GT_CTF ) {
+		if (cgs.gametype < GT_CTF || JVM_IsMode(cgs.gametype)) {
 			value = atoi( Info_ValueForKey( info, "fraglimit" ) );
 			if ( value ) {
 				CG_DrawProportionalString( (SCREEN_WIDTH / 2), y, va( "%s %i", CG_GetStringEdString("MP_INGAME", "FRAGLIMIT"), value ), UI_CENTER|UI_INFOFONT|UI_DROPSHADOW, colorWhite );
@@ -285,7 +285,7 @@ void CG_DrawInformation( void ) {
 		}
 	}
 
-	if (cgs.gametype >= GT_CTF) {
+	if (cgs.gametype >= GT_CTF && !JVM_IsMode(cgs.gametype)) {
 		value = atoi( Info_ValueForKey( info, "capturelimit" ) );
 		if ( value ) {
 			CG_DrawProportionalString( (SCREEN_WIDTH / 2), y, va( "%s %i", CG_GetStringEdString("MP_INGAME", "CAPTURELIMIT"), value ), UI_CENTER|UI_INFOFONT|UI_DROPSHADOW, colorWhite );
@@ -293,7 +293,7 @@ void CG_DrawInformation( void ) {
 		}
 	}
 
-	if (cgs.gametype >= GT_TEAM)
+	if (BG_IsTeamGame(cgs.gametype))
 	{
 		value = atoi( Info_ValueForKey( info, "g_forceBasedTeams" ) );
 		if ( value ) {

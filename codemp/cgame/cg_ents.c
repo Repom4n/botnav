@@ -2001,6 +2001,25 @@ qboolean CG_GreyItem(int type, int tag, int plSide)
 CG_Item
 ==================
 */
+static qboolean CG_JVMFadeItem(const gitem_t *item) {
+	return JVM_IsMode(cgs.gametype) &&
+		JVM_ReplicatedClass(cg.predictedPlayerState.stats[STAT_RESTRICTIONS]) == JVM_JEDI &&
+		(item->giType == IT_WEAPON || item->giType == IT_AMMO ||
+		 item->giType == IT_HEALTH || item->giType == IT_ARMOR);
+}
+
+static void CG_AddItemRef(const refEntity_t *ent, const gitem_t *item) {
+	refEntity_t faded;
+	if (!CG_JVMFadeItem(item)) {
+		trap->R_AddRefEntityToScene(ent);
+		return;
+	}
+	faded = *ent;
+	faded.shaderRGBA[3] = (ent->renderfx & RF_FORCE_ENT_ALPHA) ? ent->shaderRGBA[3] / 2 : 128;
+	faded.renderfx |= RF_FORCE_ENT_ALPHA;
+	trap->R_AddRefEntityToScene(&faded);
+}
+
 static void CG_Item( centity_t *cent ) {
 	refEntity_t		ent;
 	entityState_t	*es;
@@ -2078,9 +2097,9 @@ Ghoul2 Insert Start
 			ent.shaderRGBA[2] = 150;
 		}
 
-		trap->R_AddRefEntityToScene(&ent);
+		CG_AddItemRef(&ent, item);
 
-		if (!doGrey)
+		if (!doGrey && !CG_JVMFadeItem(item))
 		{
 			trap->FX_PlayEffectID(cgs.effects.itemCone, ent.origin, uNorm, -1, -1, qfalse);
 		}
@@ -2145,7 +2164,7 @@ Ghoul2 Insert End
 				ent.customShader = trap->R_RegisterShader("gfx/misc/mp_dark_enlight_disable");
 			}
 		}
-		trap->R_AddRefEntityToScene(&ent);
+		CG_AddItemRef(&ent, item);
 		return;
 	}
 
@@ -2313,7 +2332,7 @@ Ghoul2 Insert End
 			ent.customShader = trap->R_RegisterShader("gfx/misc/mp_dark_enlight_disable");
 		}
 
-		trap->R_AddRefEntityToScene( &ent );
+		CG_AddItemRef(&ent, item);
 		return;
 	}
 
@@ -2359,7 +2378,7 @@ Ghoul2 Insert End
 		{ //boon model uses a different blending mode for the sprite inside and doesn't look proper with this method
 			ent.renderfx |= RF_FORCE_ENT_ALPHA;
 		}
-		trap->R_AddRefEntityToScene(&ent);
+		CG_AddItemRef(&ent, item);
 
 		ent.renderfx &= ~RF_FORCE_ENT_ALPHA;
 
@@ -2400,7 +2419,7 @@ Ghoul2 Insert End
 		ent.shaderRGBA[1] = 200;
 		ent.shaderRGBA[2] = 85;
 
-		trap->R_AddRefEntityToScene( &ent );
+		CG_AddItemRef(&ent, item);
 	}
 	else
 	{    // add to refresh list  -- normal item
@@ -2414,7 +2433,7 @@ Ghoul2 Insert End
 			ScaleModelAxis(&ent);
 
 			if (cgs.jcinfo2 & JAPRO_CINFO2_WTTRIBES) {
-				trap->R_AddRefEntityToScene(&ent);
+				CG_AddItemRef(&ent, item);
 				//Com_Printf("Pre settings %i [%2.f %.2f %.2f %.2f] %i\n", ent.renderfx, ent.shaderRGBA[0], ent.shaderRGBA[1], ent.shaderRGBA[2], ent.shaderRGBA[3], ent.customShader);
 				//ent.renderfx &= ~RF_FORCE_ENT_ALPHA;
 				float distance = Distance(ent.origin, cg.predictedPlayerState.origin);
@@ -2458,7 +2477,7 @@ Ghoul2 Insert End
 				//ent.renderfx &= ~RF_NODEPTH;
 			}
 		}
-		trap->R_AddRefEntityToScene(&ent);
+		CG_AddItemRef(&ent, item);
 	}
 
 	//rww - As far as I can see, this is useless.
@@ -2503,7 +2522,7 @@ Ghoul2 Insert End
 				}
 				AnglesToAxis( spinAngles, ent.axis );
 
-				trap->R_AddRefEntityToScene( &ent );
+				CG_AddItemRef(&ent, item);
 			}
 		}
 	}

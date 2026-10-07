@@ -995,7 +995,7 @@ void Cmd_Kill_f( gentity_t *ent ) {
 			return;
 		}
 	}
-	else if (level.gametype >= GT_TEAM && level.numPlayingClients > 1 && !level.warmupTime)
+	else if (BG_IsTeamGame(level.gametype) && level.numPlayingClients > 1 && !level.warmupTime)
 	{
 		if (!g_allowTeamSuicide.integer)
 		{
@@ -1056,6 +1056,13 @@ void BroadcastTeamChange( gclient_t *client, int oldTeam )
 
 	if (level.gametype == GT_SIEGE)
 	{ //don't announce these things in siege
+		return;
+	}
+
+	if (level.gametype == GT_JVM &&
+		(client->sess.sessionTeam == TEAM_RED || client->sess.sessionTeam == TEAM_BLUE)) {
+		trap->SendServerCommand(-1, va("cp \"%s^7 joined %s\n\"",
+			client->pers.netname, client->sess.sessionTeam == TEAM_RED ? "Red Jedi" : "Blue Mercs"));
 		return;
 	}
 
@@ -1213,7 +1220,7 @@ void SetTeam( gentity_t *ent, char *s, qboolean forcedToJoin ) {//JAPRO - Modifi
 		}
 		team = TEAM_SPECTATOR;
 		specState = SPECTATOR_FREE;
-	} else if ( level.gametype >= GT_TEAM && level.gametype != GT_ARCADE ) {
+	} else if ( BG_IsTeamGame(level.gametype) && level.gametype != GT_ARCADE ) {
 		// if running a team game, assign player to one of the teams
 		specState = SPECTATOR_NOT;
 		if ( !Q_stricmp(s, "red") || !Q_stricmp(s, "r"))
@@ -1683,11 +1690,54 @@ void StopFollowing( gentity_t *ent ) {
 Cmd_Team_f
 =================
 */
+static void Cmd_Class_f(gentity_t *ent) {
+	char name[MAX_TOKEN_CHARS];
+	int playerClass;
+	if (level.gametype != GT_JOM)
+		return;
+	trap->Argv(1, name, sizeof(name));
+	if (!Q_stricmp(name, "jedi"))
+		playerClass = JVM_JEDI;
+	else if (!Q_stricmp(name, "merc"))
+		playerClass = JVM_MERC;
+	else if (!Q_stricmp(name, "tank"))
+		playerClass = JVM_TANK;
+	else {
+		trap->SendServerCommand(ent - g_entities, "print \"Usage: /class jedi|merc|tank\n\"");
+		return;
+	}
+	if (ent->client->switchTeamTime > level.time || ent->client->ps.duelInProgress)
+		return;
+	if (ent->client->sess.jvmClass == playerClass)
+		return;
+	/* Kill using the old class so class selection cannot evade damage/death. */
+	if (ent->client->sess.sessionTeam != TEAM_SPECTATOR && ent->health > 0) {
+		ent->flags &= ~FL_GODMODE;
+		ent->health = ent->client->ps.stats[STAT_HEALTH] = 0;
+		player_die(ent, ent, ent, 100000, MOD_SUICIDE);
+	}
+	ent->client->sess.jvmClass = playerClass;
+	ent->client->ps.fd.forceDoInit = 1;
+	if (ent->client->sess.sessionTeam != TEAM_SPECTATOR)
+		ClientSpawn(ent);
+	ent->client->switchTeamTime = level.time + 5000;
+	ClientUserinfoChanged(ent - g_entities);
+	G_WriteClientSessionData(ent->client);
+	trap->SendServerCommand(ent - g_entities, va("print \"JoM class: %s\n\"", name));
+}
+
 void Cmd_Team_f( gentity_t *ent ) {
 	int			oldTeam;
 	char		s[MAX_TOKEN_CHARS];
 
 	oldTeam = ent->client->sess.sessionTeam;
+	if (level.gametype == GT_JOM && trap->Argc() == 2) {
+		trap->Argv(1, s, sizeof(s));
+		if (!Q_stricmp(s, "jedi") || !Q_stricmp(s, "merc") || !Q_stricmp(s, "tank")) {
+			Cmd_Class_f(ent);
+			return;
+		}
+	}
 
 	if ( trap->Argc() != 2 ) {
 		switch ( oldTeam ) {
@@ -2246,7 +2296,7 @@ static void G_SayTo( gentity_t *ent, gentity_t *other, int mode, int color, cons
 	if ( other->client->pers.connected != CON_CONNECTED ) {
 		return;
 	}
-	if ( mode == SAY_TEAM && ((level.gametype >= GT_TEAM && !OnSameTeam(ent, other)) || (level.gametype < GT_TEAM && (ent->client->sess.sessionTeam != other->client->sess.sessionTeam)))) {
+	if ( mode == SAY_TEAM && ((BG_IsTeamGame(level.gametype) && !OnSameTeam(ent, other)) || (!BG_IsTeamGame(level.gametype) && (ent->client->sess.sessionTeam != other->client->sess.sessionTeam)))) {
 		return;
 	}
 
@@ -2350,7 +2400,7 @@ void G_Say( gentity_t *ent, gentity_t *target, int mode, const char *chatText ) 
 		color = COLOR_CYAN;
 		break;
 	case SAY_TELL:
-		if (target && target->inuse && target->client && level.gametype >= GT_TEAM &&
+		if (target && target->inuse && target->client && BG_IsTeamGame(level.gametype) &&
 			target->client->sess.sessionTeam == ent->client->sess.sessionTeam &&
 			Team_GetLocationMsg(ent, location, sizeof(location)))
 		{
@@ -2543,7 +2593,7 @@ static void Cmd_VoiceCommand_f(gentity_t *ent)
 	char *s;
 	int i = 0;
 
-	if (level.gametype < GT_TEAM)
+	if (!BG_IsTeamGame(level.gametype))
 	{
 		return;
 	}
@@ -2735,7 +2785,9 @@ static const char *gameNames[GT_MAX_GAME_TYPE] = {
 	"Siege",
 	"Capture the Flag",
 	"Capture the Ysalamiri",
-	"Arcade"
+	"Arcade",
+	"Jedi vs Merc",
+	"Jedi or Merc"
 };
 
 /*
@@ -3192,7 +3244,7 @@ static voteString_t validVoteStrings[] = {
 	{	"map",					NULL,				G_VoteMap,				0,		GTB_ALL,								qtrue,			"<name>" },
 	{	"map_restart",			"restart",			G_VoteMapRestart,		0,		GTB_ALL,								qtrue,			"<optional delay>" },
 	{	"nextmap",				NULL,				G_VoteNextmap,			0,		GTB_ALL,								qtrue,			NULL },
-	{	"sv_maxteamsize",		"teamsize",			G_VoteTeamSize,			1,		GTB_TEAM|GTB_SIEGE|GTB_CTY|GTB_CTF,		qtrue,			"<num>" },
+	{	"sv_maxteamsize",		"teamsize",			G_VoteTeamSize,			1,		GTB_TEAM|GTB_SIEGE|GTB_CTY|GTB_CTF|GTB_JVM,	qtrue,			"<num>" },
 	{	"timelimit",			"time",				G_VoteTimelimit,		1,		GTB_ALL &~GTB_SIEGE,								qtrue,			"<num>" },
 	{	"vstr",					"vstr",				G_VoteVSTR,				1,		GTB_ALL,								qtrue,			"<vstr name>" },
 	{	"poll",					"poll",				G_VotePoll,				1,		GTB_ALL,								qfalse,			"<poll question>" },
@@ -3261,10 +3313,10 @@ void Cmd_CallVote_f( gentity_t *ent ) {
 
 	// can't vote as a spectator, except in (power)duel.. fuck this logic
 
-	if (ent->client->sess.sessionTeam == TEAM_SPECTATOR || (ent->client->sess.sessionTeam == TEAM_FREE && level.gametype >= GT_TEAM && level.gametype != GT_ARCADE)) { //If we are in spec or racemode
+	if (ent->client->sess.sessionTeam == TEAM_SPECTATOR || (ent->client->sess.sessionTeam == TEAM_FREE && BG_IsTeamGame(level.gametype) && level.gametype != GT_ARCADE)) { //If we are in spec or racemode
 		if (level.gametype == GT_SIEGE && g_tweakVote.integer & TV_ALLOW_SIEGESPECVOTE) {
 		}
-		else if (level.gametype >= GT_TEAM && g_tweakVote.integer & TV_ALLOW_CTFTFFASPECVOTE) {
+		else if (BG_IsTeamGame(level.gametype) && g_tweakVote.integer & TV_ALLOW_CTFTFFASPECVOTE) {
 		}
 		else if (g_tweakVote.integer & TV_ALLOW_SPECVOTE) {
 		}
@@ -3275,8 +3327,8 @@ void Cmd_CallVote_f( gentity_t *ent ) {
 	}
 
 	/*
-	if ( level.gametype != GT_DUEL && level.gametype != GT_POWERDUEL && (ent->client->sess.sessionTeam == TEAM_SPECTATOR || (ent->client->sess.sessionTeam == TEAM_FREE && level.gametype >= GT_TEAM))) {
-		if (level.gametype >= GT_TEAM || !g_tweakVote.integer) {
+	if ( level.gametype != GT_DUEL && level.gametype != GT_POWERDUEL && (ent->client->sess.sessionTeam == TEAM_SPECTATOR || (ent->client->sess.sessionTeam == TEAM_FREE && BG_IsTeamGame(level.gametype)))) {
+		if (BG_IsTeamGame(level.gametype) || !g_tweakVote.integer) {
 			trap->SendServerCommand( ent-g_entities, va( "print \"%s\n\"", G_GetStringEdString( "MP_SVGAME", "NOSPECVOTE" ) ) );
 			return;
 		}
@@ -3601,7 +3653,7 @@ void Cmd_CallTeamVote_f( gentity_t *ent ) {
 	char	arg1[MAX_CVAR_VALUE_STRING] = {0};
 	char	arg2[MAX_CVAR_VALUE_STRING] = {0};
 
-	if ( g_gametype.integer < GT_TEAM )
+	if ( !BG_IsTeamGame(g_gametype.integer) )
 	{
 		trap->SendServerCommand( ent-g_entities, "print \"Cannot call a team vote in a non-team gametype!\n\"" );
 		return;
@@ -3814,7 +3866,7 @@ int G_ItemUsable(playerState_t *ps, int forcedUse)
 		forcedUse = bg_itemlist[ps->stats[STAT_HOLDABLE_ITEM]].giTag;
 	}
 
-	if (!BG_IsItemSelectable(ps, forcedUse))
+	if (!BG_CanUseHoldable(ps, forcedUse) || !BG_IsItemSelectable(ps, forcedUse))
 	{
 		return 0;
 	}
@@ -4332,7 +4384,7 @@ void Cmd_EngageDuel_f(gentity_t *ent, int dueltype)//JAPRO - Serverside - Fullfo
 	if (!g_privateDuel.integer)
 		return;
 
-	if (level.gametype == GT_DUEL || level.gametype == GT_POWERDUEL || level.gametype >= GT_TEAM)
+	if (level.gametype == GT_DUEL || level.gametype == GT_POWERDUEL || BG_IsTeamGame(level.gametype))
 	{ //rather pointless in this mode..
 		if (dueltype == 0 || dueltype == 1)
 			trap->SendServerCommand( ent-g_entities, va("print \"%s\n\"", G_GetStringEdString("MP_SVGAME", "NODUEL_GAMETYPE")) );
@@ -4344,7 +4396,12 @@ void Cmd_EngageDuel_f(gentity_t *ent, int dueltype)//JAPRO - Serverside - Fullfo
 	if (ent->client->ps.duelTime >= level.time)
 		return;
 
-	if ((dueltype == 0 || dueltype == 1) && ent->client->ps.weapon != WP_SABER)
+	if (level.gametype == GT_JOM && dueltype > 1)
+		return;
+
+	if ((dueltype == 0 || dueltype == 1) && ent->client->ps.weapon != WP_SABER &&
+		!(level.gametype == GT_JOM && dueltype == 1 &&
+		 JVM_ReplicatedClass(ent->client->ps.stats[STAT_RESTRICTIONS]) == JVM_MERC))
 		return;
 
 	if ((dueltype == 0 || dueltype == 1) && (ent->client->ps.stats[STAT_HOLDABLE_ITEMS] & (1 << HI_JETPACK)))//JAPRO - Disallow jetpack in NF,FF duels?
@@ -4387,13 +4444,16 @@ void Cmd_EngageDuel_f(gentity_t *ent, int dueltype)//JAPRO - Serverside - Fullfo
 
 		if (!challenged || !challenged->client || !challenged->inuse ||
 			challenged->health < 1 || challenged->client->ps.stats[STAT_HEALTH] < 1 ||
-			(challenged->client->ps.weapon != WP_SABER && (dueltype == 0 || dueltype == 1)) || challenged->client->ps.duelInProgress ||
+			(level.gametype == GT_JOM && challenged->client->sess.sessionTeam == TEAM_SPECTATOR) ||
+			(challenged->client->ps.weapon != WP_SABER && (dueltype == 0 || dueltype == 1) &&
+			 !(level.gametype == GT_JOM && dueltype == 1 &&
+			   JVM_ReplicatedClass(challenged->client->ps.stats[STAT_RESTRICTIONS]) == JVM_MERC)) || challenged->client->ps.duelInProgress ||
 			challenged->client->ps.saberInFlight)
 		{
 			return;
 		}
 
-		if (level.gametype >= GT_TEAM && OnSameTeam(ent, challenged))
+		if (BG_IsTeamGame(level.gametype) && OnSameTeam(ent, challenged))
 		{
 			return;
 		}
@@ -4483,7 +4543,7 @@ void Cmd_EngageDuel_f(gentity_t *ent, int dueltype)//JAPRO - Serverside - Fullfo
 				challenged->client->ps.saberHolstered = 2;
 				challenged->client->ps.weaponTime = 400;
 			}
-			if (g_duelStartHealth.integer)
+			if (g_duelStartHealth.integer && level.gametype != GT_JOM)
 			{
 				ent->client->ps.stats[STAT_ARMOR] = g_duelStartArmor.integer;
 				challenged->client->ps.stats[STAT_ARMOR] = g_duelStartArmor.integer;
@@ -5138,7 +5198,7 @@ void Cmd_Amlockteam_f(gentity_t *ent)
 	if (!G_AdminAllowed(ent, JAPRO_ACCOUNTFLAG_A_LOCKTEAM, qfalse, qfalse, "amLockTeam"))
 		return;
 
-	if (level.gametype >= GT_TEAM || level.gametype == GT_FFA)
+	if (BG_IsTeamGame(level.gametype) || level.gametype == GT_FFA || level.gametype == GT_JOM)
 	{
 		if (trap->Argc() != 2)
 		{
@@ -5237,7 +5297,7 @@ void Cmd_Amforceteam_f(gentity_t *ent)
             return;
         }
 
-		if (level.gametype >= GT_TEAM || level.gametype == GT_FFA)
+		if (BG_IsTeamGame(level.gametype) || level.gametype == GT_FFA || level.gametype == GT_JOM)
 		{
 			qboolean everyone = qfalse;
 			gclient_t *client;
@@ -5267,7 +5327,7 @@ void Cmd_Amforceteam_f(gentity_t *ent)
 
 			trap->Argv(2, teamname, sizeof(teamname));
 
-			if ((!Q_stricmp(teamname, "red") || !Q_stricmp(teamname, "r")) && level.gametype >= GT_TEAM)
+			if ((!Q_stricmp(teamname, "red") || !Q_stricmp(teamname, "r")) && BG_IsTeamGame(level.gametype))
 			{
 				if (everyone)
 				{
@@ -5287,7 +5347,7 @@ void Cmd_Amforceteam_f(gentity_t *ent)
 					}
 				}
 			}
-			else if ((!Q_stricmp(teamname, "blue") || !Q_stricmp( teamname, "b")) && level.gametype >= GT_TEAM)
+			else if ((!Q_stricmp(teamname, "blue") || !Q_stricmp( teamname, "b")) && BG_IsTeamGame(level.gametype))
 			{
 				if (everyone)
 				{
@@ -5599,7 +5659,7 @@ Cmd_Ammap_f
 */
 void Cmd_Ammap_f(gentity_t *ent)
 {
-		char    gametype[2];
+		char    gametype[16];
 		int		gtype;
 		char    mapname[MAX_MAPNAMELENGTH];
 
@@ -5621,13 +5681,14 @@ void Cmd_Ammap_f(gentity_t *ent)
 			return;
 		}
 
-		if (gametype[0] < '0' || gametype[0] > '8')
+		gtype = atoi(gametype);
+		if (gametype[0] < '0' || gametype[0] > '9' ||
+			strspn(gametype, "0123456789") != strlen(gametype) ||
+			gtype < 0 || gtype >= GT_MAX_GAME_TYPE || gtype == GT_SINGLE_PLAYER)
 		{
 			trap->SendServerCommand( ent-g_entities, "print \"Invalid gametype.\n\"" );
 			return;
 		}
-
-		gtype = atoi(gametype);
 
 		{
 			char				unsortedMaps[4096];
@@ -5869,7 +5930,7 @@ void Cmd_Aminfo_f(gentity_t *ent)
 		Q_strcat(buf, sizeof(buf), "throwFlag ");
 	if (g_allowTargetLaser.integer)
 		Q_strcat(buf, sizeof(buf), "+button15 (target laser) ");
-	if ((level.gametype >= GT_TEAM) && g_allowSpotting.integer)
+	if ((BG_IsTeamGame(level.gametype)) && g_allowSpotting.integer)
 		Q_strcat(buf, sizeof(buf), "spot ");
 	if (g_allowGrapple.integer)
 		Q_strcat(buf, sizeof(buf), "+button12 (grapple) ");
@@ -6125,7 +6186,7 @@ static void Cmd_Spot_f(gentity_t *ent) {
 	if (!g_allowSpotting.integer)
 		return;
 
-	if (level.gametype < GT_TEAM)
+	if (!BG_IsTeamGame(level.gametype))
 		return;
 
 	if (ent->client->lastSpotTime > level.time)
@@ -7813,7 +7874,7 @@ void Cmd_Race_f(gentity_t *ent)
 	}
 
 	if (level.gametype != GT_FFA) {
-		if (level.gametype >= GT_TEAM && g_raceMode.integer == 2)
+		if (BG_IsTeamGame(level.gametype) && g_raceMode.integer == 2)
 		{//this is ok
 
 			ent->client->pers.noFollow = qfalse;
@@ -8414,7 +8475,7 @@ void Cmd_ServerConfig_f(gentity_t *ent) //loda fixme fix indenting on this, make
 	Q_strcat(buf, sizeof(buf), va("   ^5Saber style damage^3: ^2%s\n", (d_saberSPStyleDamage.integer) ? "SP" : "MP"));
 	if (d_saberSPStyleDamage.integer != g_saberDuelSPDamage.integer)
 		Q_strcat(buf, sizeof(buf), va("   ^5Saber style damage in saber duels^3: ^2%s\n", (g_saberDuelSPDamage.integer) ? "SP" : "MP"));
-	if ((d_saberSPStyleDamage.integer != g_forceDuelSPDamage.integer) && (level.gametype != GT_DUEL && level.gametype != GT_POWERDUEL && level.gametype < GT_TEAM))
+	if ((d_saberSPStyleDamage.integer != g_forceDuelSPDamage.integer) && (level.gametype != GT_DUEL && level.gametype != GT_POWERDUEL && !BG_IsTeamGame(level.gametype)))
 		Q_strcat(buf, sizeof(buf), va("   ^5Saber style damage in force duels^3: ^2%s\n", (g_forceDuelSPDamage.integer) ? "SP" : "MP"));
 	if (g_saberDamageScale.value != 1.0f)
 		Q_strcat(buf, sizeof(buf), va("   ^5Saber damage scale: ^2%.2f\n", g_saberDamageScale.value));
@@ -8674,7 +8735,7 @@ void Cmd_ServerConfig_f(gentity_t *ent) //loda fixme fix indenting on this, make
 			Q_strcat(buf, sizeof(buf), "   ^5JK2 1.02 style grip\n");
 		if (g_tweakForce.integer & FT_NO_CROUCHATTACK_FP)
 			Q_strcat(buf, sizeof(buf), "   ^5Crouch special attacks do not cost forcepower\n");
-		if (level.gametype >= GT_TEAM) {
+		if (BG_IsTeamGame(level.gametype)) {
 			if (g_teamAbsorbScale.value != 1.0f)
 				Q_strcat(buf, sizeof(buf), va("   ^5Absorb team scale: ^2%.2f\n", g_teamAbsorbScale.value));
 			if (g_teamHealScale.value != 1.0f)
@@ -9057,6 +9118,7 @@ command_t commands[] = {
 	{ "clanpass",			Cmd_Clanpass_f,				CMD_NOINTERMISSION },
 	{ "clansay",			Cmd_Clansay_f,				0 },
 	{ "clanwhois",			Cmd_Clanwhois_f,			0 },
+	{ "class",				Cmd_Class_f,				CMD_NOINTERMISSION },
 
 #if _COOP
 	{ "coop",				Cmd_Coop_f,					CMD_NOINTERMISSION },

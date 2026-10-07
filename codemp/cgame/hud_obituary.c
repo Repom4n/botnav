@@ -136,7 +136,7 @@ void HUD_DrawObituary(void) {
                 continue;
             }
 
-            if (cgs.gametype >= GT_TEAM) {
+            if (BG_IsTeamGame(cgs.gametype)) {
                 if (cgs.clientinfo[client].team == TEAM_BLUE) {
                     Vector4Copy(blueTeam, slotColor);
                 } else if (cgs.clientinfo[client].team == TEAM_RED) {

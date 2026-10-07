@@ -475,7 +475,7 @@ void AddScore( gentity_t *ent, vec3_t origin, int score )
 	//ScorePlum(ent, origin, score);
 	//
 	ent->client->ps.persistant[PERS_SCORE] += score;
-	if ( level.gametype == GT_TEAM && !g_dontPenalizeTeam )
+	if ( (level.gametype == GT_TEAM || level.gametype == GT_JVM) && !g_dontPenalizeTeam )
 		level.teamScores[ ent->client->ps.persistant[PERS_TEAM] ] += score;
 	CalculateRanks();
 }
@@ -2656,7 +2656,7 @@ extern void RunEmplacedWeapon( gentity_t *ent, usercmd_t **ucmd );
 	{
 		if (OnSameTeam (self, &g_entities[self->client->ps.otherKiller]) && g_friendlyFire.value)
 			attacker = &g_entities[self->client->ps.otherKiller];
-		else if (level.gametype < GT_TEAM)
+		else if (!BG_IsTeamGame(level.gametype))
 			attacker = &g_entities[self->client->ps.otherKiller];
 	}
 //JAPRO - Serverside - Fixkillcredit for suiciders and teamchangers - End
@@ -3867,7 +3867,7 @@ void G_Dismember( gentity_t *ent, gentity_t *enemy, vec3_t point, int limbType, 
 		trap->G2API_SetSurfaceOnOff(ent->ghoul2, stubCapName, 0);
 	}
 
-	if ( level.gametype >= GT_TEAM && ent->s.eType != ET_NPC )
+	if ( BG_IsTeamGame(level.gametype) && ent->s.eType != ET_NPC )
 	{//Team game
 		switch ( ent->client->sess.sessionTeam )
 		{
@@ -5366,7 +5366,22 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker, vec3_
 		return;
 	}
 
-	if ( (g_jediVmerc.integer || level.gametype == GT_SIEGE)
+	if (JVM_IsMode(level.gametype) && (client || attacker->client) && attacker != targ &&
+		!(dflags & DAMAGE_NO_PROTECTION) && mod != MOD_SUICIDE &&
+		mod != MOD_FALLING && mod != MOD_LAVA && mod != MOD_SLIME &&
+		mod != MOD_WATER && mod != MOD_TRIGGER_HURT && mod != MOD_CRUSH &&
+		mod != MOD_TELEFRAG && mod != MOD_TEAM_CHANGE && mod != MOD_TARGET_LASER &&
+		mod != MOD_UNKNOWN) {
+		damage = (int)(damage * JVM_DamageScale(
+			client ? JVM_ReplicatedClass(client->ps.stats[STAT_RESTRICTIONS]) : JVM_JEDI,
+			attacker->client ? JVM_ReplicatedClass(attacker->client->ps.stats[STAT_RESTRICTIONS]) : JVM_JEDI,
+			mod == MOD_SABER, (dflags & DAMAGE_JVM_GRIPKICK) != 0,
+			jedi_tankscale.value, jedi_saberdamagescale.value, merc_gripkickreduction.value));
+		if (damage <= 0)
+			return;
+	}
+
+	if ( !JVM_IsMode(level.gametype) && (g_jediVmerc.integer || level.gametype == GT_SIEGE)
 		&& client )
 	{//less explosive damage for jedi, more saber damage for non-jedi
 		if ( client->ps.trueJedi
@@ -5444,7 +5459,7 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker, vec3_
 				}
 			}
 			else if (targ->inuse && targ->client &&
-				level.gametype >= GT_TEAM &&
+				BG_IsTeamGame(level.gametype) &&
 				attacker->s.number >= MAX_CLIENTS &&
 				attacker->alliedTeam &&
 				targ->client->sess.sessionTeam == attacker->alliedTeam &&

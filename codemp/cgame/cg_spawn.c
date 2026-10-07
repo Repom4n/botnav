@@ -298,7 +298,7 @@ void CG_ParseEntityFromSpawnVars( void ) {
 	int i;
 	char *classname;
 	char *p, *value, *gametypeName;
-	static char *gametypeNames[GT_MAX_GAME_TYPE] = { "ffa", "holocron", "jedimaster", "duel", "powerduel", "single", "team", "siege", "ctf", "cty" };
+	static char *gametypeNames[GT_MAX_GAME_TYPE] = { "ffa", "holocron", "jedimaster", "duel", "powerduel", "single", "team", "siege", "ctf", "cty", "arcade", "jvm", "jom" };
 
 	// check for "notsingle" flag
 	if( cgs.gametype == GT_SINGLE_PLAYER ) {
@@ -309,7 +309,7 @@ void CG_ParseEntityFromSpawnVars( void ) {
 	}
 
 	// check for "notteam" flag (GT_FFA, GT_DUEL, GT_SINGLE_PLAYER)
-	if( cgs.gametype >= GT_TEAM ) {
+	if( BG_IsTeamGame(cgs.gametype) ) {
 		CG_SpawnInt( "notteam", "0", &i );
 		if( i ) {
 			return;
@@ -327,6 +327,13 @@ void CG_ParseEntityFromSpawnVars( void ) {
 			gametypeName = gametypeNames[cgs.gametype];
 
 			p = strstr( value, gametypeName );
+			if (!p && cgs.gametype == GT_JOM)
+				p = strstr(value, "ffa");
+			if (!p && cgs.gametype == GT_JVM) {
+				p = strstr(value, "team");
+				if (!p)
+					p = strstr(value, "ffa");
+			}
 			if( !p ) {
 				return;
 			}
