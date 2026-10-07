@@ -945,7 +945,7 @@ void G_SpawnGEntityFromSpawnVars( qboolean inSubBSP ) {
 	int			i;
 	gentity_t	*ent;
 	char		*s, *value, *gametypeName;
-	static char *gametypeNames[GT_MAX_GAME_TYPE] = {"ffa", "holocron", "jedimaster", "duel", "powerduel", "single", "team", "siege", "ctf", "cty", "arcade"};
+	static char *gametypeNames[GT_MAX_GAME_TYPE] = {"ffa", "holocron", "jedimaster", "duel", "powerduel", "single", "team", "siege", "ctf", "cty", "arcade", "jvm", "jom"};
 
 	G_SpawnString("classname", NULL, &value);
 	if (!value) {
@@ -987,7 +987,7 @@ void G_SpawnGEntityFromSpawnVars( qboolean inSubBSP ) {
 		}
 	}
 	// check for "notteam" flag (GT_FFA, GT_DUEL, GT_SINGLE_PLAYER)
-	if ( level.gametype >= GT_TEAM ) {
+	if ( BG_IsTeamGame(level.gametype) ) {
 		G_SpawnInt( "notteam", "0", &i );
 		if ( i ) {
 			ADJUST_AREAPORTAL();
@@ -1008,6 +1008,13 @@ void G_SpawnGEntityFromSpawnVars( qboolean inSubBSP ) {
 			gametypeName = gametypeNames[level.gametype];
 
 			s = strstr( value, gametypeName );
+			if (!s && level.gametype == GT_JOM)
+				s = strstr(value, "ffa");
+			if (!s && level.gametype == GT_JVM) {
+				s = strstr(value, "team");
+				if (!s)
+					s = strstr(value, "ffa");
+			}
 			if( !s ) {
 				ADJUST_AREAPORTAL();
 				G_FreeEntity( ent );

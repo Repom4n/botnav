@@ -812,7 +812,7 @@ static void CG_RegisterSounds( void ) {
 	trap->S_RegisterSound("sound/weapons/force/jump.mp3"); //PDSOUND_FORCEJUMP
 	trap->S_RegisterSound("sound/weapons/force/grip.mp3"); //PDSOUND_FORCEGRIP
 
-	if ( cgs.serverMod == SVMOD_JAPRO || cgs.gametype >= GT_TEAM || com_buildScript.integer ) {
+	if ( cgs.serverMod == SVMOD_JAPRO || BG_IsTeamGame(cgs.gametype) || com_buildScript.integer ) {
 
 #ifdef JK2AWARDS
 		cgs.media.captureAwardSound = trap->S_RegisterSound("sound/chars/protocol/misc/capture.wav");
@@ -1413,7 +1413,7 @@ static void CG_RegisterGraphics( void ) {
 		cgs.media.neutralFlagModel = trap->R_RegisterModel( "models/flags/n_flag.md3" );
 	}
 
-	if ( cgs.serverMod == SVMOD_JAPRO || cgs.gametype >= GT_TEAM || com_buildScript.integer ) {
+	if ( cgs.serverMod == SVMOD_JAPRO || BG_IsTeamGame(cgs.gametype) || com_buildScript.integer ) {
 		cgs.media.teamRedShader = trap->R_RegisterShader( "sprites/team_red" );
 		cgs.media.teamBlueShader = trap->R_RegisterShader( "sprites/team_blue" );
 		//cgs.media.redQuadShader = trap->R_RegisterShader("powerups/blueflag" );
@@ -2260,7 +2260,7 @@ void CG_SetScoreSelection(void *p) {
 		return;
 	}
 
-	if ( cgs.gametype >= GT_TEAM ) {
+	if ( BG_IsTeamGame(cgs.gametype) ) {
 		int feeder = FEEDER_REDTEAM_LIST;
 		i = red;
 		if (cg.scores[cg.selectedScore].team == TEAM_BLUE) {
@@ -2276,7 +2276,7 @@ void CG_SetScoreSelection(void *p) {
 // FIXME: might need to cache this info
 static clientInfo_t * CG_InfoFromScoreIndex(int index, int team, int *scoreIndex) {
 	int i, count;
-	if ( cgs.gametype >= GT_TEAM ) {
+	if ( BG_IsTeamGame(cgs.gametype) ) {
 		count = 0;
 		for (i = 0; i < cg.numScores; i++) {
 			if (cg.scores[i].team == team) {
@@ -2384,7 +2384,7 @@ static qhandle_t CG_FeederItemImage(float feederID, int index) {
 }
 
 static qboolean CG_FeederSelection(float feederID, int index, itemDef_t *item) {
-	if ( cgs.gametype >= GT_TEAM ) {
+	if ( BG_IsTeamGame(cgs.gametype) ) {
 		int i, count;
 		int team = (feederID == FEEDER_REDTEAM_LIST) ? TEAM_RED : TEAM_BLUE;
 		count = 0;

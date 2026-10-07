@@ -2023,7 +2023,7 @@ void G_InitGame( int levelTime, int randomSeed, int restart ) {
 	G_FindTeams();
 
 	// make sure we have flags for CTF, etc
-	if( level.gametype >= GT_TEAM ) {
+	if( BG_IsTeamGame(level.gametype) ) {
 		G_CheckTeamItems();
 	}
 	else if ( level.gametype == GT_JEDIMASTER )
@@ -2885,7 +2885,7 @@ void CalculateRanks( void ) {
 		sizeof(level.sortedClients[0]), SortRanks );
 
 	// set the rank value for all clients that are connected and not spectators
-	if ( level.gametype >= GT_TEAM && level.gametype != GT_ARCADE ) {
+	if ( BG_IsTeamGame(level.gametype) && level.gametype != GT_ARCADE ) {
 		// in team games, rank is just the order of the teams, 0=red, 1=blue, 2=tied
 		for ( i = 0;  i < level.numConnectedClients; i++ ) {
 			cl = &level.clients[ level.sortedClients[i] ];
@@ -2920,7 +2920,7 @@ void CalculateRanks( void ) {
 	}
 
 	// set the CS_SCORES1/2 configstrings, which will be visible to everyone
-	if ( level.gametype >= GT_TEAM && level.gametype != GT_ARCADE ) {
+	if ( BG_IsTeamGame(level.gametype) && level.gametype != GT_ARCADE ) {
 		trap->SetConfigstring( CS_SCORES1, va("%i", level.teamScores[TEAM_RED] ) );
 		trap->SetConfigstring( CS_SCORES2, va("%i", level.teamScores[TEAM_BLUE] ) );
 	} else {
@@ -3346,7 +3346,7 @@ void LogExit( const char *string ) {
 		numSorted = 32;
 	}
 
-	if ( level.gametype >= GT_TEAM ) {
+	if ( BG_IsTeamGame(level.gametype) ) {
 		G_LogPrintf( "red:%i  blue:%i\n",
 			level.teamScores[TEAM_RED], level.teamScores[TEAM_BLUE] );
 	}
@@ -3365,7 +3365,7 @@ void LogExit( const char *string ) {
 
 		ping = cl->ps.ping < 999 ? cl->ps.ping : 999;
 
-		if (level.gametype >= GT_TEAM) {
+		if (BG_IsTeamGame(level.gametype)) {
 			G_LogPrintf( "(%s) score: %i  ping: %i  client: [%s] %i \"%s^7\"\n", TeamName(cl->ps.persistant[PERS_TEAM]), cl->ps.persistant[PERS_SCORE], ping, cl->pers.guid, level.sortedClients[i], cl->pers.netname );
 		} else {
 			G_LogPrintf( "score: %i  ping: %i  client: [%s] %i \"%s^7\"\n", cl->ps.persistant[PERS_SCORE], ping, cl->pers.guid, level.sortedClients[i], cl->pers.netname );
@@ -3651,7 +3651,7 @@ qboolean ScoreIsTied( void ) {
 		return qfalse;
 	}
 
-	if ( level.gametype >= GT_TEAM ) {
+	if ( BG_IsTeamGame(level.gametype) ) {
 		return level.teamScores[TEAM_RED] == level.teamScores[TEAM_BLUE];
 	}
 
@@ -3762,7 +3762,7 @@ void PrintStats(int client) {
 			continue;
 
 		cl = &level.clients[i];
-		if (cl->pers.netname[0] && /*!(cl->ps.pm_flags & PMF_FOLLOW) &&*/ (cl->sess.sessionTeam != TEAM_SPECTATOR) && !(level.gametype >= GT_TEAM && level.gametype != GT_ARCADE && cl->sess.sessionTeam == TEAM_FREE)) //sad
+		if (cl->pers.netname[0] && /*!(cl->ps.pm_flags & PMF_FOLLOW) &&*/ (cl->sess.sessionTeam != TEAM_SPECTATOR) && !(BG_IsTeamGame(level.gametype) && level.gametype != GT_ARCADE && cl->sess.sessionTeam == TEAM_FREE)) //sad
 		{
 			float accuracy = 0, dmgPerDeath = cl->pers.stats.damageGiven, drainRatio = 0;
 
@@ -4121,7 +4121,7 @@ void CheckExitRules( void ) {
 	{
 		sKillLimit = "Kill limit hit.";
 	}
-	if ( level.gametype < GT_SIEGE && fraglimit.integer ) {
+	if ( (level.gametype < GT_SIEGE || JVM_IsMode(level.gametype)) && fraglimit.integer ) {
 		if ( level.teamScores[TEAM_RED] >= fraglimit.integer ) {
 			trap->SendServerCommand( -1, va("print \"Red %s\n\"", G_GetStringEdString("MP_SVGAME", "HIT_THE_KILL_LIMIT")) );
 			if (d_powerDuelPrint.integer)
@@ -4211,7 +4211,7 @@ void CheckExitRules( void ) {
 		}
 	}
 
-	if ( level.gametype >= GT_CTF && capturelimit.integer ) {
+	if ( level.gametype >= GT_CTF && !JVM_IsMode(level.gametype) && capturelimit.integer ) {
 
 		if ( level.teamScores[TEAM_RED] >= capturelimit.integer )
 		{
@@ -4486,7 +4486,7 @@ void CheckTournament( void ) {
 		int		counts[TEAM_NUM_TEAMS];
 		qboolean	notEnough = qfalse;
 
-		if ( level.gametype > GT_TEAM ) {
+		if ( level.gametype > GT_TEAM && BG_IsTeamGame(level.gametype) ) {
 			counts[TEAM_BLUE] = TeamCount( -1, TEAM_BLUE );
 			counts[TEAM_RED] = TeamCount( -1, TEAM_RED );
 

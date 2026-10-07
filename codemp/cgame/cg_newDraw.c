@@ -171,13 +171,13 @@ qboolean CG_OwnerDrawVisible(int flags) {
 	}
 
 	if (flags & CG_SHOW_ANYTEAMGAME) {
-		if( cgs.gametype >= GT_TEAM) {
+		if( BG_IsTeamGame(cgs.gametype)) {
 			return qtrue;
 		}
 	}
 
 	if (flags & CG_SHOW_ANYNONTEAMGAME) {
-		if( cgs.gametype < GT_TEAM) {
+		if( !BG_IsTeamGame(cgs.gametype)) {
 			return qtrue;
 		}
 	}
@@ -239,7 +239,7 @@ const char *CG_GetGameStatusText(void) {
 	{
 		s = "";
 	}
-	else if ( cgs.gametype < GT_TEAM || cgs.gametype == GT_ARCADE)
+	else if ( !BG_IsTeamGame(cgs.gametype) || cgs.gametype == GT_ARCADE)
 	{
 		if (cg.snap->ps.persistant[PERS_TEAM] != TEAM_SPECTATOR )
 		{

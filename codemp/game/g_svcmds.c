@@ -696,9 +696,9 @@ void Svcmd_ChangeGametype_f (void) { //because of "variable change -- restarting
 		ent = &g_entities[i];
 		if (!ent->client || !ent->inuse)
 			continue;
-		if ((level.gametype < GT_TEAM) && ((ent->client->sess.sessionTeam == TEAM_RED) || (ent->client->sess.sessionTeam == TEAM_BLUE)))
+		if ((!BG_IsTeamGame(level.gametype)) && ((ent->client->sess.sessionTeam == TEAM_RED) || (ent->client->sess.sessionTeam == TEAM_BLUE)))
 			SetTeam(ent, "f", qtrue);
-		if (level.gametype >= GT_TEAM && (ent->client->sess.sessionTeam == TEAM_FREE) && !ent->client->sess.raceMode) {
+		if (BG_IsTeamGame(level.gametype) && (ent->client->sess.sessionTeam == TEAM_FREE) && !ent->client->sess.raceMode) {
 			if (red)
 				SetTeam(ent, "red", qtrue);
 			else

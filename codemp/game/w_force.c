@@ -426,6 +426,7 @@ void WP_InitForcePowers( gentity_t *ent ) {
 	for ( /*i=0*/; i<NUM_FORCE_POWERS; i++ )
 		ent->client->ps.fd.forcePowerBaseLevel[i] = ent->client->ps.fd.forcePowerLevel[i];
 	ent->client->ps.fd.forceUsingAdded = 0;
+	G_JVMApplyClass(ent, qfalse);
 }
 
 void WP_SpawnInitForcePowers( gentity_t *ent )
@@ -1326,7 +1327,9 @@ void ForceTeamHeal( gentity_t *self )
 	{
 		ent = &g_entities[i];
 
-		if (ent && ent->client && self != ent && OnSameTeam(self, ent) && ent->client->ps.stats[STAT_HEALTH] < ent->client->ps.stats[STAT_MAX_HEALTH] && ent->client->ps.stats[STAT_HEALTH] > 0 && ForcePowerUsableOn(self, ent, FP_TEAM_HEAL) &&
+		if (ent && ent->client && self != ent && OnSameTeam(self, ent) &&
+			(!JVM_IsMode(level.gametype) || JVM_ReplicatedClass(ent->client->ps.stats[STAT_RESTRICTIONS]) == JVM_JEDI) &&
+			ent->client->ps.stats[STAT_HEALTH] < ent->client->ps.stats[STAT_MAX_HEALTH] && ent->client->ps.stats[STAT_HEALTH] > 0 && ForcePowerUsableOn(self, ent, FP_TEAM_HEAL) &&
 			trap->InPVS(self->client->ps.origin, ent->client->ps.origin))
 		{
 			VectorSubtract(self->client->ps.origin, ent->client->ps.origin, a);
@@ -2186,7 +2189,7 @@ void ForceDrainDamage( gentity_t *self, gentity_t *traceEnt, vec3_t dir, vec3_t 
 				else if (traceEnt->client->ps.fd.forcePower > 100) //racemode
 					traceEnt->client->ps.fd.forcePower = 100;
 
-				if (g_gametype.integer >= GT_TEAM) {
+				if (BG_IsTeamGame(g_gametype.integer)) {
 					if (self->client->sess.sessionTeam == traceEnt->client->sess.sessionTeam) 
 						self->client->pers.stats.teamDrainDamage += dmg2;
 					else
@@ -4063,7 +4066,7 @@ void ForceThrow( gentity_t *self, qboolean pull )
 			}
 //JAPRO - Serverside - Flag push/pull physics - End
 //JAPRO - Serverside - Item push/pull physics - Start
-			else if ( (g_tweakForce.integer & FT_PUSHPULLITEMS) && !(push_list[x]->s.eFlags & EF_NODRAW) && !self->client->ps.duelInProgress && push_list[x]->s.eType == ET_ITEM && (push_list[x]->item->giType == IT_AMMO || push_list[x]->item->giType == IT_ARMOR || push_list[x]->item->giType == IT_HEALTH))
+			else if ( ((g_tweakForce.integer & FT_PUSHPULLITEMS) || (JVM_IsMode(level.gametype) && JVM_ReplicatedClass(self->client->ps.stats[STAT_RESTRICTIONS]) == JVM_JEDI)) && !(push_list[x]->s.eFlags & EF_NODRAW) && !self->client->ps.duelInProgress && push_list[x]->s.eType == ET_ITEM && ((JVM_IsMode(level.gametype) && push_list[x]->item->giType == IT_WEAPON) || push_list[x]->item->giType == IT_AMMO || push_list[x]->item->giType == IT_ARMOR || push_list[x]->item->giType == IT_HEALTH))
 			{
 				push_list[x]->nextthink = level.time + 30000;
 				push_list[x]->think = ResetItem;//incase it falls off a cliff
@@ -4400,7 +4403,7 @@ void DoGripAction(gentity_t *self, forcePowers_t forcePower)
 	if (self->client->ps.fd.forcePowerDebounce[FP_GRIP] < level.time)
 	{ //2 damage per second while choking, resulting in 10 damage total (not including The Squeeze<tm>)
 		self->client->ps.fd.forcePowerDebounce[FP_GRIP] = level.time + 1000;
-		G_Damage(gripEnt, self, self, NULL, NULL, 2, DAMAGE_NO_ARMOR, MOD_FORCE_DARK);
+		G_Damage(gripEnt, self, self, NULL, NULL, 2, DAMAGE_NO_ARMOR | DAMAGE_JVM_GRIPKICK, MOD_FORCE_DARK);
 	}
 
 	Jetpack_Off(gripEnt); //make sure the guy being gripped has his jetpack off.
@@ -4448,7 +4451,7 @@ void DoGripAction(gentity_t *self, forcePowers_t forcePower)
 		if ((level.time - gripEnt->client->ps.fd.forceGripStarted) > 3000 && !self->client->ps.fd.forceGripDamageDebounceTime)
 		{ //if we managed to lift him into the air for 2 seconds, give him a crack
 			self->client->ps.fd.forceGripDamageDebounceTime = 1;
-			G_Damage(gripEnt, self, self, NULL, NULL, 20, DAMAGE_NO_ARMOR, MOD_FORCE_DARK);
+			G_Damage(gripEnt, self, self, NULL, NULL, 20, DAMAGE_NO_ARMOR | DAMAGE_JVM_GRIPKICK, MOD_FORCE_DARK);
 
 			//Must play custom sounds on the actual entity. Don't use G_Sound (it creates a temp entity for the sound)
 			G_EntitySound( gripEnt, CHAN_VOICE, G_SoundIndex(va( "*choke%d.wav", Q_irand( 1, 3 ) )) );
@@ -4550,7 +4553,7 @@ void DoGripAction(gentity_t *self, forcePowers_t forcePower)
 		if ((level.time - gripEnt->client->ps.fd.forceGripStarted) > 3000 && !self->client->ps.fd.forceGripDamageDebounceTime)
 		{ //if we managed to lift him into the air for 2 seconds, give him a crack
 			self->client->ps.fd.forceGripDamageDebounceTime = 1;
-			G_Damage(gripEnt, self, self, NULL, NULL, 40, DAMAGE_NO_ARMOR, MOD_FORCE_DARK);
+			G_Damage(gripEnt, self, self, NULL, NULL, 40, DAMAGE_NO_ARMOR | DAMAGE_JVM_GRIPKICK, MOD_FORCE_DARK);
 
 			//Must play custom sounds on the actual entity. Don't use G_Sound (it creates a temp entity for the sound)
 			G_EntitySound( gripEnt, CHAN_VOICE, G_SoundIndex(va( "*choke%d.wav", Q_irand( 1, 3 ) )) );
@@ -5635,6 +5638,8 @@ void WP_ForcePowersUpdate( gentity_t *self, usercmd_t *ucmd )
 		return;
 	}
 
+	G_JVMApplyClass(self, qfalse);
+
 	if (self->client->ps.pm_flags & PMF_FOLLOW)
 	{ //not a "real" game client, it's a spectator following someone
 		return;
@@ -5663,7 +5668,8 @@ void WP_ForcePowersUpdate( gentity_t *self, usercmd_t *ucmd )
 		self->client->ps.fd.saberAnimLevel = FORCE_LEVEL_1;
 	}
 
-	if (level.gametype != GT_SIEGE)
+	if (level.gametype != GT_SIEGE &&
+		JVM_AllowsLegacyForce(level.gametype, JVM_ReplicatedClass(self->client->ps.stats[STAT_RESTRICTIONS])))
 	{
 		if (!(self->client->ps.fd.forcePowersKnown & (1 << FP_LEVITATION)))
 		{
@@ -5860,7 +5866,8 @@ void WP_ForcePowersUpdate( gentity_t *self, usercmd_t *ucmd )
 
 	i = 0;
 
-	if (self->client->ps.powerups[PW_FORCE_ENLIGHTENED_LIGHT] || self->client->ps.powerups[PW_FORCE_ENLIGHTENED_DARK])
+	if (JVM_AllowsLegacyForce(level.gametype, JVM_ReplicatedClass(self->client->ps.stats[STAT_RESTRICTIONS])) &&
+		(self->client->ps.powerups[PW_FORCE_ENLIGHTENED_LIGHT] || self->client->ps.powerups[PW_FORCE_ENLIGHTENED_DARK]))
 	{ //enlightenment
 		if (!self->client->ps.fd.forceUsingAdded)
 		{
@@ -6138,6 +6145,10 @@ void WP_ForcePowersUpdate( gentity_t *self, usercmd_t *ucmd )
 					debounce = Q_max(g_forceDuelForceRegenTime.integer, 1);
 			}
 		}
+
+		debounce = JVM_ForceRegenInterval(level.gametype,
+			JVM_ReplicatedClass(self->client->ps.stats[STAT_RESTRICTIONS]),
+			debounce, g_mercforceregentime.integer);
 
 		while ( self->client->ps.fd.forcePowerRegenDebounceTime < level.time ) {
 			WP_ForcePowerRegenerate(self, overrideAmt);

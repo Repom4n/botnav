@@ -563,7 +563,7 @@ qboolean WP_ForcePowerUsable( gentity_t *self, forcePowers_t forcePower );
 
 int IsTeamplay(void)
 {
-	if ( level.gametype < GT_TEAM )
+	if ( !BG_IsTeamGame(level.gametype) )
 	{
 		return 0;
 	}
@@ -1041,6 +1041,19 @@ void BotUpdateInput(bot_state_t *bs, int time, int elapsed_time) {
 	bs->sfjLastRandomUse = BotInputToUserCommand(&bi, &bs->lastucmd,
 		bs->cur_ps.delta_angles, time,
 		bs->noUseTime, bs->sfjOwnsInput ? qfalse : qtrue);
+	if (JVM_BotGunAttack(level.gametype,
+		JVM_ReplicatedClass(bs->cur_ps.stats[STAT_RESTRICTIONS]),
+		bs->lastucmd.weapon, bs->cur_ps.weapon, WP_NUM_WEAPONS, WP_MELEE, WP_SABER) &&
+		g_entities[bs->client].client &&
+		g_entities[bs->client].health > 0 &&
+		(bs->lastucmd.buttons & (BUTTON_ATTACK | BUTTON_ALT_ATTACK))) {
+		gclient_t *client = g_entities[bs->client].client;
+		int interval = Com_Clampi(0, 2000, merc_botfloodprotect.integer);
+		if (time < client->jvmBotAttackTime)
+			bs->lastucmd.buttons &= ~(BUTTON_ATTACK | BUTTON_ALT_ATTACK);
+		else
+			client->jvmBotAttackTime = time + interval;
+	}
 	//subtract the delta angles
 	for (j = 0; j < 3; j++) {
 		bs->viewangles[j] = AngleMod(bs->viewangles[j] - SHORT2ANGLE(bs->cur_ps.delta_angles[j]));
@@ -18523,7 +18536,7 @@ int NewBotAI_GetTeamEnergize(bot_state_t* bs) {
 		return 0;
 	if (!(bs->cur_ps.fd.forcePowersKnown & (1 << FP_TEAM_FORCE)))
 		return 0;
-	if (g_gametype.integer < GT_TEAM)
+	if (!BG_IsTeamGame(g_gametype.integer))
 		return 0;
 
 	g_entities[bs->client].client->ps.fd.forcePowerLevel[FP_TEAM_FORCE] = 3;//hack
@@ -19170,7 +19183,7 @@ int NewBotAI_GetTeamHeal(bot_state_t *bs) {
 		return 0;
 	if (!(bs->cur_ps.fd.forcePowersKnown & (1 << FP_TEAM_HEAL)))
 		return 0;
-	if (g_gametype.integer < GT_TEAM)
+	if (!BG_IsTeamGame(g_gametype.integer))
 		return 0;
 
 	for (i = 0; i < MAX_CLIENTS; i++) {
@@ -23491,7 +23504,7 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 			}
 		}
 	}
-	else if (level.gametype >= GT_TEAM)
+	else if (BG_IsTeamGame(level.gametype))
 	{ //still check for anyone to help..
 		friendInLOF = CheckForFriendInLOF(bs);
 

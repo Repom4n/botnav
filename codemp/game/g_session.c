@@ -94,6 +94,7 @@ void G_WriteClientSessionData( gclient_t *client )
 
 	Q_strcat( s, sizeof( s ), va( "%i ", client->sess.sayteammod ) );
 	Q_strcat( s, sizeof( s ), va( "%s", client->sess.clanpass ) ); //wtf?
+	trap->Cvar_Set(va("jvmclass%i", client - level.clients), va("%i", client->sess.jvmClass));
 
 	var = va( "session%i", client - level.clients );
 
@@ -145,6 +146,8 @@ void G_ReadSessionData( gclient_t *client )
 		);
 
 	client->sess.sessionTeam	= (team_t)tempSessionTeam;
+	client->sess.jvmClass = JVM_Class(GT_JOM, TEAM_FREE,
+		trap->Cvar_VariableIntegerValue(va("jvmclass%i", client - level.clients)));
 	client->sess.spectatorState	= (spectatorState_t)tempSpectatorState;
 	client->sess.teamLeader		= (qboolean)tempTeamLeader;
 	client->sess.sawMOTD		= (qboolean)tempSawMOTD;
@@ -184,11 +187,18 @@ void G_InitSessionData( gclient_t *client, char *userinfo, qboolean isBot ) {
 	const char		*value;
 
 	sess = &client->sess;
+	if (level.gametype == GT_JOM) {
+		value = Info_ValueForKey(userinfo, "class");
+		sess->jvmClass = !Q_stricmp(value, "jedi") ? JVM_JEDI :
+			!Q_stricmp(value, "merc") ? JVM_MERC :
+			!Q_stricmp(value, "tank") ? JVM_TANK :
+			isBot ? (int)(client - level.clients) % 3 : JVM_JEDI;
+	}
 
 	client->sess.siegeDesiredTeam = TEAM_FREE;
 
 	// initial team determination
-	if ( level.gametype >= GT_TEAM && level.gametype != GT_ARCADE ) {
+	if ( BG_IsTeamGame(level.gametype) && level.gametype != GT_ARCADE ) {
 		if ( g_teamAutoJoin.integer && !(g_entities[client-level.clients].r.svFlags & SVF_BOT) ) {
 			sess->sessionTeam = PickTeam( -1 );
 			client->ps.fd.forceDoInit = 1; //every time we change teams make sure our force powers are set right

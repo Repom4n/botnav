@@ -246,6 +246,9 @@ float forceJumpStrength[NUM_FORCE_POWER_LEVELS + 2] =
 };
 
 static int GetFlipkick(playerState_t *ps) {
+	if ((ps->stats[STAT_RESTRICTIONS] & JVM_ACTIVE) &&
+		JVM_ReplicatedClass(ps->stats[STAT_RESTRICTIONS]) == JVM_MERC)
+		return JVM_FlipkickSetting(ps->stats[STAT_RESTRICTIONS], 0);
 #if _GAME
 		if (ps->duelInProgress) {
 			if (dueltypes[ps->clientNum] == 0) { //NF.. man this sucks.. fucks up JA+ nf duels
@@ -273,6 +276,17 @@ static int GetFlipkick(playerState_t *ps) {
 			return 1;
 
 		return 0;
+#endif
+}
+
+static qboolean PM_JVMUsesOwnedGuns(playerState_t *ps) {
+	if (!(ps->stats[STAT_RESTRICTIONS] & JVM_ACTIVE) ||
+		JVM_ReplicatedClass(ps->stats[STAT_RESTRICTIONS]) != JVM_MERC)
+		return qfalse;
+#ifdef _GAME
+	return JVM_DuelAllowsGuns(pm->gametype, dueltypes[ps->clientNum]);
+#else
+	return JVM_DuelAllowsGuns(pm->gametype, cg_dueltypes[ps->clientNum] - 1);
 #endif
 }
 
@@ -3862,18 +3876,18 @@ static qboolean PM_CheckJump( void )
 				else if ( pm->cmd.forwardmove == 0 )
 				{//wall-flip japro
 					#ifdef _GAME
-						if ((g_flipKick.integer < 2) && allowWallFlips)
+						if ((JVM_FlipkickSetting(pm->ps->stats[STAT_RESTRICTIONS], g_flipKick.integer) < 2) && allowWallFlips)
 						{
 							vertPush = forceJumpStrength[FORCE_LEVEL_2]/2.25f;
 							anim = BOTH_WALL_FLIP_RIGHT;
 						}
-						else if ((g_flipKick.integer == 2) && allowWallFlips && (client->lastKickTime + 50 < level.time))
+						else if ((JVM_FlipkickSetting(pm->ps->stats[STAT_RESTRICTIONS], g_flipKick.integer) == 2) && allowWallFlips && (client->lastKickTime + 50 < level.time))
 						{
 							vertPush = forceJumpStrength[FORCE_LEVEL_2]/2.25f;
 							anim = BOTH_WALL_FLIP_RIGHT;
 							client->lastKickTime = level.time;
 						}
-						else if ((g_flipKick.integer > 2) && allowWallFlips && pm->ps->legsAnim != BOTH_WALL_FLIP_RIGHT && pm->ps->legsAnim != BOTH_WALL_FLIP_LEFT)
+						else if ((JVM_FlipkickSetting(pm->ps->stats[STAT_RESTRICTIONS], g_flipKick.integer) > 2) && allowWallFlips && pm->ps->legsAnim != BOTH_WALL_FLIP_RIGHT && pm->ps->legsAnim != BOTH_WALL_FLIP_LEFT)
 						{
 							vertPush = forceJumpStrength[FORCE_LEVEL_2]/2.25f;
 							anim = BOTH_WALL_FLIP_RIGHT;
@@ -3907,18 +3921,18 @@ static qboolean PM_CheckJump( void )
 				else if ( pm->cmd.forwardmove == 0 )
 				{//wall-flip japro
 					#ifdef _GAME
-						if ((g_flipKick.integer < 2) && allowWallFlips)
+						if ((JVM_FlipkickSetting(pm->ps->stats[STAT_RESTRICTIONS], g_flipKick.integer) < 2) && allowWallFlips)
 						{
 							vertPush = forceJumpStrength[FORCE_LEVEL_2]/2.25f;
 							anim = BOTH_WALL_FLIP_LEFT;
 						}
-						else if ((g_flipKick.integer == 2) && allowWallFlips && (client->lastKickTime + 50 < level.time))
+						else if ((JVM_FlipkickSetting(pm->ps->stats[STAT_RESTRICTIONS], g_flipKick.integer) == 2) && allowWallFlips && (client->lastKickTime + 50 < level.time))
 						{
 							vertPush = forceJumpStrength[FORCE_LEVEL_2]/2.25f;
 							anim = BOTH_WALL_FLIP_LEFT;
 							client->lastKickTime = level.time;
 						}
-						else if ((g_flipKick.integer > 2) && allowWallFlips && pm->ps->legsAnim != BOTH_WALL_FLIP_LEFT && pm->ps->legsAnim != BOTH_WALL_FLIP_RIGHT)
+						else if ((JVM_FlipkickSetting(pm->ps->stats[STAT_RESTRICTIONS], g_flipKick.integer) > 2) && allowWallFlips && pm->ps->legsAnim != BOTH_WALL_FLIP_LEFT && pm->ps->legsAnim != BOTH_WALL_FLIP_RIGHT)
 						{
 							vertPush = forceJumpStrength[FORCE_LEVEL_2]/2.25f;
 							anim = BOTH_WALL_FLIP_LEFT;
@@ -4222,7 +4236,10 @@ static qboolean PM_CheckJump( void )
 
 #if 1
 			else if ( pm->cmd.forwardmove > 0 //pushing forward -- this is used for forward flipkicks i guess
-				&& pm->ps->fd.forcePowerLevel[FP_LEVITATION] > FORCE_LEVEL_1
+				&& (pm->ps->fd.forcePowerLevel[FP_LEVITATION] > FORCE_LEVEL_1 ||
+					((pm->ps->stats[STAT_RESTRICTIONS] & JVM_ACTIVE) &&
+					 JVM_ReplicatedClass(pm->ps->stats[STAT_RESTRICTIONS]) == JVM_MERC &&
+					 pm->ps->fd.forcePowerLevel[FP_LEVITATION] > 0 && GetFlipkick(pm->ps)))
 				&& pm->ps->velocity[2] > 200
 				&& PM_GroundDistance() <= 80 //unfortunately we do not have a happy ground timer like SP (this would use up more bandwidth if we wanted prediction workign right), so we'll just use the actual ground distance.
 				&& !BG_InSpecialJump(pm->ps->legsAnim))
@@ -4263,7 +4280,7 @@ static qboolean PM_CheckJump( void )
 						PM_SetAnim( parts, BOTH_WALL_FLIP_BACK1, SETANIM_FLAG_OVERRIDE|SETANIM_FLAG_HOLD );
 
 #ifdef _GAME
-						if (g_flipKick.integer > 2)
+						if (JVM_FlipkickSetting(pm->ps->stats[STAT_RESTRICTIONS], g_flipKick.integer) > 2)
 							pm->ps->legsTimer = 0;
 						else
 #endif
@@ -7048,7 +7065,7 @@ static void PM_GroundTrace( void ) {
 					pm->ps->weaponTime <= 0)
 				{
 					gentity_t *servEnt = (gentity_t *)pm_entSelf;
-					if (level.gametype < GT_TEAM ||
+					if (!BG_IsTeamGame(level.gametype) ||
 						!trEnt->alliedTeam ||
 						(trEnt->alliedTeam == servEnt->client->sess.sessionTeam))
 					{ //not belonging to a team, or client is on same team
@@ -9529,7 +9546,7 @@ int PM_ItemUsable(playerState_t *ps, int forcedUse)
 		forcedUse = bg_itemlist[ps->stats[STAT_HOLDABLE_ITEM]].giTag;
 	}
 
-	if (!BG_IsItemSelectable(ps, forcedUse))
+	if (!BG_CanUseHoldable(ps, forcedUse) || !BG_IsItemSelectable(ps, forcedUse))
 	{
 		return 0;
 	}
@@ -10277,7 +10294,7 @@ if (pm->ps->duelInProgress)
 			}
 		}
 #endif
-		else {//Japro - gun duels start
+		else if (!PM_JVMUsesOwnedGuns(pm->ps)) {//Japro - gun duels start
 			pm->cmd.weapon = WP_SABER;
 			pm->ps->weapon = WP_SABER;
 		}
@@ -10287,6 +10304,8 @@ if (pm->ps->duelInProgress)
 			pm->cmd.upmove = 0;
 			pm->cmd.forwardmove = 0;
 			pm->cmd.rightmove = 0;
+			if (pm->gametype == GT_JOM)
+				pm->cmd.buttons &= ~(BUTTON_ATTACK | BUTTON_ALT_ATTACK | BUTTON_FORCEPOWER);
 		}
 	}
 
@@ -10468,7 +10487,8 @@ if (pm->ps->duelInProgress)
 		PM_StartTorsoAnim( BOTH_GUNSIT1 );
 	}
 
-	if (pm->ps->isJediMaster || (pm->ps->duelInProgress && !IsRacemode(pm->ps)) || pm->ps->trueJedi) //_coop uses duelinprogress for semi isolation but we dont want it to actually do any of this stuff
+	if (pm->ps->isJediMaster || (pm->ps->duelInProgress && !IsRacemode(pm->ps) &&
+		!PM_JVMUsesOwnedGuns(pm->ps)) || pm->ps->trueJedi)
 	{
 #ifdef _CGAME
 		if (cg_dueltypes[pm->ps->clientNum] > 2) {
@@ -15386,7 +15406,10 @@ void PmoveSingle (pmove_t *pmove) {
 		{
 
 #if _GRAPPLE
-			if ((pm->ps->pm_flags & PMF_GRAPPLE) && IsJaPRO() && pm->ps->stats[STAT_MOVEMENTSTYLE] == MV_TRIBES) {
+			if ((pm->ps->pm_flags & PMF_GRAPPLE) && (pm->ps->stats[STAT_RESTRICTIONS] & JVM_ACTIVE) && !(pm->ps->pm_flags & PMF_DUCKED)) {
+				PM_GrappleMoveTarzan();
+			}
+			else if ((pm->ps->pm_flags & PMF_GRAPPLE) && IsJaPRO() && pm->ps->stats[STAT_MOVEMENTSTYLE] == MV_TRIBES) {
 				PM_GrappleMoveTribes();
 			}
 #if _GAME
@@ -15669,4 +15692,3 @@ void Pmove (pmove_t *pmove) {
 		}
 	}
 }
-

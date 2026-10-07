@@ -74,7 +74,7 @@ void CG_DrawTribesHealthBar(centity_t* cent, float chX, float chY, float chW, fl
 	}
 
 	//color of the bar
-	if (!cent->currentState.teamowner || cgs.gametype < GT_TEAM)
+	if (!cent->currentState.teamowner || !BG_IsTeamGame(cgs.gametype))
 	{ //not owned by a team or teamplay
 		aColor[0] = 1.0f;
 		aColor[1] = 1.0f;

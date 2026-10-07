@@ -252,7 +252,7 @@ void ShieldGoNotSolid(gentity_t *self)
 // Somebody (a player) has touched the shield.  See if it is a "friend".
 void ShieldTouch(gentity_t *self, gentity_t *other, trace_t *trace)
 {
-	if (level.gametype >= GT_TEAM)
+	if (BG_IsTeamGame(level.gametype))
 	{ // let teammates through
 		// compare the parent's team to the "other's" team
 		if (self->parent && ( self->parent->client) && (other->client))
@@ -483,7 +483,7 @@ qboolean PlaceShield(gentity_t *playerent)
 
 			shield->s.owner = playerent->s.number;
 			shield->s.shouldtarget = qtrue;
-			if (level.gametype >= GT_TEAM)
+			if (BG_IsTeamGame(level.gametype))
 			{
 				shield->s.teamowner = playerent->client->sess.sessionTeam;
 			}
@@ -1139,7 +1139,7 @@ void ItemUse_Sentry( gentity_t *ent )
 
 	sentry->s.owner = ent->s.number;
 	sentry->s.shouldtarget = qtrue;
-	if (level.gametype >= GT_TEAM)
+	if (BG_IsTeamGame(level.gametype))
 	{
 		sentry->s.teamowner = ent->client->sess.sessionTeam;
 	}
@@ -1212,11 +1212,15 @@ static void MedPackGive(gentity_t *ent, int amount)
 
 void ItemUse_MedPack_Big(gentity_t *ent)
 {
+	if (!ent || !ent->client || !BG_CanUseHoldable(&ent->client->ps, HI_MEDPAC_BIG))
+		return;
 	MedPackGive(ent, MAX_MEDPACK_BIG_HEAL_AMOUNT);
 }
 
 void ItemUse_MedPack(gentity_t *ent)
 {
+	if (!ent || !ent->client || !BG_CanUseHoldable(&ent->client->ps, HI_MEDPAC))
+		return;
 	MedPackGive(ent, MAX_MEDPACK_HEAL_AMOUNT);
 }
 
@@ -2165,7 +2169,7 @@ int Pickup_Powerup( gentity_t *ent, gentity_t *other ) {
 
     // if same team in team game, no sound
     // cannot use OnSameTeam as it expects to g_entities, not clients
-  	if ( level.gametype >= GT_TEAM && other->client->sess.sessionTeam == client->sess.sessionTeam  ) {
+	if ( BG_IsTeamGame(level.gametype) && other->client->sess.sessionTeam == client->sess.sessionTeam  ) {
       continue;
     }
 
@@ -3645,4 +3649,3 @@ void G_RunItem( gentity_t *ent ) {
 
 	G_BounceItem( ent, &tr );
 }
-

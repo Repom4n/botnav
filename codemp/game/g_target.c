@@ -133,11 +133,11 @@ The activator is given this many points.
 */
 void Use_Target_Score (gentity_t *ent, gentity_t *other, gentity_t *activator) {
 	if (ent->spawnflags & 1) {
-		if (level.gametype >= GT_TEAM)
+		if (BG_IsTeamGame(level.gametype))
 			AddTeamScore(ent->s.pos.trBase, TEAM_BLUE, ent->count, qtrue);
 	}
 	else if (ent->spawnflags & 2) {
-		if (level.gametype >= GT_TEAM)
+		if (BG_IsTeamGame(level.gametype))
 			AddTeamScore(ent->s.pos.trBase, TEAM_RED, ent->count, qtrue);
 	}
 	else {

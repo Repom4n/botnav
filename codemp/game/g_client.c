@@ -718,7 +718,7 @@ gentity_t *SelectRandomFurthestSpawnPoint ( vec3_t avoidPoint, vec3_t origin, ve
 	spot = NULL;
 
 	//in Team DM, look for a team start spot first, if any
-	if ( level.gametype == GT_TEAM
+	if ( (level.gametype == GT_TEAM || level.gametype == GT_JVM)
 		&& team != TEAM_FREE
 		&& team != TEAM_SPECTATOR )
 	{
@@ -1705,7 +1705,7 @@ void SetupGameGhoul2Model(gentity_t *ent, char *modelname, char *skinName)
 						strcpy(skin, "default");
 					}
 
-					if ( level.gametype >= GT_TEAM && level.gametype != GT_SIEGE && !g_jediVmerc.integer )
+					if ( BG_IsTeamGame(level.gametype) && level.gametype != GT_SIEGE && !g_jediVmerc.integer )
 					{
 						float colorOverride[3];
 
@@ -2264,7 +2264,7 @@ void DetectTribesClass(gentity_t *ent, char *model) {
 	//WT_TRIBES
 	if (!ent || !ent->client)
 		return;
-	if (!ent->client->sess.raceMode || (level.gametype >= GT_TEAM && ent->client->sess.sessionTeam > TEAM_FREE)) {
+	if (!ent->client->sess.raceMode || (BG_IsTeamGame(level.gametype) && ent->client->sess.sessionTeam > TEAM_FREE)) {
 		Q_strlwr(model);
 		if (g_tribesMode.integer == 1) {
 			if (!Q_strncmp("tribesheavy", model, 16) || !Q_strncmp("reborn_twin", model, 11) || !Q_strncmp("reelo", model, 5) || !Q_strncmp("noghri", model, 6) || !Q_strncmp("rax_joris", model, 9)) {
@@ -2539,7 +2539,7 @@ qboolean ClientUserinfoChanged( int clientNum ) { //I think anything treated as 
 	}
 
 	//WT_TRIBES
-	if (g_tribesMode.integer && (!client->sess.raceMode || (level.gametype >= GT_TEAM && client->sess.sessionTeam > TEAM_FREE))) {
+	if (g_tribesMode.integer && (!client->sess.raceMode || (BG_IsTeamGame(level.gametype) && client->sess.sessionTeam > TEAM_FREE))) {
 		DetectTribesClass(ent, model);
 	}
 	else if (client->pers.tribesClass) {
@@ -2559,7 +2559,7 @@ qboolean ClientUserinfoChanged( int clientNum ) { //I think anything treated as 
 	Q_strncpyz( forcePowers, Info_ValueForKey( userinfo, "forcepowers" ), sizeof( forcePowers ) );
 
 	// update our customRGBA for team colors.
-	if ( level.gametype >= GT_TEAM && level.gametype != GT_SIEGE && !g_jediVmerc.integer ) {
+	if ( BG_IsTeamGame(level.gametype) && level.gametype != GT_SIEGE && !g_jediVmerc.integer ) {
 		char skin[MAX_QPATH] = {0};
 		vec3_t colorOverride = {0.0f};
 
@@ -2575,7 +2575,7 @@ qboolean ClientUserinfoChanged( int clientNum ) { //I think anything treated as 
 		G_ValidateCosmetics(client, cp_cosmetics, sizeof(cp_cosmetics)); //Model cosmetics
 
 	// bots set their team a few frames later
-	if ( level.gametype >= GT_TEAM && g_entities[clientNum].r.svFlags & SVF_BOT ) {
+	if ( BG_IsTeamGame(level.gametype) && g_entities[clientNum].r.svFlags & SVF_BOT ) {
 		s = Info_ValueForKey( userinfo, "team" );
 		if ( !Q_stricmp( s, "red" ) || !Q_stricmp( s, "r" ) )
 			team = TEAM_RED;
@@ -2671,7 +2671,7 @@ qboolean ClientUserinfoChanged( int clientNum ) { //I think anything treated as 
 		client->ps.stats[STAT_MAX_HEALTH] = client->pers.maxHealth;
 	}
 
-	if ( level.gametype >= GT_TEAM )
+	if ( BG_IsTeamGame(level.gametype) )
 		client->pers.teamInfo = qtrue;
 	else {
 		s = Info_ValueForKey( userinfo, "teamoverlay" );
@@ -2708,6 +2708,8 @@ qboolean ClientUserinfoChanged( int clientNum ) { //I think anything treated as 
 	buf[0] = '\0';
 	Q_strcat( buf, sizeof( buf ), va( "n\\%s\\", client->pers.netname ) );
 	Q_strcat( buf, sizeof( buf ), va( "t\\%i\\", client->sess.sessionTeam ) );
+	Q_strcat( buf, sizeof( buf ), va( "jclass\\%i\\",
+		JVM_Class(level.gametype, client->sess.sessionTeam, client->sess.jvmClass)) );
 	Q_strcat( buf, sizeof( buf ), va( "model\\%s\\", model ) );
 	if ( gender == GENDER_FEMALE )	Q_strcat( buf, sizeof( buf ), va( "ds\\%c\\", 'f' ) );
 	else							Q_strcat( buf, sizeof( buf ), va( "ds\\%c\\", 'm' ) );
@@ -2727,7 +2729,7 @@ qboolean ClientUserinfoChanged( int clientNum ) { //I think anything treated as 
 	}
 	if ( level.gametype == GT_POWERDUEL )
 		Q_strcat( buf, sizeof( buf ), va( "dt\\%i\\", client->sess.duelTeam ) );
-	if ( level.gametype >= GT_TEAM ) {
+	if ( BG_IsTeamGame(level.gametype) ) {
 	//	Q_strcat( buf, sizeof( buf ), va( "tt\\%d\\", teamTask ) );
 		Q_strcat( buf, sizeof( buf ), va( "tl\\%d\\", teamLeader ) );
 	}
@@ -3041,7 +3043,7 @@ char *ClientConnect( int clientNum, qboolean firstTime, qboolean isBot ) {
 		trap->SendServerCommand( -1, va("print \"%s" S_COLOR_WHITE " %s\n\"", client->pers.netname, G_GetStringEdString("MP_SVGAME", "PLCONNECT")) );
 	}
 
-	if ( level.gametype >= GT_TEAM &&
+	if ( BG_IsTeamGame(level.gametype) &&
 		client->sess.sessionTeam != TEAM_SPECTATOR ) {
 		BroadcastTeamChange( client, -1 );
 	}
@@ -3090,7 +3092,7 @@ void ClientBegin( int clientNum, qboolean allowTeamReset ) {
 
 	ent = g_entities + clientNum;
 
-	if ((ent->r.svFlags & SVF_BOT) && level.gametype >= GT_TEAM && level.gametype != GT_ARCADE)
+	if ((ent->r.svFlags & SVF_BOT) && BG_IsTeamGame(level.gametype) && level.gametype != GT_ARCADE)
 	{
 		if (allowTeamReset)
 		{
@@ -3969,6 +3971,79 @@ Initializes all non-persistant parts of playerState
 ============
 */
 extern qboolean WP_HasForcePowers( const playerState_t *ps );
+void G_JVMApplyClass(gentity_t *ent, qboolean loadout) {
+	gclient_t *client;
+	int playerClass, i, rank, weapons;
+	if (!ent || !ent->client || ent->s.number >= MAX_CLIENTS || !JVM_IsMode(level.gametype))
+		return;
+	client = ent->client;
+	if (client->ps.pm_flags & PMF_FOLLOW)
+		return;
+	playerClass = JVM_Class(level.gametype, client->sess.sessionTeam, client->sess.jvmClass);
+	client->ps.stats[STAT_RESTRICTIONS] =
+		(client->ps.stats[STAT_RESTRICTIONS] & ~(JVM_CLASS_MASK | JVM_ACTIVE | JVM_FLIPKICK)) |
+		JVM_ACTIVE | (playerClass << JVM_CLASS_SHIFT) |
+		(merc_flipkick.integer ? JVM_FLIPKICK : 0);
+	/* Explicit rules replace, rather than stack with, legacy Jedi-v-Merc. */
+	client->ps.trueJedi = client->ps.trueNonJedi = qfalse;
+	if (playerClass != JVM_JEDI) {
+		client->ps.fd.forcePowersKnown = 0;
+		for (i = 0; i < NUM_FORCE_POWERS; i++) {
+			rank = JVM_ForceRankWithDisable(playerClass, client->ps.fd.forcePowerLevel[i],
+				i == FP_LEVITATION, i == FP_SABER_OFFENSE || i == FP_SABER_DEFENSE || i == FP_SABERTHROW,
+				merc_forcejumplevel.integer, g_forcePowerDisable.integer & (1 << i),
+				i == FP_SABER_OFFENSE || i == FP_SABER_DEFENSE);
+			if (!rank && (client->ps.fd.forcePowersActive & (1 << i)))
+				WP_ForcePowerStop(ent, i);
+			client->ps.fd.forcePowerLevel[i] = client->ps.fd.forcePowerBaseLevel[i] = rank;
+			if (rank)
+				client->ps.fd.forcePowersKnown |= 1 << i;
+		}
+	}
+	/* Strip illegal inventory, but never re-grant disarmed weapons here. */
+	client->ps.stats[STAT_WEAPONS] = JVM_AllowedWeapons(playerClass,
+		client->ps.stats[STAT_WEAPONS], g_weaponDisable.integer, 1 << WP_MELEE, 1 << WP_SABER);
+	if (!loadout && !(client->ps.stats[STAT_WEAPONS] & (1 << client->ps.weapon))) {
+		client->ps.weapon = WP_NONE;
+		for (i = WP_MELEE; i <= LAST_USEABLE_WEAPON; i++)
+			if (client->ps.stats[STAT_WEAPONS] & (1 << i)) {
+				client->ps.weapon = i;
+				break;
+			}
+	}
+	if (!loadout)
+		return;
+	if (client->sess.sessionTeam == TEAM_SPECTATOR)
+		return;
+	if (playerClass == JVM_MERC) {
+		weapons = (client->ps.stats[STAT_WEAPONS] | (1 << WP_MELEE)) & ~(1 << WP_SABER);
+		if (!g_startingWeapons.integer)
+			weapons |= (1 << WP_BRYAR_PISTOL) | (1 << WP_BLASTER) | (1 << WP_BOWCASTER);
+		weapons &= ~g_weaponDisable.integer;
+		weapons |= 1 << WP_MELEE;
+		client->ps.stats[STAT_WEAPONS] = weapons;
+		client->ps.stats[STAT_HOLDABLE_ITEMS] &= ~((1 << HI_MEDPAC) | (1 << HI_MEDPAC_BIG));
+		client->ps.stats[STAT_HOLDABLE_ITEM] = 0;
+		for (i = WP_BRYAR_PISTOL; i <= LAST_USEABLE_WEAPON; i++)
+			if (weapons & (1 << i))
+				client->ps.ammo[weaponData[i].ammoIndex] = ammoData[weaponData[i].ammoIndex].max;
+		if (!(weapons & (1 << client->ps.weapon))) {
+			client->ps.weapon = WP_MELEE;
+			for (i = WP_BRYAR_PISTOL; i <= LAST_USEABLE_WEAPON; i++)
+				if (weapons & (1 << i)) {
+					client->ps.weapon = i;
+					break;
+				}
+		}
+	} else {
+		client->ps.stats[STAT_WEAPONS] = 1 << WP_SABER;
+		client->ps.weapon = WP_SABER;
+		memset(client->ps.ammo, 0, sizeof(client->ps.ammo));
+		client->ps.stats[STAT_HOLDABLE_ITEMS] = 0;
+		client->ps.stats[STAT_HOLDABLE_ITEM] = 0;
+	}
+}
+
 void ClientSpawn(gentity_t *ent) {
 	int					i = 0, index = 0, saveSaberNum = ENTITYNUM_NONE, wDisable = 0, savedSiegeIndex = 0, maxHealth = 100;
 	vec3_t				spawn_origin, spawn_angles;
@@ -4173,7 +4248,7 @@ void ClientSpawn(gentity_t *ent) {
 
 	client->ps.customRGBA[3]=255;
 
-	if ( level.gametype >= GT_TEAM && level.gametype != GT_SIEGE && !g_jediVmerc.integer )
+	if ( BG_IsTeamGame(level.gametype) && level.gametype != GT_SIEGE && !g_jediVmerc.integer )
 	{
 		char skin[MAX_QPATH] = {0}, model[MAX_QPATH] = {0};
 		vec3_t colorOverride = {0.0f};
@@ -4334,9 +4409,9 @@ void ClientSpawn(gentity_t *ent) {
 		&& level.gametype != GT_JEDIMASTER 
 		&& !HasSetSaberOnly()
 		&& !AllForceDisabled( g_forcePowerDisable.integer )
-		&& g_jediVmerc.integer )
+		&& g_jediVmerc.integer && !JVM_IsMode(level.gametype) )
 	{
-		if ( level.gametype >= GT_TEAM && (client->sess.sessionTeam == TEAM_BLUE || client->sess.sessionTeam == TEAM_RED) )
+		if ( BG_IsTeamGame(level.gametype) && (client->sess.sessionTeam == TEAM_BLUE || client->sess.sessionTeam == TEAM_RED) )
 		{//In Team games, force one side to be merc and other to be jedi
 			if ( level.numPlayingClients > 0 )
 			{//already someone in the game
@@ -4408,7 +4483,7 @@ void ClientSpawn(gentity_t *ent) {
 	}
 	else
 	{//jediVmerc is incompatible with this gametype, turn it off!
-		if (g_jediVmerc.integer) {
+		if (g_jediVmerc.integer && !JVM_IsMode(level.gametype)) {
 			trap->Cvar_Set( "g_jediVmerc", "0" );
 		  trap->Cvar_Update( &g_jediVmerc );
 		}
@@ -4719,6 +4794,7 @@ void ClientSpawn(gentity_t *ent) {
 		client->ps.stats[STAT_ARMOR] = client->ps.stats[STAT_MAX_HEALTH];
 	}
 
+	G_JVMApplyClass(ent, qtrue);
 	G_SetOrigin( ent, spawn_origin );
 	VectorCopy( spawn_origin, client->ps.origin );
 

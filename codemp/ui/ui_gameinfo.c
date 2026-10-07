@@ -183,6 +183,10 @@ void UI_LoadArenas( void ) {
 		uiInfo.mapList[uiInfo.mapCount].typeBits = 0;
 
 		type = Info_ValueForKey( ui_arenaInfos[n], "type" );
+		if (!*type || strstr(type, "ffa") || strstr(type, "jom"))
+			uiInfo.mapList[uiInfo.mapCount].typeBits |= 1 << GT_JOM;
+		if (strstr(type, "ffa") || strstr(type, "team") || strstr(type, "jvm"))
+			uiInfo.mapList[uiInfo.mapCount].typeBits |= 1 << GT_JVM;
 		// if no type specified, it will be treated as "ffa"
 		if( *type ) {
 			if( strstr( type, "ffa" ) ) {

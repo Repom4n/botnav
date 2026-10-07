@@ -1949,7 +1949,7 @@ void TryUse( gentity_t *ent )
 			}
 			else
 			{ // Otherwise board this vehicle.
-				if (level.gametype < GT_TEAM ||
+				if (!BG_IsTeamGame(level.gametype) ||
 					!target->alliedTeam ||
 					(target->alliedTeam == ent->client->sess.sessionTeam))
 				{ //not belonging to a team, or client is on same team

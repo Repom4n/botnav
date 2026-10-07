@@ -3387,7 +3387,11 @@ void Weapon_HookThink (gentity_t *ent);
 qboolean CanGrapple( gentity_t *ent ) {
 	if (!ent || !ent->client)
 		return qfalse;
-	if (!g_allowGrapple.integer && !ent->client->sess.raceMode)
+	if (JVM_IsMode(level.gametype) &&
+		(JVM_ReplicatedClass(ent->client->ps.stats[STAT_RESTRICTIONS]) != JVM_MERC ||
+		 !merc_grapple.integer || ent->client->ps.fd.forcePower <= 0 || ent->health <= 0))
+		return qfalse;
+	if (!JVM_IsMode(level.gametype) && !g_allowGrapple.integer && !ent->client->sess.raceMode)
 		return qfalse;
 	if (ent->client->sess.raceMode && ent->client->sess.movementStyle != MV_JETPACK && ent->client->sess.movementStyle != MV_TRIBES)
 		return qfalse;
@@ -3403,7 +3407,9 @@ qboolean CanGrapple( gentity_t *ent ) {
 qboolean CanFireGrapple( gentity_t *ent ) { // Adapt for new hold-to-use jetpack?
 	if (!ent || !ent->client)
 		return qfalse;
-	if (!g_allowGrapple.integer && !ent->client->sess.raceMode)
+	if (JVM_IsMode(level.gametype) && !CanGrapple(ent))
+		return qfalse;
+	if (!JVM_IsMode(level.gametype) && !g_allowGrapple.integer && !ent->client->sess.raceMode)
 		return qfalse;
 	if (ent->client->sess.raceMode && ent->client->sess.movementStyle != MV_JETPACK && ent->client->sess.movementStyle != MV_TRIBES)
 		return qfalse;
@@ -3411,7 +3417,7 @@ qboolean CanFireGrapple( gentity_t *ent ) { // Adapt for new hold-to-use jetpack
 		return qfalse;
 	if (ent->client->jetPackOn)
 		return qfalse;
-	if (!BG_SaberInIdle(ent->client->ps.saberMove))
+	if ((!JVM_IsMode(level.gametype) || ent->client->ps.weapon == WP_SABER) && !BG_SaberInIdle(ent->client->ps.saberMove))
 		return qfalse;
 	if (BG_InRoll(&ent->client->ps, ent->client->ps.legsAnim))
 		return qfalse;
@@ -3761,7 +3767,7 @@ void ClientThink_real( gentity_t *ent ) {
 	}
 
 	if (!isNPC && client->sess.sessionTeam == TEAM_FREE && !g_raceMode.integer) {
-		if (client->ps.stats[STAT_RACEMODE] || (level.gametype >= GT_TEAM && level.gametype != GT_ARCADE)) {
+		if (client->ps.stats[STAT_RACEMODE] || (BG_IsTeamGame(level.gametype) && level.gametype != GT_ARCADE)) {
 			SetTeam ( ent, "spectator", qtrue );
 			client->sess.raceMode = qfalse;
 			client->ps.stats[STAT_RACEMODE] = qfalse;
@@ -4425,6 +4431,8 @@ void ClientThink_real( gentity_t *ent ) {
 
 					duelAgainst->client->ps.duelTime = 0;
 				}
+				if (JVM_DuelAllowsGuns(level.gametype, dueltypes[client->ps.clientNum]))
+					client->ps.duelTime = 0;
 			}
 			else //loda fixme, how to predict this
 			{
@@ -4433,6 +4441,8 @@ void ClientThink_real( gentity_t *ent ) {
 				ucmd->forwardmove = 0;
 				ucmd->rightmove = 0;
 				ucmd->upmove = 0;
+				if (level.gametype == GT_JOM)
+					ucmd->buttons &= ~(BUTTON_ATTACK | BUTTON_ALT_ATTACK | BUTTON_FORCEPOWER);
 			}
 		}
 
@@ -4535,8 +4545,11 @@ void ClientThink_real( gentity_t *ent ) {
 								ent->client->ps.stats[STAT_HEALTH], ent->client->ps.stats[STAT_ARMOR]);
 						}
 					}
-					ent->client->ps.stats[STAT_HEALTH] = ent->health = ent->client->ps.stats[STAT_MAX_HEALTH];
-					ent->client->ps.stats[STAT_ARMOR] = 25;//JAPRO
+					if (!JVM_IsMode(level.gametype) ||
+						JVM_ReplicatedClass(ent->client->ps.stats[STAT_RESTRICTIONS]) == JVM_JEDI) {
+						ent->client->ps.stats[STAT_HEALTH] = ent->health = ent->client->ps.stats[STAT_MAX_HEALTH];
+						ent->client->ps.stats[STAT_ARMOR] = 25;//JAPRO
+					}
 					if (g_showHealth.integer) {
 						G_ScaleNetHealth(ent);
 					}
@@ -5103,6 +5116,23 @@ void ClientThink_real( gentity_t *ent ) {
 	if (ent->client) //why pmove here
 	{
 		int hookFloodProtect = g_hookFloodProtect.integer;
+		if (JVM_IsMode(level.gametype)) {
+			if (client->hook) {
+				int elapsed = client->jvmGrappleTime ? level.time - client->jvmGrappleTime : 0;
+				client->ps.fd.forcePower -= JVM_GrappleDrain(&client->jvmGrappleFraction,
+					elapsed, merc_grappleFPscale.value);
+				if (client->ps.fd.forcePower < 0)
+					client->ps.fd.forcePower = 0;
+				client->ps.fd.forcePowerRegenDebounceTime = level.time + Q_max(g_mercforceregentime.integer, 1);
+				if (!CanGrapple(ent) || !(pmove.cmd.buttons & BUTTON_GRAPPLE)) {
+					Weapon_HookFree(client->hook);
+					client->hookHasBeenFired = qfalse;
+					client->fireHeld = qfalse;
+					client->ps.pm_flags &= ~PMF_GRAPPLE;
+				}
+			}
+			client->jvmGrappleTime = level.time;
+		}
 		if (ent->client->sess.movementStyle == MV_TRIBES) {
 			//hookFloodProtect = 4000;
 		}
@@ -5656,7 +5686,7 @@ void ClientThink_real( gentity_t *ent ) {
 				
 //JAPRO - Serverside - New flipkick damage options - Start
 				if (g_flipKick.integer < 2 && g_flipKickDamageScale.value)
-					G_Damage( faceKicked, ent, ent, oppDir, client->ps.origin, ((strength + glitchKickBonus) * g_flipKickDamageScale.value), DAMAGE_NO_ARMOR, MOD_MELEE );//default flipkick dmg
+					G_Damage( faceKicked, ent, ent, oppDir, client->ps.origin, ((strength + glitchKickBonus) * g_flipKickDamageScale.value), DAMAGE_NO_ARMOR | DAMAGE_JVM_GRIPKICK, MOD_MELEE );//default flipkick dmg
 				else if (g_flipKick.integer == 2 && g_flipKickDamageScale.value)
 				{
 					//int damageStrength = strength; //Revert this and use damageStrength here if we want to have flipkick knockback strength "random" i.e. give slight advantage to wait 2 kick scripters..
@@ -5664,10 +5694,10 @@ void ClientThink_real( gentity_t *ent ) {
 					{
 						strength = 20 + glitchKickBonus;
 					}
-					G_Damage( faceKicked, ent, ent, 0, 0, (strength * g_flipKickDamageScale.value), DAMAGE_NO_ARMOR, MOD_MELEE ); //new japro flipkick dmg
+					G_Damage( faceKicked, ent, ent, 0, 0, (strength * g_flipKickDamageScale.value), DAMAGE_NO_ARMOR | DAMAGE_JVM_GRIPKICK, MOD_MELEE ); //new japro flipkick dmg
 				}
 				else if (g_flipKickDamageScale.value)
-					G_Damage( faceKicked, ent, ent, 0, 0, 20 + glitchKickBonus, DAMAGE_NO_ARMOR, MOD_MELEE ); //new japro flipkick dmg (20)
+					G_Damage( faceKicked, ent, ent, 0, 0, 20 + glitchKickBonus, DAMAGE_NO_ARMOR | DAMAGE_JVM_GRIPKICK, MOD_MELEE ); //new japro flipkick dmg (20)
 
 				if (g_fixKillCredit.integer) {//JAPRO - Serverside - fix flipkick not giving killcredit..?
 					faceKicked->client->ps.otherKillerTime = level.time + 2000;

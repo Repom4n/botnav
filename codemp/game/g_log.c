@@ -1536,7 +1536,7 @@ void CalculateAwards(gentity_t *ent, char *msg)
 		strcpy(buf2, buf1);
 		Com_sprintf(buf1, AWARDS_MSG_LENGTH, "%s %d", buf2, streak);
 	}
-	if (level.gametype >= GT_TEAM)
+	if (BG_IsTeamGame(level.gametype))
 	{
 		teamAwards = CalculateTeamAward(ent);
 		if (teamAwards)

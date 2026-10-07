@@ -94,6 +94,10 @@ static void CG_DrawClientScore( int y, score_t *score, float *color, float fade,
 	}
 
 	ci = &cgs.clientinfo[score->client];
+	if (cgs.gametype == GT_JOM && ci->team != TEAM_SPECTATOR)
+		CG_Text_Paint(iconx - 28, y + 12, 0.35f, colorWhite,
+			ci->jvmClass == JVM_TANK ? "Tank" : ci->jvmClass == JVM_MERC ? "Merc" : "Jedi",
+			0, 0, ITEM_TEXTSTYLE_SHADOWED, FONT_SMALL);
 
 	// draw the handicap or bot skill marker (unless player has flag)
 	if ( ci->powerups & (1<<PW_NEUTRALFLAG) )
@@ -138,7 +142,7 @@ static void CG_DrawClientScore( int y, score_t *score, float *color, float fade,
 		localClient = qtrue;
 
 		if ( cg.snap->ps.persistant[PERS_TEAM] == TEAM_SPECTATOR
-			|| (cgs.gametype >= GT_TEAM && cgs.gametype != GT_ARCADE) ) {
+			|| (BG_IsTeamGame(cgs.gametype) && cgs.gametype != GT_ARCADE) ) {
 			rank = -1;
 		} else {
 			rank = cg.snap->ps.persistant[PERS_RANK] & ~RANK_TIED_FLAG;
@@ -442,7 +446,7 @@ qboolean CG_DrawOldScoreboard( void ) {
 	if (cgs.gametype == GT_POWERDUEL)
 	{ //do nothing?
 	}
-	else if ( cgs.gametype < GT_TEAM) {
+	else if ( !BG_IsTeamGame(cgs.gametype)) {
 		if (cg.snap->ps.persistant[PERS_TEAM] != TEAM_SPECTATOR )
 		{
 			char sPlace[256];
@@ -476,6 +480,8 @@ qboolean CG_DrawOldScoreboard( void ) {
 		} else {
 			s = va("%s, %i / %i", CG_GetStringEdString("MP_INGAME", "BLUE_LEADS"), cg.teamScores[1], cg.teamScores[0] );
 		}
+		if (cgs.gametype == GT_JVM)
+			s = va("Red Jedi %i / Blue Mercs %i", cg.teamScores[0], cg.teamScores[1]);
 
 		x = ( SCREEN_WIDTH ) / 2;
 		y = 60;
@@ -556,7 +562,7 @@ qboolean CG_DrawOldScoreboard( void ) {
 
 	//I guess this can be accomplished simply by printing the first teams score with a maxClients
 	//value passed in related to how many players are on both teams.
-	if ( cgs.gametype >= GT_TEAM && cgs.gametype != GT_ARCADE ) {
+	if ( BG_IsTeamGame(cgs.gametype) && cgs.gametype != GT_ARCADE ) {
 		//
 		// teamplay scoreboard
 		//
