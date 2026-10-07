@@ -706,4 +706,61 @@ BOOST_AUTO_TEST_CASE(footing_never_mixes_across_exact_neighbor_or_coarse_context
 	BOOST_CHECK_EQUAL(BotLearn_ExtractSequences(&unknown, 1, 1, &sequence, 1), 0);
 }
 
+BOOST_AUTO_TEST_CASE(baked_baseline_keeps_last_learned_saber_and_force_preferences)
+{
+	const int base = BotLearn_ContextKey(150, 150, 100, 100, 0, 1, 1);
+	const int saber = BotLearn_ContextFooting(BotLearn_ContextSafety(base, 0, 0, 0, 0, 0, 0, 0),
+		BOTLEARN_FOOTING_ADVANCE);
+	const int force = BotLearn_ContextFooting(BotLearn_ContextSafety(base, 1, 0, 0, 0, 0, 0, 0),
+		BOTLEARN_FOOTING_ADVANCE);
+
+	// Saber-only: opening fan chains (idle -> swing -> swing) were the strongest human result.
+	BOOST_CHECK_GT(BotLearn_BaselineBonus(saber, BOTLEARN_TOK_IDLE, BOTLEARN_TOK_SWING,
+		BOTLEARN_BASELINE_FOLLOW_ANY, 1.0f, 7.0f), 10);
+	BOOST_CHECK_GT(BotLearn_BaselineBonus(saber, BOTLEARN_TOK_IDLE, BOTLEARN_TOK_SWING,
+		BOTLEARN_TOK_SWING, 1.0f, 7.0f), 0);
+	// Full force: throw -> pull pays off; draining after a pull or swinging into a throw does not.
+	BOOST_CHECK_GT(BotLearn_BaselineBonus(force, BOTLEARN_TOK_IDLE, BOTLEARN_TOK_THROW,
+		BOTLEARN_TOK_PULL, 1.0f, 7.0f), 0);
+	BOOST_CHECK_LT(BotLearn_BaselineBonus(force, BOTLEARN_TOK_PULL, BOTLEARN_TOK_DRAIN,
+		BOTLEARN_BASELINE_FOLLOW_ANY, 1.0f, 7.0f), 0);
+	BOOST_CHECK_LT(BotLearn_BaselineBonus(force, BOTLEARN_TOK_THROW, BOTLEARN_TOK_SWING,
+		BOTLEARN_TOK_SWING, 1.0f, 7.0f), 0);
+	// Modes never mix and unknown sequences stay neutral.
+	BOOST_CHECK_EQUAL(BotLearn_BaselineBonus(saber, BOTLEARN_TOK_IDLE, BOTLEARN_TOK_THROW,
+		BOTLEARN_TOK_PULL, 1.0f, 7.0f), 0);
+	BOOST_CHECK_EQUAL(BotLearn_BaselineBonus(force, BOTLEARN_TOK_KICK, BOTLEARN_TOK_ROLL,
+		BOTLEARN_BASELINE_FOLLOW_ANY, 1.0f, 7.0f), 0);
+	// Strength 0 disables it, lower skills lean on it less, and it never exceeds the cap.
+	BOOST_CHECK_EQUAL(BotLearn_BaselineBonus(saber, BOTLEARN_TOK_IDLE, BOTLEARN_TOK_SWING,
+		BOTLEARN_BASELINE_FOLLOW_ANY, 0.0f, 7.0f), 0);
+	BOOST_CHECK_LT(BotLearn_BaselineBonus(saber, BOTLEARN_TOK_IDLE, BOTLEARN_TOK_SWING,
+		BOTLEARN_BASELINE_FOLLOW_ANY, 1.0f, 1.0f),
+		BotLearn_BaselineBonus(saber, BOTLEARN_TOK_IDLE, BOTLEARN_TOK_SWING,
+		BOTLEARN_BASELINE_FOLLOW_ANY, 1.0f, 7.0f));
+	BOOST_CHECK_LE(BotLearn_BaselineBonus(saber, BOTLEARN_TOK_IDLE, BOTLEARN_TOK_SWING,
+		BOTLEARN_BASELINE_FOLLOW_ANY, 10.0f, 10.0f), BOTLEARN_BONUS_CAP);
+}
+
+BOOST_AUTO_TEST_CASE(baked_baseline_respects_safety_dimensions)
+{
+	const int base = BotLearn_ContextKey(150, 150, 100, 100, 0, 1, 1);
+	const int arcade = BotLearn_ContextSafety(base, 2, 0, 0, 0, 0, 0, 0);
+	const int broken = BotLearn_ContextSafety(base, 0, BOTLEARN_DEFENSE_BROKEN, 0, 0, 0, 0, 0);
+	const int knocked = BotLearn_ContextSafety(base, 0, BOTLEARN_DEFENSE_KNOCKDOWN, 0, 0, 0, 0, 0);
+	const int recovering = BotLearn_ContextSafety(base, 0, 0, 0, 1, 0, 0, 0);
+	const int airborne = BotLearn_ContextSafety(base, 0, 0, 0, 0, 0, 1, 0);
+	const int parry = BotLearn_ContextSafety(base, 0, BOTLEARN_DEFENSE_PARRY, 0, 0, 0, 0, 1);
+
+	BOOST_CHECK(!BotLearn_BaselineContextAllowed(base));
+	BOOST_CHECK(!BotLearn_BaselineContextAllowed(arcade));
+	BOOST_CHECK(!BotLearn_BaselineContextAllowed(broken));
+	BOOST_CHECK(!BotLearn_BaselineContextAllowed(knocked));
+	BOOST_CHECK(!BotLearn_BaselineContextAllowed(recovering));
+	BOOST_CHECK(!BotLearn_BaselineContextAllowed(airborne));
+	BOOST_CHECK(BotLearn_BaselineContextAllowed(parry));
+	BOOST_CHECK_EQUAL(BotLearn_BaselineBonus(broken, BOTLEARN_TOK_IDLE, BOTLEARN_TOK_SWING,
+		BOTLEARN_BASELINE_FOLLOW_ANY, 1.0f, 7.0f), 0);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

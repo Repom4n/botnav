@@ -371,18 +371,21 @@ static qboolean G_BotLearnPoolSimilar(int contextKey, int stimulus, int response
 
 // Additive learned weight for choosing `response` (and optionally `follow1`, or
 // BOTLEARN_TOK_NONE for any follow-up) after the opponent's `stimulus` in the live context.
-// Returns 0 when learning is off or the data is too thin.
+// Without enough live data the built-in baseline (BotLearn_BaselineBonus, scaled by
+// bot_learningbaseline) is used instead. Returns 0 when both are off or have no entry.
 int G_BotLearnBonus(gentity_t *self, gentity_t *enemy, int stimulus, int response, int follow1, float skill)
 {
-	const botlearn_cache_entry_t *e;
+	const botlearn_cache_entry_t *e = NULL;
 	botlearn_cache_entry_t pooled;
 	const int followKey = (follow1 > BOTLEARN_TOK_NONE && follow1 < BOTLEARN_TOK_COUNT) ? follow1 : BOTLEARN_FOLLOW_ANY;
 	const int minSamples = G_BotLearnMinSamples();
+	const qboolean live = (bot_learning.integer && bot_learningstrength.value > 0.0f && g_botLearnCacheCount) ?
+		qtrue : qfalse;
 	int contextKey;
 	int bonus;
 	int noise;
 
-	if (!bot_learning.integer || bot_learningstrength.value <= 0.0f || !g_botLearnCacheCount)
+	if (!live && bot_learningbaseline.value <= 0.0f)
 		return 0;
 	if (stimulus <= BOTLEARN_TOK_NONE)
 		stimulus = BOTLEARN_TOK_IDLE;
@@ -392,18 +395,28 @@ int G_BotLearnBonus(gentity_t *self, gentity_t *enemy, int stimulus, int respons
 	if (((contextKey >> 16) & 3) >= 2)
 		return 0;
 
-	e = G_BotLearnCacheFind(contextKey, stimulus, response, followKey, qfalse);
-	if ((!e || e->samples < minSamples) &&
-		G_BotLearnPoolSimilar(contextKey, stimulus, response, followKey, &pooled) &&
-		pooled.samples >= minSamples)
-		e = &pooled;
-	if (!e || e->samples < minSamples)
-		e = G_BotLearnCacheFind(BotLearn_CoarseKey(contextKey), stimulus, response, followKey, qfalse);
-	if (!e || e->samples < minSamples)
-		return 0;
-
-	bonus = BotLearn_WeightBonus(BotLearn_ScoreRelative(e->samples, e->excessWins, e->netDamage), e->samples,
-		minSamples, bot_learningstrength.value, skill);
+	if (live)
+	{
+		e = G_BotLearnCacheFind(contextKey, stimulus, response, followKey, qfalse);
+		if ((!e || e->samples < minSamples) &&
+			G_BotLearnPoolSimilar(contextKey, stimulus, response, followKey, &pooled) &&
+			pooled.samples >= minSamples)
+			e = &pooled;
+		if (!e || e->samples < minSamples)
+			e = G_BotLearnCacheFind(BotLearn_CoarseKey(contextKey), stimulus, response, followKey, qfalse);
+	}
+	if (e && e->samples >= minSamples)
+	{
+		bonus = BotLearn_WeightBonus(BotLearn_ScoreRelative(e->samples, e->excessWins, e->netDamage), e->samples,
+			minSamples, bot_learningstrength.value, skill);
+	}
+	else
+	{
+		bonus = BotLearn_BaselineBonus(contextKey, stimulus, response, followKey,
+			bot_learningbaseline.value, skill);
+		if (!bonus)
+			return 0;
+	}
 	noise = BotLearn_SampleNoise(skill);
 	if (noise > 0)
 		bonus += Q_irand(-noise, noise);

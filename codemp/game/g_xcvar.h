@@ -379,9 +379,13 @@ XCVAR_DEF( bot_healthbias,				"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_forcebias,				"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_saberthrowbias,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_gripkickbias,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
-// Chance for a bot to misfire or delay a gripkick escape attempt when it has a pull available.
-// Scales with bot skill: lower-skill bots are more likely to miss/delay the pull.
+// Chance weight (0-100) for imperfect combat decisions (timing, positioning, combos, pull aim).
+// Gripkick escapes use bot_gkmistakebias instead.
 XCVAR_DEF( bot_mistakebias, 			"0", 			NULL, 				CVAR_ARCHIVE, 							qtrue )
+// Chance weight (0-100) for gripkick escape mistakes only: delayed/failed pull-outs, push
+// instead of pull, mis-aimed escape pulls and being rattled by a fast gripkick. Scales with
+// bot skill; level 10 never makes them and 0 disables them for every level.
+XCVAR_DEF( bot_gkmistakebias, 			"0", 			NULL, 				CVAR_ARCHIVE, 							qtrue )
 // Sequence learning: on map load bots read LocalBotLearnedSequence (stimulus -> response ->
 // follow-up outcomes recorded from tracked duels) and add a capped, skill-scaled bonus to the
 // matching counter/combo weights. bot_learningstrength scales the bonus (0 disables it),
@@ -393,6 +397,10 @@ XCVAR_DEF( bot_learningstrength,		"1",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_learninghumansonly,		"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_learningminsamples,		"4",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_learning_debug,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
+// Strength (0 disables) of the built-in baseline baked from the last exported learning
+// (dueltrack_learned.csv). Used only where live learned data is below bot_learningminsamples,
+// so bots keep their learned saber/force preferences after a learning reset.
+XCVAR_DEF( bot_learningbaseline,		"1",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_learninglog,				"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 // Percentage scaler (10-300) for the Gripkick aim-down/hold phase: how long the bot
 // holds the gripped target and aims down toward it (forward-only movement) before the

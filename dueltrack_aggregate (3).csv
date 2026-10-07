@@ -1,3 +1,0 @@
-"export_format_version","record_type","source_context","participant_key","participant_kind","side","matchup","duels","wins","losses","total_force_spent","total_force_regen","low_force_deaths","grip_cripples","saber_throw_punishes","force_push","force_pull","force_grip","force_drain","force_rage","force_absorb","force_protect","force_heal","force_speed","force_seeing","force_unknown"
-"2","duel_aggregate","duel","iphash:8ac6695b","2","2","3","1","1","0","231","165","0","1","3","0","0","0","0","0","0","0","0","0","231","0"
-"2","duel_aggregate","duel","bot:/botfiles/mediumds.jkb","0","2","3","1","0","1","473","461","1","3","0","39","193","107","105","0","0","0","0","29","0","0"

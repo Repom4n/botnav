@@ -526,4 +526,131 @@ static inline int BotLearn_SampleNoise(float skill)
 	return (int)((7.0f - skill) * 3.0f);
 }
 
+/*
+ * Built-in baseline baked from the last exported learning (dueltrack_learned.csv, context
+ * version 3 rows only: 2,418 samples from 67 duels, 1,336 human / 1,082 bot). Rows are pooled
+ * per duel mode (0 saber-only, 1 full force), stimulus, response and follow-up with the same
+ * weighting as G_BotLearnLoadCache: bot rows x0.25, wins relative to each source's baseline win
+ * rate (human 0.662, bot 0.383). Only entries whose skill-7 bonus reaches +/-2 are kept.
+ * Used only when live learned data is too thin, so a learning reset keeps these preferences.
+ */
+#define BOTLEARN_BASELINE_FOLLOW_ANY BOTLEARN_TOK_COUNT
+
+typedef struct
+{
+	int mode;
+	int stimulus;
+	int response;
+	int follow1;		/* specific follow-up or BOTLEARN_BASELINE_FOLLOW_ANY */
+	float samples;		/* source-weighted */
+	float excessWins;	/* source-weighted, baseline-relative */
+	float netDamage;	/* source-weighted */
+} botlearn_baseline_t;
+
+static inline const botlearn_baseline_t *BotLearn_FindBaseline(int mode, int stimulus, int response, int followKey)
+{
+	static const botlearn_baseline_t baseline[] = {
+	{ 0, BOTLEARN_TOK_IDLE, BOTLEARN_TOK_SWING, BOTLEARN_TOK_SWING, 54.25f, 14.13f, 819.00f },
+	{ 0, BOTLEARN_TOK_IDLE, BOTLEARN_TOK_SWING, BOTLEARN_BASELINE_FOLLOW_ANY, 90.50f, 21.34f, 1123.50f },
+	{ 0, BOTLEARN_TOK_SWING, BOTLEARN_TOK_SWING, BOTLEARN_TOK_SWING, 32.50f, 8.11f, 581.25f },
+	{ 0, BOTLEARN_TOK_SWING, BOTLEARN_TOK_SWING, BOTLEARN_BASELINE_FOLLOW_ANY, 53.50f, 6.97f, 518.25f },
+	{ 1, BOTLEARN_TOK_IDLE, BOTLEARN_TOK_PULL, BOTLEARN_TOK_JUMP, 21.00f, 1.09f, 398.00f },
+	{ 1, BOTLEARN_TOK_IDLE, BOTLEARN_TOK_GRIP, BOTLEARN_TOK_JUMP, 6.00f, -1.97f, 88.00f },
+	{ 1, BOTLEARN_TOK_IDLE, BOTLEARN_TOK_DRAIN, BOTLEARN_TOK_PULL, 21.75f, 4.14f, 213.25f },
+	{ 1, BOTLEARN_TOK_IDLE, BOTLEARN_TOK_DRAIN, BOTLEARN_TOK_JUMP, 14.00f, 1.73f, 103.00f },
+	{ 1, BOTLEARN_TOK_IDLE, BOTLEARN_TOK_DRAIN, BOTLEARN_BASELINE_FOLLOW_ANY, 143.50f, 11.76f, 307.25f },
+	{ 1, BOTLEARN_TOK_IDLE, BOTLEARN_TOK_THROW, BOTLEARN_TOK_PULL, 38.00f, 3.57f, 617.75f },
+	{ 1, BOTLEARN_TOK_IDLE, BOTLEARN_TOK_THROW, BOTLEARN_TOK_JUMP, 7.00f, 1.36f, 141.00f },
+	{ 1, BOTLEARN_TOK_IDLE, BOTLEARN_TOK_THROW, BOTLEARN_BASELINE_FOLLOW_ANY, 117.25f, 7.26f, 1376.00f },
+	{ 1, BOTLEARN_TOK_IDLE, BOTLEARN_TOK_SWING, BOTLEARN_TOK_SWING, 60.50f, -1.69f, 449.00f },
+	{ 1, BOTLEARN_TOK_IDLE, BOTLEARN_TOK_SWING, BOTLEARN_BASELINE_FOLLOW_ANY, 123.75f, 1.53f, 917.50f },
+	{ 1, BOTLEARN_TOK_IDLE, BOTLEARN_TOK_JUMP, BOTLEARN_TOK_GRIP, 7.00f, -2.64f, 142.00f },
+	{ 1, BOTLEARN_TOK_IDLE, BOTLEARN_TOK_JUMP, BOTLEARN_TOK_DRAIN, 14.00f, 0.73f, 61.00f },
+	{ 1, BOTLEARN_TOK_IDLE, BOTLEARN_TOK_JUMP, BOTLEARN_TOK_THROW, 15.00f, -0.94f, 245.00f },
+	{ 1, BOTLEARN_TOK_IDLE, BOTLEARN_TOK_JUMP, BOTLEARN_BASELINE_FOLLOW_ANY, 142.00f, -12.06f, 855.00f },
+	{ 1, BOTLEARN_TOK_PUSH, BOTLEARN_TOK_DRAIN, BOTLEARN_BASELINE_FOLLOW_ANY, 5.50f, -0.97f, -60.00f },
+	{ 1, BOTLEARN_TOK_PUSH, BOTLEARN_TOK_THROW, BOTLEARN_BASELINE_FOLLOW_ANY, 4.00f, 1.38f, 67.00f },
+	{ 1, BOTLEARN_TOK_PULL, BOTLEARN_TOK_PUSH, BOTLEARN_BASELINE_FOLLOW_ANY, 6.75f, -1.98f, -60.50f },
+	{ 1, BOTLEARN_TOK_PULL, BOTLEARN_TOK_PULL, BOTLEARN_BASELINE_FOLLOW_ANY, 8.75f, -1.78f, 129.50f },
+	{ 1, BOTLEARN_TOK_PULL, BOTLEARN_TOK_GRIP, BOTLEARN_BASELINE_FOLLOW_ANY, 23.75f, -2.24f, -83.75f },
+	{ 1, BOTLEARN_TOK_PULL, BOTLEARN_TOK_DRAIN, BOTLEARN_BASELINE_FOLLOW_ANY, 41.25f, -1.84f, -447.75f },
+	{ 1, BOTLEARN_TOK_PULL, BOTLEARN_TOK_THROW, BOTLEARN_TOK_PULL, 7.75f, -2.14f, 141.50f },
+	{ 1, BOTLEARN_TOK_PULL, BOTLEARN_TOK_THROW, BOTLEARN_BASELINE_FOLLOW_ANY, 28.25f, -0.68f, 278.50f },
+	{ 1, BOTLEARN_TOK_PULL, BOTLEARN_TOK_KICK, BOTLEARN_BASELINE_FOLLOW_ANY, 8.00f, 0.70f, -63.00f },
+	{ 1, BOTLEARN_TOK_PULL, BOTLEARN_TOK_JUMP, BOTLEARN_BASELINE_FOLLOW_ANY, 14.75f, -3.44f, -66.75f },
+	{ 1, BOTLEARN_TOK_GRIP, BOTLEARN_TOK_PULL, BOTLEARN_BASELINE_FOLLOW_ANY, 16.00f, -0.14f, 125.00f },
+	{ 1, BOTLEARN_TOK_GRIP, BOTLEARN_TOK_DRAIN, BOTLEARN_BASELINE_FOLLOW_ANY, 9.25f, -1.81f, -200.00f },
+	{ 1, BOTLEARN_TOK_DRAIN, BOTLEARN_TOK_PUSH, BOTLEARN_BASELINE_FOLLOW_ANY, 9.25f, -0.03f, 58.75f },
+	{ 1, BOTLEARN_TOK_DRAIN, BOTLEARN_TOK_PULL, BOTLEARN_TOK_JUMP, 10.00f, 0.38f, 258.00f },
+	{ 1, BOTLEARN_TOK_DRAIN, BOTLEARN_TOK_PULL, BOTLEARN_BASELINE_FOLLOW_ANY, 31.25f, -1.67f, 483.00f },
+	{ 1, BOTLEARN_TOK_DRAIN, BOTLEARN_TOK_GRIP, BOTLEARN_BASELINE_FOLLOW_ANY, 4.75f, -2.44f, -47.00f },
+	{ 1, BOTLEARN_TOK_DRAIN, BOTLEARN_TOK_DRAIN, BOTLEARN_TOK_PULL, 11.50f, 1.77f, 212.50f },
+	{ 1, BOTLEARN_TOK_DRAIN, BOTLEARN_TOK_DRAIN, BOTLEARN_TOK_JUMP, 22.00f, 1.43f, 159.00f },
+	{ 1, BOTLEARN_TOK_DRAIN, BOTLEARN_TOK_DRAIN, BOTLEARN_BASELINE_FOLLOW_ANY, 82.50f, 9.70f, 208.25f },
+	{ 1, BOTLEARN_TOK_DRAIN, BOTLEARN_TOK_THROW, BOTLEARN_TOK_PULL, 13.25f, 1.29f, 414.25f },
+	{ 1, BOTLEARN_TOK_DRAIN, BOTLEARN_TOK_THROW, BOTLEARN_BASELINE_FOLLOW_ANY, 35.75f, -3.32f, 674.75f },
+	{ 1, BOTLEARN_TOK_DRAIN, BOTLEARN_TOK_KICK, BOTLEARN_BASELINE_FOLLOW_ANY, 8.00f, 0.70f, 93.00f },
+	{ 1, BOTLEARN_TOK_DRAIN, BOTLEARN_TOK_JUMP, BOTLEARN_TOK_THROW, 9.00f, 1.04f, 196.00f },
+	{ 1, BOTLEARN_TOK_DRAIN, BOTLEARN_TOK_JUMP, BOTLEARN_BASELINE_FOLLOW_ANY, 41.25f, 1.74f, 517.00f },
+	{ 1, BOTLEARN_TOK_THROW, BOTLEARN_TOK_PULL, BOTLEARN_TOK_JUMP, 13.00f, -0.61f, 111.00f },
+	{ 1, BOTLEARN_TOK_THROW, BOTLEARN_TOK_PULL, BOTLEARN_BASELINE_FOLLOW_ANY, 22.25f, 0.61f, 132.50f },
+	{ 1, BOTLEARN_TOK_THROW, BOTLEARN_TOK_GRIP, BOTLEARN_BASELINE_FOLLOW_ANY, 6.50f, 0.61f, -82.25f },
+	{ 1, BOTLEARN_TOK_THROW, BOTLEARN_TOK_DRAIN, BOTLEARN_BASELINE_FOLLOW_ANY, 45.25f, 3.61f, -405.25f },
+	{ 1, BOTLEARN_TOK_THROW, BOTLEARN_TOK_THROW, BOTLEARN_TOK_PULL, 10.00f, 0.38f, 86.00f },
+	{ 1, BOTLEARN_TOK_THROW, BOTLEARN_TOK_THROW, BOTLEARN_BASELINE_FOLLOW_ANY, 20.00f, 1.43f, 45.75f },
+	{ 1, BOTLEARN_TOK_THROW, BOTLEARN_TOK_SWING, BOTLEARN_TOK_SWING, 34.00f, -3.52f, -456.00f },
+	{ 1, BOTLEARN_TOK_THROW, BOTLEARN_TOK_SWING, BOTLEARN_TOK_JUMP, 4.00f, 0.35f, 119.00f },
+	{ 1, BOTLEARN_TOK_THROW, BOTLEARN_TOK_SWING, BOTLEARN_BASELINE_FOLLOW_ANY, 46.50f, -1.38f, -360.50f },
+	{ 1, BOTLEARN_TOK_SWING, BOTLEARN_TOK_DRAIN, BOTLEARN_BASELINE_FOLLOW_ANY, 17.25f, -1.21f, -54.75f },
+	{ 1, BOTLEARN_TOK_SWING, BOTLEARN_TOK_THROW, BOTLEARN_BASELINE_FOLLOW_ANY, 13.00f, -0.59f, 241.00f },
+	{ 1, BOTLEARN_TOK_SWING, BOTLEARN_TOK_SWING, BOTLEARN_TOK_SWING, 11.00f, -1.29f, -135.00f },
+	{ 1, BOTLEARN_TOK_SWING, BOTLEARN_TOK_SWING, BOTLEARN_BASELINE_FOLLOW_ANY, 24.25f, -1.12f, -186.50f },
+	{ 1, BOTLEARN_TOK_SWING, BOTLEARN_TOK_JUMP, BOTLEARN_TOK_PULL, 4.00f, -2.65f, -64.00f },
+	{ 1, BOTLEARN_TOK_SWING, BOTLEARN_TOK_JUMP, BOTLEARN_BASELINE_FOLLOW_ANY, 20.00f, -6.25f, -79.00f },
+	{ 1, BOTLEARN_TOK_JUMP, BOTLEARN_TOK_PULL, BOTLEARN_BASELINE_FOLLOW_ANY, 11.00f, 1.54f, 83.25f },
+	{ 1, BOTLEARN_TOK_JUMP, BOTLEARN_TOK_JUMP, BOTLEARN_BASELINE_FOLLOW_ANY, 6.25f, 1.46f, 116.00f },
+	{ 1, BOTLEARN_TOK_KNOCKDOWN, BOTLEARN_TOK_THROW, BOTLEARN_BASELINE_FOLLOW_ANY, 4.00f, 0.35f, 120.00f },
+	};
+	int i;
+
+	for (i = 0; i < (int)(sizeof(baseline) / sizeof(baseline[0])); i++)
+	{
+		const botlearn_baseline_t *b = &baseline[i];
+		if (b->mode == mode && b->stimulus == stimulus && b->response == response && b->follow1 == followKey)
+			return b;
+	}
+	return 0;
+}
+
+/* The baseline pools every context of a mode, so it is withheld while our own defense is
+ * broken/knocked down/lost, during return recovery or while airborne. */
+static inline int BotLearn_BaselineContextAllowed(int contextKey)
+{
+	const int selfDefense = (contextKey >> 18) & 7;
+
+	if (contextKey < 0 || !(contextKey & BOTLEARN_CONTEXT_VERSION_FLAG))
+		return 0;
+	if (((contextKey >> 16) & 3) >= 2)
+		return 0;
+	if (selfDefense == BOTLEARN_DEFENSE_BROKEN || selfDefense == BOTLEARN_DEFENSE_KNOCKDOWN ||
+		selfDefense == BOTLEARN_DEFENSE_LOST)
+		return 0;
+	return ((contextKey >> 24) & 1) || ((contextKey >> 26) & 1) ? 0 : 1;
+}
+
+/* Bonus from the baked baseline for the live context, or 0 when it has no entry. */
+static inline int BotLearn_BaselineBonus(int contextKey, int stimulus, int response, int followKey,
+	float strength, float skill)
+{
+	const botlearn_baseline_t *b;
+
+	if (strength <= 0.0f || !BotLearn_BaselineContextAllowed(contextKey))
+		return 0;
+	b = BotLearn_FindBaseline((contextKey >> 16) & 3, stimulus, response, followKey);
+	if (!b)
+		return 0;
+	return BotLearn_WeightBonus(BotLearn_ScoreRelative(b->samples, b->excessWins, b->netDamage),
+		b->samples, BOTLEARN_DEFAULT_MIN_SAMPLES, strength, skill);
+}
+
 #endif
