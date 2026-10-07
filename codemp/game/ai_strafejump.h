@@ -419,6 +419,74 @@ static inline int BotSFJ_RouteSafetyAllows(int arcClear, int hazardFree,
 }
 
 /*
+ * Wall contact: bots may hit walls directly. The arc keeps going (velocity is
+ * clipped like PM_ClipVelocity) while horizontal speed after the contact stays
+ * above normal ground speed; at or below it the strafe is over and the bot
+ * resumes normal navigation.
+ */
+#define BOT_SFJ_MAX_WALL_CONTACTS 8
+/* A jump a wall slows out sooner than this is not worth starting. */
+#define BOT_SFJ_MIN_USEFUL_FLIGHT_S 0.3f
+
+static inline int BotSFJ_WallContactKeepsStrafe(float speedAfterContact, float groundSpeed)
+{
+	return groundSpeed > 0.0f && speedAfterContact > groundSpeed;
+}
+
+/* In flight: a strafe that has been faster than ground speed and has now
+ * dropped to ground speed or below (usually a wall) hands control back. */
+static inline int BotSFJ_SlowedOut(float peakSpeed, float horizontalSpeed, float groundSpeed)
+{
+	return groundSpeed > 0.0f && peakSpeed > groundSpeed && horizontalSpeed <= groundSpeed;
+}
+
+/*
+ * Human strafe-route recording (bot_strafetrack).
+ * A route starts on a circle jump: grounded, forward + strafe held, view
+ * turning at least BOT_SFJ_TRACK_MIN_YAW_RATE deg/s, faster than ground speed,
+ * jump pressed. Each landing is a node. The route ends once the player has
+ * been on the ground at or below ground speed for BOT_SFJ_TRACK_END_MS.
+ */
+#define BOT_SFJ_TRACK_MIN_YAW_RATE 90.0f
+#define BOT_SFJ_TRACK_END_MS 150
+#define BOT_SFJ_TRACK_MIN_NODES 2
+#define BOT_SFJ_TRACK_MIN_DISTANCE 256.0f
+#define BOT_SFJ_TRACK_MAX_NODES 32
+
+static inline int BotSFJ_TrackCircleJumpStart(int grounded, int forwardMove, int rightMove,
+	float yawRate, float horizontalSpeed, float groundSpeed, int jumpPressed)
+{
+	return grounded && jumpPressed && forwardMove > 0 && rightMove != 0 &&
+		fabsf(yawRate) >= BOT_SFJ_TRACK_MIN_YAW_RATE &&
+		groundSpeed > 0.0f && horizontalSpeed > groundSpeed;
+}
+
+static inline int BotSFJ_TrackLanded(int wasGrounded, int grounded)
+{
+	return !wasGrounded && grounded;
+}
+
+/* Returns the updated "slow on ground since" time (0 = not slow). */
+static inline int BotSFJ_TrackSlowSince(int slowSince, int now, int grounded,
+	float horizontalSpeed, float groundSpeed)
+{
+	if (!grounded || horizontalSpeed > groundSpeed)
+		return 0;
+	return slowSince ? slowSince : (now ? now : 1);
+}
+
+static inline int BotSFJ_TrackShouldEnd(int slowSince, int now)
+{
+	return slowSince && now - slowSince >= BOT_SFJ_TRACK_END_MS;
+}
+
+static inline int BotSFJ_TrackKeep(int nodes, float pathDistance, int touchedHazard)
+{
+	return !touchedHazard && nodes >= BOT_SFJ_TRACK_MIN_NODES &&
+		pathDistance >= BOT_SFJ_TRACK_MIN_DISTANCE;
+}
+
+/*
  * Hand-authored .botroute strafe-jump hints (start -> end).  A bot is "on" a
  * hint when it is within startRadius of the start, or alongside the route
  * (within halfWidth laterally, heightTolerance of the interpolated route
@@ -486,6 +554,52 @@ static inline int BotSFJ_RouteHintSpeedAllows(float progress, int grounded,
 		progress < BOT_SFJ_ROUTE_HINT_SPEED_GATE_PROGRESS)
 		return 1;
 	return horizontalSpeed >= minSpeed;
+}
+
+/*
+ * Waypoint navigation anti-backtracking.  Bots keep a small ring of recently
+ * reached waypoints (stored as index + 1, 0 = empty) and avoid re-picking them
+ * when they re-path.  A bot whose distance to its waypoint destination has not
+ * improved by BOT_NAV_PROGRESS_MIN_GAIN for BOT_NAV_PROGRESS_STALL_MS is stuck.
+ */
+#define BOT_NAV_RECENT_WAYPOINTS 8
+#define BOT_NAV_PROGRESS_STALL_MS 3000
+#define BOT_NAV_PROGRESS_MIN_GAIN 32.0f
+
+static inline int BotNav_RecentContains(const int *ring, int count, int index)
+{
+	int i;
+
+	if (!ring || index < 0)
+		return 0;
+	for (i = 0; i < count; i++)
+	{
+		if (ring[i] == index + 1)
+			return 1;
+	}
+	return 0;
+}
+
+/* Adds index to the ring (no duplicates); returns the new head. */
+static inline int BotNav_RecentPush(int *ring, int count, int head, int index)
+{
+	if (!ring || count <= 0 || index < 0 || BotNav_RecentContains(ring, count, index))
+		return head;
+	if (head < 0 || head >= count)
+		head = 0;
+	ring[head] = index + 1;
+	return (head + 1) % count;
+}
+
+/* True when progress has improved enough to reset the stall timer. */
+static inline int BotNav_ProgressImproved(float best, float distance)
+{
+	return best <= 0.0f || distance < best - BOT_NAV_PROGRESS_MIN_GAIN;
+}
+
+static inline int BotNav_ProgressStalled(int lastImproveTime, int now)
+{
+	return lastImproveTime > 0 && now - lastImproveTime >= BOT_NAV_PROGRESS_STALL_MS;
 }
 
 #endif

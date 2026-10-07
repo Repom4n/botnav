@@ -116,6 +116,10 @@ XCVAR_DEF( merc_gripkickreduction, "0", NULL, CVAR_ARCHIVE, qtrue )
 XCVAR_DEF( merc_forcejumplevel, "1", NULL, CVAR_ARCHIVE, qtrue )
 XCVAR_DEF( merc_botfloodprotect, "100", NULL, CVAR_ARCHIVE, qtrue )
 XCVAR_DEF( merc_flipkick, "1", NULL, CVAR_ARCHIVE, qtrue )
+// Merc spawn loadout bitmasks (same layout as g_startingWeapons / g_startingItems).
+// Default 102384: pistol..rocket launcher, concussion, old bryar; never the saber.
+XCVAR_DEF( merc_startingweapons, "102384", NULL, CVAR_ARCHIVE, qtrue )
+XCVAR_DEF( merc_startingitems, "0", NULL, CVAR_ARCHIVE, qtrue )
 XCVAR_DEF( jedi_tankscale, "0.5", NULL, CVAR_ARCHIVE, qtrue )
 XCVAR_DEF( jedi_saberdamagescale, "2", NULL, CVAR_ARCHIVE, qtrue )
 XCVAR_DEF( g_knockback,					"1000",			NULL,				CVAR_NONE,										qtrue )
@@ -352,6 +356,8 @@ XCVAR_DEF( bot_strafeOffset,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_strafejumps,			"1",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_strafejumpfrequency,	"100",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_onlystrafes,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
+// Record human strafe-jump routes: 0 off, 1 record (console echo on start/end), 2 also echo each landing.
+XCVAR_DEF( bot_strafetrack,			"1",			NULL,				CVAR_ARCHIVE,									qtrue )
 // 1: print why strafe-jump attempts are rejected (rate limited per bot).
 XCVAR_DEF( bot_strafejumps_debug,		"0",			NULL,				0,												qfalse )
 // Minimum enemy distance (units) before a chase/escape strafe jump may start. 0 lets bots

@@ -1710,6 +1710,11 @@ int G_CanUseDispOn(gentity_t *ent, int dispType)
 		return 0;
 	}
 
+	if (!G_JVMCanReceive(ent, dispType == HI_HEALTHDISP, qfalse, dispType == HI_AMMODISP))
+	{
+		return 0;
+	}
+
 	if (dispType == HI_HEALTHDISP)
 	{
         if (ent->client->ps.stats[STAT_HEALTH] < ent->client->ps.stats[STAT_MAX_HEALTH])

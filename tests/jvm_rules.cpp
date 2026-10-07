@@ -39,17 +39,42 @@ BOOST_AUTO_TEST_CASE(classes_are_not_jom_teams)
 
 BOOST_AUTO_TEST_CASE(pickup_categories)
 {
-	for (int category = 0; category < 4; ++category) {
+	/* categories: weapon, ammo, health, armor, other (holdable/powerup) */
+	for (int category = 0; category < 5; ++category) {
 		BOOST_CHECK(!JVM_PickupAllowed(JVM_JEDI, category == 0,
-			category == 1, category == 2, category == 3, 0));
+			category == 1, category == 2, category == 3, 0, 0));
 		BOOST_CHECK(JVM_PickupAllowed(JVM_MERC, category == 0,
-			category == 1, category == 2, category == 3, 0));
+			category == 1, category == 2, category == 3, 0, 0));
 		BOOST_CHECK_EQUAL(JVM_PickupAllowed(JVM_TANK, category == 0,
-			category == 1, category == 2, category == 3, 0), category >= 2);
+			category == 1, category == 2, category == 3, 0, 0), category == 2 || category == 3);
 	}
-	BOOST_CHECK(!JVM_PickupAllowed(JVM_MERC, 1, 0, 0, 0, 1));
-	BOOST_CHECK(!JVM_PickupAllowed(JVM_TANK, 0, 0, 0, 0, 0));
-	BOOST_CHECK(JVM_PickupAllowed(JVM_JEDI, 0, 0, 0, 0, 0));
+	BOOST_CHECK(!JVM_PickupAllowed(JVM_MERC, 1, 0, 0, 0, 1, 0));
+	for (int playerClass = JVM_JEDI; playerClass <= JVM_TANK; ++playerClass)
+		BOOST_CHECK(JVM_PickupAllowed(playerClass, 0, 0, 0, 0, 0, 1));
+}
+
+BOOST_AUTO_TEST_CASE(merc_loadout_defaults_and_team_digits)
+{
+	const int melee = 1 << WP_MELEE;
+	const int saber = 1 << WP_SABER;
+	const int def = JVM_MERC_DEFAULT_WEAPONS;
+	for (int w = WP_BRYAR_PISTOL; w <= WP_ROCKET_LAUNCHER; ++w)
+		BOOST_CHECK(def & (1 << w));
+	BOOST_CHECK(def & (1 << WP_CONCUSSION));
+	BOOST_CHECK(def & (1 << WP_BRYAR_OLD));
+	for (int w : {WP_NONE, WP_STUN_BATON, WP_MELEE, WP_SABER, WP_THERMAL, WP_TRIP_MINE, WP_DET_PACK})
+		BOOST_CHECK_EQUAL(def & (1 << w), 0);
+	BOOST_CHECK_EQUAL(JVM_MercStartingWeapons(def, 0, melee, saber), def | melee);
+	BOOST_CHECK_EQUAL(JVM_MercStartingWeapons(saber, 0, melee, saber), melee);
+	BOOST_CHECK_EQUAL(JVM_MercStartingWeapons(def, 1 << WP_BLASTER, melee, saber) & (1 << WP_BLASTER), 0);
+	BOOST_CHECK_EQUAL(JVM_MercStartingWeapons(0, melee, melee, saber), melee);
+	BOOST_CHECK_EQUAL(JVM_TeamArgClass("1"), JVM_JEDI);
+	BOOST_CHECK_EQUAL(JVM_TeamArgClass("2"), JVM_MERC);
+	BOOST_CHECK_EQUAL(JVM_TeamArgClass("3"), JVM_TANK);
+	BOOST_CHECK_EQUAL(JVM_TeamArgClass("0"), -1);
+	BOOST_CHECK_EQUAL(JVM_TeamArgClass("12"), -1);
+	BOOST_CHECK_EQUAL(JVM_TeamArgClass("free"), -1);
+	BOOST_CHECK_EQUAL(JVM_TeamArgClass(""), -1);
 }
 
 BOOST_AUTO_TEST_CASE(force_exceptions_and_shared_jump)
@@ -157,7 +182,7 @@ BOOST_AUTO_TEST_CASE(map_healing_only_blocks_medpacs_not_other_merc_holdables)
 				BOOST_CHECK_EQUAL(BG_CanUseHoldable(&ps, item),
 					!medpac || !active || playerClass == JVM_JEDI);
 			}
-			BOOST_CHECK(JVM_PickupAllowed(JVM_MERC, 0, 0, 0, 0, 0));
+			BOOST_CHECK(JVM_PickupAllowed(JVM_MERC, 0, 0, 0, 0, 0, 0));
 		}
 	}
 }

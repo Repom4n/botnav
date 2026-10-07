@@ -1952,6 +1952,94 @@ BOOST_AUTO_TEST_CASE( strafejump_glancing_walls_slide_instead_of_rejecting )
 	BOOST_CHECK( !BotSFJ_IsGlancingWall( -1.0f, 0.0f, 0.0f, 0.0f, 0.0f ) );
 }
 
+BOOST_AUTO_TEST_CASE( sfj_wall_contact_keeps_strafe_above_ground_speed )
+{
+	BOOST_CHECK( BotSFJ_WallContactKeepsStrafe( 300.0f, 250.0f ) );
+	BOOST_CHECK( !BotSFJ_WallContactKeepsStrafe( 250.0f, 250.0f ) );
+	BOOST_CHECK( !BotSFJ_WallContactKeepsStrafe( 200.0f, 250.0f ) );
+	BOOST_CHECK( !BotSFJ_WallContactKeepsStrafe( 400.0f, 0.0f ) );
+}
+
+BOOST_AUTO_TEST_CASE( sfj_slowed_out_releases_at_ground_speed )
+{
+	BOOST_CHECK( BotSFJ_SlowedOut( 420.0f, 250.0f, 250.0f ) );
+	BOOST_CHECK( BotSFJ_SlowedOut( 420.0f, 180.0f, 250.0f ) );
+	BOOST_CHECK( !BotSFJ_SlowedOut( 420.0f, 260.0f, 250.0f ) );
+	/* Never got going: not a slow-out, the take-off logic handles it. */
+	BOOST_CHECK( !BotSFJ_SlowedOut( 240.0f, 200.0f, 250.0f ) );
+}
+
+BOOST_AUTO_TEST_CASE( sfj_track_circle_jump_start )
+{
+	BOOST_CHECK( BotSFJ_TrackCircleJumpStart( 1, 127, -127, 180.0f, 300.0f, 250.0f, 1 ) );
+	BOOST_CHECK( BotSFJ_TrackCircleJumpStart( 1, 127, 127, -120.0f, 300.0f, 250.0f, 1 ) );
+	BOOST_CHECK( !BotSFJ_TrackCircleJumpStart( 0, 127, 127, 180.0f, 300.0f, 250.0f, 1 ) );
+	BOOST_CHECK( !BotSFJ_TrackCircleJumpStart( 1, 0, 127, 180.0f, 300.0f, 250.0f, 1 ) );
+	BOOST_CHECK( !BotSFJ_TrackCircleJumpStart( 1, 127, 0, 180.0f, 300.0f, 250.0f, 1 ) );
+	BOOST_CHECK( !BotSFJ_TrackCircleJumpStart( 1, 127, 127, 30.0f, 300.0f, 250.0f, 1 ) );
+	BOOST_CHECK( !BotSFJ_TrackCircleJumpStart( 1, 127, 127, 180.0f, 250.0f, 250.0f, 1 ) );
+	BOOST_CHECK( !BotSFJ_TrackCircleJumpStart( 1, 127, 127, 180.0f, 300.0f, 250.0f, 0 ) );
+}
+
+BOOST_AUTO_TEST_CASE( sfj_track_landing_and_end )
+{
+	int slow;
+
+	BOOST_CHECK( BotSFJ_TrackLanded( 0, 1 ) );
+	BOOST_CHECK( !BotSFJ_TrackLanded( 1, 1 ) );
+	BOOST_CHECK( !BotSFJ_TrackLanded( 0, 0 ) );
+
+	/* Slow only counts on the ground at or below ground speed. */
+	BOOST_CHECK_EQUAL( BotSFJ_TrackSlowSince( 0, 1000, 0, 100.0f, 250.0f ), 0 );
+	BOOST_CHECK_EQUAL( BotSFJ_TrackSlowSince( 0, 1000, 1, 400.0f, 250.0f ), 0 );
+	slow = BotSFJ_TrackSlowSince( 0, 1000, 1, 250.0f, 250.0f );
+	BOOST_CHECK_EQUAL( slow, 1000 );
+	slow = BotSFJ_TrackSlowSince( slow, 1100, 1, 200.0f, 250.0f );
+	BOOST_CHECK_EQUAL( slow, 1000 );
+	BOOST_CHECK( !BotSFJ_TrackShouldEnd( slow, 1100 ) );
+	BOOST_CHECK( BotSFJ_TrackShouldEnd( slow, 1000 + BOT_SFJ_TRACK_END_MS ) );
+	/* A landing hop that is still fast resets the timer. */
+	BOOST_CHECK_EQUAL( BotSFJ_TrackSlowSince( slow, 1120, 1, 380.0f, 250.0f ), 0 );
+	BOOST_CHECK( !BotSFJ_TrackShouldEnd( 0, 5000 ) );
+}
+
+BOOST_AUTO_TEST_CASE( sfj_track_keep_rules )
+{
+	BOOST_CHECK( BotSFJ_TrackKeep( 2, 300.0f, 0 ) );
+	BOOST_CHECK( !BotSFJ_TrackKeep( 1, 900.0f, 0 ) );
+	BOOST_CHECK( !BotSFJ_TrackKeep( 4, 100.0f, 0 ) );
+	BOOST_CHECK( !BotSFJ_TrackKeep( 4, 900.0f, 1 ) );
+}
+
+BOOST_AUTO_TEST_CASE( nav_recent_waypoint_ring )
+{
+	int ring[BOT_NAV_RECENT_WAYPOINTS] = { 0 };
+	int head = 0;
+	int i;
+
+	BOOST_CHECK( !BotNav_RecentContains( ring, BOT_NAV_RECENT_WAYPOINTS, 0 ) );
+	head = BotNav_RecentPush( ring, BOT_NAV_RECENT_WAYPOINTS, head, 0 );
+	BOOST_CHECK( BotNav_RecentContains( ring, BOT_NAV_RECENT_WAYPOINTS, 0 ) );
+	/* Duplicates do not advance the ring. */
+	BOOST_CHECK_EQUAL( BotNav_RecentPush( ring, BOT_NAV_RECENT_WAYPOINTS, head, 0 ), head );
+	for (i = 1; i <= BOT_NAV_RECENT_WAYPOINTS; i++)
+		head = BotNav_RecentPush( ring, BOT_NAV_RECENT_WAYPOINTS, head, i );
+	/* Oldest entry (0) has been overwritten. */
+	BOOST_CHECK( !BotNav_RecentContains( ring, BOT_NAV_RECENT_WAYPOINTS, 0 ) );
+	BOOST_CHECK( BotNav_RecentContains( ring, BOT_NAV_RECENT_WAYPOINTS, BOT_NAV_RECENT_WAYPOINTS ) );
+	BOOST_CHECK( !BotNav_RecentContains( ring, BOT_NAV_RECENT_WAYPOINTS, -1 ) );
+}
+
+BOOST_AUTO_TEST_CASE( nav_progress_stall )
+{
+	BOOST_CHECK( BotNav_ProgressImproved( 0.0f, 900.0f ) );
+	BOOST_CHECK( BotNav_ProgressImproved( 900.0f, 800.0f ) );
+	BOOST_CHECK( !BotNav_ProgressImproved( 900.0f, 890.0f ) );
+	BOOST_CHECK( !BotNav_ProgressStalled( 0, 10000 ) );
+	BOOST_CHECK( !BotNav_ProgressStalled( 1000, 1000 + BOT_NAV_PROGRESS_STALL_MS - 1 ) );
+	BOOST_CHECK( BotNav_ProgressStalled( 1000, 1000 + BOT_NAV_PROGRESS_STALL_MS ) );
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 BOOST_AUTO_TEST_SUITE_END()
