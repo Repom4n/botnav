@@ -1696,6 +1696,9 @@ static void Cmd_Class_f(gentity_t *ent) {
 	if (level.gametype != GT_JOM)
 		return;
 	trap->Argv(1, name, sizeof(name));
+	if (JVM_TeamArgClass(name) >= 0)
+		Q_strncpyz(name, JVM_TeamArgClass(name) == JVM_MERC ? "merc" :
+			JVM_TeamArgClass(name) == JVM_TANK ? "tank" : "jedi", sizeof(name));
 	if (!Q_stricmp(name, "jedi"))
 		playerClass = JVM_JEDI;
 	else if (!Q_stricmp(name, "merc"))
@@ -1703,7 +1706,7 @@ static void Cmd_Class_f(gentity_t *ent) {
 	else if (!Q_stricmp(name, "tank"))
 		playerClass = JVM_TANK;
 	else {
-		trap->SendServerCommand(ent - g_entities, "print \"Usage: /class jedi|merc|tank\n\"");
+		trap->SendServerCommand(ent - g_entities, "print \"Usage: /class jedi|merc|tank (or /team 1|2|3)\n\"");
 		return;
 	}
 	if (ent->client->switchTeamTime > level.time || ent->client->ps.duelInProgress)
@@ -1733,7 +1736,26 @@ void Cmd_Team_f( gentity_t *ent ) {
 	oldTeam = ent->client->sess.sessionTeam;
 	if (level.gametype == GT_JOM && trap->Argc() == 2) {
 		trap->Argv(1, s, sizeof(s));
-		if (!Q_stricmp(s, "jedi") || !Q_stricmp(s, "merc") || !Q_stricmp(s, "tank")) {
+		if (!Q_stricmp(s, "jedi") || !Q_stricmp(s, "merc") || !Q_stricmp(s, "tank") ||
+			JVM_TeamArgClass(s) >= 0) {
+			/* Spectators join the game first, then take the requested class. */
+			if (ent->client->sess.sessionTeam == TEAM_SPECTATOR) {
+				int playerClass = !Q_stricmp(s, "merc") ? JVM_MERC : !Q_stricmp(s, "tank") ? JVM_TANK :
+					!Q_stricmp(s, "jedi") ? JVM_JEDI : JVM_TeamArgClass(s);
+				if (ent->client->switchTeamTime > level.time) {
+					trap->SendServerCommand( ent-g_entities, va("print \"%s\n\"", G_GetStringEdString("MP_SVGAME", "NOSWITCH")) );
+					return;
+				}
+				if (gEscaping)
+					return;
+				ent->client->sess.jvmClass = playerClass;
+				ent->client->ps.fd.forceDoInit = 1;
+				SetTeam(ent, "free", qfalse);
+				if (oldTeam != ent->client->sess.sessionTeam)
+					ent->client->switchTeamTime = level.time + 5000;
+				G_WriteClientSessionData(ent->client);
+				return;
+			}
 			Cmd_Class_f(ent);
 			return;
 		}

@@ -98,13 +98,40 @@ static inline float JVM_ClampScale(float scale, float maximum) {
 	return !(scale >= 0.0f) ? 0.0f : (scale > maximum ? maximum : scale);
 }
 
+/* Only mercs collect pickups; tanks take health/armor only; Jedi take nothing
+ * except team objectives (flags), which every class may carry. */
 static inline int JVM_PickupAllowed(int playerClass, int weapon, int ammo,
-	int health, int armor, int saber) {
+	int health, int armor, int saber, int teamItem) {
+	if (teamItem)
+		return 1;
 	if (playerClass == JVM_TANK)
 		return health || armor;
 	if (playerClass == JVM_MERC)
 		return !saber;
-	return !weapon && !ammo && !health && !armor;
+	return 0;
+}
+
+/* Default merc loadout: pistol..rocket launcher, concussion and old bryar
+ * (WP_BRYAR_PISTOL=4..WP_ROCKET_LAUNCHER=11, WP_CONCUSSION=15, WP_BRYAR_OLD=16);
+ * no stun baton, explosives or saber. Melee is always added. */
+#define JVM_MERC_DEFAULT_WEAPONS 102384
+
+static inline int JVM_MercStartingWeapons(int configured, int disabled,
+	int melee, int saber) {
+	return ((configured & ~saber & ~disabled) | melee);
+}
+
+/* /team 1|2|3 in Jedi-or-Merc selects jedi|merc|tank; -1 when not a class. */
+static inline int JVM_TeamArgClass(const char *arg) {
+	if (!arg || !arg[0] || arg[1])
+		return -1;
+	if (arg[0] == '1')
+		return JVM_JEDI;
+	if (arg[0] == '2')
+		return JVM_MERC;
+	if (arg[0] == '3')
+		return JVM_TANK;
+	return -1;
 }
 
 static inline float JVM_DamageScale(int targetClass, int attackerClass,

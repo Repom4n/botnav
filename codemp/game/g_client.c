@@ -3971,6 +3971,15 @@ Initializes all non-persistant parts of playerState
 ============
 */
 extern qboolean WP_HasForcePowers( const playerState_t *ps );
+/* Jedi-v-Merc / Jedi-or-Merc: may this client take health/armor/ammo from a
+ * map station or dispenser? Mirrors the item pickup rule. */
+qboolean G_JVMCanReceive(gentity_t *ent, qboolean health, qboolean armor, qboolean ammo) {
+	if (!ent || !ent->client || !JVM_IsMode(level.gametype))
+		return qtrue;
+	return JVM_PickupAllowed(JVM_ReplicatedClass(ent->client->ps.stats[STAT_RESTRICTIONS]),
+		0, ammo, health, armor, 0, 0) ? qtrue : qfalse;
+}
+
 void G_JVMApplyClass(gentity_t *ent, qboolean loadout) {
 	gclient_t *client;
 	int playerClass, i, rank, weapons;
@@ -4016,14 +4025,23 @@ void G_JVMApplyClass(gentity_t *ent, qboolean loadout) {
 	if (client->sess.sessionTeam == TEAM_SPECTATOR)
 		return;
 	if (playerClass == JVM_MERC) {
-		weapons = (client->ps.stats[STAT_WEAPONS] | (1 << WP_MELEE)) & ~(1 << WP_SABER);
-		if (!g_startingWeapons.integer)
-			weapons |= (1 << WP_BRYAR_PISTOL) | (1 << WP_BLASTER) | (1 << WP_BOWCASTER);
-		weapons &= ~g_weaponDisable.integer;
-		weapons |= 1 << WP_MELEE;
+		weapons = JVM_MercStartingWeapons(merc_startingweapons.integer,
+			g_weaponDisable.integer, 1 << WP_MELEE, 1 << WP_SABER);
 		client->ps.stats[STAT_WEAPONS] = weapons;
-		client->ps.stats[STAT_HOLDABLE_ITEMS] &= ~((1 << HI_MEDPAC) | (1 << HI_MEDPAC_BIG));
+		client->ps.stats[STAT_HOLDABLE_ITEMS] = 0;
 		client->ps.stats[STAT_HOLDABLE_ITEM] = 0;
+		for (i = HI_NONE + 1; i < HI_NUM_HOLDABLE; i++) {
+			if (i == HI_MEDPAC || i == HI_MEDPAC_BIG)
+				continue;
+			if (merc_startingitems.integer & (1 << i))
+				client->ps.stats[STAT_HOLDABLE_ITEMS] |= (1 << i);
+		}
+		for (i = HI_NONE + 1; i < HI_NUM_HOLDABLE; i++)
+			if (client->ps.stats[STAT_HOLDABLE_ITEMS] & (1 << i)) {
+				client->ps.stats[STAT_HOLDABLE_ITEM] = BG_GetItemIndexByTag(i, IT_HOLDABLE);
+				break;
+			}
+		memset(client->ps.ammo, 0, sizeof(client->ps.ammo));
 		for (i = WP_BRYAR_PISTOL; i <= LAST_USEABLE_WEAPON; i++)
 			if (weapons & (1 << i))
 				client->ps.ammo[weaponData[i].ammoIndex] = ammoData[weaponData[i].ammoIndex].max;

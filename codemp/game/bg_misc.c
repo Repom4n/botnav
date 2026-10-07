@@ -2323,7 +2323,8 @@ qboolean BG_CanItemBeGrabbed( int gametype, const entityState_t *ent, const play
 		!JVM_PickupAllowed(JVM_ReplicatedClass(ps->stats[STAT_RESTRICTIONS]),
 			item->giType == IT_WEAPON, item->giType == IT_AMMO,
 			item->giType == IT_HEALTH, item->giType == IT_ARMOR,
-			item->giType == IT_WEAPON && item->giTag == WP_SABER))
+			item->giType == IT_WEAPON && item->giTag == WP_SABER,
+			item->giType == IT_TEAM))
 		return qfalse;
 
 	if ( ps )

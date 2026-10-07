@@ -1427,6 +1427,10 @@ void shield_power_converter_use( gentity_t *self, gentity_t *other, gentity_t *a
 	{
 		return;
 	}
+	if (!G_JVMCanReceive(activator, qfalse, qtrue, qfalse))
+	{
+		return;
+	}
 
 	if ( level.gametype == GT_SIEGE
 		&& other
@@ -1526,6 +1530,10 @@ void ammo_generic_power_converter_use( gentity_t *self, gentity_t *other, gentit
 	int stop = 1;
 
 	if (!activator || !activator->client)
+	{
+		return;
+	}
+	if (!G_JVMCanReceive(activator, qfalse, qfalse, qtrue))
 	{
 		return;
 	}
@@ -1951,6 +1959,10 @@ void ammo_power_converter_use( gentity_t *self, gentity_t *other, gentity_t *act
 	{
 		return;
 	}
+	if (!G_JVMCanReceive(activator, qfalse, qfalse, qtrue))
+	{
+		return;
+	}
 
 	if (self->setTime < level.time)
 	{
@@ -2112,6 +2124,10 @@ void health_power_converter_use( gentity_t *self, gentity_t *other, gentity_t *a
 	int stop = 1;
 
 	if (!activator || !activator->client)
+	{
+		return;
+	}
+	if (!G_JVMCanReceive(activator, qtrue, qfalse, qfalse))
 	{
 		return;
 	}
