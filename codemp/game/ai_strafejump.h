@@ -390,6 +390,27 @@ static inline int BotSFJ_UseIsConflict(int deliberateActionUse,
 		(commandButtonUse && !previousUseWasRandom);
 }
 
+/*
+ * A steep wall the predicted path only grazes (horizontal motion at most ~20 degrees
+ * into it) just slides the player along it in pmove, so it should not veto or abort
+ * a strafe jump. Head-on walls, ceilings and floors are not glancing.
+ */
+#define BOT_SFJ_GLANCING_WALL_DOT 0.35f
+#define BOT_SFJ_MAX_WALL_SLIDES 3
+
+static inline int BotSFJ_IsGlancingWall(float normalX, float normalY, float normalZ,
+	float velocityX, float velocityY)
+{
+	const float normalLength = sqrtf(normalX * normalX + normalY * normalY);
+	const float speed = sqrtf(velocityX * velocityX + velocityY * velocityY);
+	float into;
+
+	if (normalZ >= 0.7f || normalZ < -0.1f || normalLength <= 0.001f || speed <= 1.0f)
+		return 0;
+	into = -(normalX * velocityX + normalY * velocityY) / (normalLength * speed);
+	return into <= BOT_SFJ_GLANCING_WALL_DOT;
+}
+
 static inline int BotSFJ_RouteSafetyAllows(int arcClear, int hazardFree,
 	int staticLanding, float landingNormalZ, float routeContinuity)
 {

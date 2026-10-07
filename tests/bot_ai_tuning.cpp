@@ -1936,6 +1936,22 @@ BOOST_AUTO_TEST_CASE( saber_throw_hold_telemetry_records_transitions_and_bounded
 	BOOST_CHECK( NewBotAI_SaberThrowDecisionSampleDue( 1, 1, -1 ) );
 }
 
+BOOST_AUTO_TEST_CASE( strafejump_glancing_walls_slide_instead_of_rejecting )
+{
+	// Wall facing -X; moving mostly along +Y with a slight push into it: a graze.
+	BOOST_CHECK( BotSFJ_IsGlancingWall( -1.0f, 0.0f, 0.0f, 100.0f, 400.0f ) );
+	// Moving away from or parallel to the wall is fine too.
+	BOOST_CHECK( BotSFJ_IsGlancingWall( -1.0f, 0.0f, 0.0f, -50.0f, 400.0f ) );
+	BOOST_CHECK( BotSFJ_IsGlancingWall( -1.0f, 0.0f, 0.0f, 0.0f, 400.0f ) );
+	// Head-on and steep-angle impacts still reject the arc.
+	BOOST_CHECK( !BotSFJ_IsGlancingWall( -1.0f, 0.0f, 0.0f, 400.0f, 0.0f ) );
+	BOOST_CHECK( !BotSFJ_IsGlancingWall( -1.0f, 0.0f, 0.0f, 300.0f, 300.0f ) );
+	// Floors, ceilings and a standing start are never treated as a graze.
+	BOOST_CHECK( !BotSFJ_IsGlancingWall( 0.0f, 0.0f, 1.0f, 0.0f, 400.0f ) );
+	BOOST_CHECK( !BotSFJ_IsGlancingWall( 0.0f, 0.3f, -0.95f, 0.0f, 400.0f ) );
+	BOOST_CHECK( !BotSFJ_IsGlancingWall( -1.0f, 0.0f, 0.0f, 0.0f, 0.0f ) );
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 BOOST_AUTO_TEST_SUITE_END()

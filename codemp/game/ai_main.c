@@ -135,6 +135,7 @@ static float BotGetExtraPenaltyScaleForSkill(bot_state_t *bs);
 static int BotGetReflexScaledResponseDelayMs(bot_state_t *bs);
 static float BotGetChanceBiasPercent(float value);
 static float BotGetMistakeBiasChance(bot_state_t *bs);
+static float BotGetGripMistakeBiasChance(bot_state_t *bs);
 static int NewBotAI_GetGripEscapeDelayMs(bot_state_t *bs);
 static int NewBotAI_GetGripNeverEscapeChance(bot_state_t *bs);
 static int NewBotAI_GetGripPushInsteadChance(bot_state_t *bs);
@@ -290,6 +291,7 @@ static void NewBotAI_RecordSaberThrowDecision(bot_state_t *bs, int heldMs, qbool
 static void NewBotAI_ConfigureSaberThrow(bot_state_t *bs);
 static void NewBotAI_TrySaberThrowDefenseBreak(bot_state_t *bs);
 static void NewBotAI_ApplyPullMistake(bot_state_t *bs);
+static void NewBotAI_ApplyGripEscapePullMistake(bot_state_t *bs);
 static qboolean BotNav_CheckFallingHazard(bot_state_t *bs, vec3_t moveDir, qboolean inCombat);
 int WaitingForNow(bot_state_t *bs, vec3_t goalpos);
 static void BotSFJ_SelectIntent(bot_state_t *bs);
@@ -3211,7 +3213,9 @@ static qboolean BotSFJ_HazardAhead(bot_state_t *bs, const playerState_t *ps)
 		return qfalse;
 	if (trace.fraction < 1.0f &&
 		((trace.contents & (CONTENTS_LAVA | CONTENTS_SLIME | CONTENTS_NODROP)) ||
-		 trace.plane.normal[2] < 0.7f))
+		 (trace.plane.normal[2] < 0.7f &&
+		  !BotSFJ_IsGlancingWall(trace.plane.normal[0], trace.plane.normal[1],
+			trace.plane.normal[2], ps->velocity[0], ps->velocity[1]))))
 		return qtrue;
 	return BotNav_SweepTouchesInstantKillTrigger(ps->origin, trace.endpos);
 }
@@ -3252,8 +3256,9 @@ static qboolean BotSFJ_ArcIsSafe(bot_state_t *bs, const playerState_t *ps,
 	const vec3_t routeDirection, const vec3_t routeDestination,
 	int commandMsec, int sliceMsec)
 {
-	static vec3_t playerMins = {-24.0f, -24.0f, DEFAULT_MINS_2};
-	static vec3_t playerMaxs = {24.0f, 24.0f, DEFAULT_MAXS_2};
+	/* 3u margin over the 15u player hull: nearby walls the path never touches are fine. */
+	static vec3_t playerMins = {-18.0f, -18.0f, DEFAULT_MINS_2};
+	static vec3_t playerMaxs = {18.0f, 18.0f, DEFAULT_MAXS_2};
 	const int traceMask = MASK_PLAYERSOLID | CONTENTS_LAVA | CONTENTS_SLIME | CONTENTS_NODROP;
 	vec3_t position, velocity, next, wishDirection;
 	vec3_t traveled;
@@ -3266,6 +3271,7 @@ static qboolean BotSFJ_ArcIsSafe(bot_state_t *bs, const playerState_t *ps,
 	int heldRemaining;
 	int steps;
 	int side;
+	int wallSlides = 0;
 	const qboolean launched = ps && ps->groundEntityNum != ENTITYNUM_NONE;
 	qboolean forceEligible = qfalse;
 	qboolean predictedLanding = qfalse;
@@ -3371,6 +3377,21 @@ static qboolean BotSFJ_ArcIsSafe(bot_state_t *bs, const playerState_t *ps,
 				VectorCopy(trace.endpos, position);
 				predictedLanding = qtrue;
 				break;
+			}
+			if (wallSlides < BOT_SFJ_MAX_WALL_SLIDES &&
+				trace.entityNum == ENTITYNUM_WORLD &&
+				!(trace.contents & (CONTENTS_LAVA | CONTENTS_SLIME | CONTENTS_NODROP)) &&
+				BotSFJ_IsGlancingWall(trace.plane.normal[0], trace.plane.normal[1],
+					trace.plane.normal[2], velocity[0], velocity[1]))
+			{
+				/* Graze: slide along the wall like PM_ClipVelocity and keep going. */
+				const float backoff = DotProduct(velocity, trace.plane.normal) * 1.001f;
+
+				VectorMA(velocity, -backoff, trace.plane.normal, velocity);
+				VectorCopy(trace.endpos, position);
+				elapsed += stepSeconds;
+				wallSlides++;
+				continue;
 			}
 			return qfalse;
 		}
@@ -3501,6 +3522,12 @@ static void BotSFJ_SelectIntent(bot_state_t *bs)
 	ps = &g_entities[bs->client].client->ps;
 	BotSFJ_UpdatePursuit(bs);
 	trap->EA_GetInput(bs->client, (float)level.time / 1000.0f, &queued);
+	/*
+	 * Queued navigation jump/walk requests are replaced by the controller's own
+	 * jump timing once it owns input (see BotSFJ_ApplyInput), so they should not
+	 * block initiation either; the arc check still has to clear the path.
+	 */
+	queued.actionflags &= ~(ACTION_JUMP | ACTION_DELAYEDJUMP | ACTION_WALK);
 	conflict = BotSFJ_GetInputConflict(bs, ps, &queued, &conflictReason);
 	if (BotSFJ_ConflictBlocks(conflict, bs->sfjPhase))
 	{
@@ -10466,7 +10493,7 @@ void NewBotAI_ReactToBeingGripped(bot_state_t *bs) //Test this more, does it pus
 	//reacting to being gripped (a continuous grip calls this every think). Roll the
 	//escape delay once per session instead of re-rolling a chance every think - a
 	//per-think chance converges to breaking free within a couple of thinks no matter
-	//how high bot_mistakebias is set, which is why it never felt effective. Each fresh
+	//how high bot_gkmistakebias is set, which is why it never felt effective. Each fresh
 	//session also rolls its own failure package: whether this grip is ever escaped by
 	//a pull/push at all (low levels occasionally fail entirely), and the escape delay.
 	if (bs->gripReactLastCallTime < level.time - 300)
@@ -10527,7 +10554,7 @@ void NewBotAI_ReactToBeingGripped(bot_state_t *bs) //Test this more, does it pus
 				if (bs->settings.skill >= 7.0f)
 				{
 					level.clients[bs->client].ps.fd.forcePowerSelected = FP_PULL;
-					NewBotAI_ApplyPullMistake(bs);
+					NewBotAI_ApplyGripEscapePullMistake(bs);
 				}
 				else
 				{
@@ -10538,7 +10565,7 @@ void NewBotAI_ReactToBeingGripped(bot_state_t *bs) //Test this more, does it pus
 			else {
 				if (bs->gripMistakeNeverEscape > 0)
 				{
-					//bot_mistakebias rolled a total escape failure for this grip: keep
+					//bot_gkmistakebias rolled a total escape failure for this grip: keep
 					//kick-struggling and just wait the grip out - no pull, no push.
 					NewBotAI_Flipkick(bs);
 					return;
@@ -10577,7 +10604,7 @@ void NewBotAI_ReactToBeingGripped(bot_state_t *bs) //Test this more, does it pus
 				else
 				{
 					level.clients[bs->client].ps.fd.forcePowerSelected = FP_PULL;
-					NewBotAI_ApplyPullMistake(bs);
+					NewBotAI_ApplyGripEscapePullMistake(bs);
 				}
 				useTheForce = qtrue;
 			}
@@ -10587,7 +10614,7 @@ void NewBotAI_ReactToBeingGripped(bot_state_t *bs) //Test this more, does it pus
 		if (bs->cur_ps.fd.forcePower >= 20 && InFieldOfVision(bs->viewangles, 50, a_fo)) {
 			if (bs->gripMistakeNeverEscape > 0)
 			{
-				//bot_mistakebias rolled a total escape failure for this grip: keep
+				//bot_gkmistakebias rolled a total escape failure for this grip: keep
 				//kick-struggling and just wait the grip out - no pull.
 				NewBotAI_Flipkick(bs);
 				return;
@@ -10598,7 +10625,7 @@ void NewBotAI_ReactToBeingGripped(bot_state_t *bs) //Test this more, does it pus
 				return;
 			}
 			level.clients[bs->client].ps.fd.forcePowerSelected = FP_PULL;
-			NewBotAI_ApplyPullMistake(bs);
+			NewBotAI_ApplyGripEscapePullMistake(bs);
 			useTheForce = qtrue;
 		}
 	}
@@ -14521,7 +14548,7 @@ static float BotGetChanceBiasPercent(float value)
 	return value;
 }
 
-static float BotGetMistakeBiasChance(bot_state_t *bs)
+static float BotScaleMistakeBiasForSkill(bot_state_t *bs, float biasValue)
 {
 	float skillScale;
 	float chance;
@@ -14531,7 +14558,7 @@ static float BotGetMistakeBiasChance(bot_state_t *bs)
 		return 0.0f;
 	}
 
-	chance = BotGetChanceBiasPercent(bot_mistakebias.value);
+	chance = BotGetChanceBiasPercent(biasValue);
 	if (chance <= 0.0f)
 	{
 		return 0.0f;
@@ -14569,6 +14596,19 @@ static float BotGetMistakeBiasChance(bot_state_t *bs)
 	return chance;
 }
 
+//General combat mistakes (timing, positioning, combos, pull aim) - bot_mistakebias.
+static float BotGetMistakeBiasChance(bot_state_t *bs)
+{
+	return BotScaleMistakeBiasForSkill(bs, bot_mistakebias.value);
+}
+
+//Gripkick escape mistakes only - bot_gkmistakebias, tuned separately so high-level bots
+//can stop fumbling grip escapes while lower levels keep (or gain) general mistakes.
+static float BotGetGripMistakeBiasChance(bot_state_t *bs)
+{
+	return BotScaleMistakeBiasForSkill(bs, bot_gkmistakebias.value);
+}
+
 // Item 4: the amount of time (ms) mistakebias should keep this bot from correctly
 // breaking out of an opponent's grip once the grip starts - rolled fresh per grip
 // session (see NewBotAI_ReactToBeingGripped) rather than re-rolled every think, since a
@@ -14579,7 +14619,7 @@ static float BotGetMistakeBiasChance(bot_state_t *bs)
 #define NEWBOTAI_GRIP_MISTAKE_MAX_DELAY_MS 3600
 static int NewBotAI_GetGripEscapeDelayMs(bot_state_t *bs)
 {
-	const float mistakeChance = BotGetMistakeBiasChance(bs);
+	const float mistakeChance = BotGetGripMistakeBiasChance(bs);
 	int maxDelay;
 	int roll;
 
@@ -14615,7 +14655,7 @@ static int NewBotAI_GetGripEscapeDelayMs(bot_state_t *bs)
 // escape nearly every grip.
 static int NewBotAI_GetGripNeverEscapeChance(bot_state_t *bs)
 {
-	return (int)(BotGetMistakeBiasChance(bs) * 0.45f);
+	return (int)(BotGetGripMistakeBiasChance(bs) * 0.45f);
 }
 
 // Item 4: per-attempt chance (0-100) that a grip-escape pull is fumbled into a push -
@@ -14623,21 +14663,24 @@ static int NewBotAI_GetGripNeverEscapeChance(bot_state_t *bs)
 // the wrong direction and shoves them away instead of pulling free of the grip.
 static int NewBotAI_GetGripPushInsteadChance(bot_state_t *bs)
 {
-	return (int)(BotGetMistakeBiasChance(bs) * 0.5f);
+	return (int)(BotGetGripMistakeBiasChance(bs) * 0.5f);
 }
 
-// Item 4: mistakebias weights off gripkicks that achieve high speeds - the faster the
-// gripper is moving our bot around mid-grip (hard yaw jerks, throws), the more likely
+// Item 4: bot_gkmistakebias weights off gripkicks that achieve high speeds - the faster
+// the gripper is moving our bot around mid-grip (hard yaw jerks, throws), the more likely
 // the escape fails, so a skillful fast gripkick is genuinely harder to break out of
 // than a slow one. Returns a 0-100 chance scaled off how fast we are currently being
-// moved; at or above ~900 u/s even a perfect bot can be rattled into a failed attempt.
+// moved (full at ~900 u/s), weighted by the skill-scaled gripkick mistake chance: it
+// used to bypass every bias and skill check, which made high-level bots fumble pull-outs
+// even with no mistakes configured. Level 10 and bot_gkmistakebias 0 are never rattled.
 #define NEWBOTAI_GRIP_SPEED_MISTAKE_MAX 900.0f
 static int NewBotAI_GetGripSpeedMistakeChance(bot_state_t *bs)
 {
 	const float speed = VectorLength(bs->cur_ps.velocity);
+	const float gripMistakeChance = BotGetGripMistakeBiasChance(bs);
 	float chance;
 
-	if (speed <= 0.0f)
+	if (speed <= 0.0f || gripMistakeChance <= 0.0f)
 	{
 		return 0;
 	}
@@ -14648,16 +14691,11 @@ static int NewBotAI_GetGripSpeedMistakeChance(bot_state_t *bs)
 		chance = 100.0f;
 	}
 
-	//Level 10 plays perfectly (see BotGetMistakeBiasChance) - but being whipped around
-	//at full grip speed rattles anyone, so speed applies its own independent pressure
-	//rather than going through the skill-zeroed base chance.
-	return (int)chance;
+	return (int)(chance * (gripMistakeChance / 100.0f));
 }
 
-
-static void NewBotAI_ApplyPullMistake(bot_state_t *bs)
+static void NewBotAI_ApplyPullMistakeChance(bot_state_t *bs, float mistakeChance)
 {
-	const float mistakeChance = BotGetMistakeBiasChance(bs);
 	float missAngle;
 
 	if (!(g_entities[bs->client].r.svFlags & SVF_BOT))
@@ -14680,6 +14718,17 @@ static void NewBotAI_ApplyPullMistake(bot_state_t *bs)
 	//force pull can miss its target.
 	bs->ideal_viewangles[YAW] = AngleNormalize360(bs->ideal_viewangles[YAW] + missAngle);
 	bs->goalAngles[YAW] = bs->ideal_viewangles[YAW];
+}
+
+static void NewBotAI_ApplyPullMistake(bot_state_t *bs)
+{
+	NewBotAI_ApplyPullMistakeChance(bs, BotGetMistakeBiasChance(bs));
+}
+
+//Escape pulls while gripped are gripkick mistakes (bot_gkmistakebias), not general ones.
+static void NewBotAI_ApplyGripEscapePullMistake(bot_state_t *bs)
+{
+	NewBotAI_ApplyPullMistakeChance(bs, BotGetGripMistakeBiasChance(bs));
 }
 
 static int BotGetAggressionWeightedBonus(bot_state_t *bs, float biasPercent, int maxBonus, qboolean aggressiveOnly)
@@ -22077,7 +22126,7 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 		//Item 5: no instant push-out while gripped here - that path fired regardless of the
 		//bot's (slow) low-skill aim and let level 1-2 bots break free immediately. Escaping
 		//an opponent's grip is now left to NewBotAI_ReactToBeingGripped, which is gated by
-		//bot_mistakebias. A scripted force push (doForcePush) is still honored.
+		//bot_gkmistakebias. A scripted force push (doForcePush) is still honored.
 		if ((bs->cur_ps.fd.forcePowersKnown & (1 << FP_PUSH)) && bs->doForcePush > level.time && level.clients[bs->client].ps.fd.forcePower > forcePowerNeeded[level.clients[bs->client].ps.fd.forcePowerLevel[FP_PUSH]][FP_PUSH] /*&& InFieldOfVision(bs->viewangles, 50, a_fo)*/)
 		{
 			level.clients[bs->client].ps.fd.forcePowerSelected = FP_PUSH;
