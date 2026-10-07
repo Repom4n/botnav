@@ -1,4 +1,5 @@
 #include <math.h>
+#include <limits>
 
 #include "ai_combat_tuning.h"
 #include "ai_strafejump.h"
@@ -8,6 +9,37 @@
 BOOST_AUTO_TEST_SUITE( bot_ai )
 
 BOOST_AUTO_TEST_SUITE( tuning )
+
+BOOST_AUTO_TEST_CASE( strafejump_route_hints_reject_nonfinite_and_invalid_geometry )
+{
+	float start[3] = { 0.0f, 0.0f, 0.0f };
+	float end[3] = { 600.0f, 0.0f, 0.0f };
+	BOOST_CHECK( BotSFJ_RouteHintValid( start, end, 450.0f ) );
+	BOOST_CHECK( !BotSFJ_RouteHintValid( start, start, 0.0f ) );
+	BOOST_CHECK( !BotSFJ_RouteHintValid( start, end, -1.0f ) );
+	BOOST_CHECK( !BotSFJ_RouteHintValid( start, end, 2001.0f ) );
+	BOOST_CHECK( !BotSFJ_RouteHintValid( start, end,
+		std::numeric_limits<float>::quiet_NaN() ) );
+	end[0] = std::numeric_limits<float>::infinity();
+	BOOST_CHECK( !BotSFJ_RouteHintValid( start, end, 0.0f ) );
+	end[0] = 600.0f;
+	start[2] = std::numeric_limits<float>::quiet_NaN();
+	BOOST_CHECK( !BotSFJ_RouteHintValid( start, end, 0.0f ) );
+	start[2] = 131073.0f;
+	BOOST_CHECK( !BotSFJ_RouteHintValid( start, end, 0.0f ) );
+}
+
+BOOST_AUTO_TEST_CASE( demo_trails_preserve_required_waypoints_links_and_goals )
+{
+	BOOST_CHECK_EQUAL( BotSFJ_DemoTrailStep( 0, 1, 1, 0, 100.0f, 600.0f ), 0 );
+	BOOST_CHECK_EQUAL( BotSFJ_DemoTrailStep( 0, 1, 1, 0, 600.0f, 600.0f ), 1 );
+	BOOST_CHECK_EQUAL( BotSFJ_DemoTrailStep( 0, 1, 1, 1, 600.0f, 600.0f ), 1 );
+	BOOST_CHECK_EQUAL( BotSFJ_DemoTrailStep( 0, 1, 1, 1, 500.0f, 600.0f ), -1 );
+	BOOST_CHECK_EQUAL( BotSFJ_DemoTrailStep( 1, 1, 1, 0, 600.0f, 600.0f ), -1 );
+	BOOST_CHECK_EQUAL( BotSFJ_DemoTrailStep( 0, 0, 1, 0, 600.0f, 600.0f ), -1 );
+	BOOST_CHECK_EQUAL( BotSFJ_DemoTrailStep( 0, 1, 0, 0, 600.0f, 600.0f ), -1 );
+	BOOST_CHECK_EQUAL( BotSFJ_DemoTrailStep( 0, 1, 1, 0, 600.0f, 0.0f ), -1 );
+}
 
 BOOST_AUTO_TEST_CASE( strafejump_frequency_and_waypoint_skip_safety )
 {

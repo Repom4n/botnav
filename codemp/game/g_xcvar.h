@@ -341,6 +341,7 @@ XCVAR_DEF( bot_dueltracking,			"1",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_dueltracking_geometry,	"2",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_strafeOffset,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_strafejumps,			"1",			NULL,				CVAR_ARCHIVE,									qtrue )
+XCVAR_DEF( bot_demotracks,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_strafejumpfrequency,	"100",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_onlystrafes,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 // 1: print why strafe-jump attempts are rejected (rate limited per bot).

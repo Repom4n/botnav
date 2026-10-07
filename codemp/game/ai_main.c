@@ -3012,11 +3012,13 @@ typedef struct
 	vec3_t start;
 	vec3_t end;
 	float minSpeed;
+	qboolean demo;
 } bot_sfj_route_hint_t;
 
-static bot_sfj_route_hint_t g_botSfjRouteHints[BOT_SFJ_MAX_ROUTE_HINTS];
+static bot_sfj_route_hint_t g_botSfjRouteHints[2 * BOT_SFJ_MAX_ROUTE_HINTS];
 static int g_botSfjRouteHintCount;
 static qboolean g_botSfjRouteHintsLoaded; /* the game module is reloaded on map change */
+static qboolean g_botSfjDemoRoutesLoaded;
 
 static qboolean BotSFJ_ParseRouteVector(const char **text, vec3_t out)
 {
@@ -3030,9 +3032,10 @@ static qboolean BotSFJ_ParseRouteVector(const char **text, vec3_t out)
 	return qtrue;
 }
 
-static void BotSFJ_ParseRouteHints(const char *buffer, const char *path)
+static void BotSFJ_ParseRouteHints(const char *buffer, const char *path, qboolean demo)
 {
 	const char *text = buffer;
+	const int limit = g_botSfjRouteHintCount + BOT_SFJ_MAX_ROUTE_HINTS;
 	char *token;
 
 	COM_BeginParseSession(path);
@@ -3057,6 +3060,7 @@ static void BotSFJ_ParseRouteHints(const char *buffer, const char *path)
 			break;
 		}
 		memset(&hint, 0, sizeof(hint));
+		hint.demo = demo;
 		while (1)
 		{
 			token = COM_ParseExt(&text, qtrue);
@@ -3090,12 +3094,14 @@ static void BotSFJ_ParseRouteHints(const char *buffer, const char *path)
 			else
 				COM_ParseExt(&text, qfalse); /* src_area, dest_area, unknown keys */
 		}
-		if (!valid || !haveStart || !haveEnd)
+		if (!valid || !haveStart || !haveEnd ||
+			!BotSFJ_RouteHintValid(hint.start, hint.end, hint.minSpeed))
 		{
-			trap->Print(S_COLOR_YELLOW "%s: skipping strafejump block without valid start_pos/end_pos\n", path);
+			trap->Print(S_COLOR_YELLOW "%s: skipping invalid strafejump block\n", path);
 			continue;
 		}
-		if (g_botSfjRouteHintCount >= BOT_SFJ_MAX_ROUTE_HINTS)
+		if (g_botSfjRouteHintCount >= limit ||
+			g_botSfjRouteHintCount >= (int)ARRAY_LEN(g_botSfjRouteHints))
 		{
 			trap->Print(S_COLOR_YELLOW "%s: more than %i strafejump routes, ignoring the rest\n",
 				path, BOT_SFJ_MAX_ROUTE_HINTS);
@@ -3105,45 +3111,111 @@ static void BotSFJ_ParseRouteHints(const char *buffer, const char *path)
 	}
 }
 
+static qboolean BotSFJ_LoadRouteFile(const char *path, qboolean demo)
+{
+	fileHandle_t f;
+	char *buffer;
+	int len;
+	int previousCount = g_botSfjRouteHintCount;
+
+	len = trap->FS_Open(path, &f, FS_READ);
+	if (!f)
+		return qfalse;
+	if (len <= 0 || len >= BOT_SFJ_ROUTE_FILE_MAX)
+	{
+		trap->Print(S_COLOR_YELLOW "%s: empty or larger than %i bytes, ignored\n",
+			path, BOT_SFJ_ROUTE_FILE_MAX);
+		trap->FS_Close(f);
+		return qtrue;
+	}
+	buffer = (char *)B_TempAlloc(len + 1);
+	trap->FS_Read(buffer, len, f);
+	trap->FS_Close(f);
+	buffer[len] = '\0';
+	BotSFJ_ParseRouteHints(buffer, path, demo);
+	B_TempFree(len + 1);
+	trap->Print("Loaded %i strafe-jump route hint(s) from %s\n",
+		g_botSfjRouteHintCount - previousCount, path);
+	return qtrue;
+}
+
 static void BotSFJ_LoadRouteHints(void)
 {
 	static const char *folders[] = { "botroutes", "routes" };
 	char mapname[MAX_QPATH];
 	char path[MAX_QPATH];
-	fileHandle_t f;
-	char *buffer;
-	int len;
 	int i;
 
-	if (g_botSfjRouteHintsLoaded)
+	if (g_botSfjRouteHintsLoaded &&
+		(!bot_demotracks.integer || g_botSfjDemoRoutesLoaded))
 		return;
-	g_botSfjRouteHintsLoaded = qtrue;
-	g_botSfjRouteHintCount = 0;
 	trap->Cvar_VariableStringBuffer("mapname", mapname, sizeof(mapname));
 	if (!mapname[0])
 		return;
-	for (i = 0; i < (int)ARRAY_LEN(folders); i++)
+	if (!g_botSfjRouteHintsLoaded)
 	{
-		Com_sprintf(path, sizeof(path), "%s/%s.botroute", folders[i], mapname);
-		len = trap->FS_Open(path, &f, FS_READ);
-		if (!f)
-			continue;
-		if (len <= 0 || len >= BOT_SFJ_ROUTE_FILE_MAX)
+		g_botSfjRouteHintsLoaded = qtrue;
+		for (i = 0; i < (int)ARRAY_LEN(folders); i++)
 		{
-			trap->Print(S_COLOR_YELLOW "%s: empty or larger than %i bytes, ignored\n",
-				path, BOT_SFJ_ROUTE_FILE_MAX);
-			trap->FS_Close(f);
-			return;
+			Com_sprintf(path, sizeof(path), "%s/%s.botroute", folders[i], mapname);
+			if (BotSFJ_LoadRouteFile(path, qfalse))
+				break;
 		}
-		buffer = (char *)B_TempAlloc(len + 1);
-		trap->FS_Read(buffer, len, f);
-		trap->FS_Close(f);
-		buffer[len] = '\0';
-		BotSFJ_ParseRouteHints(buffer, path);
-		B_TempFree(len + 1);
-		trap->Print("Loaded %i strafe-jump route hint(s) from %s\n", g_botSfjRouteHintCount, path);
-		return;
 	}
+	if (bot_demotracks.integer && !g_botSfjDemoRoutesLoaded)
+	{
+		g_botSfjDemoRoutesLoaded = qtrue;
+		Com_sprintf(path, sizeof(path), "botroutes/%s.demoroute", mapname);
+		BotSFJ_LoadRouteFile(path, qtrue);
+	}
+}
+
+/*
+ * A recording is not authority to skip required trail interactions or the
+ * navigation goal. Require an unflagged, passable linked trail through its end.
+ */
+static qboolean BotSFJ_DemoTrailAllows(bot_state_t *bs, const vec3_t start,
+	const vec3_t end)
+{
+	const int budget = BotSFJ_WaypointBudget(bot_strafejumpwaypoints.integer);
+	const int step = bs->wpDirection ? -1 : 1;
+	wpobject_t *previous = NULL;
+	vec3_t direction, toWaypoint;
+	float length, progress;
+	int index, count;
+
+	if (!bs->wpCurrent || bs->doingFallback ||
+		(bs->wpDestination &&
+		 ((step > 0 && bs->wpCurrent->index > bs->wpDestination->index) ||
+		  (step < 0 && bs->wpCurrent->index < bs->wpDestination->index))))
+		return qfalse;
+	VectorSubtract(end, start, direction);
+	direction[2] = 0.0f;
+	length = VectorNormalize(direction);
+	if (length <= 1.0f)
+		return qfalse;
+	index = bs->wpCurrent->index;
+	for (count = 0; count < budget; count++, index += step)
+	{
+		wpobject_t *wp;
+		int decision;
+
+		if (index < 0 || index >= gWPNum)
+			return qfalse;
+		wp = gWPArray[index];
+		if (!wp || !wp->inuse)
+			return qfalse;
+		VectorSubtract(wp->origin, start, toWaypoint);
+		progress = DotProduct(toWaypoint, direction);
+		decision = BotSFJ_DemoTrailStep(wp->flags || wp->forceJumpTo,
+			PassWayCheck(bs, index),
+			!previous || BotSFJ_WaypointsLinked(previous, index),
+			wp == bs->wpDestination, progress, length);
+		if (decision)
+			return decision > 0 ? qtrue : qfalse;
+		previous = wp;
+	}
+	return qfalse;
 }
 
 /*
@@ -3166,6 +3238,8 @@ static qboolean BotSFJ_GetRouteHintCorridor(bot_state_t *bs, const playerState_t
 		vec3_t toEnd;
 		float progress;
 
+		if (hint->demo && !bot_demotracks.integer)
+			continue;
 		if (!BotSFJ_RouteHintProgress(ps->origin, hint->start, hint->end,
 				BOT_SFJ_ROUTE_HINT_START_RADIUS, BOT_SFJ_ROUTE_HINT_HALF_WIDTH,
 				BOT_SFJ_ROUTE_HINT_HEIGHT_TOLERANCE, BOT_SFJ_ROUTE_HINT_MAX_PROGRESS,
@@ -3174,6 +3248,8 @@ static qboolean BotSFJ_GetRouteHintCorridor(bot_state_t *bs, const playerState_t
 		VectorSubtract(hint->end, ps->origin, toEnd);
 		toEnd[2] = 0.0f;
 		if (VectorNormalize(toEnd) <= 0.0f || DotProduct(toEnd, moveDirection) < 0.7f)
+			continue;
+		if (hint->demo && !BotSFJ_DemoTrailAllows(bs, ps->origin, hint->end))
 			continue;
 		if (!BotSFJ_RouteHintSpeedAllows(progress, grounded, horizontalSpeed, hint->minSpeed))
 		{

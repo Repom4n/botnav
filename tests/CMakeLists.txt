@@ -75,3 +75,8 @@ if(NOT MSVC)
 endif()
 
 add_test(NAME unittests COMMAND ${TestTarget})
+
+find_package(Python3 3.9 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+	add_test(NAME demo_tracks COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/demo_tracks.py")
+endif()

@@ -126,6 +126,7 @@ During the temporary duel no-strafe gate, free selection boundaries deliberately
 | `bot_strafeduration` | `50` | Duration scale (0-100) for random strafes. 50 = 80-2500ms range. |
 | `bot_strafeOffset` | `0` | Legacy strafe offset. |
 | `bot_strafejumps` | `1` | Enables forward-only strafe jumping (optimal-yaw air acceleration with a circle-jump start and bhop chaining) on validated, open corridors for navigation, chase and escape. Corridors look ahead up to ~1024 units along linked waypoints, or straight toward/away from the enemy when chasing/escaping directly. In CTF, carrying a flag counts as escape and chasing an enemy flag carrier counts as chase. |
+| `bot_demotracks` | `0` | Opt in to map-specific decoded-demo route hints from `botroutes/<map>.demoroute`. Authored `.botroute` hints have priority. Requires enabled strafe jumps; never bypasses movement, combat, collision, landing or hazard checks. Disabling it immediately excludes demo hints from route selection. |
 | `bot_strafejumpfrequency` | `100` | Initiation frequency scale, clamped to 1–1000 when enabled: `100` waits 1000 ms before starting a new eligible sequence, `200` waits 500 ms, `50` waits 2000 ms. `0` or negative disables strafe jumping. No per-frame random rolls; established safe chains are not delayed. |
 | `bot_strafejumpwaypoints` | `128` | Strafe corridor waypoint budget, clamped to 1–512, independent of ordinary `bot_waypointskip`. Dense trails need enough points to reach the minimum corridor length; look-ahead remains distance-bounded to about 1024 units and stops at required interactions, destinations, disconnected links, bends or height changes. |
 | `bot_onlystrafes` | `0` | Test preference: starts eligible strafe navigation without the frequency wait and also considers safe direct enemy corridors without requiring increasing separation. Requires enabled strafe jumps and positive frequency. Does not force jumping: combat, required interactions, physics, proximity, collision and hazard checks still take priority, with ordinary navigation as fallback. |
@@ -167,7 +168,75 @@ Live-map validation checklist:
 - Keep `bot_hopfrequency 0` and confirm ambient hops stay disabled. With `bot_strafejumps_debug 3`, inspect client-visible rejections while comparing `bot_waypointskip` at 0, 2 and 4 on linear and branched trails, including flagged waypoints, gaps and required destinations.
 - On densely spaced trails, compare `bot_strafejumpwaypoints` at 16, 128 and 256. Verify corridor initiation and forward waypoint progression during flight without backtracking, and confirm flagged interactions, destinations and unsafe terrain remain barriers rather than being blindly skipped.
 
-Optional future work may use dedicated, opt-in strafe-jump demonstrations for tuning. Dueltrack CSV capture and runtime database logging are deliberately outside this feature.
+### Importing demo tracks
+
+Demo tracks can supply **route-selection evidence**, not scripted input playback. Use a
+JKA-compatible demo decoder to export player snapshots, then normalize the export to
+this JSON format (one track per player/continuous recording):
+
+```json
+{
+  "version": 1,
+  "map": "mp/ffa1",
+  "tracks": [{
+    "client": 0,
+    "frames": [{
+      "time_ms": 1000,
+      "origin": [1200.5, -450.0, 128.0],
+      "velocity": [450.0, 0.0, 0.0],
+      "grounded": true,
+      "alive": true
+    }]
+  }]
+}
+```
+
+The example shows the schema only; importing requires a sequence containing a
+completed jump or jump chain. Positions/velocities use engine world coordinates,
+timestamps are integer milliseconds increasing within each track, and `grounded`
+and `alive` are explicit booleans derived from decoded player state. Split tracks
+at recording/map changes; do not interpolate missing snapshots or guess inputs.
+
+Run the offline importer with Python 3.9 or newer from your checkout:
+
+```sh
+python3 tools/import_demo_tracks.py decoded.json --output-dir /path/to/server/base
+```
+
+It writes `botroutes/mp/ffa1.demoroute` under that game directory. Existing files
+are protected unless `--force` is supplied; this replaces only the generated file,
+never the authored `.botroute`. Review generated hints before deployment. Enable
+`bot_demotracks 1` on the server and keep `bot_strafejumps 1`. Files are read once
+per map on first use (demo files on first enabled use); restart the map after
+replacing a loaded file. Existing waypoint navigation still chooses the direction;
+demo hints only offer a corridor when the bot is already moving along it.
+They also require a passable, linked, unflagged waypoint trail through the hinted
+endpoint within `bot_strafejumpwaypoints`, without crossing the navigation goal.
+Insufficient trail coverage or required interaction/jump/duck waypoints reject
+the hint; recorded routes are not a replacement for `.wnt` waypoint files.
+
+The importer selects successful, near-straight, level-ended jump corridors,
+rejecting walking-only tracks, missing/dead/discontinuous samples, sharp turns
+and incomplete flights. It bounds file size, frame count and route count, and
+deduplicates similar routes. Recorded launch speeds supply the route's minimum
+speed gate (80% of the slowest launch in the corridor, capped at 2000). Teleport
+detection is a displacement/velocity heuristic, not proof that a recording is
+unmodified or free of knockback. In-game arc/landing traces, unsafe contents and `trigger_hurt` checks,
+combat exclusions, required interactions and supported physics remain authoritative;
+an unusable hint falls back to normal AI. The recording cannot prove present-day
+map safety or suitability for different physics.
+
+**Scope:** raw `.dm_26` binary/Huffman/delta decoding is not implemented by this
+importer. Normal client demos contain snapshots, not the full original usercmd
+stream; no attack buttons, mouse deltas or force commands are fabricated. This
+first bridge improves navigation/strafe corridor decisions using the existing
+physics-based yaw controller; it does not train combat weights, change movement
+physics, create waypoints, or import data into dueltrack/learning databases.
+
+Acceptance on a live server: compare `bot_demotracks 0` and `1` on a recorded
+corridor with `bot_strafejumps_debug 2`; confirm starts only while aligned and
+eligible. Place blockers/hazards along the recorded line and verify rejection
+or abort, then disable demo hints and confirm ordinary corridor selection resumes.
 
 ## Retreat Wall Escapes
 

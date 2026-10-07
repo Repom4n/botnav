@@ -431,6 +431,36 @@ static inline int BotSFJ_RouteSafetyAllows(int arcClear, int hazardFree,
 #define BOT_SFJ_ROUTE_HINT_MAX_PROGRESS 0.85f
 #define BOT_SFJ_ROUTE_HINT_SPEED_GATE_PROGRESS 0.5f
 
+static inline int BotSFJ_RouteHintValid(const float *start, const float *end,
+	float minSpeed)
+{
+	int i;
+	float dx, dy;
+
+	if (!(minSpeed >= 0.0f && minSpeed <= 2000.0f))
+		return 0;
+	for (i = 0; i < 3; i++)
+	{
+		if (!(start[i] >= -131072.0f && start[i] <= 131072.0f) ||
+			!(end[i] >= -131072.0f && end[i] <= 131072.0f))
+			return 0;
+	}
+	dx = end[0] - start[0];
+	dy = end[1] - start[1];
+	return dx * dx + dy * dy > 1.0f;
+}
+
+/* -1 rejects a demo trail, 0 continues checking, 1 reaches its endpoint. */
+static inline int BotSFJ_DemoTrailStep(int required, int passable, int linked,
+	int destination, float progress, float routeLength)
+{
+	if (required || !passable || !linked || !(routeLength > 1.0f))
+		return -1;
+	if (progress >= routeLength)
+		return 1;
+	return destination ? -1 : 0;
+}
+
 static inline int BotSFJ_RouteHintProgress(const float *origin, const float *start,
 	const float *end, float startRadius, float halfWidth, float heightTolerance,
 	float maxProgress, float *progress)
