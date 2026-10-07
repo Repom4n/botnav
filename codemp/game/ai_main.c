@@ -293,6 +293,7 @@ static void NewBotAI_TrySaberThrowDefenseBreak(bot_state_t *bs);
 static void NewBotAI_ApplyPullMistake(bot_state_t *bs);
 static void NewBotAI_ApplyGripEscapePullMistake(bot_state_t *bs);
 static qboolean BotNav_CheckFallingHazard(bot_state_t *bs, vec3_t moveDir, qboolean inCombat);
+static void BotSFJ_DebugReject(bot_state_t *bs, const char *reason);
 int WaitingForNow(bot_state_t *bs, vec3_t goalpos);
 static void BotSFJ_SelectIntent(bot_state_t *bs);
 static void BotSFJ_ApplyInput(bot_state_t *bs, bot_input_t *bi, int time, int elapsedTime);
@@ -1577,6 +1578,128 @@ int GetNearestVisibleWP(vec3_t org, int ignore)
 	return bestindex;
 }
 
+static void BotNav_RememberWP(bot_state_t *bs, int index)
+{
+	if (!bs)
+		return;
+	bs->wpRecentHead = BotNav_RecentPush(bs->wpRecent, BOT_NAV_RECENT_WAYPOINTS,
+		bs->wpRecentHead, index);
+}
+
+/*
+ * Nearest visible waypoint that the bot has not just passed.  Re-picking a
+ * point it already reached is what makes bots walk back and forth; fall back
+ * to any visible point when nothing fresh is in reach.
+ */
+static int BotNav_NearestVisibleFreshWP(bot_state_t *bs)
+{
+	vec3_t a, mins, maxs;
+	float bestdist = RMG.integer ? 300.0f : 800.0f;
+	int bestindex = -1;
+	int i;
+
+	VectorSet(mins, -15, -15, -1);
+	VectorSet(maxs, 15, 15, 1);
+	for (i = 0; i < gWPNum; i++)
+	{
+		float flLen;
+
+		if (!gWPArray[i] || !gWPArray[i]->inuse ||
+			BotNav_RecentContains(bs->wpRecent, BOT_NAV_RECENT_WAYPOINTS, i))
+			continue;
+		VectorSubtract(bs->origin, gWPArray[i]->origin, a);
+		flLen = VectorLength(a);
+		if (flLen < bestdist && (RMG.integer || BotPVSCheck(bs->origin, gWPArray[i]->origin)) &&
+			OrgVisibleBox(bs->origin, mins, maxs, gWPArray[i]->origin, bs->client))
+		{
+			bestdist = flLen;
+			bestindex = i;
+		}
+	}
+	if (bestindex == -1)
+		bestindex = GetNearestVisibleWP(bs->origin, bs->client);
+	return bestindex;
+}
+
+/*
+ * Falling hazard ahead: switch to the next waypoint in the travel direction
+ * when it is visible and safe to head for, otherwise drop the waypoint so the
+ * bot re-paths (avoiding the points it just passed).
+ */
+static void BotNav_AvoidHazardWaypoint(bot_state_t *bs)
+{
+	int next;
+
+	if (!bs->wpCurrent)
+		return;
+	BotNav_RememberWP(bs, bs->wpCurrent->index);
+	next = bs->wpDirection ? bs->wpCurrent->index - 1 : bs->wpCurrent->index + 1;
+	if (next >= 0 && next < gWPNum && gWPArray[next] && gWPArray[next]->inuse &&
+		OrgVisible(bs->origin, gWPArray[next]->origin, bs->client))
+	{
+		vec3_t dir;
+
+		VectorSubtract(gWPArray[next]->origin, bs->origin, dir);
+		dir[2] = 0.0f;
+		if (VectorNormalize(dir) > 0.0f && !BotNav_CheckFallingHazard(bs, dir,
+			(bs->currentEnemy && bs->frame_Enemy_Vis) ? qtrue : qfalse))
+		{
+			bs->wpCurrent = gWPArray[next];
+			bs->wpSeenTime = level.time + 1500;
+			bs->wpTravelTime = level.time + 10000;
+			return;
+		}
+	}
+	bs->wpCurrent = NULL; //force re-path
+}
+
+/*
+ * Out of combat, a bot heading for a waypoint destination that has not got
+ * closer for a few seconds is stuck in a local loop: mark its current point
+ * as visited and re-path to a fresh one instead of reversing direction.
+ */
+static void BotNav_CheckProgress(bot_state_t *bs)
+{
+	float distance;
+	int goal;
+
+	if (!bs->wpCurrent || !bs->wpDestination || bs->wpCamping ||
+		(bs->currentEnemy && bs->frame_Enemy_Vis) || bs->sfjRoute)
+	{
+		bs->navProgressGoal = 0;
+		bs->navProgressBest = 0.0f;
+		bs->navProgressTime = 0;
+		return;
+	}
+	goal = bs->wpDestination->index + 1;
+	distance = Distance(bs->origin, bs->wpDestination->origin);
+	if (goal != bs->navProgressGoal || BotNav_ProgressImproved(bs->navProgressBest, distance))
+	{
+		bs->navProgressGoal = goal;
+		bs->navProgressBest = distance;
+		bs->navProgressTime = level.time;
+		return;
+	}
+	if (!BotNav_ProgressStalled(bs->navProgressTime, level.time))
+		return;
+	{
+		const int savedDirection = bs->wpDirection;
+		int wp;
+
+		BotNav_RememberWP(bs, bs->wpCurrent->index);
+		wp = BotNav_NearestVisibleFreshWP(bs);
+		bs->navProgressBest = distance;
+		bs->navProgressTime = level.time;
+		if (wp == -1 || wp == bs->wpCurrent->index)
+			return;
+		BotSFJ_DebugReject(bs, "waypoint progress stalled, re-pathing to an unvisited point");
+		bs->wpCurrent = gWPArray[wp];
+		bs->wpDirection = savedDirection;
+		bs->wpSeenTime = level.time + 1500;
+		bs->wpTravelTime = level.time + 10000;
+	}
+}
+
 //wpDirection
 //0 == FORWARD
 //1 == BACKWARD
@@ -1934,6 +2057,8 @@ void WPTouchRoutine(bot_state_t *bs)
 	{
 		return;
 	}
+
+	BotNav_RememberWP(bs, bs->wpCurrent->index);
 
 	bs->wpTravelTime = level.time + 10000;
 
@@ -22883,7 +23008,7 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 
 	if (!bs->wpCurrent)
 	{
-		wp = GetNearestVisibleWP(bs->origin, bs->client);
+		wp = BotNav_NearestVisibleFreshWP(bs);
 
 		if (wp != -1)
 		{
@@ -23085,6 +23210,9 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 				bs->wpSeenTime = level.time + 1500; //if we lose sight of the point, we have 1.5 seconds to regain it before we drop it
 			}
 		}
+		BotNav_CheckProgress(bs);
+		if (!bs->wpCurrent)
+			return;
 		VectorCopy(bs->wpCurrent->origin, bs->goalPosition);
 		if (bs->sfjCorridorForwardGoal)
 			VectorCopy(bs->sfjIntentDestination, bs->goalPosition);
@@ -23742,7 +23870,9 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 			(bs->currentEnemy && bs->frame_Enemy_Vis) ? qtrue : qfalse))
 		{
 			bs->beStill = level.time + 100;
-			bs->wpCurrent = NULL; //force re-path
+			//Prefer the next waypoint along the route over a full re-path, which
+			//tends to pick a point behind the bot and send it walking back.
+			BotNav_AvoidHazardWaypoint(bs);
 		}
 		else if (bs->jumpTime > level.time && bs->jDelay < level.time &&
 			level.clients[bs->client].pers.cmd.upmove > 0)
@@ -23778,8 +23908,9 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 		if (BotTrace_Jump(bs, bs->goalPosition))
 		{
 			bs->jumpTime = level.time + 100;
+			bs->duckTime = 0; //never crouch-jump over an obstacle
 		}
-		else if (BotTrace_Duck(bs, bs->goalPosition))
+		else if (bs->jumpTime <= level.time && BotTrace_Duck(bs, bs->goalPosition))
 		{
 			bs->duckTime = level.time + 100;
 		}

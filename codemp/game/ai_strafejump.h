@@ -556,4 +556,50 @@ static inline int BotSFJ_RouteHintSpeedAllows(float progress, int grounded,
 	return horizontalSpeed >= minSpeed;
 }
 
+/*
+ * Waypoint navigation anti-backtracking.  Bots keep a small ring of recently
+ * reached waypoints (stored as index + 1, 0 = empty) and avoid re-picking them
+ * when they re-path.  A bot whose distance to its waypoint destination has not
+ * improved by BOT_NAV_PROGRESS_MIN_GAIN for BOT_NAV_PROGRESS_STALL_MS is stuck.
+ */
+#define BOT_NAV_RECENT_WAYPOINTS 8
+#define BOT_NAV_PROGRESS_STALL_MS 3000
+#define BOT_NAV_PROGRESS_MIN_GAIN 32.0f
+
+static inline int BotNav_RecentContains(const int *ring, int count, int index)
+{
+	int i;
+
+	if (!ring || index < 0)
+		return 0;
+	for (i = 0; i < count; i++)
+	{
+		if (ring[i] == index + 1)
+			return 1;
+	}
+	return 0;
+}
+
+/* Adds index to the ring (no duplicates); returns the new head. */
+static inline int BotNav_RecentPush(int *ring, int count, int head, int index)
+{
+	if (!ring || count <= 0 || index < 0 || BotNav_RecentContains(ring, count, index))
+		return head;
+	if (head < 0 || head >= count)
+		head = 0;
+	ring[head] = index + 1;
+	return (head + 1) % count;
+}
+
+/* True when progress has improved enough to reset the stall timer. */
+static inline int BotNav_ProgressImproved(float best, float distance)
+{
+	return best <= 0.0f || distance < best - BOT_NAV_PROGRESS_MIN_GAIN;
+}
+
+static inline int BotNav_ProgressStalled(int lastImproveTime, int now)
+{
+	return lastImproveTime > 0 && now - lastImproveTime >= BOT_NAV_PROGRESS_STALL_MS;
+}
+
 #endif

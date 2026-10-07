@@ -356,8 +356,9 @@ XCVAR_DEF( bot_strafeOffset,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_strafejumps,			"1",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_strafejumpfrequency,	"100",			NULL,				CVAR_ARCHIVE,									qtrue )
 XCVAR_DEF( bot_onlystrafes,			"0",			NULL,				CVAR_ARCHIVE,									qtrue )
-// 1: print why strafe-jump attempts are rejected (rate limited per bot).
+// Record human strafe-jump routes: 0 off, 1 record (console echo on start/end), 2 also echo each landing.
 XCVAR_DEF( bot_strafetrack,			"1",			NULL,				CVAR_ARCHIVE,									qtrue )
+// 1: print why strafe-jump attempts are rejected (rate limited per bot).
 XCVAR_DEF( bot_strafejumps_debug,		"0",			NULL,				0,												qfalse )
 // Minimum enemy distance (units) before a chase/escape strafe jump may start. 0 lets bots
 // strafe away or give chase as soon as they land after an engagement.

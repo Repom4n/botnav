@@ -130,6 +130,7 @@ During the temporary duel no-strafe gate, free selection boundaries deliberately
 | `bot_strafejumpwaypoints` | `128` | Strafe corridor waypoint budget, clamped to 1–512, independent of ordinary `bot_waypointskip`. Dense trails need enough points to reach the minimum corridor length; look-ahead remains distance-bounded to about 1024 units and stops at required interactions, destinations, disconnected links, bends or height changes. |
 | `bot_onlystrafes` | `0` | Test preference: starts eligible strafe navigation without the frequency wait and also considers safe direct enemy corridors without requiring increasing separation. Requires enabled strafe jumps and positive frequency. Does not force jumping: combat, required interactions, physics, proximity, collision and hazard checks still take priority, with ordinary navigation as fallback. |
 | `bot_minstrafe` | `320` | Minimum opponent distance (units) before a bot starts a chase or escape strafe jump; the jump is cancelled once the gap shrinks below 75% of this. Lower it (even `0`) to let bots chase or retreat with a strafe as soon as they land after an engagement. Navigation strafes with a visible enemy are still held back inside close-combat range (~384 units) or when the enemy is closing fast. |
+| `bot_strafetrack` | `1` | Records human strafe-jump routes. `0` off, `1` record (the console prints when a route begins on a circle jump and when it ends), `2` also prints each landing. Bots and spectators are never recorded. See "Recorded strafe routes" below. |
 | `bot_strafejumps_debug` | `0` | `1` prints rejection reasons to the server console; `2` also reports starts; `3+` also broadcasts diagnostics to connected clients. All are rate-limited to once per second per bot. Includes initiation waits, final-input conflicts, and waypoint-skip rejection reasons. |
 | `bot_hopfrequency` | `0` | Deprecated but retained for existing configurations. Controls ambient and discretionary combat hops only; leave `0` to disable them. Emergency jumps, kicks and required map traversal are separate. Use `bot_strafejumpfrequency` for navigation strafe initiation. |
 | `bot_waypointskip` | `2` | Maximum extra same-direction waypoints to skip after reaching a waypoint without a visible-enemy combat lock. Supports explicit neighbor links and implicit consecutive links on linear trails. Requires near-straight, level links and a clear, grounded hull path with safe floor; flagged waypoints and destinations are retained. |
@@ -137,13 +138,17 @@ During the temporary duel no-strafe gate, free selection boundaries deliberately
 
 `bot_strafejumps` supports only the effective JKA/co-op-JKA physics selected by `PM_GetMovePhysics`; special/ramp/super-jump styles and force-speed/rage modifiers fall back to normal AI movement. Its conservative predictor uses live speed/gravity, the command's actual pmove slicing, JKA air acceleration, and the level 0-3 levitation launch adjustment made by the second `PM_CheckJump` call in the takeoff slice. It approximates future released-command air movement; it does not run pmove, inject velocity, or change shared physics. Close combat, attacks, deliberate use, force use/jumps, saber techniques/defense, flipkicks, knockdowns, rolls, mounted/water/use states, forced movement, special jumps, steep or moving launch surfaces, and map-required interaction/jump/duck waypoint segments retain priority. Opportunistic random-use presses are suppressed only while this controller owns the command. Airborne jump is released and each landing gets a release command before a fresh press.
 
-Arc validation performs bounded swept player-hull integration (coarse 50 ms steps after the jump command) until a real static, walkable contact; unresolved falls are rejected rather than vertically probing for a floor. Walls, ceilings, dynamic blockers, lava, slime, no-drop/void areas, and instant-kill `trigger_hurt` volumes along the full arc reject the intent. The landing must fall inside the look-ahead corridor (64 units either side, up to 96 units past its end). To keep the cost down, the full arc is simulated at most once per 100 ms per bot while deciding, and once per takeoff/rejump; while airborne a single hull trace along the predicted velocity watches for a wall, liquid, or kill volume and cleanly releases control if one comes up. Instant-kill triggers are cached per map instead of being queried with an area search for every sample. Selection and final command ownership both require the AI's own queued movement to be aligned with the corridor.
+Arc validation performs bounded swept player-hull integration (coarse 50 ms steps after the jump command) until a real static, walkable contact; unresolved falls are rejected rather than vertically probing for a floor. Ceilings, dynamic blockers, lava, slime, no-drop/void areas, and instant-kill `trigger_hurt` volumes along the full arc reject the intent. The landing must fall inside the look-ahead corridor (64 units either side, up to 96 units past its end). To keep the cost down, the full arc is simulated at most once per 100 ms per bot while deciding, and once per takeoff/rejump; while airborne a single hull trace along the predicted velocity watches for liquid or kill volumes and cleanly releases control if one comes up. Instant-kill triggers are cached per map instead of being queried with an area search for every sample. Selection and final command ownership both require the AI's own queued movement to be aligned with the corridor.
 
-Initiation ignores queued navigation jump/delayed-jump/walk requests (the controller supplies its own jump timing once it owns input). The takeoff arc uses an 18-unit half-width hull (3 units over the player) and lets the predicted path slide along up to three walls it only grazes (≤ ~20° into the wall); head-on walls, ceilings, hazards and off-route landings still reject it. The same graze rule keeps a jump in flight from being released at a wall it is sliding along.
+Walls: bots are not afraid of touching walls. The takeoff arc uses the real 15-unit player hull and, like the game, removes the speed into any wall it touches and keeps simulating (up to 8 wall contacts per jump, head-on or glancing). A jump stays valid while horizontal speed after contact is above the bot's normal ground speed. If a wall would slow the jump to ground speed or below, the arc ends there and is accepted only when the bot would still fly at least 0.3 s first and the stopping point is safe. In flight, once a strafe that was faster than ground speed drops to ground speed or below (usually a wall), the bot hands control straight back to normal navigation with no abort cooldown. Lava, slime, no-drop and `trigger_hurt`/kill checks are unchanged.
+
+Initiation ignores queued navigation jump/delayed-jump/walk requests (the controller supplies its own jump timing once it owns input).
+
+`strafeJumpStats [reset]` (server console) prints how often bots started, took off, followed recorded routes, aborted and were released by a wall/slow-down, plus the most frequent rejection reasons since the last reset. Use it to compare wall rejections before and after tuning.
 
 Dense waypoint trails use `bot_strafejumpwaypoints`, not a large ordinary skip setting. During a committed strafe sequence, already-passed, unflagged waypoints may advance within the validated linked corridor so navigation does not aim backward at them. Advancement remains bounded, stops at required interactions/destinations and visible-enemy combat locks, and rechecks collision/hazards at the bot's actual flight height. It does not demand a walking floor immediately under an airborne bot or blindly advance to the hundredth point. Budget exhaustion and rejected advances appear in strafe diagnostics.
 
-Hand-authored strafe-jump routes: put a `botroutes/<map>.botroute` file next to the map's `.wnt` waypoint file (`routes/<map>.botroute` is also read), e.g. `botroutes/mp/ffa1.botroute`. Up to 64 routes are read once per map (64 KB max):
+Hand-authored strafe-jump routes: put a `botroutes/<map>.botroute` file next to the map's `.wnt` waypoint file (`routes/<map>.botroute` is also read), e.g. `botroutes/mp/ffa1.botroute`. Up to 256 single-jump routes and 128 recorded routes are read once per map (1 MB max):
 
 ```
 // comments are allowed
@@ -157,6 +162,41 @@ strafejump
 
 A bot uses a route when it is within 96 units of `start_pos`, or alongside the route (within 96 units sideways, 64 units of the route's height) before 85% of its length, and is moving toward `end_pos`. Routes take priority over the waypoint corridor and do not need straight waypoints, but every takeoff still passes the same arc/landing/hazard checks and enemy rules. `min_speed` (optional): the first half of the route is for building speed; past halfway, a grounded bot slower than `min_speed` will not take off on the route. `src_area`/`dest_area` from AAS-based route files are accepted and ignored (these bots use waypoints, not AAS). Use `/viewpos` in-game to read coordinates. With `bot_strafejumps_debug 1`, a speed-gated route prints `route hint: below min_speed past the speed gate`.
 
+### Recorded strafe routes (`bot_strafetrack`, `exportStrafeTrack`)
+
+With `bot_strafetrack 1` (default), the server records human strafe jumps on every map:
+- **Start:** a circle jump. On the ground holding forward plus a strafe key, view turning at least 90°/s, faster than ground speed, then jumping. The console prints `Strafe route N began: <player> circle-jumped on <map> at (x y z), speed S` and the player sees a short message.
+- **While recording:** every server frame stores forward/strafe/jump input, yaw and yaw change, frame time, position, speed and grounded state. Each landing becomes a route node (position, speed, strafe key held on that hop, air time). Each landing is the bots' next goal.
+- **End:** the player has been on the ground at or below normal ground speed for 150 ms. The console prints the result. Routes with fewer than 2 landings or under 256 units, or that touch lava/slime/no-drop, are discarded, as are routes cut short by death, teleporting, spectating or forced movement.
+
+Kept routes go into the local tracking database (`LocalStrafeRoute`, `LocalStrafeRouteNode`, `LocalStrafeRouteInput`, the same file as duel tracking). Recording alone does not change bot behaviour.
+
+`exportStrafeTrack [prefix]` (server console):
+- writes `strafetrack_routes.csv`, `strafetrack_nodes.csv` and `strafetrack_inputs.csv` next to the database (split into `_partN` files at 24 MB, like `exportDuelTrack`);
+- regenerates `botroutes/<map>.botroute` for every map with recorded routes (fastest 128 per map). Only the section between `// BEGIN recorded strafe routes (exportStrafeTrack)` and `// END recorded strafe routes` is replaced, so hand-written `strafejump` blocks are kept;
+- reloads the routes, so bots start using them immediately.
+
+Recorded route block format:
+
+```
+strafejump_route
+{
+    start_pos   1200.5 -450.0 128.0     // circle-jump position
+    min_speed   320                     // speed at the circle jump
+    node        1500.0 -460.0 128.0 410 1 640   // landing x y z, speed, strafe side (-1 left, 1 right), air ms
+    node        1820.0 -470.0 132.0 470 -1 610
+}
+```
+
+A grounded bot picks up a recorded route when it is within 96 units horizontally and 64 vertically of `start_pos`, the first landing is ahead of its movement, and the last landing is closer to its current goal than it is. Recorded routes take precedence over single-jump hints and the waypoint corridor; waypoints stay the fallback. While on a route, each landing node is the bot's movement goal, the recorded strafe key chooses its strafe side, and the strafe frequency wait is skipped. Every takeoff still passes the arc, landing and hazard checks. The bot leaves the route and goes back to waypoints when the route is finished, a landing is not reached within 3 s, a jump is aborted or slowed to ground speed, or a visible enemy is within close-combat range (~384 units, unless carrying a flag).
+
+### Waypoint navigation
+
+- Bots remember their last 8 reached waypoints and avoid re-picking them when they re-path, unless no other waypoint is visible. This stops walking back to points already passed.
+- When a drop or ledge is detected ahead, the bot switches to the next waypoint in its travel direction if that one is visible and safe, instead of dropping its waypoint and re-pathing to the nearest (often earlier) point.
+- A navigation jump over an obstacle clears any crouch, and no obstacle crouch starts while a navigation jump is active, so bots no longer crouch-jump at obstacles.
+- Out of combat, a bot whose distance to its waypoint destination has not improved by 32 units for 3 s re-paths to an unvisited waypoint without reversing its path direction.
+
 Live-map validation checklist:
 - Test long, level waypoint corridors at low and high accumulated speed and with variable server frame times.
 - Confirm jump is released during flight and for one command after landing; verify no force jump or flipkick occurs.
@@ -167,7 +207,7 @@ Live-map validation checklist:
 - Keep `bot_hopfrequency 0` and confirm ambient hops stay disabled. With `bot_strafejumps_debug 3`, inspect client-visible rejections while comparing `bot_waypointskip` at 0, 2 and 4 on linear and branched trails, including flagged waypoints, gaps and required destinations.
 - On densely spaced trails, compare `bot_strafejumpwaypoints` at 16, 128 and 256. Verify corridor initiation and forward waypoint progression during flight without backtracking, and confirm flagged interactions, destinations and unsafe terrain remain barriers rather than being blindly skipped.
 
-Optional future work may use dedicated, opt-in strafe-jump demonstrations for tuning. Dueltrack CSV capture and runtime database logging are deliberately outside this feature.
+Human strafe-jump demonstrations are captured with `bot_strafetrack` and exported with `exportStrafeTrack` (see above); dueltrack CSVs do not include strafe routes.
 
 ## Retreat Wall Escapes
 
@@ -418,7 +458,11 @@ g_newBotAI (master switch)
 classes, not teams. Everyone else is an enemy, spawning and scores are individual.
 CTF (8), CTY (9) and Arcade (10) retain their IDs and rules.
 
-In JoM, use `/class jedi`, `/class merc`, or `/class tank` (also `/team jedi|merc|tank`).
+In JoM, use `/class jedi`, `/class merc`, or `/class tank` (also `/team jedi|merc|tank`,
+or `/team 1`, `/team 2`, `/team 3` for Jedi, Merc, Tank; `/class 1|2|3` works too). `/team free`
+and `/team spectator` behave as in FFA. JoM is not a team game: the server sends no team scores.
+Clients running an older cgame that treats every gametype from 6 up as a team game will still
+draw team scores; deploy the cgame from this repo.
 Changing class kills and respawns an active player, has a five-second cooldown,
 and is forbidden during private duels. Spectators select their next spawn's class.
 Class persists across reconnects/map restarts and is replicated without changing
@@ -427,6 +471,9 @@ can select Merc or Tank. JvM class is always determined by team.
 
 | Cvar | Default | Meaning (only in JvM/JoM) |
 |---|---:|---|
+| `g_jediVmerc` | 0 | Legacy JA "Jedi vs Merc" modifiers for non-JvM gametypes (latched). In JvM/JoM the class rules below replace these bonuses instead of stacking. |
+| `merc_startingweapons` | 102384 | Merc spawn weapons, same bit layout as `g_startingWeapons` (bit = 1 << weapon number). The default is bryar pistol, E-11 blaster, disruptor, bowcaster, repeater, DEMP2, flechette, rocket launcher, concussion rifle and old bryar pistol, i.e. every gun but no stun baton, thermal detonators, trip mines or det packs. The saber bit is always removed, melee is always added, `g_weaponDisable` still applies and ammo is filled for every weapon owned. |
+| `merc_startingitems` | 0 | Merc spawn holdable items, same bit layout as `g_startingItems` (bit = 1 << holdable number). Medpacs are never given (Mercs heal only from pickups). |
 | `g_mercforceregentime` | 200 | Merc Force-energy regeneration interval, milliseconds (minimum 1). |
 | `merc_grapple` | 1 | Allow Merc grapple (`+grapple`), independent of legacy `g_allowGrapple`. |
 | `merc_grappleFPscale` | 10 | Force points/second while the hook exists; fractional drain is accumulated across frames/releases. Clamped 0–1000. Depletion releases the real hook. |
@@ -437,13 +484,20 @@ can select Merc or Tank. JvM class is always determined by team.
 | `jedi_tankscale` | 0.5 | Tank incoming combat-damage multiplier, clamped 0–10. Does not mitigate suicide, team changes, forced deaths or environmental hazards. |
 | `jedi_saberdamagescale` | 2 | Tank outgoing saber-damage multiplier, clamped 0–10. |
 
-Jedi have their normally configured Force powers and only a saber. Weapons,
-ammo, health and armor cannot be picked up and render at 50% opacity to Jedi
-(including simple items, holograms and respawn passes). Jedi can push/pull world
-items and disarm opponents using normal Force rules.
+Pickups by class (team objectives such as CTF flags are allowed for everyone):
 
-Mercs have melee and permitted configured starting guns (when `g_startingWeapons`
-is zero: pistol, blaster and bowcaster), but never a saber. Pickups remain available.
+| Class | Can pick up / use |
+|---|---|
+| Merc | Everything: weapons, ammo, health, armor, holdable items, powerups, ammo/health/shield dispensers and power converters. |
+| Tank | Health and armor only (including health/shield power converters). |
+| Jedi | Nothing. |
+
+Jedi have their normally configured Force powers and only a saber. Pickups they
+cannot take render at 50% opacity to them (including simple items, holograms and
+respawn passes). Jedi can push/pull world items and disarm opponents using normal Force rules.
+
+Mercs spawn with melee plus `merc_startingweapons` and `merc_startingitems`
+(`g_startingWeapons`/`g_startingItems` are not used for Mercs), but never a saber.
 They have no Force powers except configured Jump, cannot push/pull/disarm, and
 heal only through health pickups (no medpac use, starting medpacs or external Force healing).
 In JoM full-force private duels, Mercs retain **only already owned** guns and ammo;
@@ -462,4 +516,5 @@ at spawn, not granted every frame, so disarming a Merc remains effective.
 
 FFA arena maps support JoM, and FFA/team arena maps support JvM. Both modes are
 available through gametype votes and server-browser filters in the updated UI.
+The in-game menu's Profile button is shown in Arcade, JvM and JoM as well.
 Deploy matching game, cgame and UI modules for class display and prediction.
