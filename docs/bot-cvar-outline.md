@@ -128,6 +128,10 @@ During the temporary duel no-strafe gate, free selection boundaries deliberately
 | `bot_strafejumps` | `1` | Enables forward-only strafe jumping (optimal-yaw air acceleration with a circle-jump start and bhop chaining) on validated, open corridors for navigation, chase and escape. Corridors look ahead up to ~1024 units along linked waypoints, or straight toward/away from the enemy when chasing/escaping directly. In CTF, carrying a flag counts as escape and chasing an enemy flag carrier counts as chase. |
 | `bot_strafejumpfrequency` | `100` | Initiation frequency scale, clamped to 1–1000 when enabled: `100` waits 1000 ms before starting a new eligible sequence, `200` waits 500 ms, `50` waits 2000 ms. `0` or negative disables strafe jumping. No per-frame random rolls; established safe chains are not delayed. |
 | `bot_strafejumpwaypoints` | `128` | Strafe corridor waypoint budget, clamped to 1–512, independent of ordinary `bot_waypointskip`. Dense trails need enough points to reach the minimum corridor length; look-ahead remains distance-bounded to about 1024 units and stops at required interactions, destinations, disconnected links, bends or height changes. |
+| `bot_strafe_minledge` | `200` | Maximum permitted downward route/landing height change, units, clamped 0–200. Modest drops may continue a chain only with a validated static walkable landing; hazards and excessive descent speed remain forbidden. |
+| `bot_strafe_wallmargin` | `32` | Endpoint setback from walls for direct enemy corridors, units, clamped 0–128. Lower values allow closer approaches without shrinking the collision hull or disabling wall-slide prediction. |
+| `bot_strafe_tolerance` | `80` | Horizontal waypoint/recorded-node acceptance and landing-corridor tolerance, units, clamped 16–256. Nodes mark progress rather than requiring exact touchdown; grounded height and lateral checks prevent unrelated nodes being skipped. |
+| `bot_strafe_nodetimeout` | `5000` | Recorded-route node progress timeout, milliseconds, clamped 1000–15000. Increase for longer or slower segments; stalled routes still fall back to normal navigation. |
 | `bot_onlystrafes` | `0` | Test preference: starts eligible strafe navigation without the frequency wait and also considers safe direct enemy corridors without requiring increasing separation. Requires enabled strafe jumps and positive frequency. Does not force jumping: combat, required interactions, physics, proximity, collision and hazard checks still take priority, with ordinary navigation as fallback. |
 | `bot_minstrafe` | `320` | Minimum opponent distance (units) before a bot starts a chase or escape strafe jump; the jump is cancelled once the gap shrinks below 75% of this. Lower it (even `0`) to let bots chase or retreat with a strafe as soon as they land after an engagement. Navigation strafes with a visible enemy are still held back inside close-combat range (~384 units) or when the enemy is closing fast. |
 | `bot_strafetrack` | `1` | Records human strafe-jump routes. `0` off, `1` record (the console prints when a route begins on a circle jump and when it ends), `2` also prints each landing. Bots and spectators are never recorded. See "Recorded strafe routes" below. |
@@ -138,9 +142,14 @@ During the temporary duel no-strafe gate, free selection boundaries deliberately
 
 `bot_strafejumps` supports only the effective JKA/co-op-JKA physics selected by `PM_GetMovePhysics`; special/ramp/super-jump styles and force-speed/rage modifiers fall back to normal AI movement. Its conservative predictor uses live speed/gravity, the command's actual pmove slicing, JKA air acceleration, and the level 0-3 levitation launch adjustment made by the second `PM_CheckJump` call in the takeoff slice. It approximates future released-command air movement; it does not run pmove, inject velocity, or change shared physics. Close combat, attacks, deliberate use, force use/jumps, saber techniques/defense, flipkicks, knockdowns, rolls, mounted/water/use states, forced movement, special jumps, steep or moving launch surfaces, and map-required interaction/jump/duck waypoint segments retain priority. Opportunistic random-use presses are suppressed only while this controller owns the command. Airborne jump is released and each landing gets a release command before a fresh press.
 
-Arc validation performs bounded swept player-hull integration (coarse 50 ms steps after the jump command) until a real static, walkable contact; unresolved falls are rejected rather than vertically probing for a floor. Ceilings, dynamic blockers, lava, slime, no-drop/void areas, and instant-kill `trigger_hurt` volumes along the full arc reject the intent. The landing must fall inside the look-ahead corridor (64 units either side, up to 96 units past its end). To keep the cost down, the full arc is simulated at most once per 100 ms per bot while deciding, and once per takeoff/rejump; while airborne a single hull trace along the predicted velocity watches for liquid or kill volumes and cleanly releases control if one comes up. Instant-kill triggers are cached per map instead of being queried with an area search for every sample. Selection and final command ownership both require the AI's own queued movement to be aligned with the corridor.
+Arc validation performs bounded swept player-hull integration (coarse 50 ms steps after the jump command) until a real static, walkable contact; unresolved falls are rejected rather than vertically probing for a floor. Ceilings, dynamic blockers, lava, slime, no-drop/void areas, and instant-kill `trigger_hurt` volumes along the full arc reject the intent. Landing-corridor slack uses `bot_strafe_tolerance` instead of requiring exact waypoint landings. To keep the cost down, the full arc is simulated at most once per 100 ms per bot while deciding, and once per takeoff/rejump; while airborne a single hull trace along the predicted velocity watches for liquid or kill volumes and cleanly releases control if one comes up. Instant-kill triggers are cached per map instead of being queried with an area search for every sample. Selection and final command ownership both require the AI's own queued movement to be aligned with the corridor.
 
-Walls: bots are not afraid of touching walls. The takeoff arc uses the real 15-unit player hull and, like the game, removes the speed into any wall it touches and keeps simulating (up to 8 wall contacts per jump, head-on or glancing). A jump stays valid while horizontal speed after contact is above the bot's normal ground speed. If a wall would slow the jump to ground speed or below, the arc ends there and is accepted only when the bot would still fly at least 0.3 s first and the stopping point is safe. In flight, once a strafe that was faster than ground speed drops to ground speed or below (usually a wall), the bot hands control straight back to normal navigation with no abort cooldown. Lava, slime, no-drop and `trigger_hurt`/kill checks are unchanged.
+Walls: the takeoff arc uses the real 15-unit player hull and removes speed into
+walls while continuing bounded wall-slide simulation (up to 64 contact slices).
+Brief speed losses near ground speed no longer immediately discard an established
+chain; a substantial slowdown releases it to ordinary navigation. Predicted
+wall stops still require useful flight and a safe landing. Lava, slime, no-drop
+and `trigger_hurt`/kill checks are unchanged.
 
 Initiation ignores queued navigation jump/delayed-jump/walk requests (the controller supplies its own jump timing once it owns input).
 
@@ -533,4 +542,23 @@ at spawn, not granted every frame, so disarming a Merc remains effective.
 FFA arena maps support JoM, and FFA/team arena maps support JvM. Both modes are
 available through gametype votes and server-browser filters in the updated UI.
 The in-game menu's Profile button is shown in Arcade, JvM and JoM as well.
+Both Profile buttons open the loaded in-game customization menu; deploy the updated
+UI module and menu assets together.
+
+### Gun bot weapon and pickup priorities
+
+Merc bots keep a usable ranged weapon instead of switching to melee just because
+an enemy is close. Close-range choices prefer safe firing modes; unsafe splash
+shots are suppressed and bots try a hazard-checked retreat. Melee remains the
+fallback when no ranged ammunition is usable.
+
+Skills 3–6 favor lower/medium-tier guns without banning stronger fallback choices.
+Skills 1–2 retain legacy preferences, while higher skills score effective damage
+output. Ammo availability and splash safety override these preferences.
+
+Bots without usable ranged equipment prioritize actual available, legal weapon
+and compatible-ammo pickups over random wandering. They route through reachable
+waypoints and approach the item itself, retaining map and objective safety gates.
+Saber approach movement refreshes stale footing directions and tries safe forward
+lanes before retreating rather than injecting an unconditional attack.
 Deploy matching game, cgame and UI modules for class display and prediction.

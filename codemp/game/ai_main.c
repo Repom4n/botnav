@@ -1660,13 +1660,24 @@ static void BotNav_AvoidHazardWaypoint(bot_state_t *bs)
  * closer for a few seconds is stuck in a local loop: mark its current point
  * as visited and re-path to a fresh one instead of reversing direction.
  */
+static qboolean BotNav_SFJTravelOwnsInput(bot_state_t *bs)
+{
+	return BotNav_PreserveValidatedStrafe(bot_strafejumps.integer &&
+		bot_strafejumpfrequency.integer > 0,
+		BotSFJ_IntentIsFresh(level.time, bs->sfjIntentTime),
+		bs->sfjSafetyUntil >= level.time, BotSFJ_PhaseInProgress(bs->sfjPhase),
+		bs->sfjOwnsInput, bs->sfjCorridorValid,
+		bs->wpCurrent && (bs->wpCurrent->flags || bs->wpCurrent->forceJumpTo),
+		bs->currentEnemy && bs->frame_Enemy_Vis) ? qtrue : qfalse;
+}
+
 static void BotNav_CheckProgress(bot_state_t *bs)
 {
 	float distance;
 	int goal;
 
 	if (!bs->wpCurrent || !bs->wpDestination || bs->wpCamping ||
-		(bs->currentEnemy && bs->frame_Enemy_Vis) || bs->sfjRoute)
+		(bs->currentEnemy && bs->frame_Enemy_Vis) || BotNav_SFJTravelOwnsInput(bs))
 	{
 		bs->navProgressGoal = 0;
 		bs->navProgressBest = 0.0f;
@@ -4162,8 +4173,16 @@ static void BotSFJ_SelectIntent(bot_state_t *bs)
 	}
 	if (!BotSFJ_EffectiveInputDirection(&queued, effectiveDirection))
 	{
-		BotSFJ_Reject(bs, "no horizontal movement input");
-		return;
+		if (airborneJump && bs->sfjOwnsInput &&
+			bs->sfjIntent == BOT_SFJ_INTENT_NAVIGATION &&
+			BotSFJ_IntentIsFresh(level.time, bs->sfjIntentTime) &&
+			(bs->sfjCorridorValid || bs->sfjRoute))
+			VectorCopy(bs->sfjIntentDirection, effectiveDirection);
+		else
+		{
+			BotSFJ_Reject(bs, "no horizontal movement input");
+			return;
+		}
 	}
 
 	carryingFlag = BotSFJ_ClientCarriesFlag(g_entities[bs->client].client);
@@ -4389,10 +4408,11 @@ static void BotSFJ_ApplyInput(bot_state_t *bs, bot_input_t *bi, int time, int el
 	}
 	conflict = BotSFJ_GetInputConflict(bs, ps, &masked, &conflictReason);
 	eligible = BotSFJ_ConflictBlocks(conflict, bs->sfjPhase) ? qfalse : qtrue;
-	if (eligible && (!BotSFJ_EffectiveInputDirection(&masked, effectiveDirection) ||
-		(DotProduct(effectiveDirection, bs->sfjIntentDirection) < 0.5f &&
-		 !(fresh && !grounded && bs->sfjIntent == BOT_SFJ_INTENT_NAVIGATION &&
-		   (bs->sfjCorridorValid || bs->sfjRoute)))))
+	if (eligible && !(fresh && !grounded && bs->sfjOwnsInput &&
+		 bs->sfjIntent == BOT_SFJ_INTENT_NAVIGATION &&
+		 (bs->sfjCorridorValid || bs->sfjRoute)) &&
+		(!BotSFJ_EffectiveInputDirection(&masked, effectiveDirection) ||
+		 DotProduct(effectiveDirection, bs->sfjIntentDirection) < 0.5f))
 	{
 		eligible = qfalse;
 		conflictReason = "movement misaligned with corridor";
@@ -6407,12 +6427,14 @@ static void BotCombat_FilterRangedInput(bot_state_t *bs, bot_input_t *bi)
 		alt = safeAlt;
 	}
 	radius = BotCombat_SplashRadius(bs->cur_ps.weapon, alt);
+	if (!radius)
+		return;
 	VectorSet(direction, 0, bi->viewangles[YAW], 0);
 	AngleVectors(direction, direction, NULL, NULL);
 	VectorMA(bs->eye, radius + 48.0f, direction, end);
 	JP_Trace(&trace, bs->eye, NULL, NULL, end, bs->client, MASK_SHOT, qfalse, 0, 0);
-	if (!radius || (bs->frame_Enemy_Len >= radius + 64.0f &&
-		!trace.startsolid && trace.fraction == 1.0f))
+	if (bs->frame_Enemy_Len >= radius + 64.0f &&
+		!trace.startsolid && trace.fraction == 1.0f)
 		return;
 	bi->actionflags &= ~(ACTION_ATTACK | ACTION_ALT_ATTACK);
 	bs->doAttack = bs->doAltAttack = 0;
@@ -8403,7 +8425,7 @@ int BotSelectIdealWeapon(bot_state_t *bs)
 	int alt = 0;
 
 	i = 0;
-	if (BotCombat_IsMerc(bs))
+	if (BotCombat_IsMerc(bs) && bs->settings.skill > 2.0f)
 	{
 		bestweapon = BotCombat_SelectRanged(bs, &alt);
 		if (bestweapon != WP_NONE)
@@ -8415,7 +8437,8 @@ int BotSelectIdealWeapon(bot_state_t *bs)
 		}
 	}
 
-	if (g_newBotAI.integer && (bs->cur_ps.stats[STAT_WEAPONS] & (1 << WP_SABER))) { //always use saber for new bot.. sad hack
+	if (g_newBotAI.integer && !BotCombat_IsMerc(bs) &&
+		(bs->cur_ps.stats[STAT_WEAPONS] & (1 << WP_SABER))) { //always use saber for new bot.. sad hack
 		BotSelectWeapon(bs->client, WP_SABER);
 		return 0;
 	}
@@ -8522,6 +8545,20 @@ int BotSelectIdealWeapon(bot_state_t *bs)
 				bestweapon = WP_DISRUPTOR;
 				bestweight = 1;
 			}
+		}
+	}
+
+	if (BotCombat_IsMerc(bs) && (bestweapon <= WP_SABER ||
+		(!BotCombat_ModeAvailable(bs, bestweapon, 0) && !BotCombat_ModeAvailable(bs, bestweapon, 1)) ||
+		(bs->currentEnemy && bs->frame_Enemy_Len < 300.0f &&
+			BotCombat_SplashRadius(bestweapon, 0) && BotCombat_SplashRadius(bestweapon, 1))))
+	{
+		i = BotCombat_SelectRanged(bs, &alt);
+		if (i != WP_NONE)
+		{
+			bestweapon = i;
+			bestweight = 1;
+			bs->doAltAttack = alt;
 		}
 	}
 
@@ -12855,7 +12892,9 @@ void NewBotAI_GetAttack(bot_state_t *bs)
 		weapon = NewBotAI_GetTribesWeapon(bs);
 	else
 		weapon = NewBotAI_GetWeapon(bs);
-	if (BotCombat_IsMerc(bs))
+	if (BotCombat_IsMerc(bs) && (bs->settings.skill > 2.0f || weapon <= WP_SABER ||
+		!BotCombat_ModeAvailable(bs, weapon, bs->doAltAttack != 0) ||
+		(bs->frame_Enemy_Len < 300.0f && BotCombat_SplashRadius(weapon, bs->doAltAttack != 0))))
 	{
 		int alt = 0;
 		int rangedWeapon = BotCombat_SelectRanged(bs, &alt);
@@ -23378,7 +23417,8 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 	}
 
 	if (bs->wpCurrent &&
-		(bs->wpSeenTime < level.time || bs->wpTravelTime < level.time))
+		((bs->wpSeenTime < level.time && !BotNav_SFJTravelOwnsInput(bs)) ||
+		 bs->wpTravelTime < level.time))
 	{
 		bs->lastWPIndex = bs->wpCurrent->index;
 		bs->lastWPDir = bs->wpDirection;
@@ -24266,6 +24306,7 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 		vec3_t pickupGoal;
 		trace_t pickupTrace;
 		if (pickup->inuse && pickup->item && !(pickup->s.eFlags & (EF_NODRAW | EF_ITEMPLACEHOLDER)) &&
+			(pickup->item->giType == IT_WEAPON || pickup->item->giType == IT_AMMO) &&
 			!(pickup->r.svFlags & SVF_NOCLIENT) && (pickup->r.contents & CONTENTS_TRIGGER) &&
 			Distance(bs->origin, pickup->r.currentOrigin) < 256.0f &&
 			fabsf(bs->origin[2] - pickup->r.currentOrigin[2]) < 64.0f &&
@@ -24311,7 +24352,8 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 			BotNav_AvoidHazardWaypoint(bs);
 		}
 		else if (bs->jumpTime > level.time && bs->jDelay < level.time &&
-			level.clients[bs->client].pers.cmd.upmove > 0)
+			level.clients[bs->client].pers.cmd.upmove > 0 &&
+			!BotNav_SFJTravelOwnsInput(bs))
 		{
 		//	trap->EA_Move(bs->client, bs->origin, 5000);
 			bs->beStill = level.time + 200;
@@ -24341,17 +24383,19 @@ void StandardBotAI(bot_state_t *bs, float thinktime)
 			}
 		}
 
-		if (BotTrace_Jump(bs, bs->goalPosition))
+		if (!BotNav_SFJTravelOwnsInput(bs) && BotTrace_Jump(bs, bs->goalPosition))
 		{
 			bs->jumpTime = level.time + 100;
 			bs->duckTime = 0; //never crouch-jump over an obstacle
 		}
-		else if (bs->jumpTime <= level.time && BotTrace_Duck(bs, bs->goalPosition))
+		else if (!BotNav_SFJTravelOwnsInput(bs) && bs->jumpTime <= level.time &&
+			BotTrace_Duck(bs, bs->goalPosition))
 		{
 			bs->duckTime = level.time + 100;
 		}
 #ifdef BOT_STRAFE_AVOIDANCE
 		else if ((!bs->frame_Enemy_Vis || !bs->currentEnemy || bs->frame_Enemy_Len > 512) &&
+			!BotNav_SFJTravelOwnsInput(bs) &&
 			!NewBotAI_HasWaypointNavigation() &&
 			!NewBotAI_IsRecoveryMovementActive(bs) &&
 			!NewBotAI_HasExclusiveFlipkickMovement(bs))

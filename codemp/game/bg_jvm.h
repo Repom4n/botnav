@@ -49,6 +49,13 @@ static inline int JVM_NextClass(int playerClass) {
 	return playerClass == JVM_JEDI ? JVM_MERC : playerClass == JVM_MERC ? JVM_TANK : JVM_JEDI;
 }
 
+/* Returns a next-spawn class plus one; zero means no transition. */
+static inline int JVM_DeathNextClass(int gametype, int playerClass, int enabled,
+	int dead, int spectator, int classChanging, int teamChanging) {
+	return gametype == 12 && enabled && dead && !spectator && !classChanging && !teamChanging ?
+		JVM_NextClass(playerClass) + 1 : 0;
+}
+
 static inline int JVM_PassiveAbsorb(int gametype, int playerClass, int enabled,
 	int pushPullGrip, int powerLevel) {
 	return JVM_IsMode(gametype) && playerClass == JVM_JEDI && enabled && pushPullGrip ?
@@ -172,6 +179,13 @@ static inline int JVM_PickupAllowed(int playerClass, int weapon, int ammo,
 	if (playerClass == JVM_MERC)
 		return !saber;
 	return 0;
+}
+
+static inline int JVM_WeaponDenialAllowed(int gametype, int playerClass,
+	int weapon, int saber, int duel, int race, int spectator, int jediMaster,
+	int ownerBlocked) {
+	return JVM_IsMode(gametype) && (playerClass == JVM_JEDI || playerClass == JVM_TANK) &&
+		weapon && !saber && !duel && !race && !spectator && !jediMaster && !ownerBlocked;
 }
 
 /* Default merc loadout: pistol..rocket launcher, concussion and old bryar

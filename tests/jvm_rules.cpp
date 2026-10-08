@@ -367,4 +367,50 @@ BOOST_AUTO_TEST_CASE(class_cycle_order)
 	BOOST_CHECK_EQUAL(JVM_NextClass(JVM_TANK), JVM_JEDI);
 }
 
+BOOST_AUTO_TEST_CASE(weapon_denial_preserves_nonweapon_and_protected_touches)
+{
+	for (int mode = GT_FFA; mode <= GT_JOM; ++mode) {
+		for (int playerClass = JVM_JEDI; playerClass <= JVM_TANK; ++playerClass) {
+			for (int flags = 0; flags < 128; ++flags) {
+				const bool weapon = flags & 1;
+				const bool saber = flags & 2;
+				const bool duel = flags & 4;
+				const bool race = flags & 8;
+				const bool spectator = flags & 16;
+				const bool jediMaster = flags & 32;
+				const bool ownerBlocked = flags & 64;
+				BOOST_CHECK_EQUAL(JVM_WeaponDenialAllowed(mode, playerClass, weapon, saber,
+					duel, race, spectator, jediMaster, ownerBlocked),
+					JVM_IsMode(mode) && playerClass != JVM_MERC && flags == 1);
+			}
+		}
+	}
+}
+
+BOOST_AUTO_TEST_CASE(cycle_only_schedules_an_actual_death_not_class_or_team_changes)
+{
+	for (int mode = GT_FFA; mode <= GT_JOM; ++mode) {
+		for (int playerClass = JVM_JEDI; playerClass <= JVM_TANK; ++playerClass) {
+			for (int flags = 0; flags < 32; ++flags) {
+				const bool enabled = flags & 1;
+				const bool dead = flags & 2;
+				const bool spectator = flags & 4;
+				const bool classChanging = flags & 8;
+				const bool teamChanging = flags & 16;
+				BOOST_CHECK_EQUAL(JVM_DeathNextClass(mode, playerClass, enabled, dead,
+					spectator, classChanging, teamChanging),
+					mode == GT_JOM && flags == 3 ? JVM_NextClass(playerClass) + 1 : 0);
+			}
+		}
+	}
+}
+
+BOOST_AUTO_TEST_CASE(disabled_passive_absorb_defers_every_power_to_ordinary_behavior)
+{
+	for (int power = 0; power < NUM_FORCE_POWERS; ++power) {
+		const bool eligible = power == FP_PUSH || power == FP_PULL || power == FP_GRIP;
+		BOOST_CHECK_EQUAL(JVM_PassiveAbsorb(GT_JOM, JVM_JEDI, 0, eligible, 3), -1);
+	}
+}
+
 BOOST_AUTO_TEST_SUITE_END()

@@ -3266,12 +3266,14 @@ extern void RunEmplacedWeapon( gentity_t *ent, usercmd_t **ucmd );
 			}
 		}
 	}
-	if (level.gametype == GT_JOM && jom_cycleloadout.integer &&
-		self->s.number < MAX_CLIENTS && self->client->sess.sessionTeam != TEAM_SPECTATOR &&
-		!self->client->jvmClassChanging && !g_dontPenalizeTeam &&
-		meansOfDeath != MOD_TEAM_CHANGE) {
-		self->client->jvmNextClass = JVM_NextClass(
-			JVM_ReplicatedClass(self->client->ps.stats[STAT_RESTRICTIONS])) + 1;
+	if (self->s.number < MAX_CLIENTS) {
+		int nextClass = JVM_DeathNextClass(level.gametype,
+			JVM_ReplicatedClass(self->client->ps.stats[STAT_RESTRICTIONS]),
+			jom_cycleloadout.integer, self->client->ps.pm_type == PM_DEAD,
+			self->client->sess.sessionTeam == TEAM_SPECTATOR, self->client->jvmClassChanging,
+			g_dontPenalizeTeam || meansOfDeath == MOD_TEAM_CHANGE);
+		if (nextClass)
+			self->client->jvmNextClass = nextClass;
 	}
 }
 

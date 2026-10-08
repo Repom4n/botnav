@@ -1563,6 +1563,7 @@ void SetTeam( gentity_t *ent, char *s, qboolean forcedToJoin ) {//JAPRO - Modifi
 		g_dontPenalizeTeam = qfalse;
 
 	}
+	client->jvmNextClass = 0;
 	// they go to the end of the line for tournaments
 	if ( team == TEAM_SPECTATOR && oldTeam != team )
 		AddTournamentQueue( client );

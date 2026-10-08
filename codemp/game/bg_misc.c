@@ -1892,10 +1892,11 @@ qboolean BG_CanUseFPNow(int gametype, playerState_t *ps, int time, forcePowers_t
 	if (JVM_IsMode(gametype) &&
 		JVM_ReplicatedClass(ps->stats[STAT_RESTRICTIONS]) != JVM_JEDI &&
 		(!ps->fd.forcePowerLevel[power] || !(ps->fd.forcePowersKnown & (1 << power)) ||
-		!JVM_ForceRank(JVM_ReplicatedClass(ps->stats[STAT_RESTRICTIONS]), 1,
+		(!JVM_ForceRank(JVM_ReplicatedClass(ps->stats[STAT_RESTRICTIONS]), 1,
 			power == FP_LEVITATION,
 			power == FP_SABER_OFFENSE || power == FP_SABER_DEFENSE || power == FP_SABERTHROW,
-			ps->fd.forcePowerLevel[FP_LEVITATION])))
+			ps->fd.forcePowerLevel[FP_LEVITATION]) &&
+		!JVM_TankPushPull(ps->stats[STAT_RESTRICTIONS], power == FP_PUSH || power == FP_PULL))))
 		return qfalse;
 
 	if (BG_HasYsalamiri(gametype, ps))

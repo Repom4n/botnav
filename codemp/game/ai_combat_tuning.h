@@ -53,6 +53,13 @@ static inline int BotCombat_FootingFallbackForward(int advancing, int defensive,
 	return lane < 4 ? 0 : -1;
 }
 
+static inline int BotNav_PreserveValidatedStrafe(int enabled, int fresh, int safe,
+	int active, int ownsInput, int corridor, int requiredWaypoint, int combat)
+{
+	return enabled && fresh && safe && active && ownsInput && corridor &&
+		!requiredWaypoint && !combat;
+}
+
 typedef enum
 {
 	NEWBOTAI_DRAINLOCK_FORCE_NONE = 0,

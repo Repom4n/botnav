@@ -3454,7 +3454,7 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 				cg.time, cg.snap ? cg.snap->ps.commandTime : -1, cg.predictKnockbackServerTime);
 		}
 		// Authoritative "stop predicting" signal for cg_predictKnockback: our own rocket has exploded
-		// server-side, so its knockback is now in the snapshot stream. Unambiguous ï¿½ unlike the old
+		// server-side, so its knockback is now in the snapshot stream. Unambiguous — unlike the old
 		// velocity-jump heuristic, this can never be confused with the player's own jump.
 		if (cg_predictKnockback.integer && cg.predictKnockback && es->weapon == WP_ROCKET_LAUNCHER && es->owner == cg.predictedPlayerState.clientNum)
 			cg.predictKnockbackExploded = qtrue;
@@ -3532,7 +3532,7 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 				hitImpulseDelta[0], hitImpulseDelta[1], hitImpulseDelta[2],
 				cg.time, cg.snap ? cg.snap->ps.commandTime : -1, cg.predictKnockbackServerTime);
 		}
-		// Authoritative stop signal (see EV_MISSILE_MISS) ï¿½ rocket impacting metal still means it exploded.
+		// Authoritative stop signal (see EV_MISSILE_MISS) — rocket impacting metal still means it exploded.
 		if (cg_predictKnockback.integer && cg.predictKnockback && es->weapon == WP_ROCKET_LAUNCHER && es->owner == cg.predictedPlayerState.clientNum)
 			cg.predictKnockbackExploded = qtrue;
 		if (cg.snap && cg.snap->ps.duelInProgress &&
@@ -4152,3 +4152,4 @@ void CG_CheckEvents( centity_t *cent ) {
 
 	CG_EntityEvent( cent, cent->lerpOrigin );
 }
+
