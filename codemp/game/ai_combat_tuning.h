@@ -80,6 +80,12 @@ static inline int BotNav_FloorAllows(int found, int solid, float normalZ, float 
 	return found && isfinite(drop) && normalZ >= 0.7f && drop <= maxDrop;
 }
 
+static inline int BotNav_GapDispatchAllows(int grounded, int ownsInput, int fresh,
+	int arcSafe, int jumpPressed, int jumpReleased)
+{
+	return !grounded || (ownsInput && fresh && arcSafe && jumpPressed && jumpReleased);
+}
+
 typedef enum
 {
 	NEWBOTAI_DRAINLOCK_FORCE_NONE = 0,

@@ -205,6 +205,17 @@ BOOST_AUTO_TEST_CASE( navigation_floor_safety_only_waives_ordinary_gaps_for_vali
 	BOOST_CHECK( !BotNav_FloorAllows( 0, 1, 0, 500, 200, 1, 1 ) );
 }
 
+BOOST_AUTO_TEST_CASE( navigation_gap_dispatch_never_falls_back_to_unsafe_grounded_walking )
+{
+	BOOST_CHECK( BotNav_GapDispatchAllows( 1, 1, 1, 1, 1, 1 ) );
+	BOOST_CHECK( BotNav_GapDispatchAllows( 0, 0, 0, 0, 0, 0 ) );
+	BOOST_CHECK( !BotNav_GapDispatchAllows( 1, 0, 1, 1, 1, 1 ) );
+	BOOST_CHECK( !BotNav_GapDispatchAllows( 1, 1, 0, 1, 1, 1 ) );
+	BOOST_CHECK( !BotNav_GapDispatchAllows( 1, 1, 1, 0, 1, 1 ) );
+	BOOST_CHECK( !BotNav_GapDispatchAllows( 1, 1, 1, 1, 0, 1 ) );
+	BOOST_CHECK( !BotNav_GapDispatchAllows( 1, 1, 1, 1, 1, 0 ) );
+}
+
 BOOST_AUTO_TEST_CASE( strafejump_steering_caps_shortest_wrapped_yaw_change )
 {
 	BOOST_CHECK_EQUAL( BotSFJ_SteerYaw( 350, 10, 12 ), 362 );

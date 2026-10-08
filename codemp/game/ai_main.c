@@ -294,6 +294,7 @@ static void NewBotAI_ApplyPullMistake(bot_state_t *bs);
 static void NewBotAI_ApplyGripEscapePullMistake(bot_state_t *bs);
 static qboolean BotNav_CheckFallingHazard(bot_state_t *bs, vec3_t moveDir, qboolean inCombat);
 static void BotCombat_FilterRangedInput(bot_state_t *bs, bot_input_t *bi);
+static void BotNav_FilterGapInput(bot_state_t *bs, bot_input_t *bi, int time);
 static void BotSFJ_DebugReject(bot_state_t *bs, const char *reason);
 int WaitingForNow(bot_state_t *bs, vec3_t goalpos);
 static void BotSFJ_SelectIntent(bot_state_t *bs);
@@ -1037,6 +1038,7 @@ void BotUpdateInput(bot_state_t *bs, int time, int elapsed_time) {
 		NewBotAI_IsSaberOnlyDuel(bs));
 	BotSFJ_ApplyInput(bs, &bi, time, elapsed_time);
 	BotCombat_FilterRangedInput(bs, &bi);
+	BotNav_FilterGapInput(bs, &bi, time);
 	//respawn hack
 	if (bi.actionflags & ACTION_RESPAWN) {
 		if (bs->lastucmd.buttons & BUTTON_ATTACK) bi.actionflags &= ~(ACTION_RESPAWN|ACTION_ATTACK);
@@ -1119,6 +1121,7 @@ int BotAI(int client, float thinktime) {
 		BotAI_Print(PRT_FATAL, "BotAI: client %d is not setup\n", client);
 		return qfalse;
 	}
+	bs->sfjNavGapPending = qfalse;
 
 	//retrieve the current client state
 	BotAI_GetClientState( client, &bs->cur_ps );
@@ -1672,6 +1675,8 @@ static qboolean BotNav_SFJTravelOwnsInput(bot_state_t *bs)
 		bs->wpCurrent && (bs->wpCurrent->flags || bs->wpCurrent->forceJumpTo),
 		bs->saberTechniqueOwnsInputs || bs->saberDefenseActive || bs->gripkickActive ||
 		bs->forceJumpChargeTime > level.time || bs->forceJumping > level.time ||
+		bs->cur_ps.pm_type != PM_NORMAL || bs->cur_ps.forceHandExtend != HANDEXTEND_NONE ||
+		bs->cur_ps.fd.forceGripBeingGripped > level.time || bs->cur_ps.saberLockTime > level.time ||
 		NewBotAI_IsRecoveryMovementActive(bs) || NewBotAI_HasExclusiveFlipkickMovement(bs) ||
 		(bs->currentEnemy && bs->frame_Enemy_Vis &&
 			(bs->cur_ps.weapon <= WP_SABER || bs->combatAction == BOT_COMBAT_ACTION_RETREAT_DEFENSE))) ?
@@ -2549,7 +2554,7 @@ static qboolean BotNav_CheckFallingHazard(bot_state_t *bs, vec3_t moveDir, qbool
 	const float extendedPitTrace = 512.0f;
 	const int hazardContents = CONTENTS_LAVA | CONTENTS_SLIME | CONTENTS_NODROP;
 	float maxDrop, feetZ;
-	qboolean foundFloor;
+	qboolean foundFloor, ordinaryFloorSafe, gapAllowed, hazard;
 	int i;
 
 	(void)inCombat;
@@ -2587,11 +2592,20 @@ static qboolean BotNav_CheckFallingHazard(bot_state_t *bs, vec3_t moveDir, qbool
 	foundFloor = tr.fraction < 1.0f && (tr.entityNum == ENTITYNUM_WORLD ||
 		(tr.entityNum >= 0 && tr.entityNum < level.num_entities &&
 			g_entities[tr.entityNum].s.eType == ET_MOVER));
+	hazard = (tr.contents & hazardContents) ||
+		BotNav_SweepTouchesInstantKillTrigger(start, tr.endpos);
+	ordinaryFloorSafe = BotNav_FloorAllows(foundFloor, tr.startsolid || tr.allsolid,
+		tr.plane.normal[2], feetZ - tr.endpos[2], maxDrop, 0, hazard);
+	gapAllowed = !ordinaryFloorSafe && !hazard && BotNav_SFJTravelOwnsInput(bs) &&
+		bs->lastucmd.upmove > 0 &&
+		(bs->sfjPhase == BOT_SFJ_PHASE_TAKEOFF || bs->sfjPhase == BOT_SFJ_PHASE_REJUMP) &&
+		BotSFJ_CurrentTakeoffIsSafe(bs);
 	/* Only a current accepted jump may cross a gap; explicit hazards never yield. */
 	if (!BotNav_FloorAllows(foundFloor, tr.startsolid || tr.allsolid, tr.plane.normal[2],
-		feetZ - tr.endpos[2], maxDrop, BotNav_SFJTravelOwnsInput(bs),
-		(tr.contents & hazardContents) || BotNav_SweepTouchesInstantKillTrigger(start, tr.endpos)))
+		feetZ - tr.endpos[2], maxDrop, gapAllowed, hazard))
 		return qtrue;
+	if (gapAllowed)
+		bs->sfjNavGapPending = qtrue;
 
 	//Broader hazard awareness: check farther ahead only for explicit instant-death hazards.
 	for (i = 0; i < ARRAY_LEN(pitLookAhead); i++)
@@ -2603,6 +2617,30 @@ static qboolean BotNav_CheckFallingHazard(bot_state_t *bs, vec3_t moveDir, qbool
 	}
 
 	return qfalse;
+}
+
+static void BotNav_FilterGapInput(bot_state_t *bs, bot_input_t *bi, int time)
+{
+	playerState_t *ps;
+	if (!bs->sfjNavGapPending || !g_entities[bs->client].client)
+		return;
+	ps = &g_entities[bs->client].client->ps;
+	if (ps->groundEntityNum == ENTITYNUM_NONE)
+	{
+		bs->sfjNavGapPending = qfalse;
+		return;
+	}
+	/* A cancelled jump must never fall back to the unsafe walking input it replaced. */
+	if (!BotNav_GapDispatchAllows(1, bs->sfjOwnsInput,
+		BotSFJ_IntentIsFresh(time, bs->sfjIntentTime) && bs->sfjSafetyUntil >= time,
+		bs->sfjArcSafe, (bi->actionflags & ACTION_JUMP) &&
+			(bs->sfjPhase == BOT_SFJ_PHASE_TAKEOFF || bs->sfjPhase == BOT_SFJ_PHASE_REJUMP),
+		!(ps->pm_flags & PMF_JUMP_HELD)))
+	{
+		bi->actionflags &= ~(ACTION_MOVEFORWARD | ACTION_MOVEBACK | ACTION_MOVELEFT | ACTION_MOVERIGHT);
+		VectorClear(bi->dir);
+		bi->speed = 0.0f;
+	}
 }
 
 static qboolean BotSFJ_SupportedMovementStyle(const playerState_t *ps)
