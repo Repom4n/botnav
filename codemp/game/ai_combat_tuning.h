@@ -6,6 +6,86 @@
 
 #define NEWBOTAI_TUNING_ESCAPE_YAW_SPEED 333.0f
 
+static inline int BotCombat_ModeUsable(int owned, int ammo, int cost, int forcedMode, int alt)
+{
+	return owned && ammo >= cost && !(forcedMode == 1 && alt) &&
+		!(forcedMode == 2 && !alt);
+}
+
+static inline float BotCombat_WeaponScore(int skill, float dps, float effectiveness,
+	int legacyWeight, int closeRange, int splash)
+{
+	float score;
+	if (skill <= 2)
+		score = (float)legacyWeight;
+	else if (skill <= 6)
+		score = 200.0f - fabsf(dps - (45.0f + skill * 7.5f));
+	else
+		score = dps;
+	score *= effectiveness;
+	/* Safety beats preference, but never makes an owned ranged weapon unavailable. */
+	if (closeRange && splash)
+		score -= 10000.0f;
+	return score;
+}
+
+static inline int BotCombat_PickupPriority(int needsRanged, int weaponPickup,
+	int ammoPickup, int replenishesOwned)
+{
+	if (!needsRanged)
+		return 0;
+	if (weaponPickup)
+		return 100;
+	return ammoPickup && replenishesOwned ? 120 : 0;
+}
+
+static inline int BotCombat_RefreshIdleFooting(int idle, int defensive, int recovering,
+	float distance, int plannedForward, int cachedForward)
+{
+	return idle && !defensive && !recovering && distance > 100.0f &&
+		plannedForward > 0 && cachedForward <= 0;
+}
+
+static inline int BotCombat_FootingFallbackForward(int advancing, int defensive, int lane)
+{
+	if (lane < 2)
+		return advancing && !defensive ? 1 : -1;
+	return lane < 4 ? 0 : -1;
+}
+
+static inline int BotNav_PreserveValidatedStrafe(int enabled, int fresh, int safe,
+	int active, int ownsInput, int corridor, int requiredWaypoint, int combat)
+{
+	return enabled && fresh && safe && active && ownsInput && corridor &&
+		!requiredWaypoint && !combat;
+}
+
+static inline void BotCombat_SplashTraceEnd(const float *start, const float *direction,
+	float distance, float *end)
+{
+	end[0] = start[0] + direction[0] * distance;
+	end[1] = start[1] + direction[1] * distance;
+	end[2] = start[2] + direction[2] * distance;
+}
+
+static inline int BotNav_FloorAllows(int found, int solid, float normalZ, float drop,
+	float maxDrop, int validatedJump, int hazard)
+{
+	if (hazard)
+		return 0;
+	if (validatedJump)
+		return 1;
+	if (solid)
+		return 0;
+	return found && isfinite(drop) && normalZ >= 0.7f && drop <= maxDrop;
+}
+
+static inline int BotNav_GapDispatchAllows(int grounded, int ownsInput, int fresh,
+	int arcSafe, int jumpPressed, int jumpReleased)
+{
+	return !grounded || (ownsInput && fresh && arcSafe && jumpPressed && jumpReleased);
+}
+
 typedef enum
 {
 	NEWBOTAI_DRAINLOCK_FORCE_NONE = 0,

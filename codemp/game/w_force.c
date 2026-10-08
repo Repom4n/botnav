@@ -553,6 +553,11 @@ extern qboolean BG_InKnockDown( int anim ); //bg_pmove.c
 
 int ForcePowerUsableOn(gentity_t *attacker, gentity_t *other, forcePowers_t forcePower)
 {
+	if (forcePower == FP_GRIP && other && other->client &&
+		JVM_PassiveAbsorb(level.gametype,
+			JVM_ReplicatedClass(other->client->ps.stats[STAT_RESTRICTIONS]),
+			jedi_alwaysabsorb.integer, 1, 3) == 0)
+		return 0;
 	//if (other && other->client && other->client->pers.raceMode)
 		//return 0;
 
@@ -866,6 +871,12 @@ int WP_AbsorbConversion(gentity_t *attacked, int atdAbsLevel, gentity_t *attacke
 	int getLevel = 0;
 	int addTot = 0;
 	gentity_t *abSound;
+	int passiveLevel = JVM_PassiveAbsorb(level.gametype,
+		JVM_ReplicatedClass(attacked->client->ps.stats[STAT_RESTRICTIONS]),
+		jedi_alwaysabsorb.integer, atPower == FP_PUSH || atPower == FP_PULL || atPower == FP_GRIP,
+		atPowerLevel);
+	if (passiveLevel >= 0)
+		return passiveLevel;
 
 	if (atPower != FP_LIGHTNING &&
 		atPower != FP_DRAIN &&
@@ -3743,6 +3754,10 @@ void ForceThrow( gentity_t *self, qboolean pull )
 				{
 					modPowerLevel = powerLevel;
 				}
+				if (!modPowerLevel && JVM_PassiveAbsorb(level.gametype,
+					JVM_ReplicatedClass(push_list[x]->client->ps.stats[STAT_RESTRICTIONS]),
+					jedi_alwaysabsorb.integer, 1, powerLevel) == 0)
+					continue;
 			}
 
 			if (g_tweakWeapons.integer & WT_TRIBES) {
@@ -3879,6 +3894,7 @@ void ForceThrow( gentity_t *self, qboolean pull )
 						if (push_list[x]->client && VectorLength(pushDir) <= weaponPullDist) //LODA
 						{
 							int randfact = 0;
+							float dropChance = JVM_DisarmChance(merc_dropchance.value, VectorLength(pushDir));
 
 							if (modPowerLevel == FORCE_LEVEL_1)
 							{
@@ -3893,7 +3909,12 @@ void ForceThrow( gentity_t *self, qboolean pull )
 								randfact = 10;
 							}
 
-							if (!OnSameTeam(self, push_list[x]) && Q_irand(1, 10) <= randfact && canPullWeapon)
+							if (!OnSameTeam(self, push_list[x]) && canPullWeapon &&
+								(JVM_IsMode(level.gametype) &&
+								JVM_ReplicatedClass(push_list[x]->client->ps.stats[STAT_RESTRICTIONS]) == JVM_MERC ?
+									modPowerLevel > 0 && (dropChance >= 100.0f ||
+										Q_flrand(0.0f, 100.0f) < dropChance) :
+									Q_irand(1, 10) <= randfact))
 							{
 								vec3_t uorg, vecnorm;
 
@@ -4066,7 +4087,8 @@ void ForceThrow( gentity_t *self, qboolean pull )
 			}
 //JAPRO - Serverside - Flag push/pull physics - End
 //JAPRO - Serverside - Item push/pull physics - Start
-			else if ( ((g_tweakForce.integer & FT_PUSHPULLITEMS) || (JVM_IsMode(level.gametype) && JVM_ReplicatedClass(self->client->ps.stats[STAT_RESTRICTIONS]) == JVM_JEDI)) && !(push_list[x]->s.eFlags & EF_NODRAW) && !self->client->ps.duelInProgress && push_list[x]->s.eType == ET_ITEM && ((JVM_IsMode(level.gametype) && push_list[x]->item->giType == IT_WEAPON) || push_list[x]->item->giType == IT_AMMO || push_list[x]->item->giType == IT_ARMOR || push_list[x]->item->giType == IT_HEALTH))
+			else if ( JVM_CanMoveWorldItems(level.gametype, self->client->ps.stats[STAT_RESTRICTIONS],
+				g_tweakForce.integer & FT_PUSHPULLITEMS) && !(push_list[x]->s.eFlags & EF_NODRAW) && !self->client->ps.duelInProgress && push_list[x]->s.eType == ET_ITEM && ((JVM_IsMode(level.gametype) && push_list[x]->item->giType == IT_WEAPON) || push_list[x]->item->giType == IT_AMMO || push_list[x]->item->giType == IT_ARMOR || push_list[x]->item->giType == IT_HEALTH))
 			{
 				push_list[x]->nextthink = level.time + 30000;
 				push_list[x]->think = ResetItem;//incase it falls off a cliff

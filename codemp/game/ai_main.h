@@ -468,6 +468,9 @@ typedef struct bot_state_s
 	int					saberFootingRight;
 	qboolean			saberFootingValid;
 	vec3_t				saberFootingWorldDir;
+	int					rangedPickupEntity;
+	int					rangedPickupWaypoint;
+	qboolean			sfjNavGapPending;
 	int					saberLearnedPreference;
 	int					saberLearnedStimulus;
 	int					saberLearnedFollow;

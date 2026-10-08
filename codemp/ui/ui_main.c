@@ -5832,12 +5832,15 @@ static void UI_Update(const char *name) {
 
 	if ( !Q_stricmp( name, "ui_GetName" ) ) {
 		char buf[MAX_NETNAME] = {0};
+		uiClientState_t cs;
+		trap->GetClientState(&cs);
 		Q_strncpyz( buf, UI_Cvar_VariableString( "name" ), sizeof( buf ) );
 		trap->Cvar_Set( "ui_Name", buf );
 
-		//Set the team to whatever our current skin is.
+		// Only infer a team from skins offline; cgame supplies the real in-game team.
 		Q_strncpyz(buf, UI_Cvar_VariableString("model"), sizeof(buf));
-		if (ui_selectedModelIndex.integer > -1 && !BG_IsTeamGame(uiInfo.gameTypes[ui_gametype.integer].gtEnum))
+		if (cs.connState < CA_CONNECTED && ui_selectedModelIndex.integer > -1 &&
+			!BG_IsTeamGame(uiInfo.gameTypes[ui_gametype.integer].gtEnum))
 		{
 			const char *skin = Q_strchrs(buf, "/");
 
@@ -6512,6 +6515,17 @@ static void UI_GetCharacterCvars ( void )
 	char *model;
 	char *skin;
 	int i;
+	int gametype;
+	uiClientState_t cs;
+	char info[MAX_INFO_STRING];
+
+	trap->GetClientState(&cs);
+	gametype = uiInfo.gameTypes[ui_gametype.integer].gtEnum;
+	if (cs.connState >= CA_CONNECTED)
+	{
+		trap->GetConfigString(CS_SERVERINFO, info, sizeof(info));
+		gametype = atoi(Info_ValueForKey(info, "g_gametype"));
+	}
 
 	model = UI_Cvar_VariableString("model");
 	skin = strrchr(model, '/');
@@ -6577,15 +6591,18 @@ static void UI_GetCharacterCvars ( void )
 	}
 	else
 	{
-		if (skin != NULL && ui_selectedModelIndex.integer > -1 && !BG_IsTeamGame(uiInfo.gameTypes[ui_gametype.integer].gtEnum))
-		{ //set our team to respect our current skin
+		if (skin != NULL && ui_selectedModelIndex.integer > -1 &&
+			(!BG_IsTeamGame(gametype) || gametype == GT_ARCADE))
+		{ // Remember non-team skin colors without replacing the in-game team.
 			if (!Q_stricmp(skin, "/red")) {
 				uiSkinColor = TEAM_RED;
-				trap->Cvar_Set("ui_myteam", va("%i", uiSkinColor));
+				if (cs.connState < CA_CONNECTED)
+					trap->Cvar_Set("ui_myteam", va("%i", uiSkinColor));
 			}
 			else if (!Q_stricmp(skin, "/blue")) {
 				uiSkinColor = TEAM_BLUE;
-				trap->Cvar_Set("ui_myteam", va("%i", uiSkinColor));
+				if (cs.connState < CA_CONNECTED)
+					trap->Cvar_Set("ui_myteam", va("%i", uiSkinColor));
 			}
 			else if (!Q_stricmpn(skin, "/rgb", 3)) {
 				uiSkinColor = 3;
@@ -6599,6 +6616,7 @@ static void UI_GetCharacterCvars ( void )
 			else {
 				uiSkinColor = TEAM_FREE;
 			}
+			uiHoldSkinColor = uiSkinColor;
 		}
 
 		model = UI_Cvar_VariableString ( "ui_char_model" );

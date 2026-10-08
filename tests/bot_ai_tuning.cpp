@@ -1,4 +1,5 @@
 #include <math.h>
+#include <limits>
 
 #include "ai_combat_tuning.h"
 #include "ai_strafejump.h"
@@ -8,6 +9,108 @@
 BOOST_AUTO_TEST_SUITE( bot_ai )
 
 BOOST_AUTO_TEST_SUITE( tuning )
+
+BOOST_AUTO_TEST_CASE( merc_ranged_modes_respect_ammo_and_forced_fire )
+{
+	BOOST_CHECK( BotCombat_ModeUsable( 1, 5, 5, 0, 0 ) );
+	BOOST_CHECK( !BotCombat_ModeUsable( 1, 4, 5, 0, 0 ) );
+	BOOST_CHECK( !BotCombat_ModeUsable( 0, 100, 5, 0, 0 ) );
+	BOOST_CHECK( !BotCombat_ModeUsable( 1, 5, 5, 1, 1 ) );
+	BOOST_CHECK( !BotCombat_ModeUsable( 1, 5, 5, 2, 0 ) );
+	BOOST_CHECK( BotCombat_ModeUsable( 1, 5, 5, 2, 1 ) );
+}
+
+BOOST_AUTO_TEST_CASE( merc_weapon_preferences_are_soft_and_distance_aware )
+{
+	for (int skill = 1; skill <= 2; ++skill)
+		BOOST_CHECK_EQUAL( BotCombat_WeaponScore( skill, 200, 1, 7, 0, 0 ), 7 );
+	for (int skill = 3; skill <= 6; ++skill)
+	{
+		BOOST_CHECK( BotCombat_WeaponScore( skill, 75, 1, 1, 0, 0 ) >
+			BotCombat_WeaponScore( skill, 200, 1, 10, 0, 0 ) );
+		BOOST_CHECK( BotCombat_WeaponScore( skill, 200, 1, 10, 0, 0 ) > -10000 );
+	}
+	for (int skill = 7; skill <= 10; ++skill)
+	{
+		BOOST_CHECK( BotCombat_WeaponScore( skill, 200, 1, 1, 0, 0 ) >
+			BotCombat_WeaponScore( skill, 75, 1, 10, 0, 0 ) );
+		BOOST_CHECK( BotCombat_WeaponScore( skill, 200, 0.1f, 1, 0, 0 ) <
+			BotCombat_WeaponScore( skill, 75, 1, 10, 0, 0 ) );
+	}
+}
+
+BOOST_AUTO_TEST_CASE( merc_close_range_safety_beats_dps_without_banning_fallback )
+{
+	for (int skill = 1; skill <= 10; ++skill)
+		BOOST_CHECK( BotCombat_WeaponScore( skill, 25, 1, 1, 1, 0 ) >
+			BotCombat_WeaponScore( skill, 200, 1, 10, 1, 1 ) );
+	BOOST_CHECK( BotCombat_WeaponScore( 10, 200, 1, 10, 1, 1 ) > -1.0e20f );
+}
+
+BOOST_AUTO_TEST_CASE( merc_splash_probe_keeps_firing_pitch_and_muzzle_offset )
+{
+	const float muzzle[] = { 12, 8, 64 };
+	const float downward[] = { 0.6f, 0, -0.8f };
+	const float upward[] = { 0.6f, 0, 0.8f };
+	float end[3];
+	BotCombat_SplashTraceEnd( muzzle, downward, 208, end );
+	BOOST_CHECK_CLOSE( end[0], 136.8f, 0.001f );
+	BOOST_CHECK_EQUAL( end[1], 8 );
+	BOOST_CHECK_CLOSE( end[2], -102.4f, 0.001f );
+	BotCombat_SplashTraceEnd( muzzle, upward, 208, end );
+	BOOST_CHECK_CLOSE( end[2], 230.4f, 0.001f );
+}
+
+BOOST_AUTO_TEST_CASE( merc_resupply_prioritizes_ammo_that_restores_owned_ranged_weapon )
+{
+	BOOST_CHECK_EQUAL( BotCombat_PickupPriority( 0, 1, 0, 0 ), 0 );
+	BOOST_CHECK_EQUAL( BotCombat_PickupPriority( 1, 0, 1, 0 ), 0 );
+	BOOST_CHECK( BotCombat_PickupPriority( 1, 0, 1, 1 ) >
+		BotCombat_PickupPriority( 1, 1, 0, 0 ) );
+	BOOST_CHECK( BotCombat_PickupPriority( 1, 1, 0, 0 ) > 0 );
+}
+
+BOOST_AUTO_TEST_CASE( saber_idle_approach_releases_cached_zero_footing_not_defense )
+{
+	BOOST_CHECK( BotCombat_RefreshIdleFooting( 1, 0, 0, 200, 1, 0 ) );
+	BOOST_CHECK( BotCombat_RefreshIdleFooting( 1, 0, 0, 150, 1, -1 ) );
+	BOOST_CHECK( !BotCombat_RefreshIdleFooting( 0, 0, 0, 200, 1, 0 ) );
+	BOOST_CHECK( !BotCombat_RefreshIdleFooting( 1, 1, 0, 200, 1, 0 ) );
+	BOOST_CHECK( !BotCombat_RefreshIdleFooting( 1, 0, 1, 200, 1, 0 ) );
+	BOOST_CHECK( !BotCombat_RefreshIdleFooting( 1, 0, 0, 80, 1, 0 ) );
+	BOOST_CHECK( !BotCombat_RefreshIdleFooting( 1, 0, 0, 200, 0, 0 ) );
+}
+
+BOOST_AUTO_TEST_CASE( saber_blocked_approach_tries_forward_lanes_before_safe_exits )
+{
+	BOOST_CHECK_EQUAL( BotCombat_FootingFallbackForward( 1, 0, 0 ), 1 );
+	BOOST_CHECK_EQUAL( BotCombat_FootingFallbackForward( 1, 0, 1 ), 1 );
+	BOOST_CHECK_EQUAL( BotCombat_FootingFallbackForward( 1, 0, 2 ), 0 );
+	BOOST_CHECK_EQUAL( BotCombat_FootingFallbackForward( 1, 0, 4 ), -1 );
+	BOOST_CHECK_EQUAL( BotCombat_FootingFallbackForward( 1, 1, 0 ), -1 );
+	BOOST_CHECK_EQUAL( BotCombat_FootingFallbackForward( 0, 0, 0 ), -1 );
+}
+
+BOOST_AUTO_TEST_CASE( saber_and_force_duels_approach_from_safe_distance_without_empty_swings )
+{
+	for (int saberOnly = 0; saberOnly <= 1; ++saberOnly)
+	{
+		for (int distance = 150; distance <= 250; distance += 50)
+		{
+			newbotai_saber_tactic_context_t context = {};
+			context.saberOnlyDuel = saberOnly;
+			context.saberCombat = 1;
+			context.skill = 7;
+			context.ourTotalHealth = context.enemyTotalHealth = 100;
+			context.enemyDistance = (float)distance;
+			const auto tactic = NewBotAI_GetCorrectSaberTactic( context );
+			const auto command = NewBotAI_PlanSaberCommand( context, tactic,
+				NEWBOTAI_SABER_BASIC, 0, 1, 1, 1, 1, 0 );
+			BOOST_CHECK_EQUAL( command.forward, 1 );
+			BOOST_CHECK_EQUAL( command.attack, 0 );
+		}
+	}
+}
 
 BOOST_AUTO_TEST_CASE( strafejump_frequency_and_waypoint_skip_safety )
 {
@@ -21,6 +124,103 @@ BOOST_AUTO_TEST_CASE( strafejump_frequency_and_waypoint_skip_safety )
 	BOOST_CHECK( !BotSFJ_WaypointSkipAllows( 0, 33.0f, 1.0f, 1 ) );
 	BOOST_CHECK( !BotSFJ_WaypointSkipAllows( 0, 0.0f, 0.8f, 1 ) );
 	BOOST_CHECK( !BotSFJ_WaypointSkipAllows( 0, 0.0f, 1.0f, 0 ) );
+}
+
+BOOST_AUTO_TEST_CASE( strafejump_settings_and_drop_limits_are_finite_and_bounded )
+{
+	BOOST_CHECK_EQUAL( BotSFJ_ClampSetting( -1, 0, 200 ), 0 );
+	BOOST_CHECK_EQUAL( BotSFJ_ClampSetting( 80, 0, 200 ), 80 );
+	BOOST_CHECK_EQUAL( BotSFJ_ClampSetting( 201, 0, 200 ), 200 );
+	BOOST_CHECK_EQUAL( BotSFJ_ClampSetting( std::numeric_limits<float>::quiet_NaN(), 32, 200 ), 32 );
+	BOOST_CHECK_EQUAL( BotSFJ_ClampSetting( std::numeric_limits<float>::infinity(), 32, 200 ), 32 );
+	BOOST_CHECK( BotSFJ_HeightAllows( -200, 32, 200 ) );
+	BOOST_CHECK( BotSFJ_HeightAllows( 32, 32, 200 ) );
+	BOOST_CHECK( !BotSFJ_HeightAllows( -201, 32, 200 ) );
+	BOOST_CHECK( !BotSFJ_HeightAllows( 33, 32, 200 ) );
+	BOOST_CHECK( !BotSFJ_HeightAllows( std::numeric_limits<float>::quiet_NaN(), 32, 200 ) );
+}
+
+BOOST_AUTO_TEST_CASE( strafejump_track_nodes_measure_progress_not_exact_touchdown )
+{
+	const float from[] = { 0, 0, 0 };
+	const float node[] = { 100, 0, 0 };
+	const float beyond[] = { 200, 80, 200 };
+	const float offRoute[] = { 200, 81, 200 };
+	const float wrongHeight[] = { 100, 0, 65 };
+	const float near[] = { 20, 0, 0 };
+	BOOST_CHECK( BotSFJ_TrackNodePassed( beyond, from, node, 0, 80, 64 ) );
+	BOOST_CHECK( !BotSFJ_TrackNodePassed( offRoute, from, node, 0, 80, 64 ) );
+	BOOST_CHECK( !BotSFJ_TrackNodePassed( wrongHeight, from, node, 1, 80, 64 ) );
+	BOOST_CHECK( BotSFJ_TrackNodePassed( wrongHeight, from, node, 0, 80, 64 ) );
+	BOOST_CHECK( BotSFJ_TrackNodePassed( near, from, node, 1, 80, 64 ) );
+	BOOST_CHECK( !BotSFJ_TrackNodePassed( beyond, node, node, 0, 80, 64 ) );
+}
+
+BOOST_AUTO_TEST_CASE( strafejump_continuity_uses_speed_hysteresis )
+{
+	BOOST_CHECK( !BotSFJ_ContinuitySlowedOut( 420, 250, 250 ) );
+	BOOST_CHECK( BotSFJ_ContinuitySlowedOut( 420, 180, 250 ) );
+	BOOST_CHECK( !BotSFJ_ContinuitySlowedOut( 260, 180, 250 ) );
+	BOOST_CHECK( !BotSFJ_ContinuitySlowedOut( 420, 200, 250 ) );
+	BOOST_CHECK( !BotSFJ_ContinuitySlowedOut( 420, 180, 0 ) );
+}
+
+BOOST_AUTO_TEST_CASE( strafejump_drop_links_keep_all_existing_route_gates )
+{
+	BOOST_CHECK( BotSFJ_AdvanceDropLinkAllows( 0, 1, 1, -200, -200, 0.9f, 0, 200 ) );
+	BOOST_CHECK( !BotSFJ_AdvanceDropLinkAllows( 0, 1, 1, 33, 0, 1, 0, 200 ) );
+	BOOST_CHECK( !BotSFJ_AdvanceDropLinkAllows( 0, 1, 1, -201, 0, 1, 0, 200 ) );
+	BOOST_CHECK( !BotSFJ_AdvanceDropLinkAllows( 0, 1, 1, 0, -201, 1, 0, 200 ) );
+	BOOST_CHECK( !BotSFJ_AdvanceDropLinkAllows( 1, 1, 1, 0, 0, 1, 0, 200 ) );
+	BOOST_CHECK( !BotSFJ_AdvanceDropLinkAllows( 0, 0, 1, 0, 0, 1, 0, 200 ) );
+	BOOST_CHECK( !BotSFJ_AdvanceDropLinkAllows( 0, 1, 0, 0, 0, 1, 0, 200 ) );
+	BOOST_CHECK( !BotSFJ_AdvanceDropLinkAllows( 0, 1, 1, 0, 0, 0.89f, 0, 200 ) );
+	BOOST_CHECK( !BotSFJ_AdvanceDropLinkAllows( 0, 1, 1, 0, 0, 1, -1, 200 ) );
+}
+
+BOOST_AUTO_TEST_CASE( navigation_soft_overrides_require_live_validated_strafe_ownership )
+{
+	BOOST_CHECK( BotNav_PreserveValidatedStrafe( 1, 1, 1, 1, 1, 1, 0, 0 ) );
+	BOOST_CHECK( !BotNav_PreserveValidatedStrafe( 0, 1, 1, 1, 1, 1, 0, 0 ) );
+	BOOST_CHECK( !BotNav_PreserveValidatedStrafe( 1, 0, 1, 1, 1, 1, 0, 0 ) );
+	BOOST_CHECK( !BotNav_PreserveValidatedStrafe( 1, 1, 0, 1, 1, 1, 0, 0 ) );
+	BOOST_CHECK( !BotNav_PreserveValidatedStrafe( 1, 1, 1, 0, 1, 1, 0, 0 ) );
+	BOOST_CHECK( !BotNav_PreserveValidatedStrafe( 1, 1, 1, 1, 0, 1, 0, 0 ) );
+	BOOST_CHECK( !BotNav_PreserveValidatedStrafe( 1, 1, 1, 1, 1, 0, 0, 0 ) );
+	BOOST_CHECK( !BotNav_PreserveValidatedStrafe( 1, 1, 1, 1, 1, 1, 1, 0 ) );
+	BOOST_CHECK( !BotNav_PreserveValidatedStrafe( 1, 1, 1, 1, 1, 1, 0, 1 ) );
+}
+
+BOOST_AUTO_TEST_CASE( navigation_floor_safety_only_waives_ordinary_gaps_for_validated_jumps )
+{
+	BOOST_CHECK( BotNav_FloorAllows( 1, 0, 1, 200, 200, 0, 0 ) );
+	BOOST_CHECK( !BotNav_FloorAllows( 1, 0, 1, 201, 200, 0, 0 ) );
+	BOOST_CHECK( !BotNav_FloorAllows( 0, 0, 1, 0, 200, 0, 0 ) );
+	BOOST_CHECK( !BotNav_FloorAllows( 1, 1, 1, 0, 200, 0, 0 ) );
+	BOOST_CHECK( !BotNav_FloorAllows( 1, 0, 0.69f, 0, 200, 0, 0 ) );
+	BOOST_CHECK( BotNav_FloorAllows( 0, 0, 0, 500, 200, 1, 0 ) );
+	BOOST_CHECK( !BotNav_FloorAllows( 0, 0, 0, 500, 200, 1, 1 ) );
+	BOOST_CHECK( !BotNav_FloorAllows( 1, 0, 1, 0, 200, 1, 1 ) );
+	BOOST_CHECK( BotNav_FloorAllows( 0, 1, 0, 500, 200, 1, 0 ) );
+	BOOST_CHECK( !BotNav_FloorAllows( 0, 1, 0, 500, 200, 1, 1 ) );
+}
+
+BOOST_AUTO_TEST_CASE( navigation_gap_dispatch_never_falls_back_to_unsafe_grounded_walking )
+{
+	BOOST_CHECK( BotNav_GapDispatchAllows( 1, 1, 1, 1, 1, 1 ) );
+	BOOST_CHECK( BotNav_GapDispatchAllows( 0, 0, 0, 0, 0, 0 ) );
+	BOOST_CHECK( !BotNav_GapDispatchAllows( 1, 0, 1, 1, 1, 1 ) );
+	BOOST_CHECK( !BotNav_GapDispatchAllows( 1, 1, 0, 1, 1, 1 ) );
+	BOOST_CHECK( !BotNav_GapDispatchAllows( 1, 1, 1, 0, 1, 1 ) );
+	BOOST_CHECK( !BotNav_GapDispatchAllows( 1, 1, 1, 1, 0, 1 ) );
+	BOOST_CHECK( !BotNav_GapDispatchAllows( 1, 1, 1, 1, 1, 0 ) );
+}
+
+BOOST_AUTO_TEST_CASE( strafejump_steering_caps_shortest_wrapped_yaw_change )
+{
+	BOOST_CHECK_EQUAL( BotSFJ_SteerYaw( 350, 10, 12 ), 362 );
+	BOOST_CHECK_EQUAL( BotSFJ_SteerYaw( 10, 350, 12 ), -2 );
+	BOOST_CHECK_EQUAL( BotSFJ_SteerYaw( 350, 355, 12 ), 355 );
 }
 
 BOOST_AUTO_TEST_CASE( strafejump_dense_waypoint_budget_is_independent_and_bounded )
@@ -2009,6 +2209,66 @@ BOOST_AUTO_TEST_CASE( sfj_track_keep_rules )
 	BOOST_CHECK( !BotSFJ_TrackKeep( 1, 900.0f, 0 ) );
 	BOOST_CHECK( !BotSFJ_TrackKeep( 4, 100.0f, 0 ) );
 	BOOST_CHECK( !BotSFJ_TrackKeep( 4, 900.0f, 1 ) );
+}
+
+BOOST_AUTO_TEST_CASE( sfj_continuity_settings_and_drop_limits_are_bounded )
+{
+	BOOST_CHECK_EQUAL( BotSFJ_ClampSetting( 80.0f, 16.0f, 256.0f ), 80.0f );
+	BOOST_CHECK_EQUAL( BotSFJ_ClampSetting( -1.0f, 16.0f, 256.0f ), 16.0f );
+	BOOST_CHECK_EQUAL( BotSFJ_ClampSetting( 999.0f, 0.0f, 200.0f ), 200.0f );
+	BOOST_CHECK_EQUAL( BotSFJ_ClampSetting( NAN, 16.0f, 256.0f ), 16.0f );
+	BOOST_CHECK_EQUAL( BotSFJ_ClampSetting( INFINITY, 0.0f, 200.0f ), 0.0f );
+	BOOST_CHECK( BotSFJ_HeightAllows( -200.0f, 32.0f, 200.0f ) );
+	BOOST_CHECK( BotSFJ_HeightAllows( 32.0f, 32.0f, 200.0f ) );
+	BOOST_CHECK( !BotSFJ_HeightAllows( -201.0f, 32.0f, 200.0f ) );
+	BOOST_CHECK( !BotSFJ_HeightAllows( 33.0f, 32.0f, 200.0f ) );
+	BOOST_CHECK( !BotSFJ_HeightAllows( -1.0f, 32.0f, 0.0f ) );
+	BOOST_CHECK( !BotSFJ_HeightAllows( NAN, 32.0f, 200.0f ) );
+}
+
+BOOST_AUTO_TEST_CASE( sfj_drop_advancement_keeps_legal_link_and_direction_gates )
+{
+	BOOST_CHECK( BotSFJ_AdvanceDropLinkAllows( 0, 1, 1, -200.0f, -200.0f, 1.0f, 8.0f, 200.0f ) );
+	BOOST_CHECK( !BotSFJ_AdvanceDropLinkAllows( 0, 1, 1, -201.0f, -200.0f, 1.0f, 8.0f, 200.0f ) );
+	BOOST_CHECK( !BotSFJ_AdvanceDropLinkAllows( 0, 1, 1, -200.0f, -201.0f, 1.0f, 8.0f, 200.0f ) );
+	BOOST_CHECK( !BotSFJ_AdvanceDropLinkAllows( 0, 1, 1, 33.0f, 0.0f, 1.0f, 8.0f, 200.0f ) );
+	BOOST_CHECK( !BotSFJ_AdvanceDropLinkAllows( 0, 1, 1, 0.0f, 65.0f, 1.0f, 8.0f, 200.0f ) );
+	BOOST_CHECK( !BotSFJ_AdvanceDropLinkAllows( 1, 1, 1, -100.0f, -100.0f, 1.0f, 8.0f, 200.0f ) );
+	BOOST_CHECK( !BotSFJ_AdvanceDropLinkAllows( 0, 0, 1, -100.0f, -100.0f, 1.0f, 8.0f, 200.0f ) );
+	BOOST_CHECK( !BotSFJ_AdvanceDropLinkAllows( 0, 1, 0, -100.0f, -100.0f, 1.0f, 8.0f, 200.0f ) );
+	BOOST_CHECK( !BotSFJ_AdvanceDropLinkAllows( 0, 1, 1, -100.0f, -100.0f, 0.8f, 8.0f, 200.0f ) );
+	BOOST_CHECK( !BotSFJ_AdvanceDropLinkAllows( 0, 1, 1, -100.0f, -100.0f, 1.0f, -1.0f, 200.0f ) );
+}
+
+BOOST_AUTO_TEST_CASE( sfj_recorded_nodes_are_progress_markers_not_exact_landings )
+{
+	const float from[3] = { 0.0f, 0.0f, 0.0f };
+	const float node[3] = { 300.0f, 0.0f, 0.0f };
+	const float passed[3] = { 500.0f, 80.0f, 200.0f };
+	const float outside[3] = { 500.0f, 81.0f, 0.0f };
+	const float wrongFloor[3] = { 500.0f, 0.0f, 65.0f };
+	const float near[3] = { 220.0f, 0.0f, 0.0f };
+	const float behind[3] = { 219.0f, 0.0f, 0.0f };
+
+	BOOST_CHECK( BotSFJ_TrackNodePassed( passed, from, node, 0, 80.0f, 64.0f ) );
+	BOOST_CHECK( !BotSFJ_TrackNodePassed( outside, from, node, 0, 80.0f, 64.0f ) );
+	BOOST_CHECK( !BotSFJ_TrackNodePassed( wrongFloor, from, node, 1, 80.0f, 64.0f ) );
+	BOOST_CHECK( BotSFJ_TrackNodePassed( wrongFloor, from, node, 0, 80.0f, 64.0f ) );
+	BOOST_CHECK( BotSFJ_TrackNodePassed( near, from, node, 1, 80.0f, 64.0f ) );
+	BOOST_CHECK( !BotSFJ_TrackNodePassed( behind, from, node, 1, 80.0f, 64.0f ) );
+	BOOST_CHECK( !BotSFJ_TrackNodePassed( passed, node, node, 0, 80.0f, 64.0f ) );
+}
+
+BOOST_AUTO_TEST_CASE( sfj_continuity_ignores_small_speed_losses_and_smooths_wraparound )
+{
+	BOOST_CHECK( !BotSFJ_ContinuitySlowedOut( 420.0f, 250.0f, 250.0f ) );
+	BOOST_CHECK( !BotSFJ_ContinuitySlowedOut( 420.0f, 200.0f, 250.0f ) );
+	BOOST_CHECK( BotSFJ_ContinuitySlowedOut( 420.0f, 180.0f, 250.0f ) );
+	BOOST_CHECK( !BotSFJ_ContinuitySlowedOut( 260.0f, 180.0f, 250.0f ) );
+	BOOST_CHECK( !BotSFJ_ContinuitySlowedOut( 420.0f, 0.0f, 0.0f ) );
+	BOOST_CHECK_EQUAL( BotSFJ_SteerYaw( 350.0f, 10.0f, 12.0f ), 362.0f );
+	BOOST_CHECK_EQUAL( BotSFJ_SteerYaw( 10.0f, 350.0f, 12.0f ), -2.0f );
+	BOOST_CHECK_EQUAL( BotSFJ_SteerYaw( 350.0f, 355.0f, 12.0f ), 355.0f );
 }
 
 BOOST_AUTO_TEST_CASE( nav_recent_waypoint_ring )

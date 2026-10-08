@@ -128,6 +128,10 @@ During the temporary duel no-strafe gate, free selection boundaries deliberately
 | `bot_strafejumps` | `1` | Enables forward-only strafe jumping (optimal-yaw air acceleration with a circle-jump start and bhop chaining) on validated, open corridors for navigation, chase and escape. Corridors look ahead up to ~1024 units along linked waypoints, or straight toward/away from the enemy when chasing/escaping directly. In CTF, carrying a flag counts as escape and chasing an enemy flag carrier counts as chase. |
 | `bot_strafejumpfrequency` | `100` | Initiation frequency scale, clamped to 1–1000 when enabled: `100` waits 1000 ms before starting a new eligible sequence, `200` waits 500 ms, `50` waits 2000 ms. `0` or negative disables strafe jumping. No per-frame random rolls; established safe chains are not delayed. |
 | `bot_strafejumpwaypoints` | `128` | Strafe corridor waypoint budget, clamped to 1–512, independent of ordinary `bot_waypointskip`. Dense trails need enough points to reach the minimum corridor length; look-ahead remains distance-bounded to about 1024 units and stops at required interactions, destinations, disconnected links, bends or height changes. |
+| `bot_strafe_minledge` | `200` | Maximum permitted downward route/landing/navigation height change, units, clamped 0–200. Modest drops may continue a chain only with a validated static walkable landing; hazards and excessive descent speed remain forbidden. Ordinary navigation requires a safe floor; a fresh validated jump may cross a gap. |
+| `bot_strafe_wallmargin` | `32` | Endpoint setback from walls for direct enemy corridors, units, clamped 0–128. Lower values allow closer approaches without shrinking the collision hull or disabling wall-slide prediction. |
+| `bot_strafe_tolerance` | `80` | Horizontal waypoint/recorded-node acceptance and landing-corridor tolerance, units, clamped 16–256. Nodes mark progress rather than requiring exact touchdown; grounded height and lateral checks prevent unrelated nodes being skipped. |
+| `bot_strafe_nodetimeout` | `5000` | Recorded-route node progress timeout, milliseconds, clamped 1000–15000. Increase for longer or slower segments; stalled routes still fall back to normal navigation. |
 | `bot_onlystrafes` | `0` | Test preference: starts eligible strafe navigation without the frequency wait and also considers safe direct enemy corridors without requiring increasing separation. Requires enabled strafe jumps and positive frequency. Does not force jumping: combat, required interactions, physics, proximity, collision and hazard checks still take priority, with ordinary navigation as fallback. |
 | `bot_minstrafe` | `320` | Minimum opponent distance (units) before a bot starts a chase or escape strafe jump; the jump is cancelled once the gap shrinks below 75% of this. Lower it (even `0`) to let bots chase or retreat with a strafe as soon as they land after an engagement. Navigation strafes with a visible enemy are still held back inside close-combat range (~384 units) or when the enemy is closing fast. |
 | `bot_strafetrack` | `1` | Records human strafe-jump routes. `0` off, `1` record (the console prints when a route begins on a circle jump and when it ends), `2` also prints each landing. Bots and spectators are never recorded. See "Recorded strafe routes" below. |
@@ -138,9 +142,14 @@ During the temporary duel no-strafe gate, free selection boundaries deliberately
 
 `bot_strafejumps` supports only the effective JKA/co-op-JKA physics selected by `PM_GetMovePhysics`; special/ramp/super-jump styles and force-speed/rage modifiers fall back to normal AI movement. Its conservative predictor uses live speed/gravity, the command's actual pmove slicing, JKA air acceleration, and the level 0-3 levitation launch adjustment made by the second `PM_CheckJump` call in the takeoff slice. It approximates future released-command air movement; it does not run pmove, inject velocity, or change shared physics. Close combat, attacks, deliberate use, force use/jumps, saber techniques/defense, flipkicks, knockdowns, rolls, mounted/water/use states, forced movement, special jumps, steep or moving launch surfaces, and map-required interaction/jump/duck waypoint segments retain priority. Opportunistic random-use presses are suppressed only while this controller owns the command. Airborne jump is released and each landing gets a release command before a fresh press.
 
-Arc validation performs bounded swept player-hull integration (coarse 50 ms steps after the jump command) until a real static, walkable contact; unresolved falls are rejected rather than vertically probing for a floor. Ceilings, dynamic blockers, lava, slime, no-drop/void areas, and instant-kill `trigger_hurt` volumes along the full arc reject the intent. The landing must fall inside the look-ahead corridor (64 units either side, up to 96 units past its end). To keep the cost down, the full arc is simulated at most once per 100 ms per bot while deciding, and once per takeoff/rejump; while airborne a single hull trace along the predicted velocity watches for liquid or kill volumes and cleanly releases control if one comes up. Instant-kill triggers are cached per map instead of being queried with an area search for every sample. Selection and final command ownership both require the AI's own queued movement to be aligned with the corridor.
+Arc validation performs bounded swept player-hull integration (coarse 50 ms steps after the jump command) until a real static, walkable contact; unresolved falls are rejected rather than vertically probing for a floor. Ceilings, dynamic blockers, lava, slime, no-drop/void areas, and instant-kill `trigger_hurt` volumes along the full arc reject the intent. Landing-corridor slack uses `bot_strafe_tolerance` instead of requiring exact waypoint landings. To keep the cost down, the full arc is simulated at most once per 100 ms per bot while deciding, and once per takeoff/rejump; while airborne a single hull trace along the predicted velocity watches for liquid or kill volumes and cleanly releases control if one comes up. Instant-kill triggers are cached per map instead of being queried with an area search for every sample. Selection and final command ownership both require the AI's own queued movement to be aligned with the corridor.
 
-Walls: bots are not afraid of touching walls. The takeoff arc uses the real 15-unit player hull and, like the game, removes the speed into any wall it touches and keeps simulating (up to 8 wall contacts per jump, head-on or glancing). A jump stays valid while horizontal speed after contact is above the bot's normal ground speed. If a wall would slow the jump to ground speed or below, the arc ends there and is accepted only when the bot would still fly at least 0.3 s first and the stopping point is safe. In flight, once a strafe that was faster than ground speed drops to ground speed or below (usually a wall), the bot hands control straight back to normal navigation with no abort cooldown. Lava, slime, no-drop and `trigger_hurt`/kill checks are unchanged.
+Walls: the takeoff arc uses the real 15-unit player hull and removes speed into
+walls while continuing bounded wall-slide simulation (up to 64 contact slices).
+Brief speed losses near ground speed no longer immediately discard an established
+chain; a substantial slowdown releases it to ordinary navigation. Predicted
+wall stops still require useful flight and a safe landing. Lava, slime, no-drop
+and `trigger_hurt`/kill checks are unchanged.
 
 Initiation ignores queued navigation jump/delayed-jump/walk requests (the controller supplies its own jump timing once it owns input).
 
@@ -453,7 +462,7 @@ g_newBotAI (master switch)
 
 ## Jedi vs Merc / Jedi or Merc
 
-`g_gametype 11` (`jvm`) is team deathmatch: **Red Jedi, Blue Mercs**.
+`g_gametype 11` (`jvm`) is team deathmatch: **Red Jedi/Tanks, Blue Mercs**.
 `g_gametype 12` (`jom`) is free-for-all: Jedi, Merc and Tank are loadout
 classes, not teams. Everyone else is an enemy, spawning and scores are individual.
 CTF (8), CTY (9) and Arcade (10) retain their IDs and rules.
@@ -467,7 +476,7 @@ Changing class kills and respawns an active player, has a five-second cooldown,
 and is forbidden during private duels. Spectators select their next spawn's class.
 Class persists across reconnects/map restarts and is replicated without changing
 the player-state layout. Bots default to a mix of JoM classes; `class` userinfo
-can select Merc or Tank. JvM class is always determined by team.
+can select Merc or Tank. In JvM, Blue always uses Merc; Red can select Jedi or Tank.
 
 | Cvar | Default | Meaning (only in JvM/JoM) |
 |---|---:|---|
@@ -475,14 +484,22 @@ can select Merc or Tank. JvM class is always determined by team.
 | `merc_startingweapons` | 102384 | Merc spawn weapons, same bit layout as `g_startingWeapons` (bit = 1 << weapon number). The default is bryar pistol, E-11 blaster, disruptor, bowcaster, repeater, DEMP2, flechette, rocket launcher, concussion rifle and old bryar pistol, i.e. every gun but no stun baton, thermal detonators, trip mines or det packs. The saber bit is always removed, melee is always added, `g_weaponDisable` still applies and ammo is filled for every weapon owned. |
 | `merc_startingitems` | 0 | Merc spawn holdable items, same bit layout as `g_startingItems` (bit = 1 << holdable number). Medpacs are never given (Mercs heal only from pickups). |
 | `g_mercforceregentime` | 200 | Merc Force-energy regeneration interval, milliseconds (minimum 1). |
-| `merc_grapple` | 1 | Allow Merc grapple (`+grapple`), independent of legacy `g_allowGrapple`. |
+| `merc_grapple` | 1 | Allow Merc and Tank grapple (`+grapple`), independent of legacy `g_allowGrapple`. |
 | `merc_grappleFPscale` | 10 | Force points/second while the hook exists; fractional drain is accumulated across frames/releases. Clamped 0–1000. Depletion releases the real hook. |
 | `merc_gripkickreduction` | 0 | Fraction of actual Force Grip and flipkick damage resisted by Mercs, clamped 0–1. Does not reduce lightning, punches or ordinary saber kicks. |
 | `merc_forcejumplevel` | 1 | Force Jump rank for **both Mercs and Tanks**, clamped 0–3 and replicated for prediction. If Jump is globally disabled, positive ranks are capped at 1 (the normal basic-jump exception); rank 0 stays disabled. |
 | `merc_botfloodprotect` | 100 | Minimum milliseconds between Merc bot primary/alternate gun attack commands, clamped 0–2000; all bot AI paths share the final command gate. Melee and saber attacks are not throttled. |
 | `merc_flipkick` | 1 | Merc flipkick permission, replicated for shared movement prediction; rank-1 Mercs can front-flipkick. No duplicate `g_mercflipkick` cvar. |
+| `merc_countergrip` | 1 | Allow Merc primary/alternate gun fire while gripped. Only grip-related attack suppression is bypassed; movement restrictions and other firing gates remain. Requires the updated cgame for matching prediction. |
+| `merc_dropchance` | 50 | Merc weapon disarm percentage at 100 units, scaled inversely with pull distance and capped at 100%. Zero disables disarming Mercs; normal enemy, range, weapon and resistance gates still apply. |
 | `jedi_tankscale` | 0.5 | Tank incoming combat-damage multiplier, clamped 0–10. Does not mitigate suicide, team changes, forced deaths or environmental hazards. |
 | `jedi_saberdamagescale` | 2 | Tank outgoing saber-damage multiplier, clamped 0–10. |
+| `jedi_healthregen` | 1 | Tank health restored per regeneration interval; fractional amounts accumulate. Zero disables regeneration. Never heals dead players or exceeds maximum health. |
+| `jedi_healthregentime` | 1000 | Tank health regeneration interval in milliseconds, minimum 1. Default settings restore one HP per second. |
+| `jedi_gripkickreduction` | 0 | Grip/flipkick damage reduction for Jedi-side classes, clamped 0–1, separate from Merc resistance. |
+| `jedi_alwaysabsorb` | 1 | Tanks passively resist Push, Pull and Grip as with level-3 Absorb. No visible Absorb activation or Force-energy gain; Drain and Lightning are unaffected. |
+| `jedi_pushpull` | 1 | Give Tanks rank-3 Push/Pull, subject to globally disabled powers. |
+| `jom_cycleloadout` | 0 | In JoM, cycle the next spawn's class on death: Jedi → Merc → Tank → Jedi. Does not change other gametypes. |
 
 Pickups by class (team objectives such as CTF flags are allowed for everyone):
 
@@ -495,6 +512,13 @@ Pickups by class (team objectives such as CTF flags are allowed for everyone):
 Jedi have their normally configured Force powers and only a saber. Pickups they
 cannot take render at 50% opacity to them (including simple items, holograms and
 respawn passes). Jedi can push/pull world items and disarm opponents using normal Force rules.
+Jedi and Tanks deny non-saber weapons on contact without receiving a weapon or
+ammunition, or producing a pickup sound, HUD notification or console message.
+Map weapons use their ordinary respawn timers (including map `wait`/`random`
+overrides); dropped weapons are removed. Ammo and other forbidden pickups remain
+untouched and silent. Denial is disabled for spectators, race mode and private duels.
+Deploy the updated cgame as well as the game module to suppress invalid local
+pickup feedback.
 
 Mercs spawn with melee plus `merc_startingweapons` and `merc_startingitems`
 (`g_startingWeapons`/`g_startingItems` are not used for Mercs), but never a saber.
@@ -508,8 +532,9 @@ receive the legacy automatic health/armor refill for winning a private duel.
 
 Tanks have a saber, rank-3 saber offense/defense/throw, and the same configured
 Jump as Mercs. Globally disabled saber throw is not granted; offense/defense keep
-the normal rank-3 free-saber exception. They have no other Force powers, including push, pull, Heal or
-Drain, and cannot use medpacs or receive external Force healing. Only health/armor pickups are
+the normal rank-3 free-saber exception. Optional rank-3 Push/Pull is controlled by
+`jedi_pushpull`. Tanks do not gain Heal or Drain, and cannot use medpacs or receive external
+Force healing. They regenerate health using the settings above. Only health/armor pickups are
 allowed, at ordinary opacity. Explicit class modifiers replace legacy
 `g_jediVmerc` bonuses rather than stacking with them. Weapon loadouts are applied
 at spawn, not granted every frame, so disarming a Merc remains effective.
@@ -517,4 +542,23 @@ at spawn, not granted every frame, so disarming a Merc remains effective.
 FFA arena maps support JoM, and FFA/team arena maps support JvM. Both modes are
 available through gametype votes and server-browser filters in the updated UI.
 The in-game menu's Profile button is shown in Arcade, JvM and JoM as well.
+Both Profile buttons open the loaded in-game customization menu; deploy the updated
+UI module and menu assets together.
+
+### Gun bot weapon and pickup priorities
+
+Merc bots keep a usable ranged weapon instead of switching to melee just because
+an enemy is close. Close-range choices prefer safe firing modes; unsafe splash
+shots are suppressed and bots try a hazard-checked retreat. Melee remains the
+fallback when no ranged ammunition is usable.
+
+Skills 3–6 favor lower/medium-tier guns without banning stronger fallback choices.
+Skills 1–2 retain legacy preferences, while higher skills score effective damage
+output. Ammo availability and splash safety override these preferences.
+
+Bots without usable ranged equipment prioritize actual available, legal weapon
+and compatible-ammo pickups over random wandering. They route through reachable
+waypoints and approach the item itself, retaining map and objective safety gates.
+Saber approach movement refreshes stale footing directions and tries safe forward
+lanes before retreating rather than injecting an unconditional attack.
 Deploy matching game, cgame and UI modules for class display and prediction.

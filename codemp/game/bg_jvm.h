@@ -13,6 +13,8 @@ typedef enum {
 #define JVM_CLASS_MASK (3 << JVM_CLASS_SHIFT)
 #define JVM_ACTIVE (1 << 10)
 #define JVM_FLIPKICK (1 << 11)
+#define JVM_COUNTERGRIP (1 << 12)
+#define JVM_PUSHPULL (1 << 13)
 
 static inline int JVM_IsMode(int gametype) {
 	return gametype == 11 || gametype == 12;
@@ -23,14 +25,54 @@ static inline int JVM_IsTeamGame(int gametype) {
 	return gametype >= 6 && gametype != 12;
 }
 
+static inline int JVM_HealthRegenAllowed(int gametype, int playerClass, int alive, int spectator) {
+	return JVM_IsMode(gametype) && playerClass == JVM_TANK && alive && !spectator;
+}
+
 static inline int JVM_Class(int gametype, int team, int selected) {
 	if (gametype == 11)
-		return team == 2 ? JVM_MERC : JVM_JEDI;
+		return team == 2 ? JVM_MERC : team == 1 && selected == JVM_TANK ? JVM_TANK : JVM_JEDI;
 	return selected >= JVM_JEDI && selected <= JVM_TANK ? selected : JVM_JEDI;
 }
 
 static inline int JVM_ReplicatedClass(int restrictions) {
 	return (restrictions & JVM_CLASS_MASK) >> JVM_CLASS_SHIFT;
+}
+
+static inline int JVM_CounterGrip(int restrictions) {
+	return (restrictions & JVM_ACTIVE) && (restrictions & JVM_COUNTERGRIP) &&
+		JVM_ReplicatedClass(restrictions) == JVM_MERC;
+}
+
+static inline int JVM_CounterGripChoke(int restrictions, int choke) {
+	return choke && JVM_CounterGrip(restrictions);
+}
+
+static inline int JVM_TankPushPull(int restrictions, int pushPull) {
+	return pushPull && (restrictions & JVM_ACTIVE) && (restrictions & JVM_PUSHPULL) &&
+		JVM_ReplicatedClass(restrictions) == JVM_TANK;
+}
+
+static inline int JVM_CanMoveWorldItems(int gametype, int restrictions, int legacy) {
+	return legacy || (JVM_IsMode(gametype) &&
+		(JVM_ReplicatedClass(restrictions) == JVM_JEDI || JVM_TankPushPull(restrictions, 1)));
+}
+
+static inline int JVM_NextClass(int playerClass) {
+	return playerClass == JVM_JEDI ? JVM_MERC : playerClass == JVM_MERC ? JVM_TANK : JVM_JEDI;
+}
+
+/* Returns a next-spawn class plus one; zero means no transition. */
+static inline int JVM_DeathNextClass(int gametype, int playerClass, int enabled,
+	int dead, int spectator, int classChanging, int teamChanging) {
+	return gametype == 12 && enabled && dead && !spectator && !classChanging && !teamChanging ?
+		JVM_NextClass(playerClass) + 1 : 0;
+}
+
+static inline int JVM_PassiveAbsorb(int gametype, int playerClass, int enabled,
+	int pushPullGrip, int powerLevel) {
+	return JVM_IsMode(gametype) && playerClass == JVM_TANK && enabled && pushPullGrip ?
+		(powerLevel > 3 ? powerLevel - 3 : 0) : -1;
 }
 
 static inline int JVM_FlipkickSetting(int restrictions, int configured) {
@@ -98,6 +140,47 @@ static inline float JVM_ClampScale(float scale, float maximum) {
 	return !(scale >= 0.0f) ? 0.0f : (scale > maximum ? maximum : scale);
 }
 
+static inline float JVM_DisarmChance(float configured, float distance) {
+	float chance = JVM_ClampScale(configured, 100.0f);
+	chance *= 100.0f / (distance > 1.0f ? distance : 1.0f);
+	return JVM_ClampScale(chance, 100.0f);
+}
+
+static inline int JVM_HealthRegen(float *fraction, int *residual, int elapsed,
+	float amount, int interval, int health, int maximum) {
+	int remainder, whole;
+	float ticks;
+	if (health <= 0 || health >= maximum || !(amount > 0.0f)) {
+		*fraction = 0.0f;
+		*residual = 0;
+		return 0;
+	}
+	if (elapsed <= 0)
+		return 0;
+	if (interval < 1)
+		interval = 1;
+	ticks = (float)(elapsed / interval) + (float)(*residual / interval);
+	*residual %= interval;
+	remainder = elapsed % interval;
+	if (remainder >= interval - *residual) {
+		ticks += 1.0f;
+		*residual = remainder - (interval - *residual);
+	}
+	else
+		*residual += remainder;
+	*fraction += ticks * JVM_ClampScale(amount, (float)(maximum - health));
+	if (*fraction >= maximum - health) {
+		*fraction = 0.0f;
+		*residual = 0;
+		return maximum - health;
+	}
+	whole = (int)(*fraction + 0.00001f);
+	*fraction -= whole;
+	if (*fraction < 0.0f)
+		*fraction = 0.0f;
+	return whole;
+}
+
 /* Only mercs collect pickups; tanks take health/armor only; Jedi take nothing
  * except team objectives (flags), which every class may carry. */
 static inline int JVM_PickupAllowed(int playerClass, int weapon, int ammo,
@@ -109,6 +192,13 @@ static inline int JVM_PickupAllowed(int playerClass, int weapon, int ammo,
 	if (playerClass == JVM_MERC)
 		return !saber;
 	return 0;
+}
+
+static inline int JVM_WeaponDenialAllowed(int gametype, int playerClass,
+	int weapon, int saber, int duel, int race, int spectator, int jediMaster,
+	int ownerBlocked) {
+	return JVM_IsMode(gametype) && (playerClass == JVM_JEDI || playerClass == JVM_TANK) &&
+		weapon && !saber && !duel && !race && !spectator && !jediMaster && !ownerBlocked;
 }
 
 /* Default merc loadout: pistol..rocket launcher, concussion and old bryar
@@ -140,9 +230,14 @@ static inline float JVM_DamageScale(int targetClass, int attackerClass,
 	float scale = targetClass == JVM_TANK ? JVM_ClampScale(tankScale, 10.0f) : 1.0f;
 	if (saber && attackerClass == JVM_TANK)
 		scale *= JVM_ClampScale(saberScale, 10.0f);
-	if (targetClass == JVM_MERC && gripOrFlipkick)
+	if ((targetClass == JVM_JEDI || targetClass == JVM_MERC || targetClass == JVM_TANK) &&
+		gripOrFlipkick)
 		scale *= 1.0f - JVM_ClampScale(reduction, 1.0f);
 	return scale;
+}
+
+static inline float JVM_GripkickReduction(int targetClass, float jediReduction, float mercReduction) {
+	return targetClass == JVM_MERC ? mercReduction : jediReduction;
 }
 
 static inline int JVM_GrappleDrain(float *fraction, int elapsed, float rate) {

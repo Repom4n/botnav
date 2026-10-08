@@ -2227,6 +2227,15 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 			}
 			item = &bg_itemlist[ index ];
 
+			if (cg.snap && es->number == cg.snap->ps.clientNum &&
+				(cg.snap->ps.stats[STAT_RESTRICTIONS] & JVM_ACTIVE) &&
+				!JVM_PickupAllowed(JVM_ReplicatedClass(cg.snap->ps.stats[STAT_RESTRICTIONS]),
+					item->giType == IT_WEAPON, item->giType == IT_AMMO,
+					item->giType == IT_HEALTH, item->giType == IT_ARMOR,
+					item->giType == IT_WEAPON && item->giTag == WP_SABER,
+					item->giType == IT_TEAM))
+				break;
+
 			if ( /*item->giType != IT_POWERUP && */item->giType != IT_TEAM) {
 				if (item->pickup_sound && item->pickup_sound[0])
 				{

@@ -10243,7 +10243,9 @@ static void PM_Weapon( void )
 			}
 		}
 
-		return;
+		if (!JVM_CounterGripChoke(pm->ps->stats[STAT_RESTRICTIONS],
+			pm->ps->forceHandExtend == HANDEXTEND_CHOKE))
+			return;
 	}
 
 	if (BG_InSpecialJump(pm->ps->legsAnim) ||
@@ -14351,7 +14353,8 @@ void PmoveSingle (pmove_t *pmove) {
 		pm->cmd.upmove = 0;
 	}
 
-	if (pm->ps->fd.forceGripCripple && (pm->ps->stats[STAT_MOVEMENTSTYLE] != MV_COOP_JKA || !IsJaPRO()))
+	if (pm->ps->fd.forceGripCripple && !JVM_CounterGrip(pm->ps->stats[STAT_RESTRICTIONS]) &&
+		(pm->ps->stats[STAT_MOVEMENTSTYLE] != MV_COOP_JKA || !IsJaPRO()))
 	{ //don't let attack or alt attack if being gripped I guess
 		pm->cmd.buttons &= ~BUTTON_ATTACK;
 		pm->cmd.buttons &= ~BUTTON_ALT_ATTACK;
