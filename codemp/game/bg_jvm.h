@@ -230,7 +230,8 @@ static inline float JVM_DamageScale(int targetClass, int attackerClass,
 	float scale = targetClass == JVM_TANK ? JVM_ClampScale(tankScale, 10.0f) : 1.0f;
 	if (saber && attackerClass == JVM_TANK)
 		scale *= JVM_ClampScale(saberScale, 10.0f);
-	if (gripOrFlipkick)
+	if ((targetClass == JVM_JEDI || targetClass == JVM_MERC || targetClass == JVM_TANK) &&
+		gripOrFlipkick)
 		scale *= 1.0f - JVM_ClampScale(reduction, 1.0f);
 	return scale;
 }

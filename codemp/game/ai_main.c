@@ -298,6 +298,7 @@ static void BotSFJ_DebugReject(bot_state_t *bs, const char *reason);
 int WaitingForNow(bot_state_t *bs, vec3_t goalpos);
 static void BotSFJ_SelectIntent(bot_state_t *bs);
 static void BotSFJ_ApplyInput(bot_state_t *bs, bot_input_t *bi, int time, int elapsedTime);
+static qboolean BotSFJ_CurrentTakeoffIsSafe(bot_state_t *bs);
 static qboolean NewBotAI_ShouldConserveForce(bot_state_t *bs);
 static qboolean NewBotAI_HasWaypointNavigation(void);
 static qboolean NewBotAI_ShouldSkipPullForNaturalFlipkickPTK(bot_state_t *bs);
@@ -2558,7 +2559,7 @@ static qboolean BotNav_CheckFallingHazard(bot_state_t *bs, vec3_t moveDir, qbool
 	JP_Trace(&tr, bs->origin, g_entities[bs->client].r.mins,
 		g_entities[bs->client].r.maxs, start, bs->client,
 		MASK_PLAYERSOLID | hazardContents, qfalse, 0, 0);
-	if ((tr.contents & hazardContents) ||
+	if (tr.startsolid || tr.allsolid || (tr.contents & hazardContents) ||
 		(trap->PointContents(start, bs->client) & hazardContents) ||
 		BotNav_SweepTouchesInstantKillTrigger(bs->origin, start))
 		return qtrue;
@@ -4093,6 +4094,34 @@ static qboolean BotSFJ_CachedArcIsSafe(bot_state_t *bs, const playerState_t *ps,
 		commandMsec, sliceMsec);
 	bs->sfjArcCheckedTime = time;
 	return bs->sfjArcSafe;
+}
+
+/* A previous hop's intent is not proof that walking input may cross this gap. */
+static qboolean BotSFJ_CurrentTakeoffIsSafe(bot_state_t *bs)
+{
+	bot_input_t queued;
+	playerState_t *ps;
+	const char *reason = NULL;
+	int commandMsec, sliceMsec;
+	int fallbackMsec;
+
+	if (!bs || !bot_strafejumps.integer || bot_strafejumpfrequency.integer <= 0 ||
+		!bs->sfjOwnsInput || !BotSFJ_PhaseInProgress(bs->sfjPhase) ||
+		!BotSFJ_IntentIsFresh(level.time, bs->sfjIntentTime) ||
+		bs->sfjSafetyUntil < level.time || !g_entities[bs->client].client)
+		return qfalse;
+	ps = &g_entities[bs->client].client->ps;
+	if (ps->groundEntityNum == ENTITYNUM_NONE)
+		return qfalse;
+	trap->EA_GetInput(bs->client, (float)level.time / 1000.0f, &queued);
+	if (BotSFJ_ConflictBlocks(BotSFJ_GetInputConflict(bs, ps, &queued, &reason),
+		bs->sfjPhase))
+		return qfalse;
+	fallbackMsec = sv_fps.integer > 0 ? 1000 / sv_fps.integer : 25;
+	if (!BotSFJ_GetCommandTiming(ps, level.time, fallbackMsec, &commandMsec, &sliceMsec))
+		return qfalse;
+	return BotSFJ_CachedArcIsSafe(bs, ps, bs->sfjIntentDirection,
+		bs->sfjIntentDestination, commandMsec, sliceMsec, level.time, qtrue);
 }
 
 static float BotSFJ_MinStrafeDistance(void)
@@ -19444,6 +19473,8 @@ int NewBotAI_GetGrip(bot_state_t *bs) {
 	if (g_forcePowerDisable.integer & (1 << FP_GRIP))
 		return 0;
 	if  (!(bs->cur_ps.fd.forcePowersKnown & (1 << FP_GRIP)))
+		return 0;
+	if (!ForcePowerUsableOn(&g_entities[bs->client], bs->currentEnemy, FP_GRIP))
 		return 0;
 	if (bs->frame_Enemy_Len > MAX_GRIP_DISTANCE)
 		return 0;

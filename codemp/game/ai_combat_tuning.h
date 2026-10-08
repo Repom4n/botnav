@@ -71,10 +71,12 @@ static inline void BotCombat_SplashTraceEnd(const float *start, const float *dir
 static inline int BotNav_FloorAllows(int found, int solid, float normalZ, float drop,
 	float maxDrop, int validatedJump, int hazard)
 {
-	if (hazard || solid)
+	if (hazard)
 		return 0;
 	if (validatedJump)
 		return 1;
+	if (solid)
+		return 0;
 	return found && isfinite(drop) && normalZ >= 0.7f && drop <= maxDrop;
 }
 
