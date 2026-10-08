@@ -1061,13 +1061,13 @@ void BroadcastTeamChange( gclient_t *client, int oldTeam )
 
 	if (level.gametype == GT_JVM &&
 		(client->sess.sessionTeam == TEAM_RED || client->sess.sessionTeam == TEAM_BLUE)) {
-		trap->SendServerCommand(-1, va("cp \"%s^7 joined %s\n\"",
-			client->pers.netname, client->sess.sessionTeam == TEAM_BLUE ? "Blue Mercs" :
-			client->sess.jvmClass == JVM_TANK ? "Red Tank" : "Red Jedi"));
+		trap->SendServerCommand(-1, va("cp \"%s^7 has joined the game (%s)\n\"",
+			client->pers.netname, client->sess.sessionTeam == TEAM_BLUE ? "Merc" :
+			client->sess.jvmClass == JVM_TANK ? "Tank" : "Jedi"));
 		return;
 	}
 	if (level.gametype == GT_JOM && client->sess.sessionTeam == TEAM_FREE) {
-		trap->SendServerCommand(-1, va("cp \"%s^7 joined as %s\n\"",
+		trap->SendServerCommand(-1, va("cp \"%s^7 has joined the game (%s)\n\"",
 			client->pers.netname, client->sess.jvmClass == JVM_MERC ? "Merc" :
 			client->sess.jvmClass == JVM_TANK ? "Tank" : "Jedi"));
 		return;

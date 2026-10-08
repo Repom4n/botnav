@@ -47,6 +47,20 @@ BOOST_AUTO_TEST_CASE( merc_close_range_safety_beats_dps_without_banning_fallback
 	BOOST_CHECK( BotCombat_WeaponScore( 10, 200, 1, 10, 1, 1 ) > -1.0e20f );
 }
 
+BOOST_AUTO_TEST_CASE( merc_splash_probe_keeps_firing_pitch_and_muzzle_offset )
+{
+	const float muzzle[] = { 12, 8, 64 };
+	const float downward[] = { 0.6f, 0, -0.8f };
+	const float upward[] = { 0.6f, 0, 0.8f };
+	float end[3];
+	BotCombat_SplashTraceEnd( muzzle, downward, 208, end );
+	BOOST_CHECK_CLOSE( end[0], 136.8f, 0.001f );
+	BOOST_CHECK_EQUAL( end[1], 8 );
+	BOOST_CHECK_CLOSE( end[2], -102.4f, 0.001f );
+	BotCombat_SplashTraceEnd( muzzle, upward, 208, end );
+	BOOST_CHECK_CLOSE( end[2], 230.4f, 0.001f );
+}
+
 BOOST_AUTO_TEST_CASE( merc_resupply_prioritizes_ammo_that_restores_owned_ranged_weapon )
 {
 	BOOST_CHECK_EQUAL( BotCombat_PickupPriority( 0, 1, 0, 0 ), 0 );

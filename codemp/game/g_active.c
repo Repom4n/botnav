@@ -1752,9 +1752,10 @@ void ClientTimerActions( gentity_t *ent, int msec ) {
 	gclient_t	*client;
 
 	client = ent->client;
-	if (JVM_IsMode(level.gametype) && client->sess.sessionTeam != TEAM_SPECTATOR &&
-		client->ps.pm_type != PM_DEAD &&
-		JVM_ReplicatedClass(client->ps.stats[STAT_RESTRICTIONS]) == JVM_JEDI) {
+	if (JVM_HealthRegenAllowed(level.gametype,
+		JVM_ReplicatedClass(client->ps.stats[STAT_RESTRICTIONS]),
+		ent->health > 0 && client->ps.pm_type != PM_DEAD,
+		client->sess.sessionTeam == TEAM_SPECTATOR)) {
 		ent->health += JVM_HealthRegen(&client->jvmHealthRegenFraction,
 			&client->jvmHealthRegenResidual, msec, jedi_healthregen.value,
 			jedi_healthregentime.integer, ent->health, client->ps.stats[STAT_MAX_HEALTH]);

@@ -25,6 +25,10 @@ static inline int JVM_IsTeamGame(int gametype) {
 	return gametype >= 6 && gametype != 12;
 }
 
+static inline int JVM_HealthRegenAllowed(int gametype, int playerClass, int alive, int spectator) {
+	return JVM_IsMode(gametype) && playerClass == JVM_TANK && alive && !spectator;
+}
+
 static inline int JVM_Class(int gametype, int team, int selected) {
 	if (gametype == 11)
 		return team == 2 ? JVM_MERC : team == 1 && selected == JVM_TANK ? JVM_TANK : JVM_JEDI;
@@ -45,6 +49,11 @@ static inline int JVM_TankPushPull(int restrictions, int pushPull) {
 		JVM_ReplicatedClass(restrictions) == JVM_TANK;
 }
 
+static inline int JVM_CanMoveWorldItems(int gametype, int restrictions, int legacy) {
+	return legacy || (JVM_IsMode(gametype) &&
+		(JVM_ReplicatedClass(restrictions) == JVM_JEDI || JVM_TankPushPull(restrictions, 1)));
+}
+
 static inline int JVM_NextClass(int playerClass) {
 	return playerClass == JVM_JEDI ? JVM_MERC : playerClass == JVM_MERC ? JVM_TANK : JVM_JEDI;
 }
@@ -58,7 +67,7 @@ static inline int JVM_DeathNextClass(int gametype, int playerClass, int enabled,
 
 static inline int JVM_PassiveAbsorb(int gametype, int playerClass, int enabled,
 	int pushPullGrip, int powerLevel) {
-	return JVM_IsMode(gametype) && playerClass == JVM_JEDI && enabled && pushPullGrip ?
+	return JVM_IsMode(gametype) && playerClass == JVM_TANK && enabled && pushPullGrip ?
 		(powerLevel > 3 ? powerLevel - 3 : 0) : -1;
 }
 
@@ -217,9 +226,13 @@ static inline float JVM_DamageScale(int targetClass, int attackerClass,
 	float scale = targetClass == JVM_TANK ? JVM_ClampScale(tankScale, 10.0f) : 1.0f;
 	if (saber && attackerClass == JVM_TANK)
 		scale *= JVM_ClampScale(saberScale, 10.0f);
-	if ((targetClass == JVM_MERC || targetClass == JVM_JEDI) && gripOrFlipkick)
+	if (gripOrFlipkick)
 		scale *= 1.0f - JVM_ClampScale(reduction, 1.0f);
 	return scale;
+}
+
+static inline float JVM_GripkickReduction(int targetClass, float jediReduction, float mercReduction) {
+	return targetClass == JVM_MERC ? mercReduction : jediReduction;
 }
 
 static inline int JVM_GrappleDrain(float *fraction, int elapsed, float rate) {

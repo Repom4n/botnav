@@ -4087,7 +4087,8 @@ void ForceThrow( gentity_t *self, qboolean pull )
 			}
 //JAPRO - Serverside - Flag push/pull physics - End
 //JAPRO - Serverside - Item push/pull physics - Start
-			else if ( ((g_tweakForce.integer & FT_PUSHPULLITEMS) || (JVM_IsMode(level.gametype) && JVM_ReplicatedClass(self->client->ps.stats[STAT_RESTRICTIONS]) == JVM_JEDI)) && !(push_list[x]->s.eFlags & EF_NODRAW) && !self->client->ps.duelInProgress && push_list[x]->s.eType == ET_ITEM && ((JVM_IsMode(level.gametype) && push_list[x]->item->giType == IT_WEAPON) || push_list[x]->item->giType == IT_AMMO || push_list[x]->item->giType == IT_ARMOR || push_list[x]->item->giType == IT_HEALTH))
+			else if ( JVM_CanMoveWorldItems(level.gametype, self->client->ps.stats[STAT_RESTRICTIONS],
+				g_tweakForce.integer & FT_PUSHPULLITEMS) && !(push_list[x]->s.eFlags & EF_NODRAW) && !self->client->ps.duelInProgress && push_list[x]->s.eType == ET_ITEM && ((JVM_IsMode(level.gametype) && push_list[x]->item->giType == IT_WEAPON) || push_list[x]->item->giType == IT_AMMO || push_list[x]->item->giType == IT_ARMOR || push_list[x]->item->giType == IT_HEALTH))
 			{
 				push_list[x]->nextthink = level.time + 30000;
 				push_list[x]->think = ResetItem;//incase it falls off a cliff

@@ -2576,12 +2576,12 @@ void Touch_Item(gentity_t *ent, gentity_t *other, trace_t *trace) {
 	if (other->client->sess.sessionTeam == TEAM_SPECTATOR)
 		return;
 
-	denyWeapon = JVM_IsMode(level.gametype) &&
-		JVM_ReplicatedClass(other->client->ps.stats[STAT_RESTRICTIONS]) != JVM_MERC &&
-		ent->item->giType == IT_WEAPON && ent->item->giTag != WP_SABER &&
-		!other->client->ps.duelInProgress && !IsRacemode(&other->client->ps) &&
-		!other->client->ps.isJediMaster &&
-		!(ent->s.generic1 == other->client->ps.clientNum && ent->s.powerups);
+	denyWeapon = JVM_WeaponDenialAllowed(level.gametype,
+		JVM_ReplicatedClass(other->client->ps.stats[STAT_RESTRICTIONS]),
+		ent->item->giType == IT_WEAPON, ent->item->giTag == WP_SABER,
+		other->client->ps.duelInProgress, IsRacemode(&other->client->ps),
+		other->client->sess.sessionTeam == TEAM_SPECTATOR, other->client->ps.isJediMaster,
+		ent->s.generic1 == other->client->ps.clientNum && ent->s.powerups);
 
 	if (ent->item->giType == IT_POWERUP &&
 		(ent->item->giTag == PW_FORCE_ENLIGHTENED_LIGHT || ent->item->giTag == PW_FORCE_ENLIGHTENED_DARK))

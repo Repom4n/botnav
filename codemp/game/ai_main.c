@@ -1668,7 +1668,11 @@ static qboolean BotNav_SFJTravelOwnsInput(bot_state_t *bs)
 		bs->sfjSafetyUntil >= level.time, BotSFJ_PhaseInProgress(bs->sfjPhase),
 		bs->sfjOwnsInput, bs->sfjCorridorValid,
 		bs->wpCurrent && (bs->wpCurrent->flags || bs->wpCurrent->forceJumpTo),
-		bs->currentEnemy && bs->frame_Enemy_Vis) ? qtrue : qfalse;
+		bs->saberTechniqueOwnsInputs || bs->saberDefenseActive || bs->gripkickActive ||
+		NewBotAI_IsRecoveryMovementActive(bs) || NewBotAI_HasExclusiveFlipkickMovement(bs) ||
+		(bs->currentEnemy && bs->frame_Enemy_Vis &&
+			(bs->cur_ps.weapon <= WP_SABER || bs->combatAction == BOT_COMBAT_ACTION_RETREAT_DEFENSE))) ?
+		qtrue : qfalse;
 }
 
 static void BotNav_CheckProgress(bot_state_t *bs)
@@ -6288,9 +6292,9 @@ int JMTakesPriority(bot_state_t *bs)
 //with this waypoint.
 static qboolean BotCombat_IsMerc(bot_state_t *bs)
 {
-	return (JVM_IsMode(level.gametype) &&
-		JVM_ReplicatedClass(bs->cur_ps.stats[STAT_RESTRICTIONS]) == JVM_MERC) ||
-		!(bs->cur_ps.stats[STAT_WEAPONS] & (1 << WP_SABER));
+	if (JVM_IsMode(level.gametype))
+		return JVM_ReplicatedClass(bs->cur_ps.stats[STAT_RESTRICTIONS]) == JVM_MERC ? qtrue : qfalse;
+	return !(bs->cur_ps.stats[STAT_WEAPONS] & (1 << WP_SABER));
 }
 
 static qboolean BotCombat_ModeAvailable(bot_state_t *bs, int weapon, int alt)
@@ -6392,7 +6396,9 @@ static int BotCombat_SelectRanged(bot_state_t *bs, int *altOut)
 
 static void BotCombat_FilterRangedInput(bot_state_t *bs, bot_input_t *bi)
 {
-	vec3_t direction, end;
+	vec3_t direction, end, right, up, muzzle;
+	const vec3_t shotMins = { -3.0f, -3.0f, -3.0f };
+	const vec3_t shotMaxs = { 3.0f, 3.0f, 3.0f };
 	trace_t trace;
 	int alt, radius, safeAlt;
 	if (!BotCombat_IsMerc(bs) || !bs->currentEnemy || !bs->frame_Enemy_Vis ||
@@ -6429,10 +6435,10 @@ static void BotCombat_FilterRangedInput(bot_state_t *bs, bot_input_t *bi)
 	radius = BotCombat_SplashRadius(bs->cur_ps.weapon, alt);
 	if (!radius)
 		return;
-	VectorSet(direction, 0, bi->viewangles[YAW], 0);
-	AngleVectors(direction, direction, NULL, NULL);
-	VectorMA(bs->eye, radius + 48.0f, direction, end);
-	JP_Trace(&trace, bs->eye, NULL, NULL, end, bs->client, MASK_SHOT, qfalse, 0, 0);
+	AngleVectors(bi->viewangles, direction, right, up);
+	CalcMuzzlePoint(&g_entities[bs->client], direction, right, up, muzzle);
+	BotCombat_SplashTraceEnd(muzzle, direction, radius + 48.0f, end);
+	JP_Trace(&trace, muzzle, shotMins, shotMaxs, end, bs->client, MASK_SHOT, qfalse, 0, 0);
 	if (bs->frame_Enemy_Len >= radius + 64.0f &&
 		!trace.startsolid && trace.fraction == 1.0f)
 		return;

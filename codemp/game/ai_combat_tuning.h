@@ -60,6 +60,14 @@ static inline int BotNav_PreserveValidatedStrafe(int enabled, int fresh, int saf
 		!requiredWaypoint && !combat;
 }
 
+static inline void BotCombat_SplashTraceEnd(const float *start, const float *direction,
+	float distance, float *end)
+{
+	end[0] = start[0] + direction[0] * distance;
+	end[1] = start[1] + direction[1] * distance;
+	end[2] = start[2] + direction[2] * distance;
+}
+
 typedef enum
 {
 	NEWBOTAI_DRAINLOCK_FORCE_NONE = 0,

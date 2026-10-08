@@ -286,7 +286,22 @@ BOOST_AUTO_TEST_CASE(countergrip_and_tank_pushpull_are_replicated)
 	}
 }
 
-BOOST_AUTO_TEST_CASE(passive_absorb_is_limited_to_jedi_push_pull_grip)
+BOOST_AUTO_TEST_CASE(world_weapon_pull_allows_jedi_and_enabled_tank)
+{
+	for (int mode = GT_FFA; mode <= GT_JOM; ++mode) {
+		for (int playerClass = JVM_JEDI; playerClass <= JVM_TANK; ++playerClass) {
+			for (int flags : {0, JVM_ACTIVE, JVM_PUSHPULL, JVM_ACTIVE | JVM_PUSHPULL}) {
+				const int restrictions = flags | (playerClass << JVM_CLASS_SHIFT);
+				BOOST_CHECK_EQUAL(JVM_CanMoveWorldItems(mode, restrictions, 0),
+					JVM_IsMode(mode) && (playerClass == JVM_JEDI ||
+						(playerClass == JVM_TANK && flags == (JVM_ACTIVE | JVM_PUSHPULL))));
+				BOOST_CHECK(JVM_CanMoveWorldItems(mode, restrictions, 1));
+			}
+		}
+	}
+}
+
+BOOST_AUTO_TEST_CASE(passive_absorb_is_limited_to_tank_push_pull_grip)
 {
 	for (int mode = GT_FFA; mode <= GT_JOM; ++mode) {
 		for (int playerClass = JVM_JEDI; playerClass <= JVM_TANK; ++playerClass) {
@@ -295,7 +310,7 @@ BOOST_AUTO_TEST_CASE(passive_absorb_is_limited_to_jedi_push_pull_grip)
 					for (int rank = 1; rank <= 3; ++rank) {
 						const bool eligible = power == FP_PUSH || power == FP_PULL || power == FP_GRIP;
 						BOOST_CHECK_EQUAL(JVM_PassiveAbsorb(mode, playerClass, enabled, eligible, rank),
-							JVM_IsMode(mode) && playerClass == JVM_JEDI && enabled && eligible ? 0 : -1);
+							JVM_IsMode(mode) && playerClass == JVM_TANK && enabled && eligible ? 0 : -1);
 					}
 				}
 			}
@@ -305,10 +320,14 @@ BOOST_AUTO_TEST_CASE(passive_absorb_is_limited_to_jedi_push_pull_grip)
 
 BOOST_AUTO_TEST_CASE(jedi_and_merc_gripkick_reductions_are_independent_inputs)
 {
+	BOOST_CHECK_EQUAL(JVM_GripkickReduction(JVM_TANK, .25f, .75f), .25f);
+	BOOST_CHECK_EQUAL(JVM_GripkickReduction(JVM_JEDI, .25f, .75f), .25f);
+	BOOST_CHECK_EQUAL(JVM_GripkickReduction(JVM_MERC, .25f, .75f), .75f);
 	BOOST_CHECK_CLOSE(JVM_DamageScale(JVM_JEDI, JVM_MERC, 0, 1, .5f, 2, .25f), .75f, .001f);
 	BOOST_CHECK_CLOSE(JVM_DamageScale(JVM_MERC, JVM_JEDI, 0, 1, .5f, 2, .75f), .25f, .001f);
 	BOOST_CHECK_EQUAL(JVM_DamageScale(JVM_JEDI, JVM_MERC, 0, 0, .5f, 2, 1), 1);
-	BOOST_CHECK_CLOSE(JVM_DamageScale(JVM_TANK, JVM_JEDI, 0, 1, .5f, 2, 1), .5f, .001f);
+	BOOST_CHECK_EQUAL(JVM_DamageScale(JVM_TANK, JVM_JEDI, 0, 1, .5f, 2, 1), 0);
+	BOOST_CHECK_CLOSE(JVM_DamageScale(JVM_TANK, JVM_JEDI, 0, 1, .5f, 2, .25f), .375f, .001f);
 }
 
 BOOST_AUTO_TEST_CASE(disarm_probability_is_inverse_distance_and_bounded)
@@ -360,6 +379,19 @@ BOOST_AUTO_TEST_CASE(health_regeneration_keeps_fractional_amounts_and_intervals)
 		std::numeric_limits<int>::max(), 1, 1, 90, 100), 10);
 }
 
+BOOST_AUTO_TEST_CASE(health_regeneration_only_applies_to_alive_playing_tanks)
+{
+	for (int mode = GT_FFA; mode <= GT_JOM; ++mode) {
+		for (int playerClass = JVM_JEDI; playerClass <= JVM_TANK; ++playerClass) {
+			for (int alive : {0, 1}) {
+				for (int spectator : {0, 1})
+					BOOST_CHECK_EQUAL(JVM_HealthRegenAllowed(mode, playerClass, alive, spectator),
+						JVM_IsMode(mode) && playerClass == JVM_TANK && alive && !spectator);
+			}
+		}
+	}
+}
+
 BOOST_AUTO_TEST_CASE(class_cycle_order)
 {
 	BOOST_CHECK_EQUAL(JVM_NextClass(JVM_JEDI), JVM_MERC);
@@ -409,7 +441,7 @@ BOOST_AUTO_TEST_CASE(disabled_passive_absorb_defers_every_power_to_ordinary_beha
 {
 	for (int power = 0; power < NUM_FORCE_POWERS; ++power) {
 		const bool eligible = power == FP_PUSH || power == FP_PULL || power == FP_GRIP;
-		BOOST_CHECK_EQUAL(JVM_PassiveAbsorb(GT_JOM, JVM_JEDI, 0, eligible, 3), -1);
+		BOOST_CHECK_EQUAL(JVM_PassiveAbsorb(GT_JOM, JVM_TANK, 0, eligible, 3), -1);
 	}
 }
 
