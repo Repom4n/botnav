@@ -1665,11 +1665,13 @@ static qboolean BotNav_SFJTravelOwnsInput(bot_state_t *bs)
 {
 	return BotNav_PreserveValidatedStrafe(bot_strafejumps.integer &&
 		bot_strafejumpfrequency.integer > 0,
-		BotSFJ_IntentIsFresh(level.time, bs->sfjIntentTime),
+		BotSFJ_IntentIsFresh(level.time, bs->sfjIntentTime) &&
+			bs->sfjIntent == BOT_SFJ_INTENT_NAVIGATION,
 		bs->sfjSafetyUntil >= level.time, BotSFJ_PhaseInProgress(bs->sfjPhase),
-		bs->sfjOwnsInput, bs->sfjCorridorValid,
+		bs->sfjOwnsInput, bs->sfjCorridorValid || bs->sfjRoute,
 		bs->wpCurrent && (bs->wpCurrent->flags || bs->wpCurrent->forceJumpTo),
 		bs->saberTechniqueOwnsInputs || bs->saberDefenseActive || bs->gripkickActive ||
+		bs->forceJumpChargeTime > level.time || bs->forceJumping > level.time ||
 		NewBotAI_IsRecoveryMovementActive(bs) || NewBotAI_HasExclusiveFlipkickMovement(bs) ||
 		(bs->currentEnemy && bs->frame_Enemy_Vis &&
 			(bs->cur_ps.weapon <= WP_SABER || bs->combatAction == BOT_COMBAT_ACTION_RETREAT_DEFENSE))) ?
