@@ -12,6 +12,46 @@
 #define BOT_SFJ_JUMP_VELOCITY 225.0f
 #define BOT_SFJ_MAX_ARC_STEPS 256
 
+static inline float BotSFJ_ClampSetting(float value, float minimum, float maximum)
+{
+	if (!isfinite(value))
+		return minimum;
+	return value < minimum ? minimum : (value > maximum ? maximum : value);
+}
+
+static inline int BotSFJ_HeightAllows(float delta, float maxRise, float maxDrop)
+{
+	return isfinite(delta) && delta <= maxRise && delta >= -maxDrop;
+}
+
+/* A landing node is a progress marker, not an exact touchdown requirement. */
+static inline int BotSFJ_TrackNodePassed(const float *origin, const float *from,
+	const float *node, int grounded, float tolerance, float heightTolerance)
+{
+	const float x = origin[0] - node[0];
+	const float y = origin[1] - node[1];
+	const float dx = node[0] - from[0];
+	const float dy = node[1] - from[1];
+	const float length = sqrtf(dx * dx + dy * dy);
+	float lateral;
+
+	if (grounded && fabsf(origin[2] - node[2]) > heightTolerance)
+		return 0;
+	if (x * x + y * y <= tolerance * tolerance)
+		return 1;
+	if (length <= 1.0f || x * dx + y * dy < 0.0f)
+		return 0;
+	lateral = (x * dy - y * dx) / length;
+	return fabsf(lateral) <= tolerance;
+}
+
+static inline int BotSFJ_ContinuitySlowedOut(float peakSpeed, float speed,
+	float groundSpeed)
+{
+	return groundSpeed > 0.0f && peakSpeed > groundSpeed * 1.1f &&
+		speed < groundSpeed * 0.8f;
+}
+
 static inline int BotSFJ_WaypointBudget(int budget)
 {
 	return budget < 1 ? 1 : (budget > 512 ? 512 : budget);
@@ -46,6 +86,16 @@ static inline int BotSFJ_AdvanceLinkAllows(int requiredFlags, int linked,
 {
 	return !requiredFlags && linked && passable &&
 		fabsf(heightDelta) <= 32.0f && fabsf(baseHeightDelta) <= 64.0f &&
+		alignment >= 0.9f && endpointProgress >= 0.0f;
+}
+
+static inline int BotSFJ_AdvanceDropLinkAllows(int requiredFlags, int linked,
+	int passable, float heightDelta, float baseHeightDelta, float alignment,
+	float endpointProgress, float maxDrop)
+{
+	return !requiredFlags && linked && passable &&
+		BotSFJ_HeightAllows(heightDelta, 32.0f, maxDrop) &&
+		BotSFJ_HeightAllows(baseHeightDelta, 64.0f, maxDrop) &&
 		alignment >= 0.9f && endpointProgress >= 0.0f;
 }
 
@@ -187,6 +237,17 @@ static inline float BotSFJ_AngleDelta(float angle1, float angle2)
 	else if (delta < -180.0f)
 		delta += 360.0f;
 	return delta;
+}
+
+static inline float BotSFJ_SteerYaw(float previousYaw, float targetYaw, float maxDelta)
+{
+	float delta = BotSFJ_AngleDelta(targetYaw, previousYaw);
+
+	if (delta > maxDelta)
+		delta = maxDelta;
+	else if (delta < -maxDelta)
+		delta = -maxDelta;
+	return previousYaw + delta;
 }
 
 /*
@@ -424,7 +485,8 @@ static inline int BotSFJ_RouteSafetyAllows(int arcClear, int hazardFree,
  * above normal ground speed; at or below it the strafe is over and the bot
  * resumes normal navigation.
  */
-#define BOT_SFJ_MAX_WALL_CONTACTS 8
+/* Sustained sliding can touch the same wall on every 50 ms prediction slice. */
+#define BOT_SFJ_MAX_WALL_CONTACTS 64
 /* A jump a wall slows out sooner than this is not worth starting. */
 #define BOT_SFJ_MIN_USEFUL_FLIGHT_S 0.3f
 

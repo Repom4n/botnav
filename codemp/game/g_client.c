@@ -3043,7 +3043,7 @@ char *ClientConnect( int clientNum, qboolean firstTime, qboolean isBot ) {
 		trap->SendServerCommand( -1, va("print \"%s" S_COLOR_WHITE " %s\n\"", client->pers.netname, G_GetStringEdString("MP_SVGAME", "PLCONNECT")) );
 	}
 
-	if ( BG_IsTeamGame(level.gametype) &&
+	if ( (BG_IsTeamGame(level.gametype) || level.gametype == GT_JOM) &&
 		client->sess.sessionTeam != TEAM_SPECTATOR ) {
 		BroadcastTeamChange( client, -1 );
 	}
@@ -3990,9 +3990,11 @@ void G_JVMApplyClass(gentity_t *ent, qboolean loadout) {
 		return;
 	playerClass = JVM_Class(level.gametype, client->sess.sessionTeam, client->sess.jvmClass);
 	client->ps.stats[STAT_RESTRICTIONS] =
-		(client->ps.stats[STAT_RESTRICTIONS] & ~(JVM_CLASS_MASK | JVM_ACTIVE | JVM_FLIPKICK)) |
+		(client->ps.stats[STAT_RESTRICTIONS] & ~(JVM_CLASS_MASK | JVM_ACTIVE | JVM_FLIPKICK | JVM_COUNTERGRIP | JVM_PUSHPULL)) |
 		JVM_ACTIVE | (playerClass << JVM_CLASS_SHIFT) |
-		(merc_flipkick.integer ? JVM_FLIPKICK : 0);
+		(merc_flipkick.integer ? JVM_FLIPKICK : 0) |
+		(merc_countergrip.integer ? JVM_COUNTERGRIP : 0) |
+		(jedi_pushpull.integer ? JVM_PUSHPULL : 0);
 	/* Explicit rules replace, rather than stack with, legacy Jedi-v-Merc. */
 	client->ps.trueJedi = client->ps.trueNonJedi = qfalse;
 	if (playerClass != JVM_JEDI) {
@@ -4002,6 +4004,9 @@ void G_JVMApplyClass(gentity_t *ent, qboolean loadout) {
 				i == FP_LEVITATION, i == FP_SABER_OFFENSE || i == FP_SABER_DEFENSE || i == FP_SABERTHROW,
 				merc_forcejumplevel.integer, g_forcePowerDisable.integer & (1 << i),
 				i == FP_SABER_OFFENSE || i == FP_SABER_DEFENSE);
+			if (JVM_TankPushPull(client->ps.stats[STAT_RESTRICTIONS], i == FP_PUSH || i == FP_PULL) &&
+				!(g_forcePowerDisable.integer & (1 << i)))
+				rank = 3;
 			if (!rank && (client->ps.fd.forcePowersActive & (1 << i)))
 				WP_ForcePowerStop(ent, i);
 			client->ps.fd.forcePowerLevel[i] = client->ps.fd.forcePowerBaseLevel[i] = rank;
@@ -4079,6 +4084,15 @@ void ClientSpawn(gentity_t *ent) {
 
 	index = ent - g_entities;
 	client = ent->client;
+	if (level.gametype == GT_JOM && client->jvmNextClass &&
+		client->sess.sessionTeam != TEAM_SPECTATOR) {
+		client->sess.jvmClass = client->jvmNextClass - 1;
+		client->jvmNextClass = 0;
+		client->ps.fd.forceDoInit = 1;
+		ClientUserinfoChanged(index);
+		G_WriteClientSessionData(client);
+		BroadcastTeamChange(client, client->sess.sessionTeam);
+	}
 
 	//first we want the userinfo so we can see if we should update this client's saber -rww
 	trap->GetUserinfo( index, userinfo, sizeof( userinfo ) );

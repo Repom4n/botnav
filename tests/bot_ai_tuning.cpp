@@ -9,6 +9,73 @@ BOOST_AUTO_TEST_SUITE( bot_ai )
 
 BOOST_AUTO_TEST_SUITE( tuning )
 
+BOOST_AUTO_TEST_CASE( merc_ranged_modes_respect_ammo_and_forced_fire )
+{
+	BOOST_CHECK( BotCombat_ModeUsable( 1, 5, 5, 0, 0 ) );
+	BOOST_CHECK( !BotCombat_ModeUsable( 1, 4, 5, 0, 0 ) );
+	BOOST_CHECK( !BotCombat_ModeUsable( 0, 100, 5, 0, 0 ) );
+	BOOST_CHECK( !BotCombat_ModeUsable( 1, 5, 5, 1, 1 ) );
+	BOOST_CHECK( !BotCombat_ModeUsable( 1, 5, 5, 2, 0 ) );
+	BOOST_CHECK( BotCombat_ModeUsable( 1, 5, 5, 2, 1 ) );
+}
+
+BOOST_AUTO_TEST_CASE( merc_weapon_preferences_are_soft_and_distance_aware )
+{
+	for (int skill = 1; skill <= 2; ++skill)
+		BOOST_CHECK_EQUAL( BotCombat_WeaponScore( skill, 200, 1, 7, 0, 0 ), 7 );
+	for (int skill = 3; skill <= 6; ++skill)
+	{
+		BOOST_CHECK( BotCombat_WeaponScore( skill, 75, 1, 1, 0, 0 ) >
+			BotCombat_WeaponScore( skill, 200, 1, 10, 0, 0 ) );
+		BOOST_CHECK( BotCombat_WeaponScore( skill, 200, 1, 10, 0, 0 ) > -10000 );
+	}
+	for (int skill = 7; skill <= 10; ++skill)
+	{
+		BOOST_CHECK( BotCombat_WeaponScore( skill, 200, 1, 1, 0, 0 ) >
+			BotCombat_WeaponScore( skill, 75, 1, 10, 0, 0 ) );
+		BOOST_CHECK( BotCombat_WeaponScore( skill, 200, 0.1f, 1, 0, 0 ) <
+			BotCombat_WeaponScore( skill, 75, 1, 10, 0, 0 ) );
+	}
+}
+
+BOOST_AUTO_TEST_CASE( merc_close_range_safety_beats_dps_without_banning_fallback )
+{
+	for (int skill = 1; skill <= 10; ++skill)
+		BOOST_CHECK( BotCombat_WeaponScore( skill, 25, 1, 1, 1, 0 ) >
+			BotCombat_WeaponScore( skill, 200, 1, 10, 1, 1 ) );
+	BOOST_CHECK( BotCombat_WeaponScore( 10, 200, 1, 10, 1, 1 ) > -1.0e20f );
+}
+
+BOOST_AUTO_TEST_CASE( merc_resupply_prioritizes_ammo_that_restores_owned_ranged_weapon )
+{
+	BOOST_CHECK_EQUAL( BotCombat_PickupPriority( 0, 1, 0, 0 ), 0 );
+	BOOST_CHECK_EQUAL( BotCombat_PickupPriority( 1, 0, 1, 0 ), 0 );
+	BOOST_CHECK( BotCombat_PickupPriority( 1, 0, 1, 1 ) >
+		BotCombat_PickupPriority( 1, 1, 0, 0 ) );
+	BOOST_CHECK( BotCombat_PickupPriority( 1, 1, 0, 0 ) > 0 );
+}
+
+BOOST_AUTO_TEST_CASE( saber_idle_approach_releases_cached_zero_footing_not_defense )
+{
+	BOOST_CHECK( BotCombat_RefreshIdleFooting( 1, 0, 0, 200, 1, 0 ) );
+	BOOST_CHECK( BotCombat_RefreshIdleFooting( 1, 0, 0, 150, 1, -1 ) );
+	BOOST_CHECK( !BotCombat_RefreshIdleFooting( 0, 0, 0, 200, 1, 0 ) );
+	BOOST_CHECK( !BotCombat_RefreshIdleFooting( 1, 1, 0, 200, 1, 0 ) );
+	BOOST_CHECK( !BotCombat_RefreshIdleFooting( 1, 0, 1, 200, 1, 0 ) );
+	BOOST_CHECK( !BotCombat_RefreshIdleFooting( 1, 0, 0, 80, 1, 0 ) );
+	BOOST_CHECK( !BotCombat_RefreshIdleFooting( 1, 0, 0, 200, 0, 0 ) );
+}
+
+BOOST_AUTO_TEST_CASE( saber_blocked_approach_tries_forward_lanes_before_safe_exits )
+{
+	BOOST_CHECK_EQUAL( BotCombat_FootingFallbackForward( 1, 0, 0 ), 1 );
+	BOOST_CHECK_EQUAL( BotCombat_FootingFallbackForward( 1, 0, 1 ), 1 );
+	BOOST_CHECK_EQUAL( BotCombat_FootingFallbackForward( 1, 0, 2 ), 0 );
+	BOOST_CHECK_EQUAL( BotCombat_FootingFallbackForward( 1, 0, 4 ), -1 );
+	BOOST_CHECK_EQUAL( BotCombat_FootingFallbackForward( 1, 1, 0 ), -1 );
+	BOOST_CHECK_EQUAL( BotCombat_FootingFallbackForward( 0, 0, 0 ), -1 );
+}
+
 BOOST_AUTO_TEST_CASE( strafejump_frequency_and_waypoint_skip_safety )
 {
 	BOOST_CHECK_EQUAL( BotSFJ_StartIntervalMs( 0 ), 0 );

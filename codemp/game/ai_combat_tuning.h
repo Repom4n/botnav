@@ -6,6 +6,53 @@
 
 #define NEWBOTAI_TUNING_ESCAPE_YAW_SPEED 333.0f
 
+static inline int BotCombat_ModeUsable(int owned, int ammo, int cost, int forcedMode, int alt)
+{
+	return owned && ammo >= cost && !(forcedMode == 1 && alt) &&
+		!(forcedMode == 2 && !alt);
+}
+
+static inline float BotCombat_WeaponScore(int skill, float dps, float effectiveness,
+	int legacyWeight, int closeRange, int splash)
+{
+	float score;
+	if (skill <= 2)
+		score = (float)legacyWeight;
+	else if (skill <= 6)
+		score = 200.0f - fabsf(dps - (45.0f + skill * 7.5f));
+	else
+		score = dps;
+	score *= effectiveness;
+	/* Safety beats preference, but never makes an owned ranged weapon unavailable. */
+	if (closeRange && splash)
+		score -= 10000.0f;
+	return score;
+}
+
+static inline int BotCombat_PickupPriority(int needsRanged, int weaponPickup,
+	int ammoPickup, int replenishesOwned)
+{
+	if (!needsRanged)
+		return 0;
+	if (weaponPickup)
+		return 100;
+	return ammoPickup && replenishesOwned ? 120 : 0;
+}
+
+static inline int BotCombat_RefreshIdleFooting(int idle, int defensive, int recovering,
+	float distance, int plannedForward, int cachedForward)
+{
+	return idle && !defensive && !recovering && distance > 100.0f &&
+		plannedForward > 0 && cachedForward <= 0;
+}
+
+static inline int BotCombat_FootingFallbackForward(int advancing, int defensive, int lane)
+{
+	if (lane < 2)
+		return advancing && !defensive ? 1 : -1;
+	return lane < 4 ? 0 : -1;
+}
+
 typedef enum
 {
 	NEWBOTAI_DRAINLOCK_FORCE_NONE = 0,

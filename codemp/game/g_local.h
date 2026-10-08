@@ -991,6 +991,10 @@ struct gclient_s {
 	int			jvmGrappleTime;
 	float		jvmGrappleFraction;
 	int			jvmBotAttackTime;
+	int			jvmHealthRegenResidual;
+	float		jvmHealthRegenFraction;
+	int			jvmNextClass;
+	qboolean	jvmClassChanging;
 
 	saberInfo_t	saber[MAX_SABERS];
 	void		*weaponGhoul2[MAX_SABERS];

@@ -3266,6 +3266,13 @@ extern void RunEmplacedWeapon( gentity_t *ent, usercmd_t **ucmd );
 			}
 		}
 	}
+	if (level.gametype == GT_JOM && jom_cycleloadout.integer &&
+		self->s.number < MAX_CLIENTS && self->client->sess.sessionTeam != TEAM_SPECTATOR &&
+		!self->client->jvmClassChanging && !g_dontPenalizeTeam &&
+		meansOfDeath != MOD_TEAM_CHANGE) {
+		self->client->jvmNextClass = JVM_NextClass(
+			JVM_ReplicatedClass(self->client->ps.stats[STAT_RESTRICTIONS])) + 1;
+	}
 }
 
 
@@ -5376,7 +5383,9 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker, vec3_
 			client ? JVM_ReplicatedClass(client->ps.stats[STAT_RESTRICTIONS]) : JVM_JEDI,
 			attacker->client ? JVM_ReplicatedClass(attacker->client->ps.stats[STAT_RESTRICTIONS]) : JVM_JEDI,
 			mod == MOD_SABER, (dflags & DAMAGE_JVM_GRIPKICK) != 0,
-			jedi_tankscale.value, jedi_saberdamagescale.value, merc_gripkickreduction.value));
+			jedi_tankscale.value, jedi_saberdamagescale.value,
+			client && JVM_ReplicatedClass(client->ps.stats[STAT_RESTRICTIONS]) == JVM_JEDI ?
+				jedi_gripkickreduction.value : merc_gripkickreduction.value));
 		if (damage <= 0)
 			return;
 	}

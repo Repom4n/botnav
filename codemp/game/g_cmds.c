@@ -1062,7 +1062,14 @@ void BroadcastTeamChange( gclient_t *client, int oldTeam )
 	if (level.gametype == GT_JVM &&
 		(client->sess.sessionTeam == TEAM_RED || client->sess.sessionTeam == TEAM_BLUE)) {
 		trap->SendServerCommand(-1, va("cp \"%s^7 joined %s\n\"",
-			client->pers.netname, client->sess.sessionTeam == TEAM_RED ? "Red Jedi" : "Blue Mercs"));
+			client->pers.netname, client->sess.sessionTeam == TEAM_BLUE ? "Blue Mercs" :
+			client->sess.jvmClass == JVM_TANK ? "Red Tank" : "Red Jedi"));
+		return;
+	}
+	if (level.gametype == GT_JOM && client->sess.sessionTeam == TEAM_FREE) {
+		trap->SendServerCommand(-1, va("cp \"%s^7 joined as %s\n\"",
+			client->pers.netname, client->sess.jvmClass == JVM_MERC ? "Merc" :
+			client->sess.jvmClass == JVM_TANK ? "Tank" : "Jedi"));
 		return;
 	}
 
@@ -1693,7 +1700,7 @@ Cmd_Team_f
 static void Cmd_Class_f(gentity_t *ent) {
 	char name[MAX_TOKEN_CHARS];
 	int playerClass;
-	if (level.gametype != GT_JOM)
+	if (!JVM_IsMode(level.gametype))
 		return;
 	trap->Argv(1, name, sizeof(name));
 	{
@@ -1715,14 +1722,23 @@ static void Cmd_Class_f(gentity_t *ent) {
 	}
 	if (ent->client->switchTeamTime > level.time || ent->client->ps.duelInProgress)
 		return;
-	if (ent->client->sess.jvmClass == playerClass)
+	if (level.gametype == GT_JVM &&
+		((playerClass == JVM_MERC && ent->client->sess.sessionTeam != TEAM_BLUE) ||
+		(playerClass != JVM_MERC && ent->client->sess.sessionTeam != TEAM_RED))) {
+		trap->SendServerCommand(ent - g_entities, "print \"Join red for Jedi/Tank or blue for Merc.\n\"");
 		return;
+	}
+	if (ent->client->sess.jvmClass == playerClass && !ent->client->jvmNextClass)
+		return;
+	ent->client->jvmNextClass = 0;
+	ent->client->jvmClassChanging = qtrue;
 	/* Kill using the old class so class selection cannot evade damage/death. */
 	if (ent->client->sess.sessionTeam != TEAM_SPECTATOR && ent->health > 0) {
 		ent->flags &= ~FL_GODMODE;
 		ent->health = ent->client->ps.stats[STAT_HEALTH] = 0;
 		player_die(ent, ent, ent, 100000, MOD_SUICIDE);
 	}
+	ent->client->jvmClassChanging = qfalse;
 	ent->client->sess.jvmClass = playerClass;
 	ent->client->ps.fd.forceDoInit = 1;
 	if (ent->client->sess.sessionTeam != TEAM_SPECTATOR)
@@ -1730,7 +1746,8 @@ static void Cmd_Class_f(gentity_t *ent) {
 	ent->client->switchTeamTime = level.time + 5000;
 	ClientUserinfoChanged(ent - g_entities);
 	G_WriteClientSessionData(ent->client);
-	trap->SendServerCommand(ent - g_entities, va("print \"JoM class: %s\n\"", name));
+	if (ent->client->sess.sessionTeam != TEAM_SPECTATOR)
+		BroadcastTeamChange(ent->client, ent->client->sess.sessionTeam);
 }
 
 void Cmd_Team_f( gentity_t *ent ) {
@@ -1753,6 +1770,7 @@ void Cmd_Team_f( gentity_t *ent ) {
 				if (gEscaping)
 					return;
 				ent->client->sess.jvmClass = playerClass;
+				ent->client->jvmNextClass = 0;
 				ent->client->ps.fd.forceDoInit = 1;
 				SetTeam(ent, "free", qfalse);
 				if (oldTeam != ent->client->sess.sessionTeam)

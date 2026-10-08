@@ -2537,6 +2537,7 @@ Touch_Item
 void Touch_Item(gentity_t *ent, gentity_t *other, trace_t *trace) {
 	int			respawn;
 	qboolean	predict;
+	qboolean	denyWeapon;
 
 	if (ent->genericValue10 > level.time &&
 		other &&
@@ -2572,6 +2573,15 @@ void Touch_Item(gentity_t *ent, gentity_t *other, trace_t *trace) {
 		return;
 	if (other->health < 1)
 		return;		// dead people can't pickup
+	if (other->client->sess.sessionTeam == TEAM_SPECTATOR)
+		return;
+
+	denyWeapon = JVM_IsMode(level.gametype) &&
+		JVM_ReplicatedClass(other->client->ps.stats[STAT_RESTRICTIONS]) != JVM_MERC &&
+		ent->item->giType == IT_WEAPON && ent->item->giTag != WP_SABER &&
+		!other->client->ps.duelInProgress && !IsRacemode(&other->client->ps) &&
+		!other->client->ps.isJediMaster &&
+		!(ent->s.generic1 == other->client->ps.clientNum && ent->s.powerups);
 
 	if (ent->item->giType == IT_POWERUP &&
 		(ent->item->giTag == PW_FORCE_ENLIGHTENED_LIGHT || ent->item->giTag == PW_FORCE_ENLIGHTENED_DARK))
@@ -2593,7 +2603,7 @@ void Touch_Item(gentity_t *ent, gentity_t *other, trace_t *trace) {
 	}
 
 	// the same pickup rules are used for client side and server side
-	if (!BG_CanItemBeGrabbed(level.gametype, &ent->s, &other->client->ps)) {
+	if (!denyWeapon && !BG_CanItemBeGrabbed(level.gametype, &ent->s, &other->client->ps)) {
 		return;
 	}
 
@@ -2663,6 +2673,12 @@ void Touch_Item(gentity_t *ent, gentity_t *other, trace_t *trace) {
 				return;
 			}
 		}
+	}
+
+	if (denyWeapon) {
+		/* Denial consumes the weapon without granting inventory or pickup events. */
+		respawn = adjustRespawnTime(g_weaponRespawn.integer, ent->item->giType, ent->item->giTag);
+		goto consumeItem;
 	}
 
 	if (developer.integer) {
@@ -2768,6 +2784,7 @@ void Touch_Item(gentity_t *ent, gentity_t *other, trace_t *trace) {
 		}
 	}
 
+consumeItem:
 	// fire item targets
 	G_UseTargets (ent, other);
 

@@ -24,7 +24,10 @@ BOOST_AUTO_TEST_CASE(mode_ids_and_team_semantics)
 
 BOOST_AUTO_TEST_CASE(classes_are_not_jom_teams)
 {
-	BOOST_CHECK_EQUAL(JVM_Class(11, 1, JVM_TANK), JVM_JEDI);
+	BOOST_CHECK_EQUAL(JVM_Class(11, 1, JVM_TANK), JVM_TANK);
+	BOOST_CHECK_EQUAL(JVM_Class(11, 1, JVM_MERC), JVM_JEDI);
+	BOOST_CHECK_EQUAL(JVM_Class(11, 2, JVM_TANK), JVM_MERC);
+	BOOST_CHECK_EQUAL(JVM_Class(11, TEAM_SPECTATOR, JVM_TANK), JVM_JEDI);
 	BOOST_CHECK_EQUAL(JVM_Class(11, 2, JVM_JEDI), JVM_MERC);
 	for (int playerClass = JVM_JEDI; playerClass <= JVM_TANK; ++playerClass) {
 		BOOST_CHECK_EQUAL(JVM_Class(12, 0, playerClass), playerClass);
@@ -34,7 +37,7 @@ BOOST_AUTO_TEST_CASE(classes_are_not_jom_teams)
 	BOOST_CHECK_EQUAL(JVM_Class(12, 0, -1), JVM_JEDI);
 	BOOST_CHECK_EQUAL(JVM_Class(12, 0, 3), JVM_JEDI);
 	BOOST_CHECK_EQUAL(JVM_CLASS_MASK & 31, 0);
-	BOOST_CHECK_LT(JVM_ACTIVE | JVM_CLASS_MASK | JVM_FLIPKICK, 32768);
+	BOOST_CHECK_LT(JVM_ACTIVE | JVM_CLASS_MASK | JVM_FLIPKICK | JVM_COUNTERGRIP | JVM_PUSHPULL, 32768);
 }
 
 BOOST_AUTO_TEST_CASE(pickup_categories)
@@ -264,6 +267,104 @@ BOOST_AUTO_TEST_CASE(flipkick_permission_is_replicated_and_mode_gated)
 	BOOST_CHECK_EQUAL(JVM_FlipkickSetting(JVM_MERC << JVM_CLASS_SHIFT, 3), 3);
 	BOOST_CHECK_EQUAL(JVM_FlipkickSetting(JVM_ACTIVE | JVM_FLIPKICK, 1), 1);
 	BOOST_CHECK_EQUAL(JVM_FlipkickSetting(JVM_ACTIVE | (JVM_TANK << JVM_CLASS_SHIFT), 3), 3);
+}
+
+BOOST_AUTO_TEST_CASE(countergrip_and_tank_pushpull_are_replicated)
+{
+	for (int playerClass = JVM_JEDI; playerClass <= JVM_TANK; ++playerClass) {
+		for (int active : {0, JVM_ACTIVE}) {
+			for (int enabled : {0, JVM_COUNTERGRIP | JVM_PUSHPULL}) {
+				const int restrictions = active | enabled | (playerClass << JVM_CLASS_SHIFT);
+				BOOST_CHECK_EQUAL(JVM_CounterGrip(restrictions),
+					active && enabled && playerClass == JVM_MERC);
+				BOOST_CHECK_EQUAL(JVM_TankPushPull(restrictions, 1),
+					active && enabled && playerClass == JVM_TANK);
+				BOOST_CHECK(!JVM_TankPushPull(restrictions, 0));
+				BOOST_CHECK_EQUAL(JVM_ReplicatedClass(restrictions), playerClass);
+			}
+		}
+	}
+}
+
+BOOST_AUTO_TEST_CASE(passive_absorb_is_limited_to_jedi_push_pull_grip)
+{
+	for (int mode = GT_FFA; mode <= GT_JOM; ++mode) {
+		for (int playerClass = JVM_JEDI; playerClass <= JVM_TANK; ++playerClass) {
+			for (int enabled : {0, 1}) {
+				for (int power = 0; power < NUM_FORCE_POWERS; ++power) {
+					for (int rank = 1; rank <= 3; ++rank) {
+						const bool eligible = power == FP_PUSH || power == FP_PULL || power == FP_GRIP;
+						BOOST_CHECK_EQUAL(JVM_PassiveAbsorb(mode, playerClass, enabled, eligible, rank),
+							JVM_IsMode(mode) && playerClass == JVM_JEDI && enabled && eligible ? 0 : -1);
+					}
+				}
+			}
+		}
+	}
+}
+
+BOOST_AUTO_TEST_CASE(jedi_and_merc_gripkick_reductions_are_independent_inputs)
+{
+	BOOST_CHECK_CLOSE(JVM_DamageScale(JVM_JEDI, JVM_MERC, 0, 1, .5f, 2, .25f), .75f, .001f);
+	BOOST_CHECK_CLOSE(JVM_DamageScale(JVM_MERC, JVM_JEDI, 0, 1, .5f, 2, .75f), .25f, .001f);
+	BOOST_CHECK_EQUAL(JVM_DamageScale(JVM_JEDI, JVM_MERC, 0, 0, .5f, 2, 1), 1);
+	BOOST_CHECK_CLOSE(JVM_DamageScale(JVM_TANK, JVM_JEDI, 0, 1, .5f, 2, 1), .5f, .001f);
+}
+
+BOOST_AUTO_TEST_CASE(disarm_probability_is_inverse_distance_and_bounded)
+{
+	BOOST_CHECK_EQUAL(JVM_DisarmChance(50, 100), 50);
+	BOOST_CHECK_EQUAL(JVM_DisarmChance(50, 200), 25);
+	BOOST_CHECK_EQUAL(JVM_DisarmChance(50, 50), 100);
+	BOOST_CHECK_EQUAL(JVM_DisarmChance(50, 0), 100);
+	BOOST_CHECK_EQUAL(JVM_DisarmChance(0, 100), 0);
+	BOOST_CHECK_EQUAL(JVM_DisarmChance(-1, 100), 0);
+	BOOST_CHECK_EQUAL(JVM_DisarmChance(200, 100), 100);
+	BOOST_CHECK_EQUAL(JVM_DisarmChance(std::numeric_limits<float>::quiet_NaN(), 100), 0);
+}
+
+BOOST_AUTO_TEST_CASE(health_regeneration_keeps_fractional_amounts_and_intervals)
+{
+	float fraction = 0;
+	int residual = 0, health = 90;
+	for (int i = 0; i < 500; ++i)
+		health += JVM_HealthRegen(&fraction, &residual, 8, .25f, 1000, health, 100);
+	BOOST_CHECK_EQUAL(health, 91);
+	BOOST_CHECK_EQUAL(residual, 0);
+	BOOST_CHECK_SMALL(fraction, .0001f);
+	BOOST_CHECK_EQUAL(JVM_HealthRegen(&fraction, &residual, 10000, 100, 1000, 99, 100), 1);
+	BOOST_CHECK_EQUAL(JVM_HealthRegen(&fraction, &residual, 1000, 1, 1000, 100, 100), 0);
+	BOOST_CHECK_EQUAL(JVM_HealthRegen(&fraction, &residual, 1000, 1, 1000, 110, 100), 0);
+	BOOST_CHECK_EQUAL(JVM_HealthRegen(&fraction, &residual, 1000, 1, 1000, 0, 100), 0);
+	BOOST_CHECK_EQUAL(JVM_HealthRegen(&fraction, &residual, 1000, -1, 1000, 90, 100), 0);
+	BOOST_CHECK_EQUAL(JVM_HealthRegen(&fraction, &residual, 1000, 0, 1000, 90, 100), 0);
+	BOOST_CHECK_EQUAL(JVM_HealthRegen(&fraction, &residual, 1000,
+		std::numeric_limits<float>::quiet_NaN(), 1000, 90, 100), 0);
+	BOOST_CHECK_EQUAL(JVM_HealthRegen(&fraction, &residual, 1, 1, 0, 90, 100), 1);
+	fraction = .5f;
+	residual = 500;
+	BOOST_CHECK_EQUAL(JVM_HealthRegen(&fraction, &residual, 1000, 1, 1000, 0, 100), 0);
+	BOOST_CHECK_EQUAL(residual, 0);
+	BOOST_CHECK_EQUAL(fraction, 0);
+	fraction = .5f;
+	residual = 500;
+	BOOST_CHECK_EQUAL(JVM_HealthRegen(&fraction, &residual, 0, 1, 1000, 90, 100), 0);
+	BOOST_CHECK_EQUAL(residual, 500);
+	BOOST_CHECK_EQUAL(fraction, .5f);
+	fraction = 0;
+	residual = std::numeric_limits<int>::max() - 1;
+	BOOST_CHECK_EQUAL(JVM_HealthRegen(&fraction, &residual, 20, 1,
+		std::numeric_limits<int>::max(), 90, 100), 1);
+	BOOST_CHECK_EQUAL(residual, 19);
+	BOOST_CHECK_EQUAL(JVM_HealthRegen(&fraction, &residual,
+		std::numeric_limits<int>::max(), 1, 1, 90, 100), 10);
+}
+
+BOOST_AUTO_TEST_CASE(class_cycle_order)
+{
+	BOOST_CHECK_EQUAL(JVM_NextClass(JVM_JEDI), JVM_MERC);
+	BOOST_CHECK_EQUAL(JVM_NextClass(JVM_MERC), JVM_TANK);
+	BOOST_CHECK_EQUAL(JVM_NextClass(JVM_TANK), JVM_JEDI);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -1,0 +1,17 @@
+[  0%] Building CXX object tests/CMakeFiles/UnitTests.dir/main.cpp.o
+[ 10%] Building CXX object tests/CMakeFiles/UnitTests.dir/bot_ai_tuning.cpp.o
+[ 20%] Building CXX object tests/CMakeFiles/UnitTests.dir/jvm_rules.cpp.o
+[ 20%] Building CXX object tests/CMakeFiles/UnitTests.dir/duel_identity.cpp.o
+[ 30%] Building CXX object tests/CMakeFiles/UnitTests.dir/duel_session.cpp.o
+[ 40%] Building CXX object tests/CMakeFiles/UnitTests.dir/duel_capture.cpp.o
+[ 60%] Building CXX object tests/CMakeFiles/UnitTests.dir/duel_elo.cpp.o
+[ 60%] Building CXX object tests/CMakeFiles/UnitTests.dir/bot_learning.cpp.o
+[ 60%] Building CXX object tests/CMakeFiles/UnitTests.dir/safe/string.cpp.o
+[ 70%] Building CXX object tests/CMakeFiles/UnitTests.dir/safe/limited_vector.cpp.o
+[ 80%] Building CXX object tests/CMakeFiles/UnitTests.dir/__/shared/qcommon/safe/string.cpp.o
+[ 90%] Building C object tests/CMakeFiles/UnitTests.dir/__/codemp/game/sqlite3.c.o
+/home/runner/work/botnav/botnav/codemp/game/sqlite3.c:8542:26: warning: ‘sqlite3one’ defined but not used [-Wunused-const-variable=]
+ 8542 | SQLITE_PRIVATE const int sqlite3one = 1;
+      |                          ^~~~~~~~~~
+[100%] Linking CXX executable ../UnitTests
+[100%] Built target UnitTests

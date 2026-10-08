@@ -200,7 +200,8 @@ void UI_UpdateClientForcePowers(const char *teamArg)
 		uiForcePowersRank[14], uiForcePowersRank[15], uiForcePowersRank[16],
 		uiForcePowersRank[17]) );
 
-	if (gTouchedForce)
+	// Joining from the profile must work even when the force layout is unchanged.
+	if (gTouchedForce || (teamArg && teamArg[0]))
 	{
 		if (teamArg && teamArg[0])
 		{
