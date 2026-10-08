@@ -286,6 +286,23 @@ BOOST_AUTO_TEST_CASE(countergrip_and_tank_pushpull_are_replicated)
 	}
 }
 
+BOOST_AUTO_TEST_CASE(countergrip_only_bypasses_the_choke_weapon_fire_gate)
+{
+	for (int playerClass = JVM_JEDI; playerClass <= JVM_TANK; ++playerClass) {
+		for (int active : {0, JVM_ACTIVE}) {
+			for (int enabled : {0, JVM_COUNTERGRIP}) {
+				const int restrictions = active | enabled | (playerClass << JVM_CLASS_SHIFT);
+				for (int extension : {HANDEXTEND_NONE, HANDEXTEND_CHOKE, HANDEXTEND_FORCEPUSH,
+					HANDEXTEND_FORCEPULL, HANDEXTEND_FORCE_HOLD, HANDEXTEND_DODGE,
+					HANDEXTEND_KNOCKDOWN, HANDEXTEND_TAUNT}) {
+					BOOST_CHECK_EQUAL(JVM_CounterGripChoke(restrictions, extension == HANDEXTEND_CHOKE),
+						active && enabled && playerClass == JVM_MERC && extension == HANDEXTEND_CHOKE);
+				}
+			}
+		}
+	}
+}
+
 BOOST_AUTO_TEST_CASE(world_weapon_pull_allows_jedi_and_enabled_tank)
 {
 	for (int mode = GT_FFA; mode <= GT_JOM; ++mode) {

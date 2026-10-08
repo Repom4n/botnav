@@ -68,6 +68,16 @@ static inline void BotCombat_SplashTraceEnd(const float *start, const float *dir
 	end[2] = start[2] + direction[2] * distance;
 }
 
+static inline int BotNav_FloorAllows(int found, int solid, float normalZ, float drop,
+	float maxDrop, int validatedJump, int hazard)
+{
+	if (hazard || solid)
+		return 0;
+	if (validatedJump)
+		return 1;
+	return found && isfinite(drop) && normalZ >= 0.7f && drop <= maxDrop;
+}
+
 typedef enum
 {
 	NEWBOTAI_DRAINLOCK_FORCE_NONE = 0,

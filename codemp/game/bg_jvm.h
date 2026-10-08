@@ -44,6 +44,10 @@ static inline int JVM_CounterGrip(int restrictions) {
 		JVM_ReplicatedClass(restrictions) == JVM_MERC;
 }
 
+static inline int JVM_CounterGripChoke(int restrictions, int choke) {
+	return choke && JVM_CounterGrip(restrictions);
+}
+
 static inline int JVM_TankPushPull(int restrictions, int pushPull) {
 	return pushPull && (restrictions & JVM_ACTIVE) && (restrictions & JVM_PUSHPULL) &&
 		JVM_ReplicatedClass(restrictions) == JVM_TANK;

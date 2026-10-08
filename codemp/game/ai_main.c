@@ -2516,7 +2516,7 @@ static qboolean BotNav_CheckInstantDeathHazardSample(bot_state_t *bs, vec3_t mov
 	start[0] += moveDir[0] * forwardDist;
 	start[1] += moveDir[1] * forwardDist;
 
-	if (BotNav_TouchesInstantKillTrigger(bs, start))
+	if (BotNav_SweepTouchesInstantKillTrigger(bs->origin, start))
 	{
 		return qtrue;
 	}
@@ -2524,13 +2524,14 @@ static qboolean BotNav_CheckInstantDeathHazardSample(bot_state_t *bs, vec3_t mov
 	VectorCopy(start, end);
 	end[2] -= downTraceDist;
 
-	JP_Trace(&tr, start, NULL, NULL, end, bs->client, MASK_PLAYERSOLID, qfalse, 0, 0);
+	JP_Trace(&tr, start, NULL, NULL, end, bs->client,
+		MASK_PLAYERSOLID | CONTENTS_LAVA | CONTENTS_SLIME | CONTENTS_NODROP, qfalse, 0, 0);
 
-	if (tr.contents & (CONTENTS_LAVA | CONTENTS_NODROP))
+	if (tr.contents & (CONTENTS_LAVA | CONTENTS_SLIME | CONTENTS_NODROP))
 	{
 		return qtrue;
 	}
-	if (BotNav_TouchesInstantKillTrigger(bs, tr.endpos))
+	if (BotNav_SweepTouchesInstantKillTrigger(start, tr.endpos))
 	{
 		return qtrue;
 	}
@@ -2540,40 +2541,54 @@ static qboolean BotNav_CheckInstantDeathHazardSample(bot_state_t *bs, vec3_t mov
 static qboolean BotNav_CheckFallingHazard(bot_state_t *bs, vec3_t moveDir, qboolean inCombat)
 {
 	static const float pitLookAhead[] = {96.0f, 144.0f};
-	vec3_t start, end;
+	vec3_t start, end, floorMins, floorMaxs;
 	trace_t tr;
 	const float extendedPitTrace = 512.0f;
+	const int hazardContents = CONTENTS_LAVA | CONTENTS_SLIME | CONTENTS_NODROP;
+	float maxDrop, feetZ;
+	qboolean foundFloor;
 	int i;
 
 	(void)inCombat;
-
-	if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE)
-	{
-		return qfalse; //already airborne, can't steer
-	}
 
 	//Project a point ahead of the bot in the movement direction
 	VectorCopy(bs->origin, start);
 	start[0] += moveDir[0] * 48.0f;
 	start[1] += moveDir[1] * 48.0f;
+	JP_Trace(&tr, bs->origin, g_entities[bs->client].r.mins,
+		g_entities[bs->client].r.maxs, start, bs->client,
+		MASK_PLAYERSOLID | hazardContents, qfalse, 0, 0);
+	if ((tr.contents & hazardContents) ||
+		(trap->PointContents(start, bs->client) & hazardContents) ||
+		BotNav_SweepTouchesInstantKillTrigger(bs->origin, start))
+		return qtrue;
+	if (bs->cur_ps.groundEntityNum == ENTITYNUM_NONE)
+		return qfalse;
 
 	if (BotNav_CheckInstantDeathHazardSample(bs, moveDir, 48.0f, 256.0f))
 	{
 		return qtrue;
 	}
 
+	maxDrop = BotSFJ_ClampSetting(bot_strafe_minledge.value, 0.0f, 200.0f);
+	feetZ = bs->origin[2] + g_entities[bs->client].r.mins[2];
+	VectorCopy(g_entities[bs->client].r.mins, floorMins);
+	VectorCopy(g_entities[bs->client].r.maxs, floorMaxs);
+	floorMins[2] = 0.0f;
+	floorMaxs[2] = 1.0f;
+	start[2] += 16.0f;
 	VectorCopy(start, end);
-	end[2] -= 256.0f;
-
-	JP_Trace(&tr, start, NULL, NULL, end, bs->client, MASK_PLAYERSOLID, qfalse, 0, 0);
-
-	//All ordinary ledges are treated as safe; only explicit instant-death hazards should stop movement.
-	if (tr.fraction < 1.0f &&
-		((tr.contents & (CONTENTS_LAVA | CONTENTS_NODROP)) ||
-		 BotNav_TouchesInstantKillTrigger(bs, tr.endpos)))
-	{
+	end[2] = feetZ - maxDrop - 1.0f;
+	JP_Trace(&tr, start, floorMins, floorMaxs, end, bs->client,
+		MASK_PLAYERSOLID | hazardContents, qfalse, 0, 0);
+	foundFloor = tr.fraction < 1.0f && (tr.entityNum == ENTITYNUM_WORLD ||
+		(tr.entityNum >= 0 && tr.entityNum < level.num_entities &&
+			g_entities[tr.entityNum].s.eType == ET_MOVER));
+	/* Only a current accepted jump may cross a gap; explicit hazards never yield. */
+	if (!BotNav_FloorAllows(foundFloor, tr.startsolid || tr.allsolid, tr.plane.normal[2],
+		feetZ - tr.endpos[2], maxDrop, BotNav_SFJTravelOwnsInput(bs),
+		(tr.contents & hazardContents) || BotNav_SweepTouchesInstantKillTrigger(start, tr.endpos)))
 		return qtrue;
-	}
 
 	//Broader hazard awareness: check farther ahead only for explicit instant-death hazards.
 	for (i = 0; i < ARRAY_LEN(pitLookAhead); i++)

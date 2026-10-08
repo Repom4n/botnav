@@ -10243,8 +10243,8 @@ static void PM_Weapon( void )
 			}
 		}
 
-		if (pm->ps->forceHandExtend != HANDEXTEND_CHOKE ||
-			!JVM_CounterGrip(pm->ps->stats[STAT_RESTRICTIONS]))
+		if (!JVM_CounterGripChoke(pm->ps->stats[STAT_RESTRICTIONS],
+			pm->ps->forceHandExtend == HANDEXTEND_CHOKE))
 			return;
 	}
 

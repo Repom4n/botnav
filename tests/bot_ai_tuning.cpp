@@ -191,6 +191,19 @@ BOOST_AUTO_TEST_CASE( navigation_soft_overrides_require_live_validated_strafe_ow
 	BOOST_CHECK( !BotNav_PreserveValidatedStrafe( 1, 1, 1, 1, 1, 1, 0, 1 ) );
 }
 
+BOOST_AUTO_TEST_CASE( navigation_floor_safety_only_waives_ordinary_gaps_for_validated_jumps )
+{
+	BOOST_CHECK( BotNav_FloorAllows( 1, 0, 1, 200, 200, 0, 0 ) );
+	BOOST_CHECK( !BotNav_FloorAllows( 1, 0, 1, 201, 200, 0, 0 ) );
+	BOOST_CHECK( !BotNav_FloorAllows( 0, 0, 1, 0, 200, 0, 0 ) );
+	BOOST_CHECK( !BotNav_FloorAllows( 1, 1, 1, 0, 200, 0, 0 ) );
+	BOOST_CHECK( !BotNav_FloorAllows( 1, 0, 0.69f, 0, 200, 0, 0 ) );
+	BOOST_CHECK( BotNav_FloorAllows( 0, 0, 0, 500, 200, 1, 0 ) );
+	BOOST_CHECK( !BotNav_FloorAllows( 0, 0, 0, 500, 200, 1, 1 ) );
+	BOOST_CHECK( !BotNav_FloorAllows( 1, 0, 1, 0, 200, 1, 1 ) );
+	BOOST_CHECK( !BotNav_FloorAllows( 0, 1, 0, 500, 200, 1, 0 ) );
+}
+
 BOOST_AUTO_TEST_CASE( strafejump_steering_caps_shortest_wrapped_yaw_change )
 {
 	BOOST_CHECK_EQUAL( BotSFJ_SteerYaw( 350, 10, 12 ), 362 );
